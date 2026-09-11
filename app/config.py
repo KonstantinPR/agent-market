@@ -1,0 +1,46 @@
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=BASE_DIR / ".env", env_file_encoding="utf-8")
+
+    pg_user: str = "postgres"
+    pg_password: str = "postgres"
+    pg_host: str = "localhost"
+    pg_port: int = 5432
+    pg_database: str = "agent_market"
+
+    sync_days_default: int = 30
+    testing_mode: bool = True
+    app_host: str = "127.0.0.1"
+    app_port: int = 8000
+
+    wb_api_key: str = ""
+    wb_finance_api_key: str = ""
+    ozon_client_id: str = ""
+    ozon_api_key: str = ""
+
+    @property
+    def database_url(self) -> str:
+        return (
+            f"postgresql+psycopg2://{self.pg_user}:{self.pg_password}"
+            f"@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+        )
+
+    @property
+    def admin_database_url(self) -> str:
+        return (
+            f"postgresql+psycopg2://{self.pg_user}:{self.pg_password}"
+            f"@{self.pg_host}:{self.pg_port}/postgres"
+        )
+
+    @property
+    def mock_dir(self) -> Path:
+        return BASE_DIR / "data" / "mock"
+
+
+settings = Settings()

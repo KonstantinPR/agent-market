@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Market</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <span class="brand">Agent Market</span>
+  <button class="menu-btn" id="menuBtn" aria-label="Меню">&#9776;</button>
+  <div class="links" id="navLinks">
+    <div class="dropdown" id="oursDropdown">
+      <button class="dropbtn" id="oursMenuBtn">Наш склад &#9662;</button>
+      <div class="dropdown-menu" id="oursMenu">
+        <a class="nav-link" data-tab="products" href="#">Товары</a>
+        <a class="nav-link" data-tab="ours" href="#">Остатки</a>
+      </div>
+    </div>
+    <div class="dropdown" id="profitDropdown">
+      <button class="dropbtn" id="profitMenuBtn">Прибыльность &#9662;</button>
+      <div class="dropdown-menu" id="profitMenu">
+        <a class="nav-link" data-tab="margin" href="#">Маржинальность</a>
+        <a class="nav-link" data-tab="margin-funnel" href="#">Воронка Продаж WB</a>
+        <a class="nav-link" data-tab="margin-detail" href="#">Детализация Продаж WB</a>
+      </div>
+    </div>
+    <div class="dropdown" id="wbDropdown">
+      <button class="dropbtn" id="wbMenuBtn">WB API &#9662;</button>
+      <div class="dropdown-menu" id="wbMenu">
+        <a class="nav-link" data-tab="wb-cards" href="#">Карточки товара</a>
+        <a class="nav-link" data-tab="wb-stock" href="#">Остатки</a>
+        <a class="nav-link" data-tab="wb-funnel" href="#">Воронка продаж</a>
+        <a class="nav-link" data-tab="wb-sales" href="#">Продажи</a>
+        <a class="nav-link" data-tab="wb-detail" href="#">Детализация продаж</a>
+        <a class="nav-link" data-tab="wb-prices" href="#">Цены</a>
+        <a class="nav-link" data-tab="wb-storage" href="#">Хранение</a>
+      </div>
+    </div>
+    <div class="dropdown" id="ozDropdown">
+      <button class="dropbtn" id="ozMenuBtn">OZON API &#9662;</button>
+      <div class="dropdown-menu" id="ozMenu">
+        <a class="nav-link" data-tab="oz-cards" href="#">Карточки товара</a>
+        <a class="nav-link" data-tab="oz-stock" href="#">Остатки</a>
+        <a class="nav-link" data-tab="oz-prices" href="#">Цены</a>
+        <a class="nav-link" data-tab="oz-realization" href="#">Реализация</a>
+        <a class="nav-link" data-tab="oz-cashflow" href="#">Движение средств</a>
+      </div>
+    </div>
+  </div>
+</nav>
+<header class="filters">
+  <label>Маркетплейс
+    <select id="fMarketplace">
+      <option value="">Все</option>
+      <option value="wb">Wildberries</option>
+      <option value="ozon">Ozon</option>
+    </select>
+  </label>
+  <label>С <input type="date" id="fFrom"></label>
+  <label>По <input type="date" id="fTo"></label>
+  <button id="btnApply">Применить</button>
+  <span class="filters-sep"></span>
+  <button id="btnRefreshWb" class="refresh-btn">Обновить WB</button>
+  <button id="btnRefreshOz" class="refresh-btn">Обновить Ozon</button>
+</header>
+<main>
+  <section id="tab-dashboard" class="pane active">
+    <div class="kpis" id="kpi"></div>
+    <div class="charts">
+      <div class="chart-box"><h3>К перечислению по маркетплейсам</h3><canvas id="chartDoughnut" height="220"></canvas></div>
+      <div class="chart-box"><h3>Выручка и доход по дням</h3><canvas id="chartDaily" height="220"></canvas></div>
+    </div>
+  </section>
+
+  <section id="tab-margin" class="pane">
+    <div class="toolbar">
+      <span class="chk-wrap">
+        <label class="chk"><input type="checkbox" id="mWb" checked> WB</label>
+        <label class="chk"><input type="checkbox" id="mOzon" checked> Ozon</label>
+      </span>
+      <input id="marginSearch" placeholder="Поиск…">
+      <input id="marginLike" placeholder="Артикул содержит… (напр. TIE)">
+      <a id="exportMargin" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+    </div>
+    <div class="table-wrap" id="marginTable"></div>
+  </section>
+
+  <section id="tab-margin-funnel" class="pane">
+    <div class="toolbar">
+      <span class="msg" id="marginFunnelMsg">Нет данных. Сначала скачайте WB API ▸ Воронка продаж.</span>
+      <input id="marginFunnelLike" placeholder="Артикул содержит… (напр. TIE)">
+      <a id="exportMarginFunnel" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+    </div>
+    <div class="table-wrap" id="marginFunnelTable"></div>
+  </section>
+
+  <section id="tab-margin-detail" class="pane">
+    <div class="toolbar">
+      <span class="msg" id="marginDetailMsg">Прибыльность по Детализации Продаж WB. Данные появятся после скачивания «WB API ▸ Детализация продаж» (финансовый токен, ~1 запрос в 12 ч; отчёт формируется на вчера).</span>
+      <input id="marginDetailLike" placeholder="Артикул содержит… (напр. TIE)">
+      <a id="exportMarginDetail" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+    </div>
+    <div class="table-wrap" id="marginDetailTable"></div>
+  </section>
+
+  <section id="tab-sales" class="pane">
+    <div class="toolbar">
+      <input id="salesSearch" placeholder="Поиск…">
+      <a id="exportSales" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+    </div>
+    <div class="table-wrap" id="salesTable"></div>
+  </section>
+
+  <section id="tab-stocks" class="pane">
+    <div class="table-wrap" id="stocksTable"></div>
+  </section>
+
+  <section id="tab-ours" class="pane">
+    <div class="toolbar">
+      <input type="file" id="oursFile" accept=".xlsx">
+      <button id="oursImport" class="btn">Загрузить остатки</button>
+      <span id="oursMsg" class="msg"></span>
+    </div>
+    <div class="table-wrap" id="oursTable"></div>
+  </section>
+
+  <section id="tab-products" class="pane">
+    <div class="toolbar">
+      <input type="file" id="productsFile" accept=".xlsx">
+      <button id="productsImport" class="btn">Загрузить товары</button>
+      <span id="productsMsg" class="msg"></span>
+    </div>
+    <div class="toolbar">
+      <input type="file" id="netCostFile" accept=".xlsx">
+      <button id="netCostImport" class="btn">Загрузить себестоимость</button>
+      <span id="netCostMsg" class="msg"></span>
+    </div>
+    <div class="table-wrap" id="productsTable"></div>
+  </section>
+
+  <section id="tab-wb-cards" class="pane">
+    <div class="wb-form">
+      <p class="hint">Полная загрузка карточек товаров Wildberries и запись в базу (товары).</p>
+      <div class="toolbar">
+        <button class="btn wb-dl" data-kind="cards">Скачать Excel</button>
+        <span class="msg" id="wbMsg-cards"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-wb-stock" class="pane">
+    <div class="wb-form">
+      <p class="hint">Остатки на складах Wildberries с записью в базу (остатки за сегодня).</p>
+      <div class="toolbar">
+        <button class="btn wb-dl" data-kind="stock">Скачать Excel</button>
+        <span class="msg" id="wbMsg-stock"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-wb-funnel" class="pane">
+    <div class="wb-form">
+      <p class="hint">Воронка продаж: просмотры, добавления в корзину, заказы по товарам.</p>
+      <div class="toolbar">
+        <label>С <input type="date" data-date="from"></label>
+        <label>По <input type="date" data-date="to"></label>
+        <button class="btn wb-dl" data-kind="funnel">Скачать Excel</button>
+        <span class="msg" id="wbMsg-funnel"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-wb-sales" class="pane">
+    <div class="wb-form">
+      <p class="hint">Отчёт о реализации Wildberries на указанные даты (записывается в продажи).</p>
+      <div class="toolbar">
+        <label>С <input type="date" data-date="from"></label>
+        <label>По <input type="date" data-date="to"></label>
+        <button class="btn wb-dl" data-kind="sales">Скачать Excel</button>
+        <span class="msg" id="wbMsg-sales"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-wb-detail" class="pane">
+    <div class="wb-form">
+      <p class="hint">Детальный финансовый отчёт по продажам Wildberries (вознаграждения, доставка, хранение, штрафы и удержания). Использует отдельный финансовый токен (WB_FINANCE_API_KEY): доступен ~1 запрос в 12 часов, отчёт формируется до следующего дня — указывайте окно «По» не позже вчера.</p>
+      <div class="toolbar">
+        <label>С <input type="date" data-date="from"></label>
+        <label>По <input type="date" data-date="to"></label>
+        <button class="btn wb-dl" data-kind="detail">Скачать Excel</button>
+        <span class="msg" id="wbMsg-detail"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-wb-prices" class="pane">
+    <div class="wb-form">
+      <p class="hint">Текущие цены и скидки Wildberries по карточкам.</p>
+      <div class="toolbar">
+        <button class="btn wb-dl" data-kind="prices">Скачать Excel</button>
+        <span class="msg" id="wbMsg-prices"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-wb-storage" class="pane">
+    <div class="wb-form">
+      <p class="hint">Стоимость хранения на складах Wildberries за последние дни.</p>
+      <div class="toolbar">
+        <label>Дней <input type="number" data-days value="7" min="1" max="90"></label>
+        <button class="btn wb-dl" data-kind="storage">Скачать Excel</button>
+        <span class="msg" id="wbMsg-storage"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-oz-cards" class="pane">
+    <div class="wb-form">
+      <p class="hint">Полная загрузка карточек товаров Ozon (отчёт) и запись в базу (товары).</p>
+      <div class="toolbar">
+        <button class="btn wb-dl" data-api="ozon" data-kind="cards">Скачать Excel</button>
+        <span class="msg" id="ozMsg-cards"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-oz-stock" class="pane">
+    <div class="wb-form">
+      <p class="hint">Остатки Ozon на складах FBO/FBS с записью в базу (остатки за сегодня).</p>
+      <div class="toolbar">
+        <button class="btn wb-dl" data-api="ozon" data-kind="stock">Скачать Excel</button>
+        <span class="msg" id="ozMsg-stock"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-oz-prices" class="pane">
+    <div class="wb-form">
+      <p class="hint">Текущие цены и скидки Ozon по карточкам.</p>
+      <div class="toolbar">
+        <button class="btn wb-dl" data-api="ozon" data-kind="prices">Скачать Excel</button>
+        <span class="msg" id="ozMsg-prices"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-oz-realization" class="pane">
+    <div class="wb-form">
+      <p class="hint">Отчёт о реализации Ozon за месяц (пусто — предыдущий месяц), записывается в продажи.</p>
+      <div class="toolbar">
+        <label>Месяц <input type="number" data-month placeholder="1-12" min="1" max="12"></label>
+        <label>Год <input type="number" data-year placeholder="2026"></label>
+        <button class="btn wb-dl" data-api="ozon" data-kind="realization">Скачать Excel</button>
+        <span class="msg" id="ozMsg-realization"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-oz-cashflow" class="pane">
+    <div class="wb-form">
+      <p class="hint">Движение средств по банковским операциям Ozon за период (сводка по дням).</p>
+      <div class="toolbar">
+        <label>С <input type="date" data-date="from"></label>
+        <label>По <input type="date" data-date="to"></label>
+        <button class="btn wb-dl" data-api="ozon" data-kind="cashflow">Скачать Excel</button>
+        <span class="msg" id="ozMsg-cashflow"></span>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="refreshModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="refreshTitle">Обновление</h3>
+      <button id="refreshClose" class="modal-close" aria-label="Закрыть">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="refresh-summary" id="refreshSummary"></div>
+      <div class="refresh-list" id="refreshList"></div>
+      <label class="refresh-detail">
+        <input type="checkbox" id="refreshDetail"> вкл. Детализацию WB (finance, лимит 1 запрос / 12 ч)
+      </label>
+      <div class="modal-actions">
+        <button id="refreshStart" class="btn btn-primary">Запустить</button>
+      </div>
+    </div>
+    <div class="modal-head">
+      <h4>Последние запуски</h4>
+    </div>
+    <div class="modal-body modal-scroll">
+      <div id="refreshHistory"></div>
+    </div>
+  </div>
+</div>
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

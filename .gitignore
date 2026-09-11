@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+.env
+data/mock/
+*.xlsx
+*.xls
+.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+.idea/
