@@ -145,21 +145,25 @@ def oz_error(e: Exception):
 
 
 # ------------------------------------------------------------- pull_* (общий слой)
-def pull_wb_cards(db, provider: Optional[WbProvider] = None) -> dict:
+def pull_wb_cards(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_cards()
-    pdf = df.rename(columns={"vendorCode": "article", "title": "name", "skus": "barcode"})
-    n = sync_service.upsert_products(db, pdf)
-    n_nm = sync_service.upsert_nm_articles(db, df)
-    _wb_nm_cache_reset()
+    n = 0
+    n_nm = 0
+    if write_db:
+        pdf = df.rename(columns={"vendorCode": "article", "title": "name", "skus": "barcode"})
+        n = sync_service.upsert_products(db, pdf)
+        n_nm = sync_service.upsert_nm_articles(db, df)
+        _wb_nm_cache_reset()
     sync_service.record_api_pull(db, "wb", "cards", len(df), n + n_nm, "сегодня")
-    return {"df": df, "count": n, "db_rows": n + n_nm, "rows": len(df), "window": "сегодня"}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n + n_nm, "rows": len(df), "window": "сегодня"}
 
 
-def pull_wb_stock(db, provider: Optional[WbProvider] = None) -> dict:
+def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_stock_report()
-    if not df.empty:
+    n = 0
+    if write_db and not df.empty:
         if "vendorCode" not in df.columns:
             nm_map = _wb_nmid_to_article()
         else:
@@ -178,78 +182,85 @@ def pull_wb_stock(db, provider: Optional[WbProvider] = None) -> dict:
             "quantity": qty,
         })
         n = sync_service.upsert_stocks(db, sdf, "wb")
-    else:
-        n = 0
     sync_service.record_api_pull(db, "wb", "stock", len(df), n, "сегодня")
-    return {"df": df, "count": n, "db_rows": n, "rows": len(df), "window": "сегодня"}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": "сегодня"}
 
 
-def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None) -> dict:
+def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None,
+                   write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_sales_funnel(from_, to_)
     n = 0
-    if not df.empty:
+    if write_db and not df.empty:
         fdf = _funnel_to_db(df, from_, to_)
         n = sync_service.upsert_funnel(db, fdf)
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "funnel", len(df), n, window)
-    return {"df": df, "count": n, "db_rows": n, "rows": len(df), "window": window}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
 
 
-def pull_wb_prices(db, provider: Optional[WbProvider] = None) -> dict:
+def pull_wb_prices(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_prices()
     sync_service.record_api_pull(db, "wb", "prices", len(df), 0, "")
     return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": ""}
 
 
-def pull_wb_storage(db, days: int = 7, provider: Optional[WbProvider] = None) -> dict:
+def pull_wb_storage(db, days: int = 7, provider: Optional[WbProvider] = None,
+                    write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_storage_cost(number_last_days=days)
     sync_service.record_api_pull(db, "wb", "storage", len(df), 0, f"{days} дней")
     return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": f"{days} дней"}
 
 
-def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None) -> dict:
+def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None,
+                  write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_sales_realization(from_, to_)
-    sdf = sync_service.normalize_wb_sales(df)
-    n = sync_service.upsert_sales(db, sdf, "wb") if sdf is not None else 0
+    n = 0
+    if write_db:
+        sdf = sync_service.normalize_wb_sales(df)
+        n = sync_service.upsert_sales(db, sdf, "wb") if sdf is not None else 0
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "sales", len(df), n, window)
-    return {"df": df, "count": n, "db_rows": n, "rows": len(df), "window": window}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
 
 
-def pull_wb_detail(db, from_, to_, provider: Optional[WbProvider] = None) -> dict:
+def pull_wb_detail(db, from_, to_, provider: Optional[WbProvider] = None,
+                   write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_sales_detail(from_, to_)
-    sdf = sync_service.normalize_wb_sales(df)
-    n = sync_service.upsert_sales(db, sdf, "wb", source="detail") if sdf is not None else 0
+    n = 0
+    if write_db:
+        sdf = sync_service.normalize_wb_sales(df)
+        n = sync_service.upsert_sales(db, sdf, "wb", source="detail") if sdf is not None else 0
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "detail", len(df), n, window)
-    return {"df": df, "count": n, "db_rows": n, "rows": len(df), "window": window}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
 
 
-def pull_oz_cards(db, provider: Optional[OzonProvider] = None) -> dict:
+def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_cards()
-    pdf = pd.DataFrame()
-    if not df.empty:
+    n = 0
+    if write_db and not df.empty:
         pdf = df.rename(columns={
             "Артикул": "article", "Offer ID": "article",
             "Название товара": "name", "Name": "name",
             "Бренд": "brand", "Category": "brand",
             "Штрихкод (Серийный номер / EAN)": "barcode", "Barcode": "barcode",
         })
-    n = sync_service.upsert_products(db, pdf)
+        n = sync_service.upsert_products(db, pdf)
     sync_service.record_api_pull(db, "ozon", "cards", len(df), n, "")
-    return {"df": df, "count": n, "db_rows": n, "rows": len(df), "window": ""}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": ""}
 
 
-def pull_oz_stock(db, provider: Optional[OzonProvider] = None) -> dict:
+def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_stock()
-    if not df.empty:
+    n = 0
+    if write_db and not df.empty:
         qty = _col_num(df, ["free_to_sell_amount"])
         sdf = pd.DataFrame({
             "date": str(date.today()),
@@ -260,31 +271,32 @@ def pull_oz_stock(db, provider: Optional[OzonProvider] = None) -> dict:
             "quantity": qty,
         })
         n = sync_service.upsert_stocks(db, sdf, "ozon")
-    else:
-        n = 0
     sync_service.record_api_pull(db, "ozon", "stock", len(df), n, "сегодня")
-    return {"df": df, "count": n, "db_rows": n, "rows": len(df), "window": "сегодня"}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": "сегодня"}
 
 
-def pull_oz_prices(db, provider: Optional[OzonProvider] = None) -> dict:
+def pull_oz_prices(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_prices()
     sync_service.record_api_pull(db, "ozon", "prices", len(df), 0, "")
     return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": ""}
 
 
-def pull_oz_realization(db, month: int, year: int,
-                        provider: Optional[OzonProvider] = None) -> dict:
+def pull_oz_realization(db, month: int, year: int, provider: Optional[OzonProvider] = None,
+                        write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_realization(month, year)
-    sdf = sync_service.normalize_ozon_realization(df)
-    n = sync_service.upsert_sales(db, sdf, "ozon", source="ozon") if sdf is not None else 0
+    n = 0
+    if write_db:
+        sdf = sync_service.normalize_ozon_realization(df)
+        n = sync_service.upsert_sales(db, sdf, "ozon", source="ozon") if sdf is not None else 0
     window = f"{year:04d}-{month:02d}"
     sync_service.record_api_pull(db, "ozon", "realization", len(df), n, window)
-    return {"df": df, "count": n, "db_rows": n, "rows": len(df), "window": window}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
 
 
-def pull_oz_cashflow(db, from_, to_, provider: Optional[OzonProvider] = None) -> dict:
+def pull_oz_cashflow(db, from_, to_, provider: Optional[OzonProvider] = None,
+                     write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_cash_flow(from_, to_)
     window = f"{from_.isoformat()} — {to_.isoformat()}"

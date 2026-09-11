@@ -76,6 +76,46 @@ def test_pull_error_maps_to_status(api_client, stub_wb):
     assert r.status_code == 502
 
 
+# ------------------------------------------------------ write_db (скачать без записи)
+def test_write_db_off_cards_does_not_write(api_client):
+    r = api_client.post("/api/wb/cards", params={"write_db": 0})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"  # строки в файле всё равно есть
+    assert api_client.get("/api/products").json()["count"] == 0
+    pulls = api_client.get("/api/pulls").json()
+    p = next(p for p in pulls if p["api"] == "wb" and p["kind"] == "cards")
+    assert p["db_rows"] == 0
+
+
+def test_write_db_off_sales_does_not_write(api_client):
+    api_client.post("/api/wb/cards")  # товары нужны для join в /api/sales
+    r = api_client.post("/api/wb/sales", params={"write_db": 0,
+                                                 "date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    sales = api_client.get("/api/sales", params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert sales["count"] == 0
+    pulls = api_client.get("/api/pulls").json()
+    assert next(p for p in pulls if p["api"] == "wb" and p["kind"] == "sales")["db_rows"] == 0
+
+
+def test_write_db_off_ozon_realization_does_not_write(api_client):
+    r = api_client.post("/api/ozon/realization", params={"write_db": 0, "month": 8, "year": 2026})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    sales = api_client.get(
+        "/api/sales", params={"marketplace": "ozon",
+                              "date_from": "2026-07-01", "date_to": "2026-09-30"}
+    ).json()
+    assert sales["count"] == 0
+
+
+def test_write_db_on_by_default_writes(api_client):
+    r = api_client.post("/api/wb/cards")
+    assert r.status_code == 200
+    assert api_client.get("/api/products").json()["count"] == 2
+
+
 def test_invalid_date_returns_400(api_client):
     r = api_client.post("/api/wb/sales", params={"date_from": "нет-даты"})
     assert r.status_code == 400

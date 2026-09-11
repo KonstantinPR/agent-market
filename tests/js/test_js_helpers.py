@@ -30,6 +30,7 @@ const doc = {
   addEventListener() {},
 };
 
+const lsStore = {};
 const sandbox = {
   document: doc, window: { addEventListener() {} }, location: { search: "" },
   fetch: async () => ({ ok: true, json: async () => ({}) }),
@@ -37,11 +38,16 @@ const sandbox = {
   console, Object, Array, Number, String, Math, Date, JSON, RegExp, Map, Set,
   Promise, setTimeout, clearTimeout, setInterval, clearInterval,
   require, process, __filename, __dirname,
+  localStorage: {
+    getItem: (k) => (k in lsStore ? lsStore[k] : null),
+    setItem: (k, v) => { lsStore[k] = String(v); },
+    removeItem: (k) => { delete lsStore[k]; },
+  },
 };
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(APP_PATH, "utf8"), sandbox);
 
-const { fmt, fmtMoney, fmtFloat, fmtPct, cls, qs } = sandbox;
+const { fmt, fmtMoney, fmtFloat, fmtPct, cls, qs, writeDbStorage, setWriteDbStorage } = sandbox;
 
 const norm = (s) => s.replace(/[\u202F\u00A0]/g, " ");
 assert.strictEqual(norm(fmt(1234)), "1 234", "fmt thousand separator");
@@ -58,6 +64,13 @@ assert.strictEqual(
   "qs drops empty and encodes"
 );
 assert.strictEqual(qs({}), "", "qs empty");
+
+assert.strictEqual(writeDbStorage("wb", "cards"), true, "write-db default true");
+setWriteDbStorage("wb", "cards", false);
+assert.strictEqual(writeDbStorage("wb", "cards"), false, "write-db off persisted");
+setWriteDbStorage("wb", "cards", true);
+assert.strictEqual(writeDbStorage("wb", "cards"), true, "write-db back on");
+assert.strictEqual(writeDbStorage("ozon", "realization"), true, "write-db default separate kind");
 
 console.log("JS_TESTS_OK");
 """

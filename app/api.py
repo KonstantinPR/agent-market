@@ -714,18 +714,18 @@ def _xlsx_response(df: pd.DataFrame, filename: str, count: int):
 
 
 @router.post("/wb/cards")
-def wb_cards(db: Session = Depends(get_db)):
+def wb_cards(write_db: int = 1, db: Session = Depends(get_db)):
     try:
-        res = refresh_service.pull_wb_cards(db)
+        res = refresh_service.pull_wb_cards(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
     return _xlsx_response(res["df"], "wb_cards.xlsx", res["count"])
 
 
 @router.post("/wb/stock")
-def wb_stock(db: Session = Depends(get_db)):
+def wb_stock(write_db: int = 1, db: Session = Depends(get_db)):
     try:
-        res = refresh_service.pull_wb_stock(db)
+        res = refresh_service.pull_wb_stock(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
     return _xlsx_response(res["df"], "wb_stock.xlsx", res["count"])
@@ -733,28 +733,28 @@ def wb_stock(db: Session = Depends(get_db)):
 
 @router.post("/wb/funnel")
 def wb_funnel(date_from: Optional[str] = None, date_to: Optional[str] = None,
-              db: Session = Depends(get_db)):
+              write_db: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
-        res = refresh_service.pull_wb_funnel(db, from_, to_)
+        res = refresh_service.pull_wb_funnel(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
     return _xlsx_response(res["df"], f"wb_funnel_{from_}_{to_}.xlsx", res["count"])
 
 
 @router.post("/wb/prices")
-def wb_prices(db: Session = Depends(get_db)):
+def wb_prices(write_db: int = 1, db: Session = Depends(get_db)):
     try:
-        res = refresh_service.pull_wb_prices(db)
+        res = refresh_service.pull_wb_prices(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
     return _xlsx_response(res["df"], "wb_prices.xlsx", res["count"])
 
 
 @router.post("/wb/storage")
-def wb_storage(days: int = 7, db: Session = Depends(get_db)):
+def wb_storage(days: int = 7, write_db: int = 1, db: Session = Depends(get_db)):
     try:
-        res = refresh_service.pull_wb_storage(db, days)
+        res = refresh_service.pull_wb_storage(db, days, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
     return _xlsx_response(res["df"], "wb_storage.xlsx", res["count"])
@@ -762,10 +762,10 @@ def wb_storage(days: int = 7, db: Session = Depends(get_db)):
 
 @router.post("/wb/sales")
 def wb_sales(date_from: Optional[str] = None, date_to: Optional[str] = None,
-             db: Session = Depends(get_db)):
+             write_db: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
-        res = refresh_service.pull_wb_sales(db, from_, to_)
+        res = refresh_service.pull_wb_sales(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
     df = res["df"]
@@ -780,10 +780,10 @@ def wb_sales(date_from: Optional[str] = None, date_to: Optional[str] = None,
 
 @router.post("/wb/detail")
 def wb_detail(date_from: Optional[str] = None, date_to: Optional[str] = None,
-              db: Session = Depends(get_db)):
+              write_db: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
-        res = refresh_service.pull_wb_detail(db, from_, to_)
+        res = refresh_service.pull_wb_detail(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
     df = res["df"]
@@ -792,27 +792,27 @@ def wb_detail(date_from: Optional[str] = None, date_to: Optional[str] = None,
 
 
 @router.post("/ozon/cards")
-def ozon_cards(db: Session = Depends(get_db)):
+def ozon_cards(write_db: int = 1, db: Session = Depends(get_db)):
     try:
-        res = refresh_service.pull_oz_cards(db)
+        res = refresh_service.pull_oz_cards(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
     return _xlsx_response(res["df"], "ozon_cards.xlsx", res["count"])
 
 
 @router.post("/ozon/stock")
-def ozon_stock(db: Session = Depends(get_db)):
+def ozon_stock(write_db: int = 1, db: Session = Depends(get_db)):
     try:
-        res = refresh_service.pull_oz_stock(db)
+        res = refresh_service.pull_oz_stock(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
     return _xlsx_response(res["df"], "ozon_stock.xlsx", res["count"])
 
 
 @router.post("/ozon/prices")
-def ozon_prices(db: Session = Depends(get_db)):
+def ozon_prices(write_db: int = 1, db: Session = Depends(get_db)):
     try:
-        res = refresh_service.pull_oz_prices(db)
+        res = refresh_service.pull_oz_prices(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
     return _xlsx_response(res["df"], "ozon_prices.xlsx", res["count"])
@@ -820,12 +820,12 @@ def ozon_prices(db: Session = Depends(get_db)):
 
 @router.post("/ozon/realization")
 def ozon_realization(month: Optional[int] = None, year: Optional[int] = None,
-                     db: Session = Depends(get_db)):
+                     write_db: int = 1, db: Session = Depends(get_db)):
     if month is None or year is None:
         today = date.today().replace(day=1) - timedelta(days=1)
         year, month = today.year, today.month
     try:
-        res = refresh_service.pull_oz_realization(db, month, year)
+        res = refresh_service.pull_oz_realization(db, month, year, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
     df = res["df"]
@@ -835,10 +835,10 @@ def ozon_realization(month: Optional[int] = None, year: Optional[int] = None,
 
 @router.post("/ozon/cashflow")
 def ozon_cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None,
-                  db: Session = Depends(get_db)):
+                  write_db: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
-        res = refresh_service.pull_oz_cashflow(db, from_, to_)
+        res = refresh_service.pull_oz_cashflow(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
     return _xlsx_response(res["df"], f"ozon_cashflow_{from_}_{to_}.xlsx", res["count"])

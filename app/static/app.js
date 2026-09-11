@@ -19,6 +19,21 @@ function fmtPct(n) {
 }
 function cls(n) { return Number(n) < 0 ? "neg" : "pos"; }
 
+function writeDbStorage(api, kind) {
+  const v = localStorage.getItem("write_db_" + api + "_" + kind);
+  return v == null ? true : v === "1";
+}
+function setWriteDbStorage(api, kind, on) {
+  localStorage.setItem("write_db_" + api + "_" + kind, on ? "1" : "0");
+}
+function initWriteDb() {
+  document.querySelectorAll(".write-db").forEach((cb) => {
+    cb.checked = writeDbStorage(cb.dataset.api, cb.dataset.kind);
+    cb.addEventListener("change", () =>
+      setWriteDbStorage(cb.dataset.api, cb.dataset.kind, cb.checked));
+  });
+}
+
 function filters() {
   return {
     marketplace: $("#fMarketplace").value,
@@ -386,12 +401,14 @@ async function apiDownload(api, kind, msgSel) {
   const days = pane.querySelector("input[data-days]");
   const month = pane.querySelector("input[data-month]");
   const year = pane.querySelector("input[data-year]");
+  const writeDb = pane.querySelector(".write-db");
   const params = {};
   if (from) params.date_from = from.value;
   if (to) params.date_to = to.value;
   if (days) params.days = days.value;
   if (month) params.month = month.value;
   if (year) params.year = year.value;
+  if (writeDb) params.write_db = writeDb.checked ? 1 : 0;
   const msg = document.querySelector(msgSel);
   msg.textContent = "Загрузка…";
   try {
@@ -406,7 +423,7 @@ async function apiDownload(api, kind, msgSel) {
     a.click();
     a.remove();
     URL.revokeObjectURL(a.href);
-    msg.textContent = "Готово, строк: " + count;
+    msg.textContent = "Готово, строк: " + count + (writeDb && !writeDb.checked ? " (без записи в базу)" : "");
     pullsCache = null;
     updateLastPull(currentTab);
   } catch (err) {
@@ -595,6 +612,7 @@ function openTab(name, linkEl) {
 
 document.addEventListener("DOMContentLoaded", () => {
   initDates();
+  initWriteDb();
   document.querySelectorAll('input[data-date="from"]').forEach((i) => (i.value = $("#fFrom").value));
   document.querySelectorAll('input[data-date="to"]').forEach((i) => (i.value = $("#fTo").value));
 

@@ -145,6 +145,7 @@
       <p class="hint">Полная загрузка карточек товаров Wildberries и запись в базу (товары).</p>
       <div class="toolbar">
         <button class="btn wb-dl" data-kind="cards">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="cards" checked> в БД</label>
         <span class="msg" id="wbMsg-cards"></span>
       </div>
     </div>
@@ -155,6 +156,7 @@
       <p class="hint">Остатки на складах Wildberries с записью в базу (остатки за сегодня).</p>
       <div class="toolbar">
         <button class="btn wb-dl" data-kind="stock">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="stock" checked> в БД</label>
         <span class="msg" id="wbMsg-stock"></span>
       </div>
     </div>
@@ -167,6 +169,7 @@
         <label>С <input type="date" data-date="from"></label>
         <label>По <input type="date" data-date="to"></label>
         <button class="btn wb-dl" data-kind="funnel">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="funnel" checked> в БД</label>
         <span class="msg" id="wbMsg-funnel"></span>
       </div>
     </div>
@@ -179,6 +182,7 @@
         <label>С <input type="date" data-date="from"></label>
         <label>По <input type="date" data-date="to"></label>
         <button class="btn wb-dl" data-kind="sales">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="sales" checked> в БД</label>
         <span class="msg" id="wbMsg-sales"></span>
       </div>
     </div>
@@ -191,6 +195,7 @@
         <label>С <input type="date" data-date="from"></label>
         <label>По <input type="date" data-date="to"></label>
         <button class="btn wb-dl" data-kind="detail">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="detail" checked> в БД</label>
         <span class="msg" id="wbMsg-detail"></span>
       </div>
     </div>
@@ -222,6 +227,7 @@
       <p class="hint">Полная загрузка карточек товаров Ozon (отчёт) и запись в базу (товары).</p>
       <div class="toolbar">
         <button class="btn wb-dl" data-api="ozon" data-kind="cards">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="cards" checked> в БД</label>
         <span class="msg" id="ozMsg-cards"></span>
       </div>
     </div>
@@ -232,6 +238,7 @@
       <p class="hint">Остатки Ozon на складах FBO/FBS с записью в базу (остатки за сегодня).</p>
       <div class="toolbar">
         <button class="btn wb-dl" data-api="ozon" data-kind="stock">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="stock" checked> в БД</label>
         <span class="msg" id="ozMsg-stock"></span>
       </div>
     </div>
@@ -254,6 +261,7 @@
         <label>Месяц <input type="number" data-month placeholder="1-12" min="1" max="12"></label>
         <label>Год <input type="number" data-year placeholder="2026"></label>
         <button class="btn wb-dl" data-api="ozon" data-kind="realization">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="realization" checked> в БД</label>
         <span class="msg" id="ozMsg-realization"></span>
       </div>
     </div>
