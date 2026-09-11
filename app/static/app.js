@@ -66,6 +66,23 @@ async function api(path) {
   return resp.json();
 }
 
+async function apiPost(path, body) {
+  const resp = await fetch("/api" + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  if (!resp.ok) {
+    let detail = "";
+    try {
+      const j = await resp.json();
+      detail = j.detail || "";
+    } catch (e) { /* не Json */ }
+    throw new Error(resp.status + " " + detail);
+  }
+  return resp.json();
+}
+
 function table(headers, rows) {
   if (!rows.length) return '<div class="empty">Нет данных за выбранный период</div>';
   let h = "<thead><tr>";
@@ -73,7 +90,7 @@ function table(headers, rows) {
   h += "</tr></thead><tbody>";
   for (const r of rows) {
     h += "<tr>";
-    for (const c of headers) h += '<td class="' + (c.num ? "num" : "") + '">' + c.render(r[c.k]) + "</td>";
+    for (const c of headers) h += '<td class="' + (c.num ? "num" : "") + '">' + c.render(r[c.k], r) + "</td>";
     h += "</tr>";
   }
   return "<table>" + h + "</tbody></table>";
@@ -158,6 +175,7 @@ async function loadTab(name) {
     else if (name === "stocks") await renderStocks(f.marketplace);
     else if (name === "ours") await renderOurs();
     else if (name === "products") await renderProducts();
+    else if (name === "pricing") await renderPricing(false);
   } catch (err) {
     console.error("loadTab error:", err);
   }
@@ -353,8 +371,36 @@ async function renderProducts() {
     { k: "brand", label: "Бренд", render: cellFmts.text },
     { k: "barcode", label: "Баркод", render: cellFmts.text },
     { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
+    { k: "replenishable", label: "Докупаемый", render: replenishableCell },
   ];
   pagedTable($("#productsTable"), headers, data.rows || []);
+  initReplenishToggle();
+}
+
+function replenishableCell(v) {
+  return '<input type="checkbox" class="repl-toggle" ' + (v ? "checked" : "") + ">";
+}
+
+function initReplenishToggle() {
+  const box = $("#productsTable");
+  if (!box || box._replBound) return;
+  box._replBound = true;
+  box.addEventListener("change", async (e) => {
+    const t = e.target;
+    if (!t.classList.contains("repl-toggle")) return;
+    const row = t.closest("tr");
+    const cell = row ? row.cells[0] : null;
+    const article = cell ? cell.textContent.trim() : "";
+    if (!article) return;
+    try {
+      await apiPost("/products/replenishable", { article, value: t.checked });
+      $("#productsMsg").textContent =
+        "Докупаемый: " + article + " → " + (t.checked ? "да" : "нет");
+    } catch (err) {
+      t.checked = !t.checked;
+      $("#productsMsg").textContent = "Ошибка: " + err.message;
+    }
+  });
 }
 
 async function uploadFile(url, input, msgSel, tab) {
@@ -610,6 +656,173 @@ function openTab(name, linkEl) {
   updateLastPull(name);
 }
 
+// ------------------------------------------------------------- автопилот цен WB
+let pricingDefaults = null;
+
+const PRICING_LABELS = {
+  window_days: "Окно скорости, дн",
+  target_doc: "Целевой DOC, дн",
+  doc_low: "Дефицит ≤, дн",
+  doc_high: "Перезапас ≥, дн",
+  floor_margin_pct: "Минимальная маржа, %",
+  max_discount_pct: "Макс. скидка, %",
+  max_raise_pct: "Макс. рост цены, %",
+  max_drop_pct: "Макс. снижение цены, %",
+  min_delta_pp: "Мин. дельта, п.п.",
+  cooldown_days: "Кулдаун, дн",
+  season_adj: "Учёт тренда",
+  season_damp: "Ослабление тренда",
+  min_days_with_sales: "Мин. дней с продажами",
+  hot_conv_pct: "Горячий спрос: конверсия ≥, %",
+  hot_backlog_factor: "Горячий спрос: в корзине ≥ заказов×",
+  return_penalty: "Порог возвратов/отмен",
+  dead_stock_days: "Мёртвый запас ≥, дн",
+  low_conv_pct: "Низкая конверсия <, %",
+  fallback_window_days: "Окно unit-экономики, дн",
+  raise_pct_replenishable: "Рост для докупаемых, %",
+};
+
+const PRICING_ACTION = {
+  RAISE: { txt: "поднять цену", cls: "p-raise" },
+  LOWER: { txt: "снизить цену", cls: "p-lower" },
+  HOLD: { txt: "держать", cls: "p-hold" },
+  SKIP: { txt: "пропустить", cls: "p-skip" },
+};
+
+function actionCell(v) {
+  const a = PRICING_ACTION[v];
+  return a ? `<span class="tag p-tag ${a.cls}">${a.txt}</span>` : (v || "—");
+}
+
+const pricingHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "stock", label: "Остаток", num: true, render: cellFmts.int },
+  { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) },
+  { k: "velocity", label: "v, шт/дн", num: true, render: (v) => v == null ? "—" : v.toFixed(1) },
+  { k: "trend", label: "Тренд", num: true, render: (v) => v == null ? "—" : (v && v > 1 ? "<span class='pos'>▲ " : v && v < 1 ? "<span class='neg'>▼ " : "<span>") + (v || 0).toFixed(2) + "</span>" },
+  { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct },
+  { k: "backlog", label: "В корзине", num: true, render: cellFmts.int },
+  { k: "current_discount", label: "Скидка сейчас, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
+  { k: "avg_price", label: "Ср. цена факт", num: true, render: cellFmts.money },
+  { k: "action", label: "Решение", render: actionCell },
+  { k: "target_discount", label: "Целевая скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
+  { k: "target_vis", label: "Целевая цена", num: true, render: cellFmts.money },
+  { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct },
+  { k: "reason", label: "Причина", render: cellFmts.text },
+];
+
+function loadPricingSettings() {
+  try {
+    return JSON.parse(localStorage.getItem("pricing_settings") || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function savePricingSettings(s) {
+  localStorage.setItem("pricing_settings", JSON.stringify(s));
+}
+
+function collectPricingSettings() {
+  const box = $("#pricingSettings");
+  const s = loadPricingSettings();
+  box.querySelectorAll("input[data-key]").forEach((i) => {
+    const key = i.dataset.key;
+    if (i.type === "checkbox") s[key] = i.checked;
+    else {
+      const v = parseFloat(i.value);
+      if (!isNaN(v)) s[key] = v;
+    }
+  });
+  savePricingSettings(s);
+  return s;
+}
+
+async function buildPricingSettings() {
+  if (!pricingDefaults) {
+    try {
+      const d = await api("/pricing/defaults");
+      pricingDefaults = d.defaults;
+    } catch (err) {
+      $("#pricingMsg").textContent = "Ошибка загрузки настроек: " + err.message;
+      return;
+    }
+  }
+  const saved = loadPricingSettings();
+  const box = $("#pricingSettings");
+  box.innerHTML = "";
+  for (const key of Object.keys(pricingDefaults)) {
+    const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
+    const lbl = document.createElement("label");
+    lbl.className = "p-st";
+    lbl.appendChild(document.createTextNode(PRICING_LABELS[key] || key));
+    const input = document.createElement("input");
+    input.dataset.key = key;
+    if (key === "season_adj") {
+      input.type = "checkbox";
+      input.checked = !!cur;
+    } else {
+      input.type = "number";
+      input.step = (key === "return_penalty" || key === "season_damp") ? "0.1" : "1";
+      input.value = cur;
+    }
+    lbl.appendChild(input);
+    box.appendChild(lbl);
+  }
+}
+
+async function renderPricingHistory() {
+  const box = $("#pricingHistory");
+  let data;
+  try {
+    data = await api("/pricing/history?limit=30");
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить журнал</div>';
+    return;
+  }
+  if (!data.rows.length) {
+    box.innerHTML = '<div class="empty">Журнал пуст — решения автопилота появятся здесь после первого расчёта</div>';
+    return;
+  }
+  const headers = [
+    { k: "calculated_at", label: "Когда", render: cellFmts.text },
+    { k: "article", label: "Артикул", render: cellFmts.text },
+    { k: "action", label: "Решение", render: actionCell },
+    { k: "status", label: "Статус", render: cellFmts.text },
+    { k: "before_discount", label: "Было, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
+    { k: "after_discount", label: "Стало, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
+    { k: "applied_at", label: "Применено", render: cellFmts.text },
+    { k: "reason", label: "Причина", render: cellFmts.text },
+  ];
+  box.innerHTML = table(headers, data.rows);
+}
+
+async function renderPricing(apply) {
+  await buildPricingSettings();
+  const s = collectPricingSettings();
+  const msg = $("#pricingMsg");
+  msg.textContent = apply ? "Применяю скидки в Wildberries…" : "Считаю рекомендации…";
+  try {
+    const data = apply
+      ? await apiPost("/pricing/apply", s)
+      : await apiPost("/pricing/recommendations", s);
+    const rows = data.rows || [];
+    const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
+    const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
+    let summary = "Товаров: " + fmt(rows.length) + ", решений: " + fmt(actionable);
+    if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
+    if (data.pushed != null) summary += " · применено: " + fmt(data.pushed);
+    if (data.as_of) summary += " · на " + data.as_of;
+    $("#pricingSummary").textContent = summary;
+    msg.textContent = data.note || "";
+    pagedTable($("#pricingTable"), pricingHeaders, rows);
+    await renderPricingHistory();
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initDates();
   initWriteDb();
@@ -682,5 +895,15 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
   $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
   $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
+  const pricingRecalc = $("#pricingRecalc");
+  const pricingApply = $("#pricingApply");
+  if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));
+  if (pricingApply) {
+    pricingApply.addEventListener("click", () => {
+      if (confirm("Применить все рекомендованные скидки к карточкам Wildberries?")) {
+        renderPricing(true);
+      }
+    });
+  }
   loadTab(currentTab);
 });

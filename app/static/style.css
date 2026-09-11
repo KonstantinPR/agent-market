@@ -248,3 +248,45 @@ td.num, th.num { text-align: right; }
 }
 .refresh-run.failed { color: #a40e26; }
 .refresh-run.partial { color: #b08800; }
+
+/* ------------------------------- автопилот цен WB ------------------------------- */
+.pricing-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px 14px;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #fafafa;
+}
+.p-st {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: #555;
+}
+.p-st input {
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 13px;
+  width: 100%;
+  background: #fff;
+  color: #111;
+}
+.p-st input[type="checkbox"] { width: auto; margin-top: 4px; }
+.pricing-summary {
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.p-tag { border-radius: 3px; padding: 1px 7px; font-weight: 600; }
+.p-raise { background: #f0faf2; color: #1a7f37; border: 1px solid #ccebd2; }
+.p-lower { background: #fdeaea; color: #a40e26; border: 1px solid #f3c1c1; }
+.p-hold { background: #f5f5f5; color: #555; border: 1px solid #ddd; }
+.p-skip { background: #fff8e6; color: #8a6d00; border: 1px solid #f2e0b0; }
+.pricing-h { font-size: 13px; color: #333; margin: 18px 0 8px; }
+.repl-toggle { width: 16px; height: 16px; cursor: pointer; }

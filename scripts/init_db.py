@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import psycopg2
 from psycopg2 import sql
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.config import settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
@@ -34,6 +34,9 @@ def create_database():
 
 def create_tables():
     Base.metadata.create_all(bind=engine)
+    # Миграции для существующих таблиц (create_all не добавляет колонки)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS replenishable boolean DEFAULT false"))
     print("Таблицы созданы/синхронизированы")
 
 

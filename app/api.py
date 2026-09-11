@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.services import (
     common as common_service,
     excel_io,
     margin as margin_service,
+    pricing as pricing_service,
     refresh as refresh_service,
     sync as sync_service,
 )
@@ -484,6 +485,7 @@ def api_products(db: Session = Depends(get_db)):
             "brand": r.brand,
             "barcode": r.barcode,
             "net_cost": float(r.net_cost or 0),
+            "replenishable": bool(r.replenishable),
         }
         for r in db.execute(
             select(
@@ -492,10 +494,80 @@ def api_products(db: Session = Depends(get_db)):
                 models.Product.brand,
                 models.Product.barcode,
                 models.Product.net_cost,
+                models.Product.replenishable,
             ).order_by(models.Product.article)
         )
     ]
     return {"rows": rows, "count": len(rows)}
+
+
+@router.post("/products/replenishable")
+def product_replenishable(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Переключает флаг «докупаемый» у товара (влияет на автопилот цен WB)."""
+    article = str(payload.get("article", "")).strip()
+    if not article:
+        raise HTTPException(status_code=400, detail="Не указан article")
+    prod = db.scalar(select(models.Product).where(models.Product.article == article))
+    if prod is None:
+        raise HTTPException(status_code=404, detail=f"Товар {article} не найден")
+    prod.replenishable = bool(payload.get("value", False))
+    db.commit()
+    return {"article": article, "replenishable": bool(prod.replenishable)}
+
+
+# ---------------------------------------------------------------------------
+# Автопилот цен Wildberries
+# ---------------------------------------------------------------------------
+@router.get("/pricing/defaults")
+def pricing_defaults():
+    return {"defaults": pricing_service.PRICING_DEFAULTS}
+
+
+@router.post("/pricing/recommendations")
+def pricing_recommendations(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов)."""
+    prices_df = provider_factory.get_wb_provider().get_prices()
+    return pricing_service.recommendations(db, settings=payload, prices_df=prices_df)
+
+
+@router.post("/pricing/apply")
+def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Применяет рекомендованные скидки через WB API upload/task и пишет журнал price_changes."""
+    prov = provider_factory.get_wb_provider()
+    prices_df = prov.get_prices()
+    try:
+        return pricing_service.apply_recommendations(
+            db, settings=payload, prices_df=prices_df, provider=prov,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"WB API не принял изменение цен: {e}")
+
+
+@router.get("/pricing/history")
+def pricing_history(limit: int = 50, db: Session = Depends(get_db)):
+    """Журнал решений автопилота (последние события)."""
+    rows = db.execute(
+        select(models.PriceChange)
+        .order_by(models.PriceChange.calculated_at.desc())
+        .limit(min(max(limit, 1), 200))
+    ).scalars().all()
+    return {
+        "rows": [
+            {
+                "article": r.article,
+                "nm_id": r.nm_id,
+                "calculated_at": str(r.calculated_at) if r.calculated_at else None,
+                "applied_at": str(r.applied_at) if r.applied_at else None,
+                "before_discount": float(r.before_discount or 0),
+                "after_discount": float(r.after_discount) if r.after_discount is not None else None,
+                "action": r.action,
+                "status": r.status,
+                "reason": r.reason,
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+    }
 
 
 @router.get("/custom-stock")

@@ -67,6 +67,15 @@ class FakeWb:
             raise self.prices_error
         return pd.DataFrame({"nmID": ["1001", "1002"], "price": [1100, 990]})
 
+    update_prices_error = None
+    applied_prices = None
+
+    def update_prices(self, items):
+        if self.update_prices_error:
+            raise self.update_prices_error
+        self.applied_prices = items
+        return {"uploadId": "fake-task-1", "task_id": "fake-task-1"}
+
     def get_storage_cost(self, number_last_days=7):
         if self.storage_error:
             raise self.storage_error

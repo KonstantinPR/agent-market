@@ -333,6 +333,25 @@ class WbProvider(BaseProvider):
             )
         return df
 
+    def update_prices(self, items) -> dict:
+        """Обновление цен/скидок WB (discounts-prices-api/v2/upload/task).
+
+        items: список {"nmID": int, "price": float, "discount": float}.
+        В тестовом режиме результат сохраняется в self.applied_prices.
+        """
+        if self.testing:
+            self.applied_prices = items
+            return {"uploadId": "mock-123", "task_id": "mock-123"}
+        url = "https://discounts-prices-api.wildberries.ru/api/v2/upload/task"
+        resp = self._session_post(url, {"data": items})
+        body = resp.json()
+        task_id = None
+        if isinstance(body, dict):
+            data = body.get("data") or {}
+            if isinstance(data, dict):
+                task_id = data.get("uploadId")
+        return {"body": body, "task_id": task_id}
+
     # ---------------------------------------------------------------- хранение
     def get_storage_cost(self, number_last_days: int = 7, is_mean: bool = True) -> pd.DataFrame:
         """Стоимость хранения (seller-analytics-api/v1/paid_storage, асинхронный отчёт)."""

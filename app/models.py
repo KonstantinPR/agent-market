@@ -1,6 +1,7 @@
 from datetime import date as date_type, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -35,6 +36,7 @@ class Product(Base):
     barcode: Mapped[str] = mapped_column(String(100), default="")
     brand: Mapped[str] = mapped_column(String(200), default="")
     net_cost: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    replenishable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class Sale(Base):
@@ -120,6 +122,23 @@ class NmArticle(Base):
     nm_id: Mapped[str] = mapped_column(String(40), primary_key=True)
     article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class PriceChange(Base):
+    """Журнал решений автопилота цен WB (applied и skipped с причинами)."""
+
+    __tablename__ = "price_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    nm_id: Mapped[str] = mapped_column(String(40), default="")
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), index=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    before_discount: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
+    after_discount: Mapped[float] = mapped_column(Numeric(6, 2), nullable=True)
+    action: Mapped[str] = mapped_column(String(20), default="")
+    status: Mapped[str] = mapped_column(String(30), default="")
+    reason: Mapped[str] = mapped_column(String(500), default="")
 
 
 class ApiPull(Base):
