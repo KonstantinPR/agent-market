@@ -9,34 +9,28 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import settings
 from app.database import get_db
-from app.providers.ozon import OZON_RU_COLUMNS, OzonProvider
+from app.providers import factory as provider_factory
+from app.providers.ozon import OZON_RU_COLUMNS
 from app.providers.wb import DETAIL_RU_COLUMNS, SALES_RU_COLUMNS, V5_RU_COLUMNS
-from app.services import excel_io, margin as margin_service, refresh as refresh_service, sync as sync_service
+from app.services import (
+    common as common_service,
+    excel_io,
+    margin as margin_service,
+    refresh as refresh_service,
+    sync as sync_service,
+)
+from app.services.window import parse_window
 
 router = APIRouter(prefix="/api")
 
 
-def _default_range():
-    to_ = date.today()
-    from_ = to_ - timedelta(days=settings.sync_days_default)
-    return from_, to_
-
-
-def _resolve_marketplace_ids(db, marketplace: Optional[str]):
-    """'wb,ozon' | 'wb' | '' -> список id (None = все)."""
-    if not marketplace or marketplace.strip().lower() == "all":
-        return None
-    codes = [c.strip() for c in marketplace.split(",") if c.strip()]
-    ids = []
-    for code in codes:
-        mp_id = db.execute(
-            select(models.Marketplace.id).where(models.Marketplace.code == code)
-        ).scalar()
-        if mp_id is not None:
-            ids.append(mp_id)
-    return ids or None
+def _parse_window400(date_from=None, date_to=None):
+    """parse_window + превращает некорректную дату в HTTP 400 (а не 500)."""
+    try:
+        return parse_window(date_from, date_to)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Некорректная дата: {e}")
 
 
 @router.get("/sales")
@@ -46,11 +40,7 @@ def api_sales(
     date_to: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
     query = (
         select(
@@ -97,13 +87,9 @@ def api_margin(
     source: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
-    mp_ids = _resolve_marketplace_ids(db, marketplace)
+    mp_ids = common_service.resolve_marketplace_ids(db, marketplace)
 
     df = margin_service.margin_dataframe(
         db, date_from=from_, date_to=to_, marketplace=mp_ids,
@@ -123,11 +109,7 @@ def api_margin_detail(
     db: Session = Depends(get_db),
 ):
     """Прибыльность по Детализации Продаж WB (строки sales с source='detail')."""
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.margin_dataframe(
         db, date_from=from_, date_to=to_, marketplace=None,
@@ -147,11 +129,7 @@ def api_margin_funnel(
     db: Session = Depends(get_db),
 ):
     """Прибыльность по Воронке Продаж WB (данные funnel_metric, оценка)."""
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.funnel_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like
@@ -201,7 +179,7 @@ def _real_ozon_articles(db, from_: date, to_: date):
 
     ok, fail = 0, 0
     try:
-        prov = OzonProvider()
+        prov = provider_factory.get_oz_provider()
         for year_, month_ in sorted(months):
             try:
                 df = prov.get_realization(month_, year_)
@@ -265,11 +243,7 @@ def api_margin_test(
     Сверяет значения из БД с эталоном реальных артикулов Ozon
     (живой /v2/finance/realization) и ставит флаги источника/себестоимости.
     """
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
     real_ozon, prov_note = _real_ozon_articles(db, from_, to_)
 
@@ -401,11 +375,7 @@ def api_dashboard(
     date_to: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
     query = (
         select(
@@ -585,7 +555,7 @@ async def import_net_cost(file: UploadFile = File(...), db: Session = Depends(ge
     if "article" not in df.columns or "net_cost" not in df.columns:
         raise HTTPException(status_code=400, detail="В файле нет колонок article и net_cost")
     n = sync_service.upsert_products(db, df)
-    filled = _count_products_with_cost(db)
+    filled = common_service.count_products_with_cost(db)
     return {"imported": n, "total": len(df), "with_cost_total": filled, "filename": file.filename}
 
 
@@ -613,13 +583,9 @@ def export_margin(
     article_like: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
-    mp_ids = _resolve_marketplace_ids(db, marketplace)
+    mp_ids = common_service.resolve_marketplace_ids(db, marketplace)
     df = margin_service.margin_dataframe(
         db, date_from=from_, date_to=to_, marketplace=mp_ids, article_like=article_like
     )
@@ -647,11 +613,7 @@ def export_margin_detail(
     article_like: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.margin_dataframe(
         db, date_from=from_, date_to=to_, marketplace=None,
@@ -681,11 +643,7 @@ def export_margin_funnel(
     article_like: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.funnel_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like
@@ -733,11 +691,7 @@ def export_sales(
 def api_sync(code: str, date_from: Optional[str] = None, date_to: Optional[str] = None):
     if code not in ("wb", "ozon"):
         return {"error": "unknown marketplace"}, 400
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
     return sync_service.sync_sales_window(code, from_, to_)
 
 
@@ -757,10 +711,6 @@ def _xlsx_response(df: pd.DataFrame, filename: str, count: int):
             "X-Count": str(count),
         },
     )
-
-
-def _count_products_with_cost(db: Session) -> int:
-    return db.query(models.Product).filter(models.Product.net_cost > 0).count()
 
 
 @router.post("/wb/cards")
@@ -784,11 +734,7 @@ def wb_stock(db: Session = Depends(get_db)):
 @router.post("/wb/funnel")
 def wb_funnel(date_from: Optional[str] = None, date_to: Optional[str] = None,
               db: Session = Depends(get_db)):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_wb_funnel(db, from_, to_)
     except Exception as e:  # noqa: BLE001
@@ -817,11 +763,7 @@ def wb_storage(days: int = 7, db: Session = Depends(get_db)):
 @router.post("/wb/sales")
 def wb_sales(date_from: Optional[str] = None, date_to: Optional[str] = None,
              db: Session = Depends(get_db)):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_wb_sales(db, from_, to_)
     except Exception as e:  # noqa: BLE001
@@ -839,11 +781,7 @@ def wb_sales(date_from: Optional[str] = None, date_to: Optional[str] = None,
 @router.post("/wb/detail")
 def wb_detail(date_from: Optional[str] = None, date_to: Optional[str] = None,
               db: Session = Depends(get_db)):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_wb_detail(db, from_, to_)
     except Exception as e:  # noqa: BLE001
@@ -898,11 +836,7 @@ def ozon_realization(month: Optional[int] = None, year: Optional[int] = None,
 @router.post("/ozon/cashflow")
 def ozon_cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None,
                   db: Session = Depends(get_db)):
-    from_, to_ = _default_range()
-    if date_from:
-        from_ = date.fromisoformat(date_from)
-    if date_to:
-        to_ = date.fromisoformat(date_to)
+    from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_oz_cashflow(db, from_, to_)
     except Exception as e:  # noqa: BLE001

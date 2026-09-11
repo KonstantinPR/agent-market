@@ -18,6 +18,7 @@ import requests
 
 from app.config import settings
 from app.providers.base import BaseProvider
+from app.providers.errors import OzonApiError
 
 OZON_API = "https://api-seller.ozon.ru"
 OZON_RU_COLUMNS = {
@@ -49,12 +50,18 @@ class OzonProvider(BaseProvider):
             resp = requests.post(url, headers=self._headers(), json=payload, timeout=90)
             if resp.status_code == 429:
                 if self.fail_fast_429:
-                    raise RuntimeError("Превышен лимит запросов Ozon API, попробуйте позже.")
+                    raise OzonApiError(
+                        "Превышен лимит запросов Ozon API, попробуйте позже.",
+                        status_code=429,
+                    )
                 time.sleep(5 + attempt * 10)
                 continue
             resp.raise_for_status()
             return resp
-        raise RuntimeError(f"Ozon API вернул 429 (лимит запросов) после {num_retries} попыток: {url}")
+        raise OzonApiError(
+            f"Ozon API вернул 429 (лимит запросов) после {num_retries} попыток: {url}",
+            status_code=429,
+        )
 
     # ------------------------------------------------------------ mock helpers
     def _mock_articles(self, n=20):

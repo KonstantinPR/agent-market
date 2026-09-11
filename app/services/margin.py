@@ -95,6 +95,41 @@ def funnel_dataframe(
     return rows
 
 
+def margin_columns() -> list:
+    """Колонки итогового df маржинальности (в т.ч. вычисляемые)."""
+    return [
+        "article", "name", "sells", "revenue", "commission", "logistics",
+        "storage", "services", "income", "net_cost", "other",
+        "margin", "margin_per_one", "margin_pct",
+    ]
+
+
+def compute_margin(df: pd.DataFrame) -> pd.DataFrame:
+    """Считает производные колонки маржинальности из агрегированного df.
+
+    Ожидаются колонки: article, name, sells, revenue, commission, logistics,
+    storage, services, income, net_cost. Ничего не пишет в БД — чистый расчёт.
+    """
+    df = df.copy()
+    df["net_cost"] = pd.to_numeric(df["net_cost"], errors="coerce").fillna(0)
+    df["other"] = (
+        df["income"] - (df["revenue"] + df["commission"]
+                        + df["logistics"] + df["storage"] + df["services"])
+    ).round(2)
+    df["margin"] = df["income"] - df["net_cost"] * df["sells"]
+    df["margin_per_one"] = np.where(
+        df["sells"] > 0, df["margin"] / np.where(df["sells"] == 0, 1, df["sells"]), 0
+    )
+    df["margin_pct"] = np.where(df["income"] != 0, df["margin"] / df["income"] * 100, 0)
+    df = df.sort_values("margin", ascending=False).reset_index(drop=True)
+    df["article"] = df["article"].astype(str)
+    return df
+
+
+def empty_margin_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=margin_columns())
+
+
 def margin_dataframe(
     db: Session,
     date_from=None,
@@ -136,23 +171,6 @@ def margin_dataframe(
 
     df = pd.read_sql(query, db.bind)
     if df.empty:
-        df = pd.DataFrame(columns=[
-            "article", "name", "sells", "revenue", "commission", "logistics",
-            "storage", "services", "income", "net_cost", "other",
-            "margin", "margin_per_one", "margin_pct",
-        ])
-        return df
+        return empty_margin_df()
 
-    df["net_cost"] = pd.to_numeric(df["net_cost"], errors="coerce").fillna(0)
-    df["other"] = (
-        df["income"] - (df["revenue"] + df["commission"]
-                        + df["logistics"] + df["storage"] + df["services"])
-    ).round(2)
-    df["margin"] = df["income"] - df["net_cost"] * df["sells"]
-    df["margin_per_one"] = np.where(
-        df["sells"] > 0, df["margin"] / np.where(df["sells"] == 0, 1, df["sells"]), 0
-    )
-    df["margin_pct"] = np.where(df["income"] != 0, df["margin"] / df["income"] * 100, 0)
-    df = df.sort_values("margin", ascending=False).reset_index(drop=True)
-    df["article"] = df["article"].astype(str)
-    return df
+    return compute_margin(df)

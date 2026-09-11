@@ -13,6 +13,7 @@ import requests
 
 from app.config import settings
 from app.providers.base import BaseProvider
+from app.providers.errors import WbApiError
 
 # Русские заголовки для отчёта детализации продаж (финансовый API)
 DETAIL_RU_COLUMNS = {
@@ -88,30 +89,38 @@ class WbProvider(BaseProvider):
             resp = requests.get(url, headers=self._headers(finance), params=params, timeout=60)
             if resp.status_code == 429:
                 if self.fail_fast_429:
-                    raise RuntimeError(
+                    raise WbApiError(
                         "Превышен лимит запросов WB API: доступен 1 запрос в "
-                        f"{self._retry_hint(resp)}. Попробуйте позже."
+                        f"{self._retry_hint(resp)}. Попробуйте позже.",
+                        status_code=429,
                     )
                 self._wait_rate_limit(resp)
                 continue
             resp.raise_for_status()
             return resp
-        raise RuntimeError(f"WB API вернул 429 (лимит запросов) после {num_retries} попыток: {url}")
+        raise WbApiError(
+            f"WB API вернул 429 (лимит запросов) после {num_retries} попыток: {url}",
+            status_code=429,
+        )
 
     def _session_post(self, url, payload, num_retries=6, finance: bool = False):
         for attempt in range(num_retries):
             resp = requests.post(url, headers=self._headers(finance), json=payload, timeout=60)
             if resp.status_code == 429:
                 if finance or self.fail_fast_429:
-                    raise RuntimeError(
+                    raise WbApiError(
                         "finance-api превысил лимит: доступен 1 запрос в "
-                        f"{self._retry_hint(resp)}. Финансовый отчёт обновлять редко."
+                        f"{self._retry_hint(resp)}. Финансовый отчёт обновлять редко.",
+                        status_code=429,
                     )
                 self._wait_rate_limit(resp)
                 continue
             resp.raise_for_status()
             return resp
-        raise RuntimeError(f"WB API вернул 429 (лимит запросов) после {num_retries} попыток: {url}")
+        raise WbApiError(
+            f"WB API вернул 429 (лимит запросов) после {num_retries} попыток: {url}",
+            status_code=429,
+        )
 
     @staticmethod
     def _retry_hint(resp) -> str:

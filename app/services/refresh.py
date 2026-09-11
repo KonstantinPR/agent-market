@@ -20,25 +20,24 @@ from sqlalchemy import select
 from app import models
 from app.config import settings
 from app.database import SessionLocal
+from app.providers import factory as provider_factory
+from app.providers.errors import (MarketError, OzonApiError, WbApiError,
+                                  translate_request_error)
 from app.providers.ozon import OzonProvider
 from app.providers.wb import WbProvider
 from app.services import sync as sync_service
+from app.services.window import parse_window
 
 
 # ------------------------------------------------------------------ окна и help
 def default_range():
-    to_ = date.today()
-    from_ = to_ - timedelta(days=settings.sync_days_default)
-    return from_, to_
+    """Окно по умолчанию (сегодня минус sync_days_default)."""
+    return parse_window()
 
 
 def resolve_range(date_from=None, date_to=None):
-    from_, to_ = default_range()
-    if date_from:
-        from_ = date.fromisoformat(str(date_from))
-    if date_to:
-        to_ = date.fromisoformat(str(date_to))
-    return from_, to_
+    """Разрешает строки дат в (date, date); пустое — окно по умолчанию."""
+    return parse_window(date_from, date_to)
 
 
 def _col_num(df: pd.DataFrame, names) -> pd.Series:
@@ -102,49 +101,47 @@ def _funnel_to_db(df: pd.DataFrame, from_, to_) -> pd.DataFrame:
 
 # ----------------------------------------------------------- привязка провайдеров
 def _wb_provider(with_fail_fast: bool = False) -> WbProvider:
-    prov = WbProvider()
-    prov.fail_fast_429 = with_fail_fast
-    return prov
+    return provider_factory.get_wb_provider(with_fail_fast=with_fail_fast)
 
 
 def _oz_provider(with_fail_fast: bool = False) -> OzonProvider:
-    prov = OzonProvider()
-    prov.fail_fast_429 = with_fail_fast
-    return prov
+    return provider_factory.get_oz_provider(with_fail_fast=with_fail_fast)
+
+
+_WB_MESSAGES = {
+    401: "Токен WB API невалиден или истёк. Проверьте WB_API_KEY в .env.",
+    403: "У токена WB нет прав на этот отчёт (финансовый отчёт требует отдельный токен продавца).",
+    429: "Превышен лимит запросов к WB API, попробуйте позже.",
+}
+_OZ_MESSAGES = {
+    401: "Ozon API: неверный Client-Id или Api-Key. Проверьте OZON_CLIENT_ID / OZON_API_KEY в .env.",
+    403: "Ozon API: нет доступа к запрошенным данным (проверьте права ключа).",
+    429: "Превышен лимит запросов к Ozon API, попробуйте позже.",
+}
+
+
+def _market_error(e: Exception, market: str, messages: dict):
+    """Обобщённые ошибки в статусный HTTPException с понятным текстом."""
+    if isinstance(e, MarketError):
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    if isinstance(e, requests.RequestException):
+        err = translate_request_error(market, e, messages)
+        raise HTTPException(status_code=err.status_code, detail=str(err))
+    if isinstance(e, RuntimeError):
+        raise HTTPException(status_code=502, detail=str(e))
+    if isinstance(e, ValueError):
+        raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=502, detail=str(e))
 
 
 def wb_error(e: Exception):
     """Превращает исключение вызова WB API в понятный HTTP-ответ."""
-    if isinstance(e, requests.RequestException):
-        code = getattr(getattr(e, "response", None), "status_code", None)
-        msg = {
-            401: "Токен WB API невалиден или истёк. Проверьте WB_API_KEY в .env.",
-            403: "У токена WB нет прав на этот отчёт (финансовый отчёт требует отдельный токен продавца).",
-            429: "Превышен лимит запросов к WB API, попробуйте позже.",
-        }.get(code, f"Ошибка обращения к WB API: {e}")
-        raise HTTPException(status_code=code or 502, detail=msg)
-    if isinstance(e, RuntimeError):
-        raise HTTPException(status_code=502, detail=str(e))
-    if isinstance(e, ValueError):
-        raise HTTPException(status_code=400, detail=str(e))
-    raise HTTPException(status_code=502, detail=str(e))
+    _market_error(e, "wb", _WB_MESSAGES)
 
 
 def oz_error(e: Exception):
     """Превращает исключение вызова Ozon API в понятный HTTP-ответ."""
-    if isinstance(e, requests.RequestException):
-        code = getattr(getattr(e, "response", None), "status_code", None)
-        msg = {
-            401: "Ozon API: неверный Client-Id или Api-Key. Проверьте OZON_CLIENT_ID / OZON_API_KEY в .env.",
-            403: "Ozon API: нет доступа к запрошенным данным (проверьте права ключа).",
-            429: "Превышен лимит запросов к Ozon API, попробуйте позже.",
-        }.get(code, f"Ошибка обращения к Ozon API: {e}")
-        raise HTTPException(status_code=code or 502, detail=msg)
-    if isinstance(e, RuntimeError):
-        raise HTTPException(status_code=502, detail=str(e))
-    if isinstance(e, ValueError):
-        raise HTTPException(status_code=400, detail=str(e))
-    raise HTTPException(status_code=502, detail=str(e))
+    _market_error(e, "ozon", _OZ_MESSAGES)
 
 
 # ------------------------------------------------------------- pull_* (общий слой)
