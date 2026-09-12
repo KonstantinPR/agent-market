@@ -570,6 +570,50 @@ def pricing_history(limit: int = 50, db: Session = Depends(get_db)):
     }
 
 
+PRICING_ACTION_RU = {
+    "RAISE": "поднять цену", "LOWER": "снизить цену", "HOLD": "держать", "SKIP": "пропустить",
+}
+
+
+@router.post("/pricing/export")
+def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся."""
+    prices_df = provider_factory.get_wb_provider().get_prices()
+    rec = pricing_service.recommendations(db, settings=payload, prices_df=prices_df)
+    df = pd.DataFrame(rec["rows"])
+    if not df.empty:
+        df["action"] = df["action"].map(PRICING_ACTION_RU)
+        df["replenishable"] = df["replenishable"].map({True: "да", False: "нет"})
+    keep = [
+        "article", "name", "price", "current_vis", "current_discount", "target_vis",
+        "target_discount", "action", "status", "reason", "doc", "velocity", "trend",
+        "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
+        "max_discount_item", "margin_pct_at_target", "replenishable",
+    ]
+    df = df[[c for c in keep if c in df.columns]]
+    df = df.rename(columns={
+        "article": "Артикул", "name": "Наименование", "price": "Цена базовая, руб",
+        "current_vis": "Цена сейчас, руб", "current_discount": "Скидка сейчас, %",
+        "target_vis": "Целевая цена, руб", "target_discount": "Целевая скидка, %",
+        "action": "Решение", "status": "Статус", "reason": "Причина",
+        "doc": "DOC, дн", "velocity": "Продажи, шт/дн", "trend": "Тренд",
+        "conv_pct": "Конверсия, %", "backlog": "В корзине", "stock": "Остаток",
+        "avg_price": "Ср. цена факт, руб", "eff": "База расчёта, руб",
+        "floor_price": "Пол (break-even), руб", "max_discount_item": "Макс. скидка, %",
+        "margin_pct_at_target": "Маржа при цели, %", "replenishable": "Докупаемый",
+    })
+    buf = excel_io.df_to_excel_stream(df, sheet_name="Автопилот")
+    fname = f"pricing_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type=XLSX_MEDIA,
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "X-Count": str(len(df)),
+        },
+    )
+
+
 @router.get("/custom-stock")
 def api_custom_stock(db: Session = Depends(get_db)):
     rows = [

@@ -100,6 +100,18 @@ def test_apply_cooldown_blocks_second(db, api_client):
                for r in second["rows"] if r["action"] in ("RAISE", "LOWER"))
 
 
+def test_export_excel(db, api_client):
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    r = api_client.post("/api/pricing/export", json={})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert int(r.headers["x-count"]) >= 1
+    assert "filename=" in r.headers["content-disposition"]
+    assert b"PK" in r.content[:4]
+    assert db.execute(select(models.PriceChange)).first() is None
+
+
 def test_replenishable_toggle(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))

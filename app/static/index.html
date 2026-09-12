@@ -108,17 +108,17 @@
 
   <section id="tab-pricing" class="pane">
     <div class="toolbar">
-      <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает) и не опускает витринную цену ниже порога убытка (unit-экономика из продаж). Рост цены — только при реальных продажах; докупаемые товары поднимаются умеренно. Между применениями действует кулдаун.</span>
+      <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает) и не опускает витринную цену ниже порога убытка (unit-экономика из продаж). Рост цены — только при реальных продажах; докупаемые товары поднимаются умеренно. Сейчас изменения в Wildberries через API НЕ вносятся — рекомендации сохраняются в Excel (применение включим после добавления токена WB).</span>
     </div>
     <div class="toolbar">
       <button id="pricingRecalc" class="btn">Пересчитать</button>
-      <button id="pricingApply" class="btn btn-primary">Применить всё</button>
+      <button id="pricingExport" class="btn btn-primary">Экспорт в Excel</button>
       <span class="msg" id="pricingMsg"></span>
     </div>
     <div id="pricingSettings" class="pricing-settings"></div>
     <div class="pricing-summary" id="pricingSummary"></div>
     <div class="table-wrap" id="pricingTable"></div>
-    <h3 class="pricing-h">Журнал изменений</h3>
+    <h3 class="pricing-h">Журнал решений</h3>
     <div class="table-wrap" id="pricingHistory"></div>
   </section>
 

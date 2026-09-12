@@ -782,7 +782,7 @@ async function renderPricingHistory() {
     return;
   }
   if (!data.rows.length) {
-    box.innerHTML = '<div class="empty">Журнал пуст — решения автопилота появятся здесь после первого расчёта</div>';
+    box.innerHTML = '<div class="empty">Журнал пуст — решения записываются здесь при применении через WB API (сейчас выключено)</div>';
     return;
   }
   const headers = [
@@ -802,22 +802,53 @@ async function renderPricing(apply) {
   await buildPricingSettings();
   const s = collectPricingSettings();
   const msg = $("#pricingMsg");
-  msg.textContent = apply ? "Применяю скидки в Wildberries…" : "Считаю рекомендации…";
+  msg.textContent = "Считаю рекомендации…";
   try {
-    const data = apply
-      ? await apiPost("/pricing/apply", s)
-      : await apiPost("/pricing/recommendations", s);
+    const data = await apiPost("/pricing/recommendations", s);
     const rows = data.rows || [];
     const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
     const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
     let summary = "Товаров: " + fmt(rows.length) + ", решений: " + fmt(actionable);
     if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
-    if (data.pushed != null) summary += " · применено: " + fmt(data.pushed);
     if (data.as_of) summary += " · на " + data.as_of;
     $("#pricingSummary").textContent = summary;
     msg.textContent = data.note || "";
     pagedTable($("#pricingTable"), pricingHeaders, rows);
     await renderPricingHistory();
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function exportPricing() {
+  await buildPricingSettings();
+  const s = collectPricingSettings();
+  const msg = $("#pricingMsg");
+  msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch("/api/pricing/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(s),
+    });
+    if (!resp.ok) {
+      let detail = "";
+      try {
+        const j = await resp.json();
+        detail = j.detail || "";
+      } catch (e) { /* не Json */ }
+      throw new Error(resp.status + " " + detail);
+    }
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition")) || "pricing.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Excel сохранён: строк " + (count == null ? "—" : count);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -896,14 +927,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
   $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
   const pricingRecalc = $("#pricingRecalc");
-  const pricingApply = $("#pricingApply");
+  const pricingExport = $("#pricingExport");
   if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));
-  if (pricingApply) {
-    pricingApply.addEventListener("click", () => {
-      if (confirm("Применить все рекомендованные скидки к карточкам Wildberries?")) {
-        renderPricing(true);
-      }
-    });
-  }
+  if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
   loadTab(currentTab);
 });
