@@ -165,6 +165,19 @@
         <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="cards" checked> в БД</label>
         <span class="msg" id="wbMsg-cards"></span>
       </div>
+      <div class="toolbar">
+        <input type="file" id="wbCardsFile" accept=".xlsx,.xlsm,.zip" multiple>
+        <button id="wbCardsImport" class="btn">Загрузить файлы</button>
+        <span class="msg" id="wbMsg-cards-excel"></span>
+      </div>
+      <div class="dropzone" id="wbCardsDrop">
+        <span class="dz-label">Перетащите сюда Excel-файлы или zip-архив с карточками Wildberries</span>
+      </div>
+      <div class="toolbar">
+        <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд…">
+        <span class="msg" id="wbMsg-cards-table"></span>
+      </div>
+      <div class="table-wrap" id="wbCardsTable"></div>
     </div>
   </section>
 

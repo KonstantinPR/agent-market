@@ -1,6 +1,8 @@
 import re
+import zipfile
 from datetime import date, timedelta
-from typing import Optional
+from io import BytesIO
+from typing import List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
@@ -689,6 +691,135 @@ async def import_custom_stock(file: UploadFile = File(...), db: Session = Depend
     })
     n = sync_service.upsert_custom_stock(db, df)
     return {"imported": n, "filename": file.filename}
+
+
+_MAX_CARDS_UPLOAD = 100 * 1024 * 1024  # 100 МБ
+
+
+@router.get("/cards")
+def api_cards(
+    marketplace: str = "wb",
+    like: Optional[str] = None,
+    limit: int = 300,
+    db: Session = Depends(get_db),
+):
+    """Сырые карточки маркетплейса (marketplace_cards): одна строка = размер/SKU."""
+    q = (
+        select(models.MarketplaceCard, models.Marketplace.code)
+        .join(models.Marketplace, models.MarketplaceCard.marketplace_id == models.Marketplace.id)
+        .where(models.Marketplace.code == marketplace)
+    )
+    if like and like.strip():
+        pat = f"%{like.strip()}%"
+        q = q.where(
+            func.concat(
+                models.MarketplaceCard.vendor_code, " ",
+                models.MarketplaceCard.barcode, " ",
+                models.MarketplaceCard.brand, " ",
+                models.MarketplaceCard.name, " ",
+                models.MarketplaceCard.nm_id,
+            ).ilike(pat)
+        )
+    q = q.order_by(models.MarketplaceCard.imported_at.desc(), models.MarketplaceCard.id.desc())
+    rows = db.execute(q.limit(min(max(limit, 1), 2000))).all()
+    return {
+        "marketplace": marketplace,
+        "count": len(rows),
+        "rows": [
+            {
+                "chrt_id": r.MarketplaceCard.chrt_id,
+                "nm_id": r.MarketplaceCard.nm_id,
+                "vendor_code": r.MarketplaceCard.vendor_code,
+                "brand": r.MarketplaceCard.brand,
+                "subject": r.MarketplaceCard.subject,
+                "size": r.MarketplaceCard.size,
+                "barcode": r.MarketplaceCard.barcode,
+                "volume_l": float(r.MarketplaceCard.volume_l or 0),
+                "composition": r.MarketplaceCard.composition,
+                "name": r.MarketplaceCard.name,
+                "imported_at": str(r.MarketplaceCard.imported_at) if r.MarketplaceCard.imported_at else "",
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.post("/import/cards")
+async def import_cards(
+    marketplace: str = "wb",
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Загрузка карточек товара маркетплейса из Excel.
+
+    Принимает 1 файл, несколько файлов или zip-архив с Excel-файлами (*.xlsx, *.xlsm).
+    Пишет в marketplace_cards и обновляет общий каталог (products + nm_articles).
+    """
+    if marketplace not in ("wb", "ozon"):
+        raise HTTPException(status_code=400, detail="marketplace должен быть wb или ozon")
+    api_code = "wb" if marketplace == "wb" else "ozon"
+    frames = []
+    total_rows = 0
+    errors = []
+    fileinfo = []
+    accum = 0
+    for upf in files:
+        data = await upf.read()
+        accum += len(data)
+        if accum > _MAX_CARDS_UPLOAD:
+            raise HTTPException(status_code=413, detail="Слишком большой объём файлов (> 100 МБ)")
+        name = upf.filename or "file"
+        if name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(BytesIO(data)) as zf:
+                    sub = 0
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        if not info.filename.lower().endswith((".xlsx", ".xlsm")):
+                            continue
+                        try:
+                            d = excel_io.read_excel_bytes(zf.read(info))
+                            frames.append(d)
+                            sub += len(d)
+                        except Exception as e:  # noqa: BLE001
+                            errors.append(f"{name}/{info.filename}: {e}")
+                fileinfo.append({"name": name, "rows": sub, "ok": True})
+                total_rows += sub
+            except zipfile.BadZipFile as e:
+                errors.append(f"{name}: не является zip-архивом ({e})")
+                fileinfo.append({"name": name, "rows": 0, "ok": False, "error": str(e)})
+            continue
+        if not name.lower().endswith((".xlsx", ".xlsm")):
+            errors.append(f"{name}: пропущен (не Excel)")
+            fileinfo.append({"name": name, "rows": 0, "ok": False, "error": "не Excel"})
+            continue
+        try:
+            d = excel_io.read_excel_bytes(data)
+            frames.append(d)
+            total_rows += len(d)
+            fileinfo.append({"name": name, "rows": len(d), "ok": True})
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{name}: {e}")
+            fileinfo.append({"name": name, "rows": 0, "ok": False, "error": str(e)})
+    if not frames:
+        raise HTTPException(status_code=400,
+                            detail="Нет данных для импорта: " + ("; ".join(errors) or "нет файлов"))
+    df = pd.concat(frames, ignore_index=True)
+    mdf = sync_service.normalize_marketplace_cards(df)
+    n_sk = sync_service.upsert_marketplace_cards(db, mdf, marketplace) if mdf is not None else 0
+    n_pr, n_nm = sync_service.refresh_products_from_cards(db, marketplace)
+    sync_service.record_api_pull(db, api_code, "cards_excel", int(total_rows), int(n_sk),
+                                 f"файлы: {len(files)}")
+    return {
+        "imported": n_sk,
+        "skus": n_sk,
+        "products": n_pr,
+        "nm_articles": n_nm,
+        "total": int(total_rows),
+        "files": fileinfo,
+        "errors": errors,
+    }
 
 
 @router.get("/export/margin")

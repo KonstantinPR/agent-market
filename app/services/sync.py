@@ -171,6 +171,113 @@ def upsert_products(db, df: pd.DataFrame) -> int:
     return n
 
 
+# Карты колонок (Excel-выгрузка ЛК WB + API WB) на схему marketplace_cards
+CARD_RENAME = {
+    "Код размера (chrt_id)": "chrt_id", "Код размера": "chrt_id", "chrt_id": "chrt_id",
+    "chrtId": "chrt_id",
+    "Артикул WB": "nm_id", "Артикул WB (nmID)": "nm_id", "nm_id": "nm_id", "nmID": "nm_id",
+    "Артикул продавца": "vendor_code", "vendor_code": "vendor_code", "vendorCode": "vendor_code",
+    "Артикул": "vendor_code",
+    "Бренд": "brand", "brand": "brand",
+    "Предмет": "subject", "subject": "subject",
+    "Размер": "size", "size": "size", "techSize": "size",
+    "Баркод": "barcode", "barcode": "barcode", "barcodes": "barcode", "skus": "barcode",
+    "Объем, л.": "volume_l", "Объём, л.": "volume_l", "volume_l": "volume_l",
+    "Состав": "composition", "composition": "composition",
+    "Наименование": "name", "Название товара": "name", "title": "name",
+    "name": "name",
+}
+
+CARD_TEXT_COLS = ["chrt_id", "nm_id", "vendor_code", "brand", "subject", "size",
+                  "barcode", "composition", "name"]
+
+
+def _first_scalar(x, default=""):
+    if isinstance(x, (list, tuple)):
+        return str(x[0]) if x else default
+    return x
+
+
+def normalize_marketplace_cards(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Приводит карточки товара WB (Excel ЛК или API) к схеме marketplace_cards."""
+    if df is None or df.empty:
+        return None
+    df = df.rename(columns={k: v for k, v in CARD_RENAME.items() if k in df.columns})
+    for col in CARD_TEXT_COLS:
+        if col not in df.columns:
+            df[col] = ""
+    if "volume_l" not in df.columns:
+        df["volume_l"] = 0.0
+    df = df[CARD_TEXT_COLS + ["volume_l"]].copy()
+    if "barcode" in df.columns:
+        df["barcode"] = df["barcode"].map(_first_scalar)
+    df["volume_l"] = pd.to_numeric(
+        df["volume_l"].astype(str).str.replace(",", ".", regex=False),
+        errors="coerce",
+    ).fillna(0.0)
+    for col in CARD_TEXT_COLS:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+    df = df.drop_duplicates(subset=["chrt_id", "vendor_code", "barcode"], keep="first")
+    df = df[df["chrt_id"] != ""]
+    return df
+
+
+def upsert_marketplace_cards(db, df: pd.DataFrame, code: str) -> int:
+    """Карточки маркетплейса (marketplace_cards), upsert по (marketplace_id, chrt_id)."""
+    if df is None or df.empty:
+        return 0
+    mp = marketplace_id(db, code)
+    values = []
+    for r in df.to_dict("records"):
+        values.append({
+            "marketplace_id": mp,
+            "chrt_id": str(r["chrt_id"]),
+            "nm_id": str(r["nm_id"]),
+            "vendor_code": str(r["vendor_code"]),
+            "brand": str(r["brand"]),
+            "subject": str(r["subject"]),
+            "size": str(r["size"]),
+            "barcode": str(r["barcode"]),
+            "volume_l": float(r.get("volume_l") or 0),
+            "composition": str(r["composition"]),
+            "name": str(r["name"]),
+        })
+    ins = insert(models.MarketplaceCard)
+    stmt = ins.on_conflict_do_update(
+        index_elements=["marketplace_id", "chrt_id"],
+        set_={c: ins.excluded[c]
+              for c in ["nm_id", "vendor_code", "brand", "subject", "size",
+                        "barcode", "volume_l", "composition", "name"]},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
+def refresh_products_from_cards(db, code: str) -> tuple:
+    """Обновляет общий каталог (products + nm_articles) из marketplace_cards."""
+    mp = marketplace_id(db, code)
+    rows = db.execute(
+        select(models.MarketplaceCard)
+        .where(models.MarketplaceCard.marketplace_id == mp)
+        .order_by(models.MarketplaceCard.imported_at.asc(), models.MarketplaceCard.id.asc())
+    ).scalars().all()
+    if not rows:
+        return 0, 0
+    pdf = pd.DataFrame([{
+        "article": r.vendor_code,
+        "name": r.name,
+        "brand": r.brand,
+        "barcode": r.barcode,
+    } for r in rows])
+    pdf = pdf[pdf["article"] != ""].drop_duplicates("article")
+    npdf = pd.DataFrame([{"nmID": r.nm_id, "vendorCode": r.vendor_code} for r in rows])
+    npdf = npdf[(npdf["nmID"] != "") & (npdf["vendorCode"] != "")].drop_duplicates("nmID")
+    n_products = upsert_products(db, pdf) if not pdf.empty else 0
+    n_nm = upsert_nm_articles(db, npdf) if not npdf.empty else 0
+    return n_products, n_nm
+
+
 def upsert_sales(db, df: pd.DataFrame, code: str, source: str = "v5") -> int:
     if df is None or df.empty:
         return 0

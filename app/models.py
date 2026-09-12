@@ -5,6 +5,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -112,6 +113,36 @@ class FunnelMetric(Base):
     cancelled: Mapped[int] = mapped_column(Integer, default=0)
     avg_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     revenue: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+
+
+class MarketplaceCard(Base):
+    """Карточки товара маркетплейса «как есть»: одна строка — размер/SKU.
+
+    Для WB — штатная выгрузка ЛК (chrt_id, артикул продавца, артикул WB,
+    размер, баркод, объём, состав). В будущем то же для Ozon и др.
+    (поле marketplace_id).
+    """
+
+    __tablename__ = "marketplace_cards"
+    __table_args__ = (
+        UniqueConstraint("marketplace_id", "chrt_id", name="uq_mp_cards_marketplace_chrt"),
+        Index("ix_mp_cards_barcode", "barcode"),
+        Index("ix_mp_cards_vendor", "vendor_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    marketplace_id: Mapped[int] = mapped_column(ForeignKey("marketplaces.id"), nullable=False)
+    chrt_id: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    nm_id: Mapped[str] = mapped_column(String(40), default="")
+    vendor_code: Mapped[str] = mapped_column(String(200), default="")
+    brand: Mapped[str] = mapped_column(String(200), default="")
+    subject: Mapped[str] = mapped_column(String(200), default="")
+    size: Mapped[str] = mapped_column(String(50), default="")
+    barcode: Mapped[str] = mapped_column(String(200), default="")
+    volume_l: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
+    composition: Mapped[str] = mapped_column(Text, default="")
+    name: Mapped[str] = mapped_column(String(500), default="")
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
 class NmArticle(Base):

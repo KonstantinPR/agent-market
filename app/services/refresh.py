@@ -150,13 +150,18 @@ def pull_wb_cards(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
     df = prov.get_cards()
     n = 0
     n_nm = 0
+    n_sk = 0
     if write_db:
         pdf = df.rename(columns={"vendorCode": "article", "title": "name", "skus": "barcode"})
         n = sync_service.upsert_products(db, pdf)
         n_nm = sync_service.upsert_nm_articles(db, df)
+        mdf = sync_service.normalize_marketplace_cards(df)
+        n_sk = sync_service.upsert_marketplace_cards(db, mdf, "wb") if mdf is not None else 0
         _wb_nm_cache_reset()
-    sync_service.record_api_pull(db, "wb", "cards", len(df), n + n_nm, "сегодня")
-    return {"df": df, "count": n if write_db else len(df), "db_rows": n + n_nm, "rows": len(df), "window": "сегодня"}
+    total_db = n + n_nm + n_sk
+    sync_service.record_api_pull(db, "wb", "cards", len(df), total_db, "сегодня")
+    return {"df": df, "count": n if write_db else len(df), "db_rows": total_db,
+            "rows": len(df), "window": "сегодня"}
 
 
 def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:

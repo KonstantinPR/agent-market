@@ -176,6 +176,7 @@ async function loadTab(name) {
     else if (name === "ours") await renderOurs();
     else if (name === "products") await renderProducts();
     else if (name === "pricing") await renderPricing(false);
+    else if (name === "wb-cards" || name === "oz-cards") await renderCards(name);
   } catch (err) {
     console.error("loadTab error:", err);
   }
@@ -498,7 +499,13 @@ async function updateLastPull(name) {
     form.insertBefore(el, form.firstChild);
   }
   const [apiName, kind] = name.split("-");
-  const p = pullsCache.find((x) => x.api === apiName && x.kind === kind);
+  let p = pullsCache.find((x) => x.api === apiName && x.kind === kind);
+  if (kind === "cards") {
+    const cand = pullsCache
+      .filter((x) => x.api === apiName && (x.kind === "cards" || x.kind === "cards_excel"))
+      .sort((a, b) => ((new Date(b.last_success_at.replace(" ", "T"))).getTime() || 0) - ((new Date(a.last_success_at.replace(" ", "T"))).getTime() || 0));
+    p = cand[0] || null;
+  }
   if (!p || !p.last_success_at) {
     el.textContent = "Ещё не загружалось (данные в базу появятся после первого успешного скачивания)";
     return;
@@ -512,6 +519,105 @@ async function updateLastPull(name) {
   }
   if (p.window) parts.push("период: " + p.window);
   el.textContent = parts.join(" · ");
+}
+
+// ----------------------------------------------------- карточки маркетплейса (Excel)
+const cardsHeaders = [
+  { k: "chrt_id", label: "Код размера", render: cellFmts.text },
+  { k: "vendor_code", label: "Артикул продавца", render: cellFmts.text },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
+  { k: "brand", label: "Бренд", render: cellFmts.text },
+  { k: "subject", label: "Предмет", render: cellFmts.text },
+  { k: "size", label: "Размер", render: cellFmts.text },
+  { k: "barcode", label: "Баркод", render: cellFmts.text },
+  { k: "volume_l", label: "Объём, л.", num: true, render: (v) => v == null || v === 0 ? "—" : fmt(v) },
+  { k: "composition", label: "Состав", render: (v) => cellFmts.text(String(v || "").slice(0, 60)) },
+  { k: "name", label: "Название", render: cellFmts.text },
+];
+
+function cardIds(name) {
+  const apiName = name.split("-")[0];
+  const tag = apiName === "oz" ? "oz" : "wb";
+  const mp = apiName === "oz" ? "ozon" : "wb";
+  return {
+    apiName, mp, tag,
+    prefix: apiName + "Cards",
+    msgExcel: "#" + tag + "Msg-cards-excel",
+    msgTable: "#" + tag + "Msg-cards-table",
+  };
+}
+
+async function renderCards(name) {
+  const ids = cardIds(name);
+  const box = document.getElementById(ids.prefix + "Table");
+  const likeEl = document.getElementById(ids.prefix + "Like");
+  const q = likeEl ? likeEl.value.trim() : "";
+  let data;
+  try {
+    data = await api("/cards" + qs({ marketplace: ids.mp, like: q || undefined, limit: 500 }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить карточки: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const msg = document.querySelector(ids.msgTable);
+  if (msg) msg.textContent = data.count ? "Карточек: " + fmt(data.count) : "Нет загруженных карточек";
+  pagedTable(box, cardsHeaders, data.rows || []);
+}
+
+async function uploadCardFiles(files, name) {
+  if (!files || !files.length) return;
+  const ids = cardIds(name);
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const msg = document.querySelector(ids.msgExcel);
+  msg.textContent = "Загружаю " + files.length + " файл(ов)…";
+  try {
+    const resp = await fetch("/api/import/cards?marketplace=" + ids.mp, { method: "POST", body: fd });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.status);
+    let m = "Карточек: " + fmt(data.imported) + ", в каталог: " + fmt(data.products);
+    if (data.total != null && data.total !== data.imported) m += " (строк: " + fmt(data.total) + ")";
+    if (data.errors && data.errors.length) m += "; с ошибками: " + fmt(data.errors.length);
+    msg.textContent = m;
+    const input = document.getElementById(ids.prefix + "File");
+    if (input) input.value = "";
+    pullsCache = null;
+    updateLastPull(name);
+    await renderCards(name);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+function initCardsUpload() {
+  ["wb-cards", "oz-cards"].forEach((name) => {
+    const ids = cardIds(name);
+    const file = document.getElementById(ids.prefix + "File");
+    const btn = document.getElementById(ids.prefix + "Import");
+    const drop = document.getElementById(ids.prefix + "Drop");
+    const likeEl = document.getElementById(ids.prefix + "Like");
+    if (btn && file) btn.addEventListener("click", () => uploadCardFiles(file.files, name));
+    if (likeEl) {
+      let timer;
+      likeEl.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { if (currentTab === name) renderCards(name); }, 400);
+      });
+    }
+    if (drop) {
+      drop.addEventListener("click", () => { if (file) file.click(); });
+      drop.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        drop.classList.add("over");
+      });
+      drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+      drop.addEventListener("drop", (e) => {
+        e.preventDefault();
+        drop.classList.remove("over");
+        uploadCardFiles(e.dataTransfer.files, name);
+      });
+    }
+  });
 }
 
 function escapeHtml(s) {
@@ -682,6 +788,29 @@ const PRICING_LABELS = {
   raise_pct_replenishable: "Рост для докупаемых, %",
 };
 
+const PRICING_HINTS = {
+  window_days: "Скользящее окно (дней), за которое считаются скорость продаж (v = продажи за окно / окно) и DOC.",
+  target_doc: "Желаемый запас в днях продаж (DOC). Если DOC выше цели — товар перезапасён, цена снижается.",
+  doc_low: "Граница дефицита: если DOC меньше этого значения, запас считается дефицитным (повод поднять цену).",
+  doc_high: "Граница перезапаса: если DOC больше этого значения, товар считается перезапасённым (повод снизить цену).",
+  floor_margin_pct: "Запас маржи над точкой безубыточности: пол цены = себестоимость+логистика+комиссия+хранение, увеличенные на эту маржу. Цену ниже пола автопилот не опускает.",
+  max_discount_pct: "Потолок скидки для любого товара, % от базовой цены. Дальше скидка не снижается ни при каком решении.",
+  max_raise_pct: "Максимальное повышение витринной цены за один шаг, % (росту разрешён только при реальных продажах).",
+  max_drop_pct: "Максимальное снижение витринной цены за один шаг, %.",
+  min_delta_pp: "Минимальное изменение скидки, п.п. Если расчётная дельта меньше — товар не трогаем (защита от «флапа» цен).",
+  cooldown_days: "Кулдаун: сколько дней после применения товар не меняется повторно, даже если правила снова что-то рекомендуют.",
+  season_adj: "Учитывать тренд продаж (рост/падение как сезонность). Выкл. → скорость продаж берётся как есть, без экстраполяции.",
+  season_damp: "Насколько ослабляем экстраполяцию тренда: 0 = полностью игнорировать, 1 = переносить тренд без смягчения. 0.5 — компромисс.",
+  min_days_with_sales: "Минимум дней с ненулевыми продажами в окне, чтобы вообще применять поправку тренда.",
+  hot_conv_pct: "Конверсия (покупки/просмотры) выше этого %, % — признак «горячего» спроса: товару можно поднимать цену даже при дефиците.",
+  hot_backlog_factor: "Признак горячего спроса: число покупателей «в корзине» больше числа заказов в это число раз.",
+  return_penalty: "Если доля возвратов/отмен больше этой величины (0..1), продажи считаются «шумными» и товар не трогаем.",
+  dead_stock_days: "Если продаж не было столько дней подряд → мёртвый запас, цену снижаем.",
+  low_conv_pct: "Много «в корзине», но конверсия ниже этого %, % — интерес без покупок; товар пропускаем.",
+  fallback_window_days: "Окно (дней), за которое берутся фактические продажи для расчёта unit-экономики: реальная цена, комиссия, маржа, возвраты.",
+  raise_pct_replenishable: "Потолок повышения цены для докупаемых товаров, % — их поднимаем аккуратно, чтобы не потерять выкупы.",
+};
+
 const PRICING_ACTION = {
   RAISE: { txt: "поднять цену", cls: "p-raise" },
   LOWER: { txt: "снизить цену", cls: "p-lower" },
@@ -756,7 +885,23 @@ async function buildPricingSettings() {
     const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
     const lbl = document.createElement("label");
     lbl.className = "p-st";
-    lbl.appendChild(document.createTextNode(PRICING_LABELS[key] || key));
+    const head = document.createElement("span");
+    head.className = "p-st-head";
+    head.appendChild(document.createTextNode(PRICING_LABELS[key] || key));
+    const hint = PRICING_HINTS[key];
+    if (hint) {
+      const tip = document.createElement("span");
+      tip.className = "tip";
+      tip.tabIndex = 0;
+      tip.setAttribute("role", "tooltip");
+      tip.appendChild(document.createTextNode("?"));
+      const tipText = document.createElement("span");
+      tipText.className = "tip-text";
+      tipText.textContent = hint;
+      tip.appendChild(tipText);
+      head.appendChild(tip);
+    }
+    lbl.appendChild(head);
     const input = document.createElement("input");
     input.dataset.key = key;
     if (key === "season_adj") {
@@ -926,6 +1071,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
   $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
   $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
+  initCardsUpload();
   const pricingRecalc = $("#pricingRecalc");
   const pricingExport = $("#pricingExport");
   if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));

@@ -267,6 +267,59 @@ td.num, th.num { text-align: right; }
   font-size: 12px;
   color: #555;
 }
+.p-st-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1.4;
+}
+.tip {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  line-height: 14px;
+  flex: 0 0 auto;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #3574b2;
+  background: #eef4fb;
+  border: 1px solid #bcd4ee;
+  border-radius: 50%;
+  cursor: help;
+  outline: none;
+}
+.tip:hover, .tip:focus { background: #dceafc; border-color: #3574b2; }
+.tip .tip-text {
+  position: absolute;
+  z-index: 60;
+  bottom: 150%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 230px;
+  padding: 9px 11px;
+  background: #2d3748;
+  color: #f4f6fa;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  border-radius: 6px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  display: none;
+  white-space: normal;
+}
+.tip .tip-text::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: #2d3748;
+}
+.tip:hover .tip-text, .tip:focus .tip-text { display: block; }
 .p-st input {
   border: 1px solid #ccc;
   border-radius: 3px;
@@ -290,3 +343,22 @@ td.num, th.num { text-align: right; }
 .p-skip { background: #fff8e6; color: #8a6d00; border: 1px solid #f2e0b0; }
 .pricing-h { font-size: 13px; color: #333; margin: 18px 0 8px; }
 .repl-toggle { width: 16px; height: 16px; cursor: pointer; }
+
+.dropzone {
+  border: 2px dashed #b9c8e0;
+  border-radius: 6px;
+  padding: 16px 12px;
+  margin-bottom: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: #6b7a90;
+  background: #fafcff;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.over {
+  border-color: #3574b2;
+  background: #eef4fb;
+  color: #3574b2;
+}
+.dropzone .dz-label { pointer-events: none; }

@@ -38,6 +38,8 @@ class FakeWb:
             "nmID": ["1001", "1002"],
             "title": ["Товар 1", "Товар 2"],
             "skus": ["2001", "2002"],
+            "chrtId": [101, 102],
+            "techSize": ["46", "47"],
         })
 
     def get_stock_report(self):
