@@ -101,6 +101,8 @@ const cellFmts = {
   moneyCls: (v) => v == null ? "—" : `<span class="${cls(v)}">${fmtMoney(v)}</span>`,
   pct: (v) => v == null ? "—" : `<span class="${cls(v)}">${fmtPct(v)}</span>`,
   int: (v) => v == null ? "—" : fmt(v),
+  intZero: (v) => !v ? "—" : fmt(v),
+  moneyZero: (v) => !v ? "—" : fmtMoney(v),
   text: (v) => (v == null || v === "") ? "—" : v,
   tag: (v) => `<span class="tag ${v}">${MP_LABELS[v] || v}</span>`,
 };
@@ -177,6 +179,12 @@ async function loadTab(name) {
     else if (name === "products") await renderProducts();
     else if (name === "pricing") await renderPricing(false);
     else if (name === "wb-cards" || name === "oz-cards") await renderCards(name);
+    else if (name === "wb-funnel") await renderWbFunnel();
+    else if (name === "wb-stock") await renderWbStocks();
+    else if (name === "wb-prices") await renderWbPrices();
+    else if (name === "wb-storage") await renderWbStorage();
+    else if (name === "wb-sales") await renderWbSales();
+    else if (name === "wb-detail") await renderWbDetail();
   } catch (err) {
     console.error("loadTab error:", err);
   }
@@ -349,7 +357,7 @@ async function renderStocks(marketplace) {
     { k: "warehouse", label: "Склад", render: cellFmts.text },
     { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
   ];
-  pagedTable($("#stocksTable"), headers, data.rows || []);
+  pagedTable($("#stocksTable"), headers, aggregateStocks(data.rows || []));
 }
 
 async function renderOurs() {
@@ -449,6 +457,7 @@ async function apiDownload(api, kind, msgSel) {
   const month = pane.querySelector("input[data-month]");
   const year = pane.querySelector("input[data-year]");
   const writeDb = pane.querySelector(".write-db");
+  const bySize = pane.querySelector(".by-size");
   const params = {};
   if (from) params.date_from = from.value;
   if (to) params.date_to = to.value;
@@ -456,6 +465,7 @@ async function apiDownload(api, kind, msgSel) {
   if (month) params.month = month.value;
   if (year) params.year = year.value;
   if (writeDb) params.write_db = writeDb.checked ? 1 : 0;
+  if (bySize) params.by_size = bySize.checked ? 1 : 0;
   const msg = document.querySelector(msgSel);
   msg.textContent = "Загрузка…";
   try {
@@ -473,6 +483,7 @@ async function apiDownload(api, kind, msgSel) {
     msg.textContent = "Готово, строк: " + count + (writeDb && !writeDb.checked ? " (без записи в базу)" : "");
     pullsCache = null;
     updateLastPull(currentTab);
+    if (currentTab.startsWith("wb-") || currentTab.startsWith("oz-")) loadTab(currentTab);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -551,17 +562,304 @@ async function renderCards(name) {
   const ids = cardIds(name);
   const box = document.getElementById(ids.prefix + "Table");
   const likeEl = document.getElementById(ids.prefix + "Like");
+  const msg = document.querySelector(ids.msgTable);
+  const st = { rows: [], total: 0, limit: 500, loading: false, fetching: null };
+  box._st = st;
+
+  const paint = () => {
+    box.innerHTML = "";
+    if (!st.total && !st.loading) {
+      box.innerHTML = '<div class="empty">Нет загруженных карточек</div>';
+      return;
+    }
+    const bar = document.createElement("div");
+    bar.className = "pager";
+    const span = document.createElement("span");
+    span.className = "pager-lbl";
+    const from = st.rows.length ? 1 : 0;
+    span.textContent = "Показано " + fmt(from) + "…" + fmt(st.rows.length) + " из " + fmt(st.total);
+    bar.appendChild(span);
+    if (st.rows.length < st.total) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn pager-all";
+      btn.textContent = st.loading ? "Загрузка…" : "Загрузить ещё (" + fmt(Math.min(st.limit, st.total - st.rows.length)) + ")";
+      btn.disabled = st.loading;
+      btn.addEventListener("click", () => st.fetching());
+      bar.appendChild(btn);
+    }
+    box.appendChild(bar);
+    const wrap = document.createElement("div");
+    wrap.innerHTML = table(cardsHeaders, st.rows);
+    box.appendChild(wrap);
+  };
+
+  st.fetching = async () => {
+    if (st.loading) return;
+    st.loading = true;
+    const q = likeEl ? likeEl.value.trim() : "";
+    try {
+      const data = await api("/cards" + qs({
+        marketplace: ids.mp,
+        like: q || undefined,
+        limit: st.limit,
+        offset: st.rows.length,
+      }));
+      st.total = data.total || 0;
+      if (st.rows.length === 0) st.rows = data.rows || [];
+      else st.rows = st.rows.concat(data.rows || []);
+      if (msg) msg.textContent = st.total ? "Карточек: " + fmt(st.total) : "Нет загруженных карточек";
+    } catch (err) {
+      box.innerHTML = '<div class="empty">Не удалось загрузить карточки: ' + escapeHtml(err.message) + "</div>";
+    } finally {
+      st.loading = false;
+      paint();
+    }
+  };
+
+  await st.fetching();
+}
+
+const wbFunnelCompact = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Название", render: cellFmts.text },
+  { k: "orders", label: "Заказы", num: true, render: cellFmts.int },
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
+  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money },
+];
+
+function funnelConv(nk, dk) {
+  return (v, r) => {
+    const n = Number(r[nk] || 0);
+    const d = Number(r[dk] || 0);
+    return d ? fmtPct((n / d) * 100) : "—";
+  };
+}
+
+const wbFunnelHeaders = [
+  { k: "date_from", label: "С", render: cellFmts.text },
+  { k: "date_to", label: "По", render: cellFmts.text },
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Название", render: cellFmts.text },
+  { k: "views", label: "Просмотры", num: true, render: cellFmts.int },
+  { k: "opens", label: "Открытия", num: true, render: cellFmts.int },
+  { k: "adds", label: "В корзину", num: true, render: cellFmts.int },
+  { k: "orders", label: "Заказы", num: true, render: cellFmts.int },
+  { k: "buyouts", label: "Выкупы", num: true, render: cellFmts.intZero },
+  { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int },
+  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money },
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
+  { k: "buyout_sum", label: "Сумма выкупа", num: true, render: cellFmts.moneyZero },
+  { k: "conv_view", label: "Просмотр→В корзину", num: true, render: funnelConv("adds", "views") },
+  { k: "conv_add", label: "В корзину→Заказ", num: true, render: funnelConv("orders", "adds") },
+  { k: "conv_buy", label: "Заказ→Выкуп", num: true, render: funnelConv("buyouts", "orders") },
+];
+
+function paneDates() {
+  const pane = document.querySelector(".pane.active");
+  function val(sel) {
+    const el = pane ? pane.querySelector(sel) : null;
+    return el ? el.value : "";
+  }
+  return { date_from: val('input[data-date="from"]'), date_to: val('input[data-date="to"]') };
+}
+
+async function renderWbFunnel() {
+  const box = document.getElementById("wbFunnelTable");
+  const likeEl = document.getElementById("wbFunnelLike");
+  const expandedEl = document.getElementById("wbFunnelExpanded");
+  const p = paneDates();
+  const like = likeEl ? likeEl.value.trim() : "";
+  let data;
+  try {
+    data = await api("/funnel" + qs({
+      date_from: p.date_from || undefined,
+      date_to: p.date_to || undefined,
+      article_like: like || undefined,
+    }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить воронку: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const msg = document.querySelector("#wbMsg-funnel-table");
+  if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных в базе";
+  const note = document.getElementById("wbFunnelBuyoutNote");
+  if (note) {
+    const total = (data.rows || []).reduce((s, r) => s + Number(r.buyouts || 0), 0);
+    note.style.display = total ? "none" : "block";
+  }
+  const headers = expandedEl && expandedEl.checked ? wbFunnelHeaders : wbFunnelCompact;
+  pagedTable(box, headers, data.rows || []);
+}
+
+function aggregateStocks(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.marketplace + "|" + r.article + "|" + r.warehouse;
+    const a = map.get(key);
+    if (a) { a.quantity += r.quantity; continue; }
+    map.set(key, {
+      date: r.date, marketplace: r.marketplace, article: r.article, name: r.name,
+      warehouse: r.warehouse, quantity: r.quantity,
+    });
+  }
+  return Array.from(map.values());
+}
+
+const wbStockHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "chrt_id", label: "Код размера", render: cellFmts.text },
+  { k: "size", label: "Размер", render: cellFmts.text },
+  { k: "barcode", label: "Баркод", render: cellFmts.text },
+  { k: "warehouse", label: "Склад", render: cellFmts.text },
+  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
+];
+
+const wbStockAggHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "warehouse", label: "Склад", render: cellFmts.text },
+  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
+];
+
+async function renderWbStocks() {
+  const box = document.getElementById("wbStockTable");
+  const likeEl = document.getElementById("wbStockLike");
+  const agg = document.getElementById("wbStockAgg");
   const q = likeEl ? likeEl.value.trim() : "";
   let data;
   try {
-    data = await api("/cards" + qs({ marketplace: ids.mp, like: q || undefined, limit: 500 }));
+    data = await api("/stocks" + qs({ marketplace: "wb" }));
   } catch (err) {
-    box.innerHTML = '<div class="empty">Не удалось загрузить карточки: ' + escapeHtml(err.message) + "</div>";
+    box.innerHTML = '<div class="empty">Не удалось загрузить остатки: ' + escapeHtml(err.message) + "</div>";
     return;
   }
-  const msg = document.querySelector(ids.msgTable);
-  if (msg) msg.textContent = data.count ? "Карточек: " + fmt(data.count) : "Нет загруженных карточек";
-  pagedTable(box, cardsHeaders, data.rows || []);
+  let rows = data.rows || [];
+  if (agg && agg.checked) {
+    rows = aggregateStocks(rows);
+  }
+  if (q) {
+    const needle = q.toLowerCase();
+    rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
+  }
+  const headers = agg && agg.checked ? wbStockAggHeaders : wbStockHeaders;
+  const msg = document.querySelector("#wbMsg-stock-table");
+  if (msg) msg.textContent = data.date && rows.length ? "Остатки на " + data.date + " · показ: " + fmt(rows.length) : "Нет данных";
+  pagedTable(box, headers, rows);
+}
+
+const wbPricesHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "size", label: "Размер", render: cellFmts.text },
+  { k: "discounted_price", label: "Цена со скид.", num: true, render: cellFmts.money },
+  { k: "price", label: "Цена без скид.", num: true, render: cellFmts.money },
+  { k: "discount", label: "Скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v, 1) + "%" },
+];
+
+async function renderWbPrices() {
+  const box = document.getElementById("wbPricesTable");
+  const likeEl = document.getElementById("wbPricesLike");
+  const q = likeEl ? likeEl.value.trim() : "";
+  let data;
+  try {
+    data = await api("/prices" + qs({ article_like: q || undefined }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить цены: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const msg = document.querySelector("#wbMsg-prices-table");
+  if (msg) {
+    const when = data.updated_at ? " · срез: " + data.updated_at : "";
+    msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
+  }
+  pagedTable(box, wbPricesHeaders, data.rows || []);
+}
+
+const wbStorageHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "barcodes_count", label: "Баркодов", num: true, render: cellFmts.int },
+  { k: "volume", label: "Объём, м³", num: true, render: (v) => v == null ? "—" : fmt(v, 3) },
+  { k: "storage_price", label: "Хранение за баркод", num: true, render: cellFmts.money },
+  { k: "warehouse_price", label: "Сумма хранения", num: true, render: cellFmts.money },
+];
+
+async function renderWbStorage() {
+  const box = document.getElementById("wbStorageTable");
+  const likeEl = document.getElementById("wbStorageLike");
+  const q = likeEl ? likeEl.value.trim() : "";
+  let data;
+  try {
+    data = await api("/storage-cost" + qs({ article_like: q || undefined }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить хранение: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const msg = document.querySelector("#wbMsg-storage-table");
+  if (msg) {
+    const when = data.updated_at ? " · срез: " + data.updated_at : "";
+    msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
+  }
+  pagedTable(box, wbStorageHeaders, data.rows || []);
+}
+
+const salesHeaders = [
+  { k: "date", label: "Дата", render: cellFmts.text },
+  { k: "marketplace", label: "Маркетплейс", render: cellFmts.tag },
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "quantity", label: "Продано, шт", num: true, render: cellFmts.int },
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
+];
+
+async function renderWbSales() {
+  const box = document.getElementById("wbSalesTable");
+  const likeEl = document.getElementById("wbSalesLike");
+  const p = paneDates();
+  let data;
+  try {
+    data = await api("/sales" + qs({
+      marketplace: "wb",
+      date_from: p.date_from || undefined,
+      date_to: p.date_to || undefined,
+    }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить продажи: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  let rows = data.rows || [];
+  if (likeEl) {
+    const q = likeEl.value.trim().toLowerCase();
+    if (q) rows = rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q));
+  }
+  const msg = document.querySelector("#wbMsg-sales-table");
+  if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
+  pagedTable(box, salesHeaders, rows);
+}
+
+async function renderWbDetail() {
+  const box = document.getElementById("wbDetailTable");
+  const likeEl = document.getElementById("wbDetailLike");
+  const p = paneDates();
+  const q = likeEl ? likeEl.value.trim() : "";
+  let data;
+  try {
+    data = await api("/margin/detail" + qs({
+      date_from: p.date_from || undefined,
+      date_to: p.date_to || undefined,
+      article_like: q || undefined,
+    }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить детализацию: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const msg = document.querySelector("#wbMsg-detail-table");
+  const rows = data.rows || [];
+  if (msg) msg.textContent = rows.length ? "Строк: " + fmt(rows.length) : "Нет данных. Отчёт формируется ~до следующего дня (finance-токен).";
+  pagedTable(box, marginHeaders, rows);
 }
 
 async function uploadCardFiles(files, name) {
@@ -586,6 +884,50 @@ async function uploadCardFiles(files, name) {
     await renderCards(name);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadDetailFiles(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const msg = document.querySelector("#wbMsg-detail-excel");
+  msg.textContent = "Загружаю " + files.length + " файл(ов)…";
+  try {
+    const resp = await fetch("/api/wb/detail-upload", { method: "POST", body: fd });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.status);
+    let m = "Детализация: строк " + fmt(data.rows || 0);
+    if (data.imported != null) m += ", записано в БД: " + fmt(data.imported);
+    if (data.errors && data.errors.length) m += "; с ошибками: " + fmt(data.errors.length);
+    msg.textContent = m;
+    const input = document.getElementById("wbDetailFile");
+    if (input) input.value = "";
+    pullsCache = null;
+    updateLastPull("wb-detail");
+    if (currentTab === "wb-detail") await renderWbDetail();
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+function initDetailUpload() {
+  const file = document.getElementById("wbDetailFile");
+  const btn = document.getElementById("wbDetailImport");
+  const drop = document.getElementById("wbDetailDrop");
+  if (btn && file) btn.addEventListener("click", () => uploadDetailFiles(file.files));
+  if (drop) {
+    drop.addEventListener("click", () => { if (file) file.click(); });
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      if (e.dataTransfer && e.dataTransfer.files) uploadDetailFiles(e.dataTransfer.files);
+    });
   }
 }
 
@@ -636,8 +978,8 @@ const STEP_STATUS = {
 };
 
 let refreshPoll = null;
-let refreshJobId = null;
-let refreshApi = null;
+let refreshJobs = [];   // [{api, jobId, rejected, msg, state, done}]
+let refreshApis = [];
 
 function stepText(s) {
   if (s.status === "ok") {
@@ -646,19 +988,32 @@ function stepText(s) {
   return STEP_STATUS[s.status] || s.status;
 }
 
-function renderRefresh(st) {
-  $("#refreshSummary").textContent =
-    (REFRESH_STATUS[st.status] || st.status) +
-    " · ок: " + st.ok + ", ошибок: " + st.failed +
-    " · " + (st.finished_at ? "завершено " + st.finished_at : "начато " + st.started_at);
+function renderRefresh() {
   let h = "";
-  for (const s of st.steps) {
-    h += '<div class="refresh-step ' + s.status + '">' +
-      '<span class="rs-name">' + escapeHtml(s.label) + "</span>" +
-      '<span class="rs-status">' + escapeHtml(stepText(s)) + "</span></div>";
-    if (s.error) h += '<div class="refresh-step-error">' + escapeHtml(s.error) + "</div>";
+  let summary = "";
+  for (const j of refreshJobs) {
+    const lbl = MP_LABELS[j.api] || j.api;
+    h += '<div class="refresh-api">' + escapeHtml(lbl) + "</div>";
+    if (j.rejected) {
+      h += '<div class="refresh-step failed"><span class="rs-name">Отклонено</span><span class="rs-status">' + escapeHtml(j.msg) + "</span></div>";
+      summary += (summary ? "; " : "") + lbl + ": " + j.msg;
+      continue;
+    }
+    if (!j.state) {
+      h += '<div class="refresh-step running"><span class="rs-name">—</span><span class="rs-status">ожидание…</span></div>';
+      continue;
+    }
+    for (const s of j.state.steps) {
+      h += '<div class="refresh-step ' + s.status + '">' +
+        '<span class="rs-name">' + escapeHtml(s.label) + "</span>" +
+        '<span class="rs-status">' + escapeHtml(stepText(s)) + "</span></div>";
+      if (s.error) h += '<div class="refresh-step-error">' + escapeHtml(s.error) + "</div>";
+    }
+    const ok = j.state.steps.filter((s) => s.status === "ok").length;
+    summary += (summary ? "; " : "") + lbl + ": " + ok + "/" + j.state.steps.length;
   }
   $("#refreshList").innerHTML = h;
+  if (summary) $("#refreshSummary").textContent = summary;
 }
 
 async function loadRefreshHistory() {
@@ -683,15 +1038,18 @@ async function loadRefreshHistory() {
   }
 }
 
-async function openRefresh(api) {
+async function openRefresh(apis) {
   const modal = $("#refreshModal");
   modal.classList.remove("hidden");
-  refreshApi = api;
-  $("#refreshTitle").textContent = "Обновление " + (MP_LABELS[api] || api);
+  if (refreshPoll) { clearInterval(refreshPoll); refreshPoll = null; }
+  refreshApis = Array.isArray(apis) ? apis : [apis];
+  refreshJobs = [];
+  $("#refreshTitle").textContent =
+    "Обновление " + refreshApis.map((a) => MP_LABELS[a] || a).join(" + ");
   const detail = $("#refreshDetail");
   detail.checked = false;
   detail.disabled = false;
-  detail.parentElement.style.display = api === "wb" ? "" : "none";
+  detail.parentElement.style.display = refreshApis.includes("wb") ? "" : "none";
   $("#refreshStart").disabled = false;
   $("#refreshSummary").textContent = "";
   $("#refreshList").innerHTML = "";
@@ -699,53 +1057,68 @@ async function openRefresh(api) {
 }
 
 async function startRefreshJob() {
-  const api = refreshApi;
+  const apis = refreshApis;
   const startBtn = $("#refreshStart");
   startBtn.disabled = true;
   $("#refreshSummary").textContent = "Запуск…";
   const detail = $("#refreshDetail");
-  const params = { api };
-  if (api === "wb" && detail.checked) params.detail = 1;
-  if ($("#fFrom").value) params.date_from = $("#fFrom").value;
-  if ($("#fTo").value) params.date_to = $("#fTo").value;
-  try {
-    const resp = await fetch("/api/refresh" + qs(params), { method: "POST" });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || resp.status);
-    if (!data.job_id) {
-      $("#refreshSummary").textContent = "Отклонено: " + (data.rejected || "задание уже в очереди");
-      startBtn.disabled = false;
-      return;
+  refreshJobs = [];
+  const started = [];
+  for (const api of apis) {
+    const params = { api };
+    if (api === "wb" && detail.checked) params.detail = 1;
+    if ($("#fFrom").value) params.date_from = $("#fFrom").value;
+    if ($("#fTo").value) params.date_to = $("#fTo").value;
+    try {
+      const resp = await fetch("/api/refresh" + qs(params), { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok) {
+        refreshJobs.push({ api, rejected: true, msg: data.detail || resp.status });
+        continue;
+      }
+      if (!data.job_id) {
+        refreshJobs.push({ api, rejected: true, msg: data.rejected || "задание уже в очереди" });
+        continue;
+      }
+      refreshJobs.push({ api, jobId: data.job_id, state: null });
+      started.push(data.job_id);
+    } catch (err) {
+      refreshJobs.push({ api, rejected: true, msg: err.message });
     }
-    refreshJobId = data.job_id;
-    detail.disabled = true;
-    pollRefresh(data.job_id);
-  } catch (err) {
-    $("#refreshSummary").textContent = "Ошибка: " + err.message;
-    startBtn.disabled = false;
   }
+  renderRefresh();
+  if (!started.length) {
+    startBtn.disabled = false;
+    return;
+  }
+  detail.disabled = true;
+  pollRefresh();
 }
 
-function pollRefresh(jobId) {
+function pollRefresh() {
   if (refreshPoll) clearInterval(refreshPoll);
   refreshPoll = setInterval(async () => {
-    let st;
-    try {
-      st = await api("/refresh/" + jobId);
-    } catch (err) {
-      $("#refreshSummary").textContent = "Ошибка опроса: " + err.message;
-      clearInterval(refreshPoll);
-      refreshPoll = null;
-      return;
+    for (const j of refreshJobs) {
+      if (j.rejected || j.done) continue;
+      try {
+        j.state = await api("/refresh/" + j.jobId);
+      } catch (err) {
+        j.state = {
+          status: "done",
+          steps: [{ status: "failed", label: "ошибка опроса", error: err.message }],
+        };
+      }
+      if (j.state.status === "done") j.done = true;
     }
-    renderRefresh(st);
-    if (st.status === "done") {
+    renderRefresh();
+    if (refreshJobs.every((j) => j.rejected || j.done)) {
       clearInterval(refreshPoll);
       refreshPoll = null;
-      refreshJobId = null;
       pullsCache = null;
       updateLastPull(currentTab);
       loadRefreshHistory();
+      $("#refreshStart").disabled = false;
+      $("#refreshDetail").disabled = false;
     }
   }, 1500);
 }
@@ -1007,6 +1380,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const menuBtn = $("#menuBtn");
   const navLinks = $("#navLinks");
+  const closeNav = () => { if (navLinks) navLinks.classList.remove("open"); };
   if (menuBtn && navLinks) {
     menuBtn.addEventListener("click", () => navLinks.classList.toggle("open"));
   }
@@ -1033,6 +1407,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".nav-link").forEach((link) => {
     link.addEventListener("click", (e) => {
       e.preventDefault();
+      if (!link.dataset.tab) return;
       if (navLinks) navLinks.classList.remove("open");
       openTab(link.dataset.tab, link);
     });
@@ -1043,9 +1418,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const kind = btn.dataset.kind;
     btn.addEventListener("click", () => apiDownload(api, kind, "#" + tag + "Msg-" + kind));
   });
+  const funnelExp = document.getElementById("wbFunnelExpanded");
+  if (funnelExp) funnelExp.addEventListener("change", () => loadTab("wb-funnel"));
   $("#btnApply").addEventListener("click", () => loadTab(currentTab));
-  $("#btnRefreshWb").addEventListener("click", () => openRefresh("wb"));
-  $("#btnRefreshOz").addEventListener("click", () => openRefresh("ozon"));
+  $("#magicRefreshWb").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("wb"); });
+  $("#magicRefreshOz").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("ozon"); });
+  $("#magicRefreshAll").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh(["wb", "ozon"]); });
   $("#refreshStart").addEventListener("click", () => startRefreshJob());
   $("#refreshClose").addEventListener("click", () => {
     $("#refreshModal").classList.add("hidden");
@@ -1068,10 +1446,49 @@ document.addEventListener("DOMContentLoaded", () => {
       timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
     });
   });
+  const funnelLike = $("#wbFunnelLike");
+  if (funnelLike) {
+    let timer;
+    funnelLike.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === "wb-funnel") loadTab(currentTab); }, 400);
+    });
+  }
+  const wbStockLike = $("#wbStockLike");
+  if (wbStockLike) {
+    let timer;
+    wbStockLike.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === "wb-stock") loadTab(currentTab); }, 400);
+    });
+  }
+  const wbStockAgg = $("#wbStockAgg");
+  if (wbStockAgg) {
+    wbStockAgg.addEventListener("change", () => { if (currentTab === "wb-stock") loadTab(currentTab); });
+  }
+  [["wbPricesLike", "wb-prices"], ["wbStorageLike", "wb-storage"]].forEach(([id, tab]) => {
+    const el = $("#" + id);
+    if (!el) return;
+    let timer;
+    el.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
+    });
+  });
+  [["wbSalesLike", "wb-sales"], ["wbDetailLike", "wb-detail"]].forEach(([id, tab]) => {
+    const el = $("#" + id);
+    if (!el) return;
+    let timer;
+    el.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
+    });
+  });
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
   $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
   $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
   initCardsUpload();
+  initDetailUpload();
   const pricingRecalc = $("#pricingRecalc");
   const pricingExport = $("#pricingExport");
   if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));

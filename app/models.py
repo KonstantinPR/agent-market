@@ -72,7 +72,8 @@ class Stock(Base):
     __tablename__ = "stocks"
     __table_args__ = (
         UniqueConstraint(
-            "marketplace_id", "date", "article", "warehouse", name="uq_stocks_market_date_article_wh"
+            "marketplace_id", "date", "article", "warehouse", "chrt_id",
+            name="uq_stocks_market_date_article_wh_chrt",
         ),
     )
 
@@ -81,6 +82,9 @@ class Stock(Base):
     date: Mapped[date_type] = mapped_column(Date, nullable=False)
     article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     warehouse: Mapped[str] = mapped_column(String(200), default="Все")
+    chrt_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    size: Mapped[str] = mapped_column(String(50), default="")
+    barcode: Mapped[str] = mapped_column(String(100), default="")
     quantity: Mapped[int] = mapped_column(Integer, default=0)
 
     marketplace: Mapped[Marketplace] = relationship(back_populates="stocks")
@@ -111,8 +115,10 @@ class FunnelMetric(Base):
     adds: Mapped[int] = mapped_column(Integer, default=0)
     orders: Mapped[int] = mapped_column(Integer, default=0)
     cancelled: Mapped[int] = mapped_column(Integer, default=0)
+    buyouts: Mapped[int] = mapped_column(Integer, default=0)
     avg_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     revenue: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    buyout_sum: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
 
 
 class MarketplaceCard(Base):
@@ -199,3 +205,43 @@ class RefreshRun(Base):
     finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="running")
     results: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class PriceSnapshot(Base):
+    """Снимок текущих цен/скидок WB по размеру (срез последней загрузки)."""
+
+    __tablename__ = "price_snapshots"
+    __table_args__ = (
+        UniqueConstraint("article", "size", name="uq_price_snap_article_size"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    nm_id: Mapped[str] = mapped_column(String(40), default="")
+    size: Mapped[str] = mapped_column(String(50), default="")
+    price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    discounted_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    discount: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class StorageCost(Base):
+    """Стоимость хранения WB по товару (срез последней загрузки)."""
+
+    __tablename__ = "storage_costs"
+    __table_args__ = (
+        UniqueConstraint("nm_id", name="uq_storage_cost_nm"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    nm_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    article: Mapped[str] = mapped_column(String(100), default="", index=True)
+    barcodes_count: Mapped[int] = mapped_column(Integer, default=0)
+    volume: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
+    storage_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    warehouse_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )

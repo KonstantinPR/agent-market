@@ -32,6 +32,29 @@ DETAIL_RU_COLUMNS = {
     "rebillLogisticCost": "Возмещение издержек по перевозке/складским операциям",
 }
 
+# Русские заголовки файла WB «Детализация продаж» -> ключи финансового отчёта.
+# Обратный DETAIL_RU_COLUMNS + алиасы реальных заголовков выгрузки ЛК.
+DETAIL_UPLOAD_RENAME = {v: k for k, v in DETAIL_RU_COLUMNS.items()}
+DETAIL_UPLOAD_RENAME.update({
+    "Артикул поставщика": "vendorCode",
+    "Баркод": "sku",
+    "Размер": "techSize",
+    "Дата продажи": "saleDt",
+    "Дата заказа покупателем": "orderDt",
+    "Кол-во": "quantity",
+    "Цена розничная": "retailPrice",
+    "Вайлдберриз реализовал Товар (Пр)": "retailAmount",
+    "К перечислению Продавцу за реализованный Товар": "forPay",
+    "Вознаграждение ВВ": "ppvzSalesCommission",
+    "Вознаграждение с продаж до вычета услуг поверенного, без НДС": "ppvzSalesCommission",
+    "Услуги по доставке товара покупателю": "deliveryService",
+    "Услуги по доставке товара покупателю (квВВ)": "deliveryService",
+    "Хранение (пр)": "paidStorage",
+    "Штраф": "penalty",
+    "Удержанный штраф": "deduction",
+    "Возмещение издержек по перевозке/складским операциям": "rebillLogisticCost",
+})
+
 # Русские заголовки для отчёта реализации (v5 / reportDetailByPeriod)
 SALES_RU_COLUMNS = {
     "date": "Дата", "nmId": "Артикул WB", "barcode": "Баркод", "supplierArticle": "Артикул продавца",
@@ -107,6 +130,21 @@ class WbProvider(BaseProvider):
         for attempt in range(num_retries):
             resp = requests.post(url, headers=self._headers(finance), json=payload, timeout=60)
             if resp.status_code == 429:
+                alt = settings.wb_finance_api_key_2 if finance else None
+                if alt:
+                    resp = requests.post(
+                        url,
+                        headers={
+                            "Authorization": alt,
+                            "Content-Type": "application/json",
+                            "accept": "application/json",
+                        },
+                        json=payload,
+                        timeout=60,
+                    )
+                    if resp.status_code != 429:
+                        resp.raise_for_status()
+                        return resp
                 if finance or self.fail_fast_429:
                     raise WbApiError(
                         "finance-api превысил лимит: доступен 1 запрос в "

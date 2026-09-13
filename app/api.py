@@ -14,7 +14,7 @@ from app import models
 from app.database import get_db
 from app.providers import factory as provider_factory
 from app.providers.ozon import OZON_RU_COLUMNS
-from app.providers.wb import DETAIL_RU_COLUMNS, SALES_RU_COLUMNS, V5_RU_COLUMNS
+from app.providers.wb import DETAIL_RU_COLUMNS, DETAIL_UPLOAD_RENAME, SALES_RU_COLUMNS, V5_RU_COLUMNS
 from app.services import (
     common as common_service,
     excel_io,
@@ -143,6 +143,81 @@ def api_margin_funnel(
         "snapshot_from": df.attrs.get("date_from", ""),
         "snapshot_to": df.attrs.get("date_to", ""),
     }
+
+
+@router.get("/funnel")
+def api_funnel(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Строки воронки продаж WB из funnel_metric.
+
+    Без дат — окно последней загрузки (max(date_to)); иначе заданное окно.
+    """
+    snapshot = db.execute(
+        select(func.max(models.FunnelMetric.date_to))
+    ).scalar()
+    if date_from is None or date_to is None:
+        win = db.execute(
+            select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
+            .order_by(models.FunnelMetric.date_to.desc(), models.FunnelMetric.date_from.desc())
+            .limit(1)
+        ).first()
+        if win is None:
+            return {"rows": [], "count": 0, "date_from": "", "date_to": "",
+                    "snapshot_from": "", "snapshot_to": ""}
+        from_, to_ = win[0], win[1]
+    else:
+        from_, to_ = _parse_window400(date_from, date_to)
+
+    name_subq = (
+        select(models.Product.name)
+        .where(models.Product.article == models.FunnelMetric.article)
+        .limit(1)
+        .scalar_subquery()
+    )
+    q = (
+        select(
+            models.FunnelMetric.date_from,
+            models.FunnelMetric.date_to,
+            models.FunnelMetric.nm_id,
+            models.FunnelMetric.article,
+            name_subq.label("name"),
+            models.FunnelMetric.views,
+            models.FunnelMetric.opens,
+            models.FunnelMetric.adds,
+            models.FunnelMetric.orders,
+            models.FunnelMetric.cancelled,
+            models.FunnelMetric.buyouts,
+            models.FunnelMetric.avg_price,
+            models.FunnelMetric.revenue,
+            models.FunnelMetric.buyout_sum,
+        )
+        .where(models.FunnelMetric.date_from == from_,
+               models.FunnelMetric.date_to == to_)
+        .order_by(models.FunnelMetric.revenue.desc(), models.FunnelMetric.article)
+    )
+    if article_like:
+        q = q.where(models.FunnelMetric.article.ilike(f"%{article_like}%"))
+
+    rows = [
+        {
+            "date_from": str(r.date_from), "date_to": str(r.date_to),
+            "nm_id": str(r.nm_id or ""), "article": str(r.article),
+            "name": str(r.name or ""),
+            "views": int(r.views or 0), "opens": int(r.opens or 0),
+            "adds": int(r.adds or 0), "orders": int(r.orders or 0),
+            "cancelled": int(r.cancelled or 0), "buyouts": int(r.buyouts or 0),
+            "avg_price": float(r.avg_price or 0), "revenue": float(r.revenue or 0),
+            "buyout_sum": float(r.buyout_sum or 0),
+        }
+        for r in db.execute(q)
+    ]
+    return {"rows": rows, "count": len(rows),
+            "date_from": str(from_), "date_to": str(to_),
+            "snapshot_to": str(snapshot or "")}
 
 
 @router.get("/pulls")
@@ -453,12 +528,15 @@ def api_stocks(
             models.Marketplace.code.label("marketplace"),
             models.Stock.article,
             models.Product.name,
+            models.Stock.chrt_id,
+            models.Stock.size,
+            models.Stock.barcode,
             models.Stock.warehouse,
             models.Stock.quantity,
         )
         .select_from(models.Stock)
         .join(models.Marketplace, models.Stock.marketplace_id == models.Marketplace.id)
-        .join(models.Product, models.Stock.article == models.Product.article)
+        .outerjoin(models.Product, models.Stock.article == models.Product.article)
         .where(models.Stock.date == latest)
     )
     if marketplace:
@@ -470,12 +548,99 @@ def api_stocks(
             "marketplace": r.marketplace,
             "article": r.article,
             "name": r.name,
+            "chrt_id": str(r.chrt_id or ""),
+            "size": str(r.size or ""),
+            "barcode": str(r.barcode or ""),
             "warehouse": r.warehouse,
             "quantity": int(r.quantity or 0),
         }
         for r in db.execute(query)
     ]
     return {"date": str(latest), "rows": rows, "count": len(rows)}
+
+
+@router.get("/prices")
+def api_prices(
+    article_like: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Срез текущих цен/скидок WB из price_snapshots (последняя загрузка)."""
+    name_subq = (
+        select(models.Product.name)
+        .where(models.Product.article == models.PriceSnapshot.article)
+        .limit(1)
+        .scalar_subquery()
+    )
+    q = (
+        select(
+            models.PriceSnapshot.article,
+            models.PriceSnapshot.nm_id,
+            models.PriceSnapshot.size,
+            name_subq.label("name"),
+            models.PriceSnapshot.price,
+            models.PriceSnapshot.discounted_price,
+            models.PriceSnapshot.discount,
+            models.PriceSnapshot.updated_at,
+        )
+        .order_by(models.PriceSnapshot.article, models.PriceSnapshot.size)
+    )
+    if article_like:
+        q = q.where(models.PriceSnapshot.article.ilike(f"%{article_like}%"))
+    rows = [
+        {
+            "article": r.article, "nm_id": str(r.nm_id or ""),
+            "size": str(r.size or ""), "name": str(r.name or ""),
+            "price": float(r.price or 0),
+            "discounted_price": float(r.discounted_price or 0),
+            "discount": float(r.discount or 0),
+            "updated_at": str(r.updated_at),
+        }
+        for r in db.execute(q)
+    ]
+    updated = db.scalar(select(func.max(models.PriceSnapshot.updated_at)))
+    return {"rows": rows, "count": len(rows), "updated_at": str(updated or "")}
+
+
+@router.get("/storage-cost")
+def api_storage_cost(
+    article_like: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Срез стоимости хранения WB из storage_costs (последняя загрузка)."""
+    name_subq = (
+        select(models.Product.name)
+        .where(models.Product.article == models.StorageCost.article)
+        .limit(1)
+        .scalar_subquery()
+    )
+    q = (
+        select(
+            models.StorageCost.nm_id,
+            models.StorageCost.article,
+            name_subq.label("name"),
+            models.StorageCost.barcodes_count,
+            models.StorageCost.volume,
+            models.StorageCost.storage_price,
+            models.StorageCost.warehouse_price,
+            models.StorageCost.updated_at,
+        )
+        .order_by(models.StorageCost.article)
+    )
+    if article_like:
+        q = q.where(models.StorageCost.article.ilike(f"%{article_like}%"))
+    rows = [
+        {
+            "nm_id": r.nm_id, "article": r.article, "name": str(r.name or ""),
+            "barcodes_count": int(r.barcodes_count or 0),
+            "volume": float(r.volume or 0),
+            "storage_price": float(r.storage_price or 0),
+            "warehouse_price": float(r.warehouse_price or 0),
+            "updated_at": str(r.updated_at),
+        }
+        for r in db.execute(q)
+    ]
+    updated = db.scalar(select(func.max(models.StorageCost.updated_at)))
+    return {"rows": rows, "count": len(rows), "updated_at": str(updated or "")}
 
 
 @router.get("/products")
@@ -701,17 +866,17 @@ def api_cards(
     marketplace: str = "wb",
     like: Optional[str] = None,
     limit: int = 300,
+    offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    """Сырые карточки маркетплейса (marketplace_cards): одна строка = размер/SKU."""
-    q = (
-        select(models.MarketplaceCard, models.Marketplace.code)
-        .join(models.Marketplace, models.MarketplaceCard.marketplace_id == models.Marketplace.id)
-        .where(models.Marketplace.code == marketplace)
-    )
+    """Сырые карточки маркетплейса (marketplace_cards): одна строка = размер/SKU.
+
+    Серверная пагинация: offset/limit; total — реальное число строк по фильтру.
+    """
+    base_where = [models.Marketplace.code == marketplace]
     if like and like.strip():
         pat = f"%{like.strip()}%"
-        q = q.where(
+        base_where.append(
             func.concat(
                 models.MarketplaceCard.vendor_code, " ",
                 models.MarketplaceCard.barcode, " ",
@@ -720,24 +885,42 @@ def api_cards(
                 models.MarketplaceCard.nm_id,
             ).ilike(pat)
         )
-    q = q.order_by(models.MarketplaceCard.imported_at.desc(), models.MarketplaceCard.id.desc())
-    rows = db.execute(q.limit(min(max(limit, 1), 2000))).all()
+    total = db.scalar(
+        select(func.count(func.distinct(models.MarketplaceCard.id)))
+        .select_from(models.MarketplaceCard)
+        .join(models.Marketplace, models.MarketplaceCard.marketplace_id == models.Marketplace.id)
+        .where(*base_where)
+    ) or 0
+    limit = min(max(int(limit), 1), 5000)
+    offset = max(int(offset), 0)
+    q = (
+        select(models.MarketplaceCard)
+        .join(models.Marketplace, models.MarketplaceCard.marketplace_id == models.Marketplace.id)
+        .where(*base_where)
+        .order_by(models.MarketplaceCard.imported_at.desc(), models.MarketplaceCard.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = db.execute(q).scalars().all()
     return {
         "marketplace": marketplace,
+        "total": total,
         "count": len(rows),
+        "offset": offset,
+        "limit": limit,
         "rows": [
             {
-                "chrt_id": r.MarketplaceCard.chrt_id,
-                "nm_id": r.MarketplaceCard.nm_id,
-                "vendor_code": r.MarketplaceCard.vendor_code,
-                "brand": r.MarketplaceCard.brand,
-                "subject": r.MarketplaceCard.subject,
-                "size": r.MarketplaceCard.size,
-                "barcode": r.MarketplaceCard.barcode,
-                "volume_l": float(r.MarketplaceCard.volume_l or 0),
-                "composition": r.MarketplaceCard.composition,
-                "name": r.MarketplaceCard.name,
-                "imported_at": str(r.MarketplaceCard.imported_at) if r.MarketplaceCard.imported_at else "",
+                "chrt_id": r.chrt_id,
+                "nm_id": r.nm_id,
+                "vendor_code": r.vendor_code,
+                "brand": r.brand,
+                "subject": r.subject,
+                "size": r.size,
+                "barcode": r.barcode,
+                "volume_l": float(r.volume_l or 0),
+                "composition": r.composition,
+                "name": r.name,
+                "imported_at": str(r.imported_at) if r.imported_at else "",
             }
             for r in rows
         ],
@@ -966,16 +1149,21 @@ def wb_cards(write_db: int = 1, db: Session = Depends(get_db)):
         res = refresh_service.pull_wb_cards(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
-    return _xlsx_response(res["df"], "wb_cards.xlsx", res["count"])
+    return _xlsx_response(refresh_service.expand_wb_card_export(res["df"]), "wb_cards.xlsx", res["count"])
 
 
 @router.post("/wb/stock")
-def wb_stock(write_db: int = 1, db: Session = Depends(get_db)):
+def wb_stock(write_db: int = 1, by_size: int = 1, db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_wb_stock(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
-        refresh_service.wb_error(e)
-    return _xlsx_response(res["df"], "wb_stock.xlsx", res["count"])
+        wb_error(e)
+    df = res["df"]
+    if not df.empty and not int(by_size):
+        df = df.groupby(["article", "warehouse"], as_index=False).agg({
+            "quantity": "sum", "date": "first",
+        })
+    return _xlsx_response(df, "wb_stock.xlsx", len(df))
 
 
 @router.post("/wb/funnel")
@@ -1036,6 +1224,86 @@ def wb_detail(date_from: Optional[str] = None, date_to: Optional[str] = None,
     df = res["df"]
     export = df.rename(columns=DETAIL_RU_COLUMNS) if not df.empty else df
     return _xlsx_response(export, f"wb_detail_{from_}_{to_}.xlsx", res["count"])
+
+
+@router.post("/wb/detail-upload")
+async def wb_detail_upload(
+    files: List[UploadFile] = File(...),
+    write_db: int = 1,
+    db: Session = Depends(get_db),
+):
+    """Ручная загрузка детализации продаж WB из Excel/zip (без finance-api, без лимита).
+
+    Принимает файлы WB с русскими заголовками («Детализация продаж»), см.
+    DETAIL_UPLOAD_RENAME. Записывает в продажи source='detail'.
+    """
+    frames = []
+    total_rows = 0
+    errors = []
+    fileinfo = []
+    accum = 0
+    for upf in files:
+        data = await upf.read()
+        accum += len(data)
+        if accum > _MAX_CARDS_UPLOAD:
+            raise HTTPException(status_code=413, detail="Слишком большой объём файлов (> 100 МБ)")
+        name = upf.filename or "file"
+        if name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(BytesIO(data)) as zf:
+                    sub = 0
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        if not info.filename.lower().endswith((".xlsx", ".xlsm")):
+                            continue
+                        try:
+                            d = excel_io.read_excel_bytes(zf.read(info))
+                            frames.append(d)
+                            sub += len(d)
+                        except Exception as e:  # noqa: BLE001
+                            errors.append(f"{name}/{info.filename}: {e}")
+                    fileinfo.append({"name": name, "rows": sub, "ok": True})
+                    total_rows += sub
+            except zipfile.BadZipFile as e:
+                errors.append(f"{name}: не является zip-архивом ({e})")
+                fileinfo.append({"name": name, "rows": 0, "ok": False, "error": str(e)})
+            continue
+        if not name.lower().endswith((".xlsx", ".xlsm")):
+            errors.append(f"{name}: пропущен (не Excel)")
+            fileinfo.append({"name": name, "rows": 0, "ok": False, "error": "не Excel"})
+            continue
+        try:
+            d = excel_io.read_excel_bytes(data)
+            frames.append(d)
+            total_rows += len(d)
+            fileinfo.append({"name": name, "rows": len(d), "ok": True})
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{name}: {e}")
+            fileinfo.append({"name": name, "rows": 0, "ok": False, "error": str(e)})
+    if not frames:
+        raise HTTPException(status_code=400,
+                            detail="Нет данных для импорта: " + ("; ".join(errors) or "нет файлов"))
+    df = pd.concat(frames, ignore_index=True)
+    rename = {k: v for k, v in DETAIL_UPLOAD_RENAME.items() if k in df.columns}
+    df = df.rename(columns=rename)
+    sdf = sync_service.normalize_wb_sales(df)
+    if sdf is None or sdf.empty:
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось распознать структуру отчёта: нужны колонки "
+                   "«Артикул поставщика/продавца» и «Дата продажи». " + "; ".join(errors[:5]),
+        )
+    n = 0
+    if write_db:
+        n = sync_service.upsert_sales(db, sdf, "wb", source="detail")
+    sync_service.record_api_pull(db, "wb", "detail", int(total_rows), int(n), "ручной импорт")
+    return {
+        "imported": int(n),
+        "rows": int(total_rows),
+        "files": fileinfo,
+        "errors": errors,
+    }
 
 
 @router.post("/ozon/cards")

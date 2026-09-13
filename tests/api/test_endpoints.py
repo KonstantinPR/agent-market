@@ -50,12 +50,25 @@ def test_wb_sales_fills_sales_and_dashboard(api_client):
     assert wb["income"] == 4500.0
 
 
-def test_wb_stock_fills_stocks(api_client):
+def test_wb_stock_fills_stocks_by_size(api_client):
     api_client.post("/api/wb/cards")
     r = api_client.post("/api/wb/stock")
     assert r.status_code == 200
-    stocks = api_client.get("/api/stocks").json()
+    stocks = api_client.get("/api/stocks", params={"marketplace": "wb"}).json()
     assert stocks["count"] == 2
+    by_card = {s["article"]: s for s in stocks["rows"]}
+    assert by_card["TST-1"]["size"] == "46"
+    assert by_card["TST-2"]["size"] == "47"
+    assert by_card["TST-1"]["chrt_id"] == "101"
+
+
+def test_wb_stock_excel_groups_without_sizes(api_client):
+    api_client.post("/api/wb/cards")
+    r = api_client.post("/api/wb/stock", params={"by_size": 0})
+    assert r.status_code == 200
+    df = pd.read_excel(r.content)
+    assert set(df.columns) == {"date", "article", "warehouse", "quantity"}
+    assert len(df) == 2  # агрегат по артикулу+склад
 
 
 def test_ozon_realization_fills_sales(api_client):
@@ -110,6 +123,53 @@ def test_write_db_off_ozon_realization_does_not_write(api_client):
     assert sales["count"] == 0
 
 
+# ---------------------------------------------------------------------- цены и хранение
+def test_wb_prices_snapshot_written_and_viewed(api_client, stub_wb):
+    stub_wb.get_prices = lambda: pd.DataFrame({
+        "nmID": ["1001", "1002"],
+        "vendorCode": ["TST-1", "TST-2"],
+        "techSizeName": ["46", "47"],
+        "price": [1100, 990],
+        "discountedPrice": [990, 891],
+        "discount": [10, 10],
+    })
+    r = api_client.post("/api/wb/prices")
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    view = api_client.get("/api/prices").json()
+    assert view["count"] == 2
+    arts = {p["article"]: p for p in view["rows"]}
+    assert set(arts) == {"TST-1", "TST-2"}
+    assert arts["TST-1"]["price"] == 1100.0
+    assert arts["TST-1"]["discount"] == 10.0
+    assert arts["TST-1"]["size"] == "46"
+    pulls = api_client.get("/api/pulls").json()
+    assert next(p for p in pulls if p["api"] == "wb" and p["kind"] == "prices")["db_rows"] == 2
+
+
+def test_wb_storage_cost_written_and_viewed(api_client):
+    r = api_client.post("/api/wb/storage")
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    view = api_client.get("/api/storage-cost").json()
+    assert view["count"] == 2
+    rows = {x["article"]: x for x in view["rows"]}
+    assert set(rows) == {"TST-1", "TST-2"}
+    assert rows["TST-1"]["warehouse_price"] > 0
+    assert rows["TST-1"]["storage_price"] > 0
+    pulls = api_client.get("/api/pulls").json()
+    assert next(p for p in pulls if p["api"] == "wb" and p["kind"] == "storage")["db_rows"] == 2
+
+
+def test_write_db_off_prices_storage_does_not_write(api_client):
+    r = api_client.post("/api/wb/prices", params={"write_db": 0})
+    assert r.status_code == 200
+    assert api_client.get("/api/prices").json()["count"] == 0
+    r = api_client.post("/api/wb/storage", params={"write_db": 0})
+    assert r.status_code == 200
+    assert api_client.get("/api/storage-cost").json()["count"] == 0
+
+
 def test_write_db_on_by_default_writes(api_client):
     r = api_client.post("/api/wb/cards")
     assert r.status_code == 200
@@ -132,6 +192,76 @@ def test_exports_are_xlsx(api_client):
         r = api_client.get(path)
         assert r.status_code == 200
         assert XLSX in r.headers["content-type"]
+
+
+# ---------------------------------------------------------------------- воронка без nmID
+def test_funnel_without_nmid_column_uses_vendor_code(api_client, stub_wb):
+    """Реальный WB-ответ может не содержать колонку nmID — не должно быть 502."""
+    api_client.post("/api/wb/cards")  # товары TST-1/TST-2 для /api/margin/funnel
+    stub_wb.get_sales_funnel = lambda from_, to_: pd.DataFrame({
+        "vendorCode": ["TST-1", "TST-2"],
+        "viewsCount": [100, 90],
+        "openCardCount": [10, 9],
+        "addToCartCount": [4, 3],
+        "orderCount": [2, 2],
+        "avgPrice": [1000, 900],
+        "revenue": [2000, 1800],
+    })
+    r = api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    assert XLSX in r.headers["content-type"]
+
+    pulls = api_client.get("/api/pulls").json()
+    assert any(p["api"] == "wb" and p["kind"] == "funnel" and p["db_rows"] == 2 for p in pulls)
+
+    funnel = api_client.get("/api/margin/funnel",
+                            params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert {row["article"] for row in funnel["rows"]} == {"TST-1", "TST-2"}
+
+
+def test_funnel_accepts_alternate_nmid_casing(api_client, stub_wb):
+    stub_wb.get_sales_funnel = lambda from_, to_: pd.DataFrame({
+        "nmId": ["101", "102"],
+        "viewsCount": [50, 40],
+    })
+    r = api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+
+
+def test_wb_detail_fills_margin_detail_view(api_client):
+    api_client.post("/api/wb/cards")  # nm_articles/products для join
+    r = api_client.post("/api/wb/detail",
+                        params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    view = api_client.get("/api/margin/detail",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert view["count"] == 2
+    assert {row["article"] for row in view["rows"]} == {"TST-1", "TST-2"}
+
+
+def test_funnel_view_returns_loaded_rows(api_client):
+    api_client.post("/api/wb/cards")  # nm_articles: 1001->TST-1 и т.д.
+    r = api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert view["count"] == 2
+    assert {row["article"] for row in view["rows"]} == {"TST-1", "TST-2"}
+    assert all(row["views"] >= 0 for row in view["rows"])
+    assert all("buyouts" in row and "buyout_sum" in row for row in view["rows"])
+
+
+def test_funnel_view_defaults_to_latest_snapshot(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    view = api_client.get("/api/funnel").json()
+    assert view["date_from"] == "2026-09-01"
+    assert view["date_to"] == "2026-09-10"
+    assert view["count"] == 2
 
 
 # ---------------------------------------------------------------------- импорт

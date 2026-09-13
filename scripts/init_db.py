@@ -37,6 +37,24 @@ def create_tables():
     # Миграции для существующих таблиц (create_all не добавляет колонки)
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS replenishable boolean DEFAULT false"))
+        # Фаза B: остатки по размерам
+        conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS chrt_id varchar(40) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS size varchar(50) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS barcode varchar(100) DEFAULT ''"))
+        # Фаза A: воронка — выкупы и сумма выкупа
+        conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyouts integer DEFAULT 0"))
+        conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyout_sum numeric(14,2) DEFAULT 0"))
+        conn.execute(text("ALTER TABLE stocks DROP CONSTRAINT IF EXISTS uq_stocks_market_date_article_wh"))
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                               WHERE conname = 'uq_stocks_market_date_article_wh_chrt') THEN
+                    ALTER TABLE stocks ADD CONSTRAINT uq_stocks_market_date_article_wh_chrt
+                        UNIQUE (marketplace_id, date, article, warehouse, chrt_id);
+                END IF;
+            END $$;
+        """))
     print("Таблицы созданы/синхронизированы")
 
 

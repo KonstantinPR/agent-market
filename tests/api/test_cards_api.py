@@ -111,7 +111,38 @@ def test_cards_search(api_client):
                     files={"files": ("c.xlsx", _xlsx(df), XLSX)})
     r = api_client.get("/api/cards?marketplace=wb&like=ABSENT").json()
     assert r["count"] == 1
+    assert r["total"] == 1
     assert r["rows"][0]["vendor_code"] == "V-2"
+
+
+def test_cards_server_pagination(api_client):
+    df1 = pd.DataFrame(_wb_df())
+    df2 = pd.DataFrame({k: [f"{v}-2" for v in vals[:1]] for k, vals in _wb_df().items()})
+    api_client.post(
+        "/api/import/cards?marketplace=wb",
+        files=[
+            ("files", ("a.xlsx", _xlsx(df1), XLSX)),
+            ("files", ("b.xlsx", _xlsx(df2), XLSX)),
+        ],
+    )
+    page1 = api_client.get("/api/cards?marketplace=wb&limit=2&offset=0").json()
+    assert page1["total"] == 3
+    assert page1["count"] == 2
+    page2 = api_client.get("/api/cards?marketplace=wb&limit=2&offset=2").json()
+    assert page2["total"] == 3
+    assert page2["count"] == 1
+    seen = {r["chrt_id"] for r in page1["rows"]} | {r["chrt_id"] for r in page2["rows"]}
+    assert seen == {"111", "222", "111-2"}
+
+
+def test_cards_offset_beyond_total_is_empty(api_client):
+    df = pd.DataFrame(_wb_df())
+    api_client.post("/api/import/cards?marketplace=wb",
+                    files={"files": ("c.xlsx", _xlsx(df), XLSX)})
+    r = api_client.get("/api/cards?marketplace=wb&limit=5&offset=10").json()
+    assert r["total"] == 2
+    assert r["count"] == 0
+    assert r["rows"] == []
 
 
 # ------------------------------------------------------------------ API pull пишет карточки

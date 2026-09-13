@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     wb_api_key: str = ""
     wb_finance_api_key: str = ""
+    wb_finance_api_key_2: str = ""
     ozon_client_id: str = ""
     ozon_api_key: str = ""
 

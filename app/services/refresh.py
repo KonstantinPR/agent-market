@@ -7,6 +7,7 @@
   блокирует остальные; история запусков пишется в refresh_runs.
 """
 import json
+import logging
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -18,6 +19,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app import models
+
+logger = logging.getLogger("agent_market.refresh")
 from app.config import settings
 from app.database import SessionLocal
 from app.providers import factory as provider_factory
@@ -48,6 +51,14 @@ def _col_num(df: pd.DataFrame, names) -> pd.Series:
     return pd.Series(0, index=df.index)
 
 
+def _pick_col(df: pd.DataFrame, names) -> Optional[pd.Series]:
+    """Первый существующий столбец из списка кандидатов (или None)."""
+    for n in names:
+        if n in df.columns:
+            return df[n]
+    return None
+
+
 # ---------------------------------------------------- карта nmID -> артикул WB
 _NM_CACHE = {"ts": 0.0, "data": {}}
 
@@ -74,34 +85,164 @@ def _wb_nm_cache_reset():
     _NM_CACHE["ts"] = 0.0
 
 
+def _wb_card_dims(db) -> dict:
+    """Карта chrt_id -> (size, barcode) из загруженных карточек WB."""
+    mp_wb = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "wb")
+    ).scalar()
+    if mp_wb is None:
+        return {}
+    rows = db.execute(
+        select(models.MarketplaceCard.chrt_id,
+               models.MarketplaceCard.size,
+               models.MarketplaceCard.barcode)
+        .where(models.MarketplaceCard.marketplace_id == mp_wb)
+    ).all()
+    return {str(r.chrt_id): (str(r.size or ""), str(r.barcode or "")) for r in rows}
+
+
+# Колонки реального ответа WB analytics/v3/sales-funnel/products
+# (pd.json_normalize верхнего уровня: product.*, statistic.selected.* и т.д.)
+FUNNEL_NM_CANDIDATES = ["product.nmID", "product.nmId", "nmID", "nmId", "nm_id"]
+FUNNEL_VENDOR_CANDIDATES = ["product.vendorCode", "vendorCode", "vendor_code",
+                            "supplierArticle", "article"]
+FUNNEL_COL_MAP = {
+    "views": ["statistic.selected.openCount", "viewsCount", "views", "viewCount"],
+    "opens": ["statistic.selected.openCardCount", "opens", "openCardCount"],
+    "adds": ["statistic.selected.cartCount", "addToCartCount", "adds", "addCartCount"],
+    "orders": ["statistic.selected.orderCount", "orderCount", "ordersCount", "orders"],
+    "cancelled": ["statistic.selected.cancelCount", "cancelCount",
+                  "cancelledOrdersCount", "cancelled"],
+    "buyouts": ["statistic.selected.buyoutCount", "buyoutCount", "boughtCount", "buyouts"],
+    "avg_price": ["statistic.selected.avgPrice", "avgPrice", "orderAvgPrice", "avg_price"],
+    "revenue": ["statistic.selected.orderSum", "statistic.selected.orderSumRub",
+                "revenue", "orderSum", "orderSumRub", "salesSum", "sales_sum"],
+    "buyout_sum": ["statistic.selected.buyoutSum", "buyoutSum", "boughtSum", "buyout_sum"],
+}
+
+
 def _funnel_to_db(df: pd.DataFrame, from_, to_) -> pd.DataFrame:
-    """Воронка WB -> схема funnel_metric (артикул через nmID->sa_name кэш)."""
+    """Воронка WB -> схема funnel_metric.
+
+    Артикул берётся напрямую из vendorCode реального ответа (product.vendorCode),
+    иначе через кэш nmID->артикул; метрики читаются из statistic.selected.*.
+    Устойчив к вариантам имён и к полному отсутствию идентификатора.
+    """
     if df.empty:
         return df
     nm_map = _wb_nmid_to_article()
 
+    nm_id = _pick_col(df, FUNNEL_NM_CANDIDATES)
+    vendor = _pick_col(df, FUNNEL_VENDOR_CANDIDATES)
+
     def art(s):
         s = str(s)
+        if not s or s == "nan":
+            return ""
         return nm_map.get(s, s)
 
-    return pd.DataFrame({
-        "date_from": from_,
-        "date_to": to_,
-        "nm_id": df["nmID"].astype(str),
-        "article": df["nmID"].astype(str).map(art),
-        "views": _col_num(df, ["viewsCount"]),
-        "opens": _col_num(df, ["openCardCount"]),
-        "adds": _col_num(df, ["addToCartCount"]),
-        "orders": _col_num(df, ["orderCount", "ordersCount"]),
-        "cancelled": _col_num(df, ["cancelCount", "cancelledOrdersCount"]),
-        "avg_price": _col_num(df, ["avgPrice", "orderAvgPrice"]),
-        "revenue": _col_num(df, ["revenue", "salesSum"]),
-    })
+    if vendor is not None:
+        article = vendor.astype(str).str.strip()
+    else:
+        article = (nm_id.astype(str) if nm_id is not None
+                   else pd.Series("", index=df.index)).map(art)
+    article = article.replace("nan", "")
+
+    if nm_id is None and vendor is not None:
+        logger.warning(
+            "Воронка WB без колонки nmID, использую артикул продавца; колонки: %s",
+            ", ".join(sorted(map(str, df.columns))),
+        )
+
+    nm_id_series = nm_id if nm_id is not None else pd.Series("", index=df.index)
+
+    out = {"date_from": from_, "date_to": to_,
+           "nm_id": nm_id_series.astype(str), "article": article}
+    for key, cands in FUNNEL_COL_MAP.items():
+        out[key] = _col_num(df, cands)
+    return pd.DataFrame(out)
 
 
 # ----------------------------------------------------------- привязка провайдеров
 def _wb_provider(with_fail_fast: bool = False) -> WbProvider:
     return provider_factory.get_wb_provider(with_fail_fast=with_fail_fast)
+
+
+# ----------------------------------------------------------- экспорт карточек (разбивка полей)
+import json as _json
+
+
+def expand_wb_card_export(df: pd.DataFrame) -> pd.DataFrame:
+    """Разбивает dimensions/characteristics/subject из WB карточек в отдельные колонки.
+
+    Используется только для Excel-экспорта, не влияет на БД.
+    """
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+
+    # --- dimensions dict -> колонки (мм / г)
+    if "dimensions" in out.columns:
+        dim = out["dimensions"]
+        out["Длина, мм"] = dim.map(lambda d: (d.get("length") if isinstance(d, dict) else None))
+        out["Ширина, мм"] = dim.map(lambda d: (d.get("width") if isinstance(d, dict) else None))
+        out["Высота, мм"] = dim.map(lambda d: (d.get("height") if isinstance(d, dict) else None))
+        out["Вес брутто, г"] = dim.map(lambda d: (d.get("weightGross") if isinstance(d, dict) else None))
+        out["Вес нетто, г"] = dim.map(lambda d: (d.get("weightNet") if isinstance(d, dict) else None))
+
+    # --- characteristics list-of-dicts -> колонка на имя
+    if "characteristics" in out.columns:
+        name_map = {}
+        for items in out["characteristics"].dropna():
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                if name and name not in name_map:
+                    name_map[name] = len(name_map) + 1  # preserving order
+        if name_map:
+            cols_sorted = list(name_map)
+            top = cols_sorted[:150]
+
+            def _char_value(items, col_name):
+                if not isinstance(items, list):
+                    return ""
+                vals = []
+                for item in items:
+                    if not isinstance(item, dict) or item.get("name") != col_name:
+                        continue
+                    v = item.get("value")
+                    if isinstance(v, list):
+                        vals.extend(str(x) for x in v)
+                    elif v is not None:
+                        vals.append(str(v))
+                return "; ".join(dict.fromkeys(vals))  # unique order
+
+            for col_name in top:
+                out[f"Хар-ка: {col_name}"] = out["characteristics"].map(
+                    lambda items, cn=col_name: _char_value(items, cn)
+                )
+            if len(cols_sorted) > 150:
+                other_cols = cols_sorted[150:]
+                out["Другие характеристики"] = out["characteristics"].map(
+                    lambda items, _oc=other_cols: "; ".join(
+                        f"{item.get('name','')}: {item.get('value','')}"
+                        for item in (items if isinstance(items, list) else [])
+                        if isinstance(item, dict) and item.get("name") in _oc
+                    ) or ""
+                )
+
+    # --- subject dict -> "Предмет" и "Предмет (родитель)"
+    if "subject" in out.columns:
+        subj = out["subject"]
+        out["Предмет"] = subj.map(lambda s: (str(s.get("name") or "") if isinstance(s, dict) else str(s or "")))
+        out["Предмет (родитель)"] = subj.map(
+            lambda s: (str(s.get("parentName") or "") if isinstance(s, dict) else "")
+        )
+
+    return out
 
 
 def _oz_provider(with_fail_fast: bool = False) -> OzonProvider:
@@ -166,29 +307,43 @@ def pull_wb_cards(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
 
 def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
-    df = prov.get_stock_report()
+    raw = prov.get_stock_report()
     n = 0
-    if write_db and not df.empty:
-        if "vendorCode" not in df.columns:
+    if not raw.empty:
+        if "vendorCode" not in raw.columns:
             nm_map = _wb_nmid_to_article()
         else:
             nm_map = {}
         qty = pd.to_numeric(
-            df["quantity"] if "quantity" in df.columns else df.get("quantityFull", 0),
+            raw["quantity"] if "quantity" in raw.columns else raw.get("quantityFull", 0),
             errors="coerce",
         ).fillna(0).astype(int)
         sdf = pd.DataFrame({
             "date": str(date.today()),
-            "article": df.apply(
+            "article": raw.apply(
                 lambda r: nm_map.get(str(r.get("nmId")), str(r.get("vendorCode", r.get("nmId", ""))).strip()),
                 axis=1,
             ),
-            "warehouse": df["warehouseName"].astype(str),
+            "warehouse": raw["warehouseName"].astype(str),
+            "chrt_id": raw["chrtId"].astype(str).str.strip() if "chrtId" in raw.columns else "",
             "quantity": qty,
         })
-        n = sync_service.upsert_stocks(db, sdf, "wb")
-    sync_service.record_api_pull(db, "wb", "stock", len(df), n, "сегодня")
-    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": "сегодня"}
+        if "chrtId" in raw.columns:
+            dims = _wb_card_dims(db)
+            sdf["size"] = sdf["chrt_id"].map(lambda c: dims.get(c, ("", ""))[0])
+            sdf["barcode"] = sdf["chrt_id"].map(lambda c: dims.get(c, ("", ""))[1])
+        else:
+            sdf["size"] = ""
+            sdf["barcode"] = ""
+        sdf["article"] = sdf["article"].astype(str).str.strip()
+        sdf = sdf[["date", "article", "chrt_id", "size", "barcode", "warehouse", "quantity"]]
+        if write_db:
+            n = sync_service.upsert_stocks(db, sdf, "wb")
+    else:
+        sdf = raw
+    sync_service.record_api_pull(db, "wb", "stock", len(sdf), n, "сегодня")
+    return {"df": sdf, "count": n if write_db else len(sdf), "db_rows": n,
+            "rows": len(sdf), "window": "сегодня"}
 
 
 def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None,
@@ -207,16 +362,24 @@ def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None,
 def pull_wb_prices(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_prices()
-    sync_service.record_api_pull(db, "wb", "prices", len(df), 0, "")
-    return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": ""}
+    n = 0
+    if write_db and not df.empty:
+        n = sync_service.upsert_price_snapshots(db, df)
+    sync_service.record_api_pull(db, "wb", "prices", len(df), n, "сейчас")
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": "сейчас"}
 
 
 def pull_wb_storage(db, days: int = 7, provider: Optional[WbProvider] = None,
                     write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
     df = prov.get_storage_cost(number_last_days=days)
-    sync_service.record_api_pull(db, "wb", "storage", len(df), 0, f"{days} дней")
-    return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": f"{days} дней"}
+    n = 0
+    if write_db and not df.empty:
+        n = sync_service.upsert_storage_costs(db, df)
+    sync_service.record_api_pull(db, "wb", "storage", len(df), n, f"{days} дней")
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": f"{days} дней"}
 
 
 def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None,

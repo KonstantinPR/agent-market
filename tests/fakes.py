@@ -48,6 +48,8 @@ class FakeWb:
         return pd.DataFrame({
             "vendorCode": ["TST-1", "TST-2"],
             "warehouseName": ["Склад 1", "Склад 1"],
+            "chrtId": [101, 102],
+            "techSize": ["46", "47"],
             "quantity": [5, 7],
         })
 
@@ -60,6 +62,8 @@ class FakeWb:
             "openCardCount": [10, 9],
             "addToCartCount": [4, 3],
             "orderCount": [2, 2],
+            "buyoutCount": [1, 2],
+            "buyoutSum": [1000.0, 1800.0],
             "avgPrice": [1000, 900],
             "revenue": [2000, 1800],
         })
@@ -82,9 +86,12 @@ class FakeWb:
         if self.storage_error:
             raise self.storage_error
         return pd.DataFrame({
-            "warehouse": ["Склад 1", "Склад 1"],
-            "date": [str(D1), str(D1)],
-            "sum": [100.0, 90.0],
+            "vendorCode": ["TST-1", "TST-2"],
+            "nmId": [1001, 1002],
+            "barcodesCount": [10, 12],
+            "volume": [0.200, 0.350],
+            "warehousePrice": [5000.0, 5400.0],
+            "storagePricePerBarcode": [500.0, 450.0],
         })
 
     def get_sales_realization(self, date_from, date_to):

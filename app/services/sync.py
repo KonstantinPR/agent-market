@@ -122,7 +122,7 @@ def normalize_wb_sales(df: pd.DataFrame) -> Optional[pd.DataFrame]:
                 for c in svc_cols:
                     parts.append(pd.to_numeric(df[c], errors="coerce").fillna(0) if c in df.columns else 0)
                 return sum(parts[1:], parts[0]) if parts else 0
-            return 0
+            return pd.Series(0.0, index=df.index)
         return pd.to_numeric(df[src], errors="coerce").fillna(0)
 
     out = pd.DataFrame({
@@ -320,20 +320,29 @@ def upsert_stocks(db, df: pd.DataFrame, code: str) -> int:
     df = _norm_num(df, ["quantity"])
     mp_id = marketplace_id(db, code)
     df["date"] = pd.to_datetime(df["date"]).dt.date
-    df = df.groupby(["date", "article", "warehouse"], as_index=False)["quantity"].sum()
+    for c in ["chrt_id", "size", "barcode"]:
+        if c not in df.columns:
+            df[c] = ""
+    df = df.groupby(["date", "article", "warehouse", "chrt_id"], as_index=False).agg({
+        "quantity": "sum", "size": "first", "barcode": "first",
+    })
     values = []
     for row in df.to_dict("records"):
         values.append({
             "marketplace_id": mp_id,
             "date": row["date"],
             "article": str(row["article"]).strip(),
-            "warehouse": str(row.get("warehouse", "Все")),
+            "warehouse": str(row.get("warehouse", "Все")).strip(),
+            "chrt_id": str(row.get("chrt_id", "")).strip(),
+            "size": str(row.get("size", "")).strip(),
+            "barcode": str(row.get("barcode", "")).strip(),
             "quantity": int(row["quantity"]),
         })
     ins = insert(models.Stock)
     stmt = ins.on_conflict_do_update(
-        index_elements=["marketplace_id", "date", "article", "warehouse"],
-        set_={"quantity": ins.excluded.quantity},
+        index_elements=["marketplace_id", "date", "article", "warehouse", "chrt_id"],
+        set_={"quantity": ins.excluded.quantity,
+              "size": ins.excluded.size, "barcode": ins.excluded.barcode},
     )
     db.execute(stmt, values)
     db.commit()
@@ -369,21 +378,25 @@ def upsert_funnel(db, df: pd.DataFrame) -> int:
     df = df.dropna(subset=["date_from", "date_to"])
     df["article"] = df["article"].astype(str).str.strip()
     df = df[df["article"] != ""]
-    for c in ["views", "opens", "adds", "orders", "cancelled"]:
+    if df.empty:
+        return 0
+    for c in ["views", "opens", "adds", "orders", "cancelled", "buyouts"]:
         df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
-    for c in ["avg_price", "revenue"]:
+    for c in ["avg_price", "revenue", "buyout_sum"]:
         df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0)
     df["nm_id"] = df.get("nm_id", "").astype(str)
     df = df.groupby(["date_from", "date_to", "article"], as_index=False).agg({
         "nm_id": "first", "views": "sum", "opens": "sum", "adds": "sum",
-        "orders": "sum", "cancelled": "sum", "avg_price": "first", "revenue": "sum",
+        "orders": "sum", "cancelled": "sum", "buyouts": "sum",
+        "avg_price": "first", "revenue": "sum", "buyout_sum": "sum",
     })
     values = [dict(r) for r in df.to_dict("records")]
     ins = insert(models.FunnelMetric)
     stmt = ins.on_conflict_do_update(
         index_elements=["date_from", "date_to", "article"],
         set_={c: ins.excluded[c] for c in ["nm_id", "views", "opens", "adds",
-                                            "orders", "cancelled", "avg_price", "revenue"]},
+                                            "orders", "cancelled", "buyouts",
+                                            "avg_price", "revenue", "buyout_sum"]},
     )
     db.execute(stmt, values)
     db.commit()
@@ -412,6 +425,81 @@ def upsert_nm_articles(db, df: pd.DataFrame) -> int:
     stmt = ins.on_conflict_do_update(
         index_elements=["nm_id"],
         set_={"article": ins.excluded.article, "updated_at": func.now()},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
+def upsert_price_snapshots(db, df: pd.DataFrame) -> int:
+    """Снимок цен/скидок WB -> price_snapshots (upsert по article+size)."""
+    if df is None or df.empty:
+        return 0
+    if "vendorCode" not in df.columns:
+        return 0
+    df = df.copy()
+
+    def col(name, default=""):
+        return df[name] if name in df.columns else pd.Series(default, index=df.index)
+
+    def num(name, default=0.0):
+        return pd.to_numeric(col(name, default), errors="coerce").fillna(default)
+
+    df = df.assign(
+        article=col("vendorCode").astype(str).str.strip(),
+        nm_id=col("nmID").astype(str).str.strip(),
+        size=col("size", col("techSize", col("techSizeName"))).astype(str).str.strip(),
+        price=num("price"),
+        discounted_price=num("discountedPrice", 0) if "discountedPrice" in df.columns else num("price"),
+        discount=num("discount"),
+    )
+    df = df.groupby(["article", "size"], as_index=False).agg({
+        "nm_id": "first", "price": "first",
+        "discounted_price": "first", "discount": "first",
+    })
+    values = [dict(r) for r in df.to_dict("records")]
+    ins = insert(models.PriceSnapshot)
+    stmt = ins.on_conflict_do_update(
+        index_elements=["article", "size"],
+        set_={c: ins.excluded[c] for c in ["nm_id", "price", "discounted_price", "discount"]},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
+def upsert_storage_costs(db, df: pd.DataFrame) -> int:
+    """Стоимость хранения WB -> storage_costs (upsert по nm_id)."""
+    if df is None or df.empty:
+        return 0
+    if "nmId" not in df.columns:
+        return 0
+    df = df.copy()
+
+    def col(name, default=""):
+        return df[name] if name in df.columns else pd.Series(default, index=df.index)
+
+    def num(name, default=0):
+        return pd.to_numeric(col(name, default), errors="coerce").fillna(default)
+
+    df = df.assign(
+        nm_id=col("nmId").astype(str).str.strip(),
+        article=col("vendorCode").astype(str).str.strip(),
+        barcodes_count=num("barcodesCount", 0).astype(int),
+        volume=num("volume"),
+        storage_price=num("storagePricePerBarcode", 0),
+        warehouse_price=num("warehousePrice", 0),
+    )
+    df = df.groupby("nm_id", as_index=False).agg({
+        "article": "first", "barcodes_count": "mean", "volume": "mean",
+        "storage_price": "mean", "warehouse_price": "mean",
+    })
+    values = [dict(r) for r in df.to_dict("records")]
+    ins = insert(models.StorageCost)
+    stmt = ins.on_conflict_do_update(
+        index_elements=["nm_id"],
+        set_={c: ins.excluded[c]
+              for c in ["article", "barcodes_count", "volume", "storage_price", "warehouse_price"]},
     )
     db.execute(stmt, values)
     db.commit()

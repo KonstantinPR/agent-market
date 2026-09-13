@@ -49,6 +49,15 @@
         <a class="nav-link" data-tab="oz-cashflow" href="#">Движение средств</a>
       </div>
     </div>
+    <div class="dropdown" id="magicDropdown">
+      <button class="dropbtn" id="magicMenuBtn">Магия &#9662;</button>
+      <div class="dropdown-menu" id="magicMenu">
+        <a class="nav-link" id="magicRefreshWb" href="#">Обновить WB</a>
+        <a class="nav-link" id="magicRefreshOz" href="#">Обновить Ozon</a>
+        <a class="nav-link" id="magicRefreshAll" href="#">Обновить ВСЁ</a>
+        <a class="nav-link is-disabled" id="magicDoAll" href="#" title="Сделать ВСЕ будет доступно позже: объединит обновление данных с операциями по ценам и другими действиями">Сделать ВСЕ</a>
+      </div>
+    </div>
   </div>
 </nav>
 <header class="filters">
@@ -62,9 +71,6 @@
   <label>С <input type="date" id="fFrom"></label>
   <label>По <input type="date" id="fTo"></label>
   <button id="btnApply">Применить</button>
-  <span class="filters-sep"></span>
-  <button id="btnRefreshWb" class="refresh-btn">Обновить WB</button>
-  <button id="btnRefreshOz" class="refresh-btn">Обновить Ozon</button>
 </header>
 <main>
   <section id="tab-dashboard" class="pane active">
@@ -173,23 +179,30 @@
       <div class="dropzone" id="wbCardsDrop">
         <span class="dz-label">Перетащите сюда Excel-файлы или zip-архив с карточками Wildberries</span>
       </div>
-      <div class="toolbar">
-        <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд…">
-        <span class="msg" id="wbMsg-cards-table"></span>
-      </div>
-      <div class="table-wrap" id="wbCardsTable"></div>
     </div>
+    <div class="toolbar">
+      <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд…">
+      <span class="msg" id="wbMsg-cards-table"></span>
+    </div>
+    <div class="table-wrap" id="wbCardsTable"></div>
   </section>
 
   <section id="tab-wb-stock" class="pane">
     <div class="wb-form">
-      <p class="hint">Остатки на складах Wildberries с записью в базу (остатки за сегодня).</p>
+      <p class="hint">Остатки на складах Wildberries с записью в базу (остатки за сегодня, по размерам).</p>
       <div class="toolbar">
         <button class="btn wb-dl" data-kind="stock">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="by-size" checked> по размерам</label>
         <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="stock" checked> в БД</label>
         <span class="msg" id="wbMsg-stock"></span>
       </div>
     </div>
+    <div class="toolbar">
+      <input id="wbStockLike" placeholder="Поиск: артикул, название, размер…">
+      <label class="chk"><input type="checkbox" id="wbStockAgg"> свернуть по размерам</label>
+      <span class="msg" id="wbMsg-stock-table"></span>
+    </div>
+    <div class="table-wrap" id="wbStockTable"></div>
   </section>
 
   <section id="tab-wb-funnel" class="pane">
@@ -203,6 +216,13 @@
         <span class="msg" id="wbMsg-funnel"></span>
       </div>
     </div>
+    <div class="toolbar">
+      <input id="wbFunnelLike" placeholder="Поиск: артикул, название…">
+      <label class="chk"><input type="checkbox" id="wbFunnelExpanded"> Расширенный вид</label>
+      <span class="msg" id="wbMsg-funnel-table"></span>
+    </div>
+    <p class="notice" id="wbFunnelBuyoutNote" style="display:none">Выкупы: WB не отдаёт эти данные с текущим ключом (нужен доступ «Статистика», метод v1/main). Доступны только Просмотры/Корзина/Заказы/Отмены. При наличии доступа колонки заполнятся после нового скачивания воронки.</p>
+    <div class="table-wrap" id="wbFunnelTable"></div>
   </section>
 
   <section id="tab-wb-sales" class="pane">
@@ -216,11 +236,16 @@
         <span class="msg" id="wbMsg-sales"></span>
       </div>
     </div>
+    <div class="toolbar">
+      <input id="wbSalesLike" placeholder="Поиск: артикул, название…">
+      <span class="msg" id="wbMsg-sales-table"></span>
+    </div>
+    <div class="table-wrap" id="wbSalesTable"></div>
   </section>
 
   <section id="tab-wb-detail" class="pane">
     <div class="wb-form">
-      <p class="hint">Детальный финансовый отчёт по продажам Wildberries (вознаграждения, доставка, хранение, штрафы и удержания). Использует отдельный финансовый токен (WB_FINANCE_API_KEY): доступен ~1 запрос в 12 часов, отчёт формируется до следующего дня — указывайте окно «По» не позже вчера.</p>
+      <p class="hint">Детальный финансовый отчёт по продажам Wildberries (вознаграждения, доставка, хранение, штрафы и удержания). Использует отдельный финансовый токен (WB_FINANCE_API_KEY): доступен ~1 запрос в 12 часов, отчёт формируется до следующего дня — указывайте окно «По» не позже вчера. Также доступна ручная загрузка файла «Детализация продаж» из ЛК WB (Excel или zip-архив) — без лимитов finance-api.</p>
       <div class="toolbar">
         <label>С <input type="date" data-date="from"></label>
         <label>По <input type="date" data-date="to"></label>
@@ -228,28 +253,53 @@
         <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="detail" checked> в БД</label>
         <span class="msg" id="wbMsg-detail"></span>
       </div>
+      <div class="toolbar">
+        <input type="file" id="wbDetailFile" accept=".xlsx,.xlsm,.zip" multiple>
+        <button id="wbDetailImport" class="btn">Загрузить файлы</button>
+        <span class="msg" id="wbMsg-detail-excel"></span>
+      </div>
+      <div class="dropzone" id="wbDetailDrop">
+        <span class="dz-label">Перетащите сюда Excel-файлы или zip-архив с детализацией Wildberries</span>
+      </div>
     </div>
+    <div class="toolbar">
+      <input id="wbDetailLike" placeholder="Поиск: артикул, название…">
+      <span class="msg" id="wbMsg-detail-table"></span>
+    </div>
+    <div class="table-wrap" id="wbDetailTable"></div>
   </section>
 
   <section id="tab-wb-prices" class="pane">
     <div class="wb-form">
-      <p class="hint">Текущие цены и скидки Wildberries по карточкам.</p>
+      <p class="hint">Текущие цены и скидки Wildberries по карточкам (записываются в базу).</p>
       <div class="toolbar">
         <button class="btn wb-dl" data-kind="prices">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="prices" checked> в БД</label>
         <span class="msg" id="wbMsg-prices"></span>
       </div>
     </div>
+    <div class="toolbar">
+      <input id="wbPricesLike" placeholder="Поиск: артикул, название…">
+      <span class="msg" id="wbMsg-prices-table"></span>
+    </div>
+    <div class="table-wrap" id="wbPricesTable"></div>
   </section>
 
   <section id="tab-wb-storage" class="pane">
     <div class="wb-form">
-      <p class="hint">Стоимость хранения на складах Wildberries за последние дни.</p>
+      <p class="hint">Стоимость хранения на складах Wildberries за последние дни (записывается в базу).</p>
       <div class="toolbar">
         <label>Дней <input type="number" data-days value="7" min="1" max="90"></label>
         <button class="btn wb-dl" data-kind="storage">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="storage" checked> в БД</label>
         <span class="msg" id="wbMsg-storage"></span>
       </div>
     </div>
+    <div class="toolbar">
+      <input id="wbStorageLike" placeholder="Поиск: артикул, название…">
+      <span class="msg" id="wbMsg-storage-table"></span>
+    </div>
+    <div class="table-wrap" id="wbStorageTable"></div>
   </section>
 
   <section id="tab-oz-cards" class="pane">

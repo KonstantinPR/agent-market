@@ -67,3 +67,61 @@ def test_fail_fast_429_raises_without_retries(monkeypatch):
         provider._session_get("https://example.invalid/x")
     assert exc.value.status_code == 429
     assert "лимит запросов" in str(exc.value)
+
+
+def _post_resp(status_code, headers=None):
+    resp = requests.Response()
+    resp.status_code = status_code
+    resp.headers = headers or {}
+    return resp
+
+
+def test_session_post_finance_rotates_to_second_key_on_429(monkeypatch):
+    monkeypatch.setattr(settings, "wb_finance_api_key", "PRIMARY")
+    monkeypatch.setattr(settings, "wb_finance_api_key_2", "SECONDARY")
+    provider = WbProvider(testing_mode=True)
+    provider.fail_fast_429 = True
+
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(headers["Authorization"])
+        return _post_resp(429) if len(calls) == 1 else _post_resp(200)
+
+    monkeypatch.setattr("requests.post", fake_post)
+    resp = provider._session_post("https://example.invalid/x", {"a": 1}, finance=True)
+    assert resp.status_code == 200
+    assert calls == ["PRIMARY", "SECONDARY"]
+
+
+def test_session_post_finance_429_both_keys_raise(monkeypatch):
+    monkeypatch.setattr(settings, "wb_finance_api_key", "PRIMARY")
+    monkeypatch.setattr(settings, "wb_finance_api_key_2", "SECONDARY")
+    provider = WbProvider(testing_mode=True)
+    provider.fail_fast_429 = True
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        return _post_resp(429, headers={"X-Ratelimit-Retry": "3600"})
+
+    monkeypatch.setattr("requests.post", fake_post)
+    with pytest.raises(WbApiError) as exc:
+        provider._session_post("https://example.invalid/x", {"a": 1}, finance=True)
+    assert exc.value.status_code == 429
+
+
+def test_session_post_without_alt_key_does_not_rotate(monkeypatch):
+    monkeypatch.setattr(settings, "wb_finance_api_key", "PRIMARY")
+    monkeypatch.setattr(settings, "wb_finance_api_key_2", "")
+    provider = WbProvider(testing_mode=True)
+    provider.fail_fast_429 = True
+
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(headers["Authorization"])
+        return _post_resp(429, headers={"X-Ratelimit-Retry": "3600"})
+
+    monkeypatch.setattr("requests.post", fake_post)
+    with pytest.raises(WbApiError):
+        provider._session_post("https://example.invalid/x", {"a": 1}, finance=True)
+    assert calls == ["PRIMARY"]
