@@ -180,6 +180,8 @@ main { padding: 20px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { padding: 6px 12px; text-align: left; border-bottom: 1px solid #eee; white-space: nowrap; }
 th { font-weight: 600; color: #333; font-size: 13px; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { background: #f6f8fa; }
 .table-wrap thead th {
   position: sticky;
   top: 0;

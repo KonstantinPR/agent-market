@@ -400,9 +400,11 @@ def pull_wb_detail(db, from_, to_, provider: Optional[WbProvider] = None,
     prov = provider or _wb_provider()
     df = prov.get_sales_detail(from_, to_)
     n = 0
-    if write_db:
-        sdf = sync_service.normalize_wb_sales(df)
-        n = sync_service.upsert_sales(db, sdf, "wb", source="detail") if sdf is not None else 0
+    if write_db and not df.empty:
+        rdf = sync_service.normalize_wb_detail(df, source="api")
+        if rdf is not None and not rdf.empty:
+            sync_service.upsert_wb_detail_rows(db, rdf, source="api")
+            n = sync_service.rebuild_sales_from_detail(db, sale_from=from_, sale_to=to_)
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "detail", len(df), n, window)
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}

@@ -141,6 +141,211 @@ def normalize_wb_sales(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     return out
 
 
+# Алиасы колонок строк «Детализации продаж» WB (Excel ЛК / finance-API) -> схема wb_detail_rows
+DETAIL_FIELD_ALIASES = {
+    "report_id": ["reportId", "realizationreport_id", "realizationsreport_id", "Номер отчёта"],
+    "rrd_id": ["rrdId", "rrd_id", "ID строки"],
+    "gi_id": ["giId", "gi_id", "ID поставки"],
+    "nm_id": ["nmId", "nm_id", "Артикул WB"],
+    "article": ["vendorCode", "sa_name", "article", "Артикул поставщика", "Артикул продавца"],
+    "brand": ["brandName", "brand", "Бренд"],
+    "title": ["title", "Название товара"],
+    "tech_size": ["techSize", "ts_name", "size", "Размер"],
+    "sku": ["sku", "barcode", "Баркод", "ШК", "ШК (shk_id)"],
+    "doc_type_name": ["docTypeName", "doc_type_name", "Тип документа"],
+    "quantity": ["quantity", "Кол-во"],
+    "retail_price": ["retailPrice", "retail_price", "Цена розничная"],
+    "retail_amount": ["retailAmount", "retail_amount", "Вайлдберриз реализовал Товар (Пр)"],
+    "commission_percent": ["commissionPercent", "commission_percent", "Размер кВВ, %"],
+    "office_name": ["officeName", "office_name", "Склад"],
+    "sale_dt": ["saleDt", "sale_dt", "Дата продажи"],
+    "order_dt": ["orderDt", "order_dt", "Дата заказа покупателем"],
+    "ppvz_sales_commission": [
+        "ppvzSalesCommission", "ppvz_sales_commission",
+        "Вознаграждение с продаж до вычета услуг поверенного, без НДС",
+    ],
+    "for_pay": ["forPay", "for_pay", "К перечислению Продавцу за реализованный Товар"],
+    "delivery_service": [
+        "deliveryService", "delivery_rub",
+        "Услуги по доставке товара покупателю", "Услуги по доставке товара покупателю (квВВ)",
+    ],
+    "paid_storage": ["paidStorage", "storage_fee", "Хранение (пр)", "Хранение"],
+    "penalty": ["penalty", "Штраф"],
+    "deduction": ["deduction", "Удержанный штраф"],
+    "additional_payment": ["additionalPayment", "additional_payment", "Корректировка ВВ"],
+    "rebill_logistic_cost": [
+        "rebillLogisticCost", "rebill_logistic_cost",
+        "Возмещение издержек по перевозке/складским операциям",
+    ],
+    "srid": ["srid", "Srid", "SRID"],
+    "order_uid": ["orderUid", "order_uid", "Id корзины заказа"],
+}
+
+DETAIL_TEXT_COLS = ["report_id", "rrd_id", "gi_id", "nm_id", "article", "brand", "title",
+                    "tech_size", "sku", "doc_type_name", "office_name", "srid", "order_uid"]
+DETAIL_NUM_COLS = ["quantity", "retail_price", "retail_amount", "commission_percent",
+                   "ppvz_sales_commission", "for_pay", "delivery_service", "paid_storage",
+                   "penalty", "deduction", "additional_payment", "rebill_logistic_cost"]
+DETAIL_DATE_COLS = ["sale_dt", "order_dt"]
+
+
+def normalize_wb_detail(df: pd.DataFrame, source: str = "excel") -> Optional[pd.DataFrame]:
+    """Приводит «Детализацию продаж» WB (Excel ЛК или finance-API) к схеме wb_detail_rows.
+
+    op_key: srid -> 'sr:<srid>'; иначе report_id:rrd_id -> 'rr:<report_id>:<rrd_id>'
+    (для API rrd_id гарантирован пагинацией); иначе rrd_id; иначе 'row:<n>'.
+    Служебные строки без идентификатора и без артикула отбрасываются.
+    """
+    if df is None or df.empty:
+        return None
+    out = {}
+    idx = df.index
+    for field, aliases in DETAIL_FIELD_ALIASES.items():
+        c = _pick_col(df, aliases)
+        if c is None:
+            if field in DETAIL_NUM_COLS:
+                out[field] = pd.Series(0.0, index=idx)
+            elif field in DETAIL_DATE_COLS:
+                out[field] = pd.Series(pd.NaT, index=idx)
+            else:
+                out[field] = pd.Series("", index=idx)
+            continue
+        col = df[c]
+        if field in DETAIL_NUM_COLS:
+            out[field] = pd.to_numeric(col, errors="coerce").fillna(0)
+        elif field in DETAIL_DATE_COLS:
+            out[field] = pd.to_datetime(col, errors="coerce")
+        else:
+            out[field] = col.fillna("").astype(str).str.strip()
+    ndf = pd.DataFrame(out)
+    ndf["quantity"] = pd.to_numeric(ndf["quantity"], errors="coerce").fillna(0).astype(int)
+
+    rows_out = []
+    for i, r in enumerate(ndf.to_dict("records")):
+        srid = str(r["srid"] or "").strip()
+        rrd = str(r["rrd_id"] or "").strip()
+        report = str(r["report_id"] or "").strip()
+        article = str(r["article"] or "").strip()
+        if srid:
+            key = "sr:" + srid
+        elif rrd and (report or source == "api"):
+            key = "rr:" + report + ":" + rrd
+        elif rrd:
+            key = "rr:" + rrd
+        elif article:
+            key = "row:" + str(i)
+        else:
+            continue  # служебная строка без id и без артикула
+        r["op_key"] = key
+        r["article"] = article
+        rows_out.append(r)
+    if not rows_out:
+        return None
+    ndf = pd.DataFrame(rows_out)
+    return ndf
+
+
+def upsert_wb_detail_rows(db, df: pd.DataFrame, source: str = "excel") -> int:
+    """Строки детализации WB -> wb_detail_rows, upsert по op_key (идемпотентно)."""
+    if df is None or df.empty:
+        return 0
+    values = []
+    for r in df.to_dict("records"):
+        values.append({
+            "op_key": str(r["op_key"]),
+            "source": source,
+            "report_id": str(r.get("report_id", "") or ""),
+            "rrd_id": str(r.get("rrd_id", "") or ""),
+            "gi_id": str(r.get("gi_id", "") or ""),
+            "nm_id": str(r.get("nm_id", "") or ""),
+            "article": str(r.get("article", "") or ""),
+            "brand": str(r.get("brand", "") or ""),
+            "title": str(r.get("title", "") or ""),
+            "tech_size": str(r.get("tech_size", "") or ""),
+            "sku": str(r.get("sku", "") or ""),
+            "doc_type_name": str(r.get("doc_type_name", "") or ""),
+            "quantity": int(_f(r.get("quantity", 0))),
+            "retail_price": _f(r.get("retail_price")),
+            "retail_amount": _f(r.get("retail_amount")),
+            "commission_percent": _f(r.get("commission_percent")),
+            "office_name": str(r.get("office_name", "") or ""),
+            "sale_dt": _as_date(r.get("sale_dt")),
+            "order_dt": _as_date(r.get("order_dt")),
+            "ppvz_sales_commission": _f(r.get("ppvz_sales_commission")),
+            "for_pay": _f(r.get("for_pay")),
+            "delivery_service": _f(r.get("delivery_service")),
+            "paid_storage": _f(r.get("paid_storage")),
+            "penalty": _f(r.get("penalty")),
+            "deduction": _f(r.get("deduction")),
+            "additional_payment": _f(r.get("additional_payment")),
+            "rebill_logistic_cost": _f(r.get("rebill_logistic_cost")),
+            "srid": str(r.get("srid", "") or ""),
+            "order_uid": str(r.get("order_uid", "") or ""),
+        })
+    ins = insert(models.WbDetailRow)
+    set_cols = [c for c in values[0].keys() if c != "op_key"]
+    stmt = ins.on_conflict_do_update(
+        index_elements=["op_key"],
+        set_={c: ins.excluded[c] for c in set_cols},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
+def _is_return_row(doc_type: str) -> bool:
+    s = str(doc_type or "").lower()
+    return "возврат" in s or "return" in s
+
+
+def rebuild_sales_from_detail(db, sale_from=None, sale_to=None, source: str = "detail") -> int:
+    """Пересчитывает продажи source='detail' из wb_detail_rows (сумма по дата+артикул).
+
+    Продажи = строки не-возвратов, возвраты — отдельная колонка; финансовые
+    поля суммируются по всем строкам (WB передаёт их со знаком).
+    """
+    q = select(models.WbDetailRow)
+    if sale_from is not None:
+        q = q.where(models.WbDetailRow.sale_dt >= sale_from)
+    if sale_to is not None:
+        q = q.where(models.WbDetailRow.sale_dt <= sale_to)
+    rows = db.execute(q).scalars().all()
+    if not rows:
+        return 0
+    recs = []
+    for r in rows:
+        if r.sale_dt is None or not r.article:
+            continue
+        is_ret = _is_return_row(r.doc_type_name)
+        recs.append({
+            "date": r.sale_dt,
+            "article": r.article,
+            "quantity": r.quantity if not is_ret else 0,
+            "returns_qty": r.quantity if is_ret else 0,
+            "revenue": r.retail_amount if not is_ret else 0,
+            "commission": _f(r.ppvz_sales_commission),
+            "logistics": _f(r.delivery_service),
+            "storage": _f(r.paid_storage),
+            "services": _f(r.penalty) + _f(r.deduction) + _f(r.additional_payment),
+            "income": _f(r.for_pay),
+        })
+    if not recs:
+        return 0
+    return upsert_sales(db, pd.DataFrame(recs), "wb", source=source)
+
+
+def _pick_col(df: pd.DataFrame, names) -> Optional[str]:
+    return next((c for c in names if c in df.columns), None)
+
+
+def _as_date(v):
+    """Надёжно приводит значение к datetime.date (None/''/NaT -> None)."""
+    if v is None or v == "":
+        return None
+    t = pd.to_datetime(v, errors="coerce")
+    return t.date() if pd.notna(t) else None
+
+
 def upsert_products(db, df: pd.DataFrame) -> int:
     existing = set(db.execute(select(models.Product.article)).scalars().all())
     n = 0

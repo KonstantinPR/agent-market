@@ -83,10 +83,15 @@ async function apiPost(path, body) {
   return resp.json();
 }
 
-function table(headers, rows) {
+function table(headers, rows, sort) {
   if (!rows.length) return '<div class="empty">Нет данных за выбранный период</div>';
   let h = "<thead><tr>";
-  for (const c of headers) h += '<th class="' + (c.num ? "num" : "") + '">' + c.label + "</th>";
+  for (const c of headers) {
+    let arrow = "";
+    if (sort && sort.k === c.k) arrow = sort.dir === "asc" ? " \u25B2" : " \u25BC";
+    h += '<th data-k="' + c.k + '" class="' + (c.num ? "num sortable" : "sortable") +
+      '" title="Сортировать">' + c.label + arrow + "</th>";
+  }
   h += "</tr></thead><tbody>";
   for (const r of rows) {
     h += "<tr>";
@@ -108,15 +113,49 @@ const cellFmts = {
 };
 
 function pagedTable(container, headers, rows) {
-  if (!container._pt) container._pt = { limit: 100, showAll: false };
+  if (!container._pt) container._pt = { limit: 100, showAll: false, sort: null };
   const st = container._pt;
+  if (st.sort && !headers.some((x) => x.k === st.sort.k)) st.sort = null;
   st.headers = headers;
   st.rows = rows;
+  if (!container._bound) {
+    container._bound = true;
+    container.addEventListener("click", (ev) => {
+      const th = ev.target.closest("th[data-k]");
+      if (!th || !container._pt) return;
+      const k = th.dataset.k;
+      const s = container._pt.sort;
+      if (s && s.k === k) {
+        s.dir = s.dir === "asc" ? "desc" : "asc";
+      } else {
+        container._pt.sort = { k, dir: "asc" };
+      }
+      paint();
+    });
+  }
   const paint = () => {
     container.innerHTML = "";
     if (!rows || !rows.length) {
       container.innerHTML = '<div class="empty">Нет данных за выбранный период</div>';
       return;
+    }
+    let list = rows;
+    if (st.sort) {
+      const hd = headers.find((x) => x.k === st.sort.k);
+      if (hd) {
+        const k = st.sort.k;
+        const dir = st.sort.dir === "asc" ? 1 : -1;
+        list = rows.slice().sort((a, b) => {
+          let cmp;
+          if (hd.num) {
+            cmp = (Number(a[k]) || 0) - (Number(b[k]) || 0);
+          } else {
+            cmp = String(a[k] == null ? "" : a[k]).localeCompare(
+              String(b[k] == null ? "" : b[k]), "ru");
+          }
+          return cmp * dir;
+        });
+      }
     }
     const bar = document.createElement("div");
     bar.className = "pager";
@@ -149,11 +188,11 @@ function pagedTable(container, headers, rows) {
         paint();
       });
     }
-    const visible = st.showAll ? rows : rows.slice(0, st.limit);
+    const visible = st.showAll ? list : list.slice(0, st.limit);
     span.textContent = "Показано " + fmt(visible.length) + " из " + fmt(rows.length);
     container.appendChild(bar);
     const wrap = document.createElement("div");
-    wrap.innerHTML = table(headers, visible);
+    wrap.innerHTML = table(headers, visible, st.sort);
     container.appendChild(wrap);
   };
   paint();
@@ -279,6 +318,21 @@ const marginHeaders = [
   { k: "margin", label: "Маржа", num: true, render: cellFmts.moneyCls },
   { k: "margin_per_one", label: "Маржа на ед.", num: true, render: cellFmts.moneyCls },
   { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct },
+];
+
+const wbDetailRowHeaders = [
+  { k: "date", label: "Дата", num: true, render: cellFmts.text },
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "title", label: "Наименование", render: cellFmts.text },
+  { k: "doc_type", label: "Тип документа", render: cellFmts.text },
+  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
+  { k: "retail_amount", label: "Реализовано", num: true, render: cellFmts.money },
+  { k: "commission", label: "КВВ", num: true, render: cellFmts.money },
+  { k: "for_pay", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "logistics", label: "Доставка", num: true, render: cellFmts.money },
+  { k: "storage", label: "Хранение", num: true, render: cellFmts.money },
+  { k: "office", label: "Склад", render: cellFmts.text },
+  { k: "source", label: "Источник", render: cellFmts.tag },
 ];
 
 const funnelHeaders = [
@@ -843,23 +897,44 @@ async function renderWbSales() {
 async function renderWbDetail() {
   const box = document.getElementById("wbDetailTable");
   const likeEl = document.getElementById("wbDetailLike");
+  const rawEl = document.getElementById("wbDetailRaw");
   const p = paneDates();
   const q = likeEl ? likeEl.value.trim() : "";
-  let data;
+  const raw = rawEl ? rawEl.checked : false;
+  const params = qs({
+    date_from: p.date_from || undefined,
+    date_to: p.date_to || undefined,
+    article_like: q || undefined,
+  });
+  const msg = document.querySelector("#wbMsg-detail-table");
   try {
-    data = await api("/margin/detail" + qs({
-      date_from: p.date_from || undefined,
-      date_to: p.date_to || undefined,
-      article_like: q || undefined,
-    }));
+    if (raw) {
+      const data = await api("/wb/detail-rows" + qs({
+        date_from: p.date_from || undefined,
+        date_to: p.date_to || undefined,
+        article_like: q || undefined,
+        limit: 500,
+      }));
+      const rows = data.rows || [];
+      if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
+        (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
+      pagedTable(box, wbDetailRowHeaders, rows);
+    } else {
+      const data = await api("/margin/detail" + params);
+      const rows = data.rows || [];
+      if (msg) {
+        if (data.detail_articles != null) {
+          msg.textContent = "По товарам: " + fmt(data.count) + " (в детализации: " +
+            fmt(data.detail_articles) + " артикулов; есть в каталоге)";
+        } else {
+          msg.textContent = rows.length ? "Строк: " + fmt(rows.length) : "Нет данных. Отчёт формируется ~до следующего дня (finance-токен).";
+        }
+      }
+      pagedTable(box, marginHeaders, rows);
+    }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию: ' + escapeHtml(err.message) + "</div>";
-    return;
   }
-  const msg = document.querySelector("#wbMsg-detail-table");
-  const rows = data.rows || [];
-  if (msg) msg.textContent = rows.length ? "Строк: " + fmt(rows.length) : "Нет данных. Отчёт формируется ~до следующего дня (finance-токен).";
-  pagedTable(box, marginHeaders, rows);
 }
 
 async function uploadCardFiles(files, name) {
@@ -915,7 +990,9 @@ function initDetailUpload() {
   const file = document.getElementById("wbDetailFile");
   const btn = document.getElementById("wbDetailImport");
   const drop = document.getElementById("wbDetailDrop");
+  const rawEl = document.getElementById("wbDetailRaw");
   if (btn && file) btn.addEventListener("click", () => uploadDetailFiles(file.files));
+  if (rawEl) rawEl.addEventListener("change", () => renderWbDetail());
   if (drop) {
     drop.addEventListener("click", () => { if (file) file.click(); });
     drop.addEventListener("dragover", (e) => {

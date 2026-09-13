@@ -30,6 +30,8 @@ DETAIL_RU_COLUMNS = {
     "paidStorage": "Хранение", "penalty": "Общая сумма штрафов",
     "deduction": "Удержания", "additionalPayment": "Корректировка ВВ",
     "rebillLogisticCost": "Возмещение издержек по перевозке/складским операциям",
+    "srid": "Уникальный идентификатор записи (SRID)",
+    "docTypeName": "Тип документа", "orderUid": "ID заказа",
 }
 
 # Русские заголовки файла WB «Детализация продаж» -> ключи финансового отчёта.
@@ -53,6 +55,10 @@ DETAIL_UPLOAD_RENAME.update({
     "Штраф": "penalty",
     "Удержанный штраф": "deduction",
     "Возмещение издержек по перевозке/складским операциям": "rebillLogisticCost",
+    "Srid": "srid", "SRID": "srid",
+    "Тип документа": "docTypeName",
+    "Id корзины заказа": "orderUid", "ID заказа": "orderUid",
+    "Склад": "officeName",
 })
 
 # Русские заголовки для отчёта реализации (v5 / reportDetailByPeriod)

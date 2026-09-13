@@ -3,10 +3,13 @@ from sqlalchemy import select
 
 from app.services.sync import (
     normalize_ozon_realization,
+    normalize_wb_detail,
     normalize_wb_sales,
+    rebuild_sales_from_detail,
     record_api_pull,
     upsert_products,
     upsert_sales,
+    upsert_wb_detail_rows,
 )
 from app import models
 
@@ -153,3 +156,85 @@ def test_record_api_pull_upserts_by_api_kind(db):
     ).scalars().one()
     assert pull.rows == 12
     assert pull.window == "2026-09-01..2026-09-08"
+
+
+def test_normalize_wb_detail_excel_maps_srid_op_key():
+    df = pd.DataFrame([{
+        "Артикул поставщика": "TST-1", "Дата продажи": "2026-09-01",
+        "Тип документа": "Продажа", "Кол-во": 2, "Srid": "ab.123.0.0",
+        "Вайлдберриз реализовал Товар (Пр)": 2200.0,
+        "К перечислению Продавцу за реализованный Товар": 2000.0,
+    }])
+    out = normalize_wb_detail(df, source="excel")
+    assert out is not None
+    row = out.iloc[0]
+    assert row["article"] == "TST-1"
+    assert row["op_key"] == "sr:ab.123.0.0"
+    assert row["quantity"] == 2
+    assert row["retail_amount"] == 2200.0
+    assert row["for_pay"] == 2000.0
+    assert str(row["sale_dt"].date()) == "2026-09-01"
+
+
+def test_normalize_wb_detail_api_fallback_to_rrd_id():
+    df = pd.DataFrame([{
+        "vendorCode": "TST-1", "saleDt": "2026-09-01", "quantity": 1,
+        "rrdId": 777, "retailAmount": 1100.0, "forPay": 1000.0,
+    }])
+    out = normalize_wb_detail(df, source="api")
+    assert out.iloc[0]["op_key"] == "rr::777"
+
+
+def test_normalize_wb_detail_drops_service_rows_without_id_or_article():
+    df = pd.DataFrame([{
+        "Дата продажи": "2026-09-01", "Кол-во": 1, "Тип документа": "Доставка",
+    }])
+    assert normalize_wb_detail(df, source="excel") is None
+
+
+def test_upsert_wb_detail_rows_idempotent_by_op_key(db):
+    df = pd.DataFrame([
+        {"op_key": "sr:op1", "article": "A1", "sale_dt": pd.Timestamp("2026-09-01"),
+         "quantity": 2, "retail_amount": 2000.0, "for_pay": 1800.0},
+        {"op_key": "sr:op2", "article": "A1", "sale_dt": pd.Timestamp("2026-09-01"),
+         "quantity": 1, "retail_amount": 1000.0, "for_pay": 900.0},
+    ])
+    assert upsert_wb_detail_rows(db, df, source="excel") == 2
+    # повторная загрузка с тем же op_key и НОВЫМ значением — перезапись, не дубль
+    df2 = pd.DataFrame([{"op_key": "sr:op1", "article": "A1",
+                         "sale_dt": pd.Timestamp("2026-09-01"),
+                         "quantity": 5, "retail_amount": 5000.0, "for_pay": 4500.0}])
+    assert upsert_wb_detail_rows(db, df2, source="excel") == 1
+    rows = db.execute(select(models.WbDetailRow)).scalars().all()
+    assert len(rows) == 2
+    assert next(r for r in rows if r.op_key == "sr:op1").quantity == 5
+
+
+def test_rebuild_sales_from_detail_splits_returns(db):
+    rows = pd.DataFrame([
+        {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 2,
+         "retail_amount": 2000.0, "for_pay": 1800.0,
+         "ppvz_sales_commission": 200.0, "delivery_service": 100.0,
+         "paid_storage": 50.0, "penalty": 10.0},
+        {"op_key": "sr:s2", "article": "A1", "doc_type_name": "Возврат",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
+         "retail_amount": -1000.0, "for_pay": -900.0,
+         "ppvz_sales_commission": -100.0, "delivery_service": -50.0},
+        {"op_key": "sr:s3", "article": "A2", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-02"), "quantity": 1,
+         "retail_amount": 1000.0, "for_pay": 900.0},
+    ])
+    upsert_wb_detail_rows(db, rows, source="excel")
+    assert rebuild_sales_from_detail(db) == 2
+    a1 = db.execute(
+        select(models.Sale).where(models.Sale.article == "A1")
+    ).scalar_one()
+    assert a1.quantity == 2
+    assert a1.returns_qty == 1
+    assert a1.revenue == 2000.0
+    assert a1.services == 10.0  # penalty не-возврата
+    a2 = db.execute(
+        select(models.Sale).where(models.Sale.article == "A2")
+    ).scalar_one()
+    assert a2.quantity == 1

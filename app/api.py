@@ -118,9 +118,21 @@ def api_margin_detail(
         db, date_from=from_, date_to=to_, marketplace=None,
         article_like=article_like, source="detail",
     )
+    detail_articles = 0
+    if from_ and to_:
+        q = select(func.count(func.distinct(models.WbDetailRow.article))).where(
+            models.WbDetailRow.article != "",
+            models.WbDetailRow.sale_dt.isnot(None),
+            models.WbDetailRow.sale_dt >= from_,
+            models.WbDetailRow.sale_dt <= to_,
+        )
+        if article_like:
+            q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+        detail_articles = int(db.execute(q).scalar_one() or 0)
     return {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
+        "detail_articles": detail_articles,
     }
 
 
@@ -1287,8 +1299,8 @@ async def wb_detail_upload(
     df = pd.concat(frames, ignore_index=True)
     rename = {k: v for k, v in DETAIL_UPLOAD_RENAME.items() if k in df.columns}
     df = df.rename(columns=rename)
-    sdf = sync_service.normalize_wb_sales(df)
-    if sdf is None or sdf.empty:
+    ndf = sync_service.normalize_wb_detail(df, source="excel")
+    if ndf is None or ndf.empty:
         raise HTTPException(
             status_code=400,
             detail="Не удалось распознать структуру отчёта: нужны колонки "
@@ -1296,7 +1308,8 @@ async def wb_detail_upload(
         )
     n = 0
     if write_db:
-        n = sync_service.upsert_sales(db, sdf, "wb", source="detail")
+        sync_service.upsert_wb_detail_rows(db, ndf, source="excel")
+        n = sync_service.rebuild_sales_from_detail(db)
     sync_service.record_api_pull(db, "wb", "detail", int(total_rows), int(n), "ручной импорт")
     return {
         "imported": int(n),
@@ -1304,6 +1317,49 @@ async def wb_detail_upload(
         "files": fileinfo,
         "errors": errors,
     }
+
+
+@router.get("/wb/detail-rows")
+def api_wb_detail_rows(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Сырые строки «Детализации продаж» WB (wb_detail_rows) с фильтрами и пагинацией."""
+    from_, to_ = _parse_window400(date_from, date_to)
+    q = select(models.WbDetailRow).where(models.WbDetailRow.sale_dt.isnot(None))
+    if from_:
+        q = q.where(models.WbDetailRow.sale_dt >= from_)
+    if to_:
+        q = q.where(models.WbDetailRow.sale_dt <= to_)
+    if article_like:
+        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+    total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
+    rows = db.execute(
+        q.order_by(models.WbDetailRow.sale_dt.desc(), models.WbDetailRow.id.desc())
+        .offset(offset).limit(limit)
+    ).scalars().all()
+    out = [{
+        "date": r.sale_dt.isoformat() if r.sale_dt else "",
+        "article": r.article,
+        "title": r.title,
+        "doc_type": r.doc_type_name,
+        "quantity": r.quantity,
+        "retail_price": float(r.retail_price or 0),
+        "retail_amount": float(r.retail_amount or 0),
+        "commission": float(r.ppvz_sales_commission or 0),
+        "for_pay": float(r.for_pay or 0),
+        "logistics": float(r.delivery_service or 0),
+        "storage": float(r.paid_storage or 0),
+        "services": float((r.penalty or 0) + (r.deduction or 0) + (r.additional_payment or 0)),
+        "office": r.office_name,
+        "srid": r.srid,
+        "source": r.source,
+    } for r in rows]
+    return {"rows": out, "total": int(total)}
 
 
 @router.post("/ozon/cards")

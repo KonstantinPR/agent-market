@@ -99,3 +99,36 @@ def test_upload_detail_write_db_0(api_client):
     assert r.status_code == 200
     assert r.json()["rows"] == 2
     assert r.json()["imported"] == 0
+
+
+def test_detail_rows_endpoint_lists_raw_rows(api_client):
+    df = _detail_df().copy()
+    df["Srid"] = ["sr-1", "sr-2"]
+    r = api_client.post("/api/wb/detail-upload", files={
+        "files": ("d.xlsx", _xlsx(df), XLSX),
+    })
+    assert r.status_code == 200
+    assert r.json()["imported"] == 2
+    rows = api_client.get("/api/wb/detail-rows",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert rows["total"] == 2
+    assert {x["srid"] for x in rows["rows"]} == {"sr-1", "sr-2"}
+    assert {x["article"] for x in rows["rows"]} == {"TST-1", "TST-2"}
+
+
+def test_upload_detail_same_srid_idempotent(api_client):
+    api_client.post("/api/wb/cards")  # products TST-1 для join в margin/detail
+    df = _detail_df().iloc[:1].copy()
+    df["Srid"] = ["sr-dedup"]
+    f = _xlsx(df)
+    r1 = api_client.post("/api/wb/detail-upload", files={"files": ("d.xlsx", f, XLSX)})
+    r2 = api_client.post("/api/wb/detail-upload", files={"files": ("d.xlsx", f, XLSX)})
+    assert r1.json()["imported"] == 1
+    assert r2.json()["imported"] == 1
+    rows = api_client.get("/api/wb/detail-rows",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert rows["total"] == 1
+    view = api_client.get("/api/margin/detail",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert view["detail_articles"] == 1
+    assert view["count"] == 1
