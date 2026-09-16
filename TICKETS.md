@@ -52,15 +52,7 @@
 
 ## В работе
 
-- [T-2] (medium) UI: гармонизировать разделы WB API с «Детализация продаж»
-  > Тело: привести все разделы WB API (wb-cards, wb-stock, wb-funnel,
-  > wb-sales, wb-prices, wb-storage) к единому виду эталона `tab-wb-detail`
-  > (app/static/index.html:359): единая форма `.wb-form` (hidden input +
-  > dropzone), единый табличный тулбар (поиск + чекбоксы + msg + tip +
-  > `toolbar-right`: pager + «Выгрузить в Excel» + «Загрузить на диск»).
-  > Добавить экспорт-эндпоинты /api/export/wb/{cards,stock,prices,storage,
-  > funnel} по образцу /api/export/wb/detail-* (переиспользовать GET-логику
-  > api_cards/api_stocks/api_prices/api_storage_cost/api_funnel). Тесты.
+_(пусто)_
 
 ## Заблокированные
 
@@ -68,4 +60,4 @@ _(пусто)_
 
 ## Закрытые
 
-_(пусто)_
+- [T-2] (closed) UI — гармонизировать разделы WB API с «Детализация продаж» — `d7bc7b0`
