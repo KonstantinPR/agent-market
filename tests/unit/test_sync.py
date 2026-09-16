@@ -443,3 +443,42 @@ def test_detail_summary_dataframe_is_goods_guard(db):
     assert a1["sells"] == 0
     assert a1["ops_count"] == 1
     assert a1["logistics"] == 50.0
+
+
+def test_detail_summary_redistributes_articleless_logistics(db):
+    """Безартикульная логистика (без srid-привязки) разносится по артикулам
+    пропорционально delivery_count + return_delivery_count."""
+    rows = pd.DataFrame([
+        {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
+         "retail_amount": 1000.0, "for_pay": 900.0,
+         "delivery_service": 100.0, "delivery_count": 1, "return_delivery_count": 0},
+        {"op_key": "sr:s2", "article": "A2", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
+         "retail_amount": 1000.0, "for_pay": 900.0,
+         "delivery_service": 100.0, "delivery_count": 3, "return_delivery_count": 1},
+        {"op_key": "sr:al1", "article": "", "doc_type_name":
+         "Возмещение издержек по перевозке/по складским операциям с то",
+         "sale_dt": pd.Timestamp("2026-09-01"),
+         "delivery_service": 400.0, "delivery_count": 4, "return_delivery_count": 4,
+         "pvz_compensation": 20.0, "penalty": 5.0},
+    ])
+    upsert_wb_detail_rows(db, rows, source="excel")
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    assert not (out["article"] == "").any()  # всё разнесено — остатка нет
+    a1 = out[out["article"] == "A1"].iloc[0]
+    a2 = out[out["article"] == "A2"].iloc[0]
+    # веса: A1 = 1+0 = 1, A2 = 3+1 = 4 → доли A1=0.2, A2=0.8
+    # доставка безарт.: 400 → A1 +80, A2 +320 (сверх своих 100/100)
+    assert a1["logistics"] == 180.0
+    assert a2["logistics"] == 420.0
+    # счётчики: 4/4 доставок → A1 +1/+1, A2 +3/+3
+    assert a1["delivery_count"] == 2
+    assert a1["return_delivery_count"] == 1
+    assert a2["delivery_count"] == 6
+    assert a2["return_delivery_count"] == 4
+    # pvz_compensation и услуги тоже разнесены (доли 0.2/0.8)
+    assert a1["pvz_compensation"] == 4.0
+    assert a2["pvz_compensation"] == 16.0
+    assert a1["services"] == 1.0
+    assert a2["services"] == 4.0

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.services.sync import _is_goods_row, storage_split
+from app.services.sync import _is_goods_row, _redistribute_articleless, storage_split
 
 
 def funnel_dataframe(
@@ -140,9 +140,14 @@ def empty_margin_df() -> pd.DataFrame:
 
 
 DETAIL_MARGIN_COLUMNS = [
-    "article", "name", "sells", "revenue", "commission", "logistics",
-    "storage", "services", "income", "margin_gross", "net_cost",
-    "net_cost_est", "margin", "margin_per_one", "margin_pct",
+    "article", "name", "sells", "returns_qty", "revenue", "commission",
+    "logistics", "logistics_out", "logistics_in", "storage", "services",
+    "income", "margin_gross", "net_cost", "net_cost_est", "margin",
+    "margin_per_one", "margin_pct",
+    "commission_per_one", "logistics_per_one",
+    "logistics_out_per_one", "logistics_in_per_one",
+    "storage_per_one", "income_per_one", "revenue_per_one",
+    "margin_gross_per_one", "return_rate",
 ]
 
 
@@ -169,15 +174,19 @@ def margin_detail_dataframe(
     margin (Маржа-себест.) = margin_gross − net_cost × продано.
     margin_pct — рентабельность от выручки (реализовано WB).
 
-    storage_est — распределённое безартикульное «Хранение» по товарам
-    пропорционально «объём × тариф × (остаток + проданное×0.5)»
-    (storage_costs.volume × storage_price × (stocks.quantity + sold×0.5)).
-    Складывается с фактическим storage — колонка «Хранение» уже содержит
-    оценку.
+    Дополнительные аналитические поля:
+    logistics_out/logistics_in — логистика туда/обратно (по типу строки);
+    *_per_one — деление на количество проданных (sells);
+    return_rate — % возвратов от общего количества (продажи + возвраты).
     """
-    cols = ["article", "name", "sells", "revenue", "commission", "logistics",
-            "storage", "services", "income", "margin_gross",
-            "net_cost", "net_cost_est", "margin", "margin_per_one", "margin_pct"]
+    cols = ["article", "name", "sells", "returns_qty", "revenue", "commission",
+            "logistics", "logistics_out", "logistics_in", "storage", "services",
+            "income", "margin_gross", "net_cost", "net_cost_est", "margin",
+            "margin_per_one", "margin_pct",
+            "commission_per_one", "logistics_per_one",
+            "logistics_out_per_one", "logistics_in_per_one",
+            "storage_per_one", "income_per_one", "revenue_per_one",
+            "margin_gross_per_one", "return_rate"]
     out = pd.DataFrame(columns=cols)
 
     q = select(models.WbDetailRow)
@@ -244,7 +253,7 @@ def margin_detail_dataframe(
             continue
         sign = -1 if is_ret(r.doc_type_name) else 1
         if art not in cells:
-            cells[art] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            cells[art] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         c = cells[art]
         qty = r.quantity if _is_goods_row(
             r.doc_type_name, r.retail_amount, r.for_pay) else 0
@@ -256,14 +265,35 @@ def margin_detail_dataframe(
         c[5] += float(r.penalty or 0) + float(r.deduction or 0) \
             + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)
         c[6] += float(r.for_pay or 0) * sign            # income
+        # Логистика туда/обратно и возвраты
+        if is_ret(r.doc_type_name):
+            c[8] += float(r.delivery_service or 0)       # inbound logistics
+            if _is_goods_row(r.doc_type_name, r.retail_amount, r.for_pay):
+                c[9] += qty                              # returns_qty
+        else:
+            c[7] += float(r.delivery_service or 0)       # outbound logistics
         if (r.title or "").strip():
             titles.setdefault(art, str(r.title).strip())
+    # Безартикульные расходы (логистика, услуги) распределяются
+    # пропорционально весу статьи (фолбэк abs(sells)) — как storage_split.
+    _redistribute_articleless(rows, cells, {
+        "logistics": (3, lambda r: float(r.delivery_service or 0)),
+        "logistics_out": (7, lambda r: float(r.delivery_service or 0)
+                          if "возврат" not in str(r.doc_type_name or "").lower()
+                          and "return" not in str(r.doc_type_name or "").lower() else 0.0),
+        "logistics_in": (8, lambda r: float(r.delivery_service or 0)
+                         if "возврат" in str(r.doc_type_name or "").lower()
+                         or "return" in str(r.doc_type_name or "").lower() else 0.0),
+        "services": (5, lambda r: float(r.penalty or 0) + float(r.deduction or 0)
+                     + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)),
+    }, weight_idx=(0,))
     if not cells:
         return out
 
     recs = []
     for art, c in cells.items():
-        sells, revenue, commission, logistics, storage, services, income = c
+        (sells, revenue, commission, logistics, storage, services, income,
+         logistics_out, logistics_in, returns_qty) = c
         prod = _find_product(art)
         name = (prod.name or "") if prod else ""
         if not name:
@@ -281,15 +311,41 @@ def margin_detail_dataframe(
         margin = round(margin_gross - net_cost * max(0, sells), 2)
         margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
         margin_pct = round(margin / revenue * 100, 2) if revenue > 0 and sells > 0 else 0.0
+        # Пересчитанные на единицу
+        _s = sells if sells > 0 else 0
+        commission_per_one = round(commission / _s, 2) if _s else 0.0
+        logistics_per_one = round(logistics / _s, 2) if _s else 0.0
+        logistics_out_per_one = round(logistics_out / _s, 2) if _s else 0.0
+        logistics_in_per_one = round(logistics_in / _s, 2) if _s else 0.0
+        storage_per_one = round(storage_full / _s, 2) if _s else 0.0
+        income_per_one = round(income / _s, 2) if _s else 0.0
+        revenue_per_one = round(revenue / _s, 2) if _s else 0.0
+        margin_gross_per_one = round(margin_gross / _s, 2) if _s else 0.0
+        denom = sells + returns_qty
+        return_rate = round(returns_qty / denom * 100, 1) if denom > 0 else 0.0
         recs.append({
-            "article": art, "name": name, "sells": sells, "revenue": round(revenue, 2),
-            "commission": round(commission, 2), "logistics": round(logistics, 2),
+            "article": art, "name": name, "sells": sells,
+            "returns_qty": returns_qty,
+            "revenue": round(revenue, 2),
+            "commission": round(commission, 2),
+            "logistics": round(logistics, 2),
+            "logistics_out": round(logistics_out, 2),
+            "logistics_in": round(logistics_in, 2),
             "storage": round(storage_full, 2),
             "services": round(services, 2),
             "income": round(income, 2), "margin_gross": margin_gross,
             "net_cost": round(net_cost, 2),
             "net_cost_est": est, "margin": margin,
             "margin_per_one": margin_per_one, "margin_pct": margin_pct,
+            "commission_per_one": commission_per_one,
+            "logistics_per_one": logistics_per_one,
+            "logistics_out_per_one": logistics_out_per_one,
+            "logistics_in_per_one": logistics_in_per_one,
+            "storage_per_one": storage_per_one,
+            "income_per_one": income_per_one,
+            "revenue_per_one": revenue_per_one,
+            "margin_gross_per_one": margin_gross_per_one,
+            "return_rate": return_rate,
         })
     out = pd.DataFrame(recs).sort_values("margin", ascending=False).reset_index(drop=True)
     return out

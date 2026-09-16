@@ -44,7 +44,10 @@ def _df_totals(df: pd.DataFrame) -> dict:
     """Итоговая строка по числовым колонкам df (для UI-футера)."""
     if df is None or df.empty:
         return {}
-    skip = {"margin_pct", "delta_pct", "margin_per_one", "net_cost_est"}
+    skip = {"margin_pct", "delta_pct", "margin_per_one", "net_cost_est",
+            "commission_per_one", "logistics_per_one", "logistics_out_per_one",
+            "logistics_in_per_one", "storage_per_one", "income_per_one",
+            "revenue_per_one", "margin_gross_per_one", "return_rate"}
     out: dict = {}
     for c in df.columns:
         if c in skip:
@@ -812,6 +815,7 @@ PRICING_ACTION_RU = {
 @router.post("/pricing/export")
 def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся."""
+    cols = payload.get("cols")
     prices_df = provider_factory.get_wb_provider().get_prices()
     rec = pricing_service.recommendations(db, settings=payload, prices_df=prices_df)
     df = pd.DataFrame(rec["rows"])
@@ -825,7 +829,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "max_discount_item", "margin_pct_at_target", "replenishable",
     ]
     df = df[[c for c in keep if c in df.columns]]
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "article": "Артикул", "name": "Наименование", "price": "Цена базовая, руб",
         "current_vis": "Цена сейчас, руб", "current_discount": "Скидка сейчас, %",
         "target_vis": "Целевая цена, руб", "target_discount": "Целевая скидка, %",
@@ -835,7 +839,8 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "avg_price": "Ср. цена факт, руб", "eff": "База расчёта, руб",
         "floor_price": "Пол (break-even), руб", "max_discount_item": "Макс. скидка, %",
         "margin_pct_at_target": "Маржа при цели, %", "replenishable": "Докупаемый",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Автопилот")
     fname = f"pricing_{date.today().isoformat()}.xlsx"
     return StreamingResponse(
@@ -1297,6 +1302,7 @@ def export_margin(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     from_, to_ = _parse_window400(date_from, date_to)
@@ -1305,7 +1311,7 @@ def export_margin(
     df = margin_service.margin_dataframe(
         db, date_from=from_, date_to=to_, marketplace=mp_ids, article_like=article_like
     )
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "article": "Артикул", "name": "Наименование", "sells": "Продано, шт",
         "revenue": "Выручка, руб", "commission": "Комиссия, руб",
         "logistics": "Логистика, руб", "storage": "Хранение, руб",
@@ -1314,7 +1320,8 @@ def export_margin(
         "margin_gross": "Маржа, до себестоимости, руб",
         "margin": "Маржа, руб",
         "margin_per_one": "Маржа на ед., руб", "margin_pct": "Маржа, %",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
     fname = f"margin_{from_}_{to_}.xlsx"
     return StreamingResponse(
@@ -1330,6 +1337,7 @@ def export_margin_detail(
     article_like: Optional[str] = None,
     missing_only: int = 0,
     compare: int = 0,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     from_, to_ = _parse_window400(date_from, date_to)
@@ -1350,8 +1358,11 @@ def export_margin_detail(
             df = margin_service.compare_margin_periods(df, prev_df)
         except (ValueError, TypeError):
             pass
-    df = df.rename(columns={
+    if missing_only:
+        df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
+    df, ru = excel_io.project_export(df, {
         "article": "Артикул", "name": "Наименование", "sells": "Продано, шт",
+        "returns_qty": "Возвращено, шт",
         "revenue": "Выручка, руб", "commission": "Комиссия, руб",
         "logistics": "Логистика, руб", "storage": "Хранение, руб",
         "services": "Услуги, руб", "income": "К перечислению, руб",
@@ -1361,9 +1372,19 @@ def export_margin_detail(
         "net_cost_est": "Себестоимость оценка",
         "sells_pp": "Пред. период: Продано, шт", "margin_pp": "Пред. период: Прибыль, руб",
         "delta_ru": "Δ прибыли, руб", "delta_pct": "Δ прибыли, %",
-    })
-    if missing_only:
-        df = df[df["Себестоимость оценка"] == True].drop(columns=["Себестоимость оценка"])
+        "logistics_out": "Логистика туда, руб",
+        "logistics_in": "Логистика обратно, руб",
+        "commission_per_one": "Комиссия на ед., руб",
+        "logistics_per_one": "Логистика на ед., руб",
+        "logistics_out_per_one": "Логистика туда на ед., руб",
+        "logistics_in_per_one": "Логистика обратно на ед., руб",
+        "storage_per_one": "Хранение на ед., руб",
+        "income_per_one": "К перечисл. на ед., руб",
+        "revenue_per_one": "Средняя цена, руб",
+        "margin_gross_per_one": "Маржа до себест. на ед., руб",
+        "return_rate": "Доля возвратов, %",
+    }, cols)
+    df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
     fname = (("detail_missing_cost" if missing_only else "margin_detail")) + f"_{from_}_{to_}.xlsx"
     if compare:
@@ -1379,6 +1400,7 @@ def export_margin_funnel(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     from_, to_ = _parse_window400(date_from, date_to)
@@ -1386,7 +1408,7 @@ def export_margin_funnel(
     df = margin_service.funnel_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like
     )
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "article": "Артикул", "name": "Наименование", "views": "Просмотры",
         "opens": "Открытия карточки", "adds": "В корзину", "orders": "Заказы",
         "cancelled": "Отмены", "avg_price": "Ср. цена, руб",
@@ -1394,7 +1416,8 @@ def export_margin_funnel(
         "cart_pct": "В корзину, %", "order_pct": "Заказы, %",
         "net_cost": "Себестоимость, руб", "margin": "Маржа (оценка), руб",
         "margin_pct": "Маржа, %",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Воронка")
     fname = f"margin_funnel_{from_}_{to_}.xlsx"
     return StreamingResponse(
@@ -1409,6 +1432,7 @@ def export_sales(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     payload = api_sales(marketplace, date_from, date_to, db)
@@ -1417,11 +1441,12 @@ def export_sales(
         needle = article_like.lower()
         keep = df["article"].str.lower().str.contains(needle, regex=False)
         df = df[keep].reset_index(drop=True)
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
         "name": "Наименование", "quantity": "Продано, шт",
         "revenue": "Выручка, руб", "income": "К перечислению, руб",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     fname = f"sales_{payload['date_from']}_{payload['date_to']}.xlsx"
     return _xlsx_response(df, fname, len(df))
 
@@ -1709,13 +1734,14 @@ def export_wb_detail_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     from_, to_ = _parse_window400(date_from, date_to)
     df = sync_service.detail_summary_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like
     )
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "article": "Артикул", "title": "Наименование", "sells": "Продано, шт",
         "returns_qty": "Возвращено, шт", "revenue": "Реализовано, руб",
         "commission": "Комиссия, руб", "for_pay": "К перечислению, руб",
@@ -1726,7 +1752,8 @@ def export_wb_detail_summary(
         "payment_services": "Платёжные услуги, руб",
         "services": "Услуги/штрафы, руб", "ops_count": "Операций",
         "sources": "Источник",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Детализация по артикулам")
     fname = f"wb_detail_summary_{from_}_{to_}.xlsx"
     return StreamingResponse(
@@ -1741,6 +1768,7 @@ def export_wb_detail_rows(
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
     limit: int = 5000,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Экспорт сырых строк «Детализации продаж» WB (wb_detail_rows) в Excel."""
@@ -1771,10 +1799,10 @@ def export_wb_detail_rows(
         "office": r.office_name, "srid": r.srid, "source": r.source,
     } for r in rows]
     df = pd.DataFrame(recs, columns=["date", "article", "title", "doc_type", "quantity",
-                                     "retail_price", "retail_amount", "commission",
-                                     "for_pay", "logistics", "storage", "services",
-                                     "office", "srid", "source"])
-    df = df.rename(columns={
+                                      "retail_price", "retail_amount", "commission",
+                                      "for_pay", "logistics", "storage", "services",
+                                      "office", "srid", "source"])
+    df, ru = excel_io.project_export(df, {
         "date": "Дата", "article": "Артикул", "title": "Наименование",
         "doc_type": "Тип документа", "quantity": "Кол-во",
         "retail_price": "Цена розничная", "retail_amount": "Реализовано, руб",
@@ -1782,7 +1810,8 @@ def export_wb_detail_rows(
         "logistics": "Доставка, руб", "storage": "Хранение, руб",
         "services": "Услуги/штрафы, руб", "office": "Склад",
         "srid": "SRID", "source": "Источник",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Строки детализации")
     fname = f"wb_detail_rows_{from_}_{to_}.xlsx"
     return StreamingResponse(
@@ -1796,6 +1825,7 @@ def export_wb_cards(
     marketplace: str = "wb",
     like: Optional[str] = None,
     limit: int = 5000,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Экспорт карточек WB из БД (marketplace_cards) в Excel."""
@@ -1804,11 +1834,12 @@ def export_wb_cards(
         "chrt_id", "nm_id", "vendor_code", "brand", "subject", "size", "barcode",
         "volume_l", "composition", "name",
     ])
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "chrt_id": "Код размера", "nm_id": "Артикул WB", "vendor_code": "Артикул продавца",
         "brand": "Бренд", "subject": "Предмет", "size": "Размер", "barcode": "Баркод",
         "volume_l": "Объём, л", "composition": "Состав", "name": "Наименование",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     return _xlsx_response(df, "wb_cards.xlsx", payload["total"])
 
 
@@ -1816,6 +1847,7 @@ def export_wb_cards(
 def export_wb_stock(
     marketplace: str = "wb",
     by_size: int = 1,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Экспорт остатков WB (последний срез stocks) в Excel.
@@ -1842,55 +1874,61 @@ def export_wb_stock(
              "quantity_full": a["quantity_full"], "in_way": a["in_way"]}
             for a in agg.values()
         ]
-        cols = ["date", "marketplace", "article", "name", "warehouse", "quantity",
-                "quantity_full", "in_way"]
+        df_cols = ["date", "marketplace", "article", "name", "warehouse", "quantity",
+                   "quantity_full", "in_way"]
         ru = {
             "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
             "name": "Наименование", "warehouse": "Склад", "quantity": "Доступно",
             "quantity_full": "Всего на складах", "in_way": "В пути",
         }
     else:
-        cols = ["date", "marketplace", "article", "name", "chrt_id", "size", "barcode",
-                "warehouse", "quantity", "quantity_full", "in_way"]
+        df_cols = ["date", "marketplace", "article", "name", "chrt_id", "size", "barcode",
+                   "warehouse", "quantity", "quantity_full", "in_way"]
         ru = {
             "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
             "name": "Наименование", "chrt_id": "Код размера", "size": "Размер",
             "barcode": "Баркод", "warehouse": "Склад", "quantity": "Доступно",
             "quantity_full": "Всего на складах", "in_way": "В пути",
         }
-    df = pd.DataFrame(recs, columns=cols).rename(columns=ru)
+    df = pd.DataFrame(recs, columns=df_cols)
+    df, ru = excel_io.project_export(df, ru, cols)
+    df = df.rename(columns=ru)
     fname = "wb_stock.xlsx" if by_size else "wb_stock_agg.xlsx"
     return _xlsx_response(df, fname, len(recs))
 
 
 @router.get("/export/wb/prices")
-def export_wb_prices(article_like: Optional[str] = None, db: Session = Depends(get_db)):
+def export_wb_prices(article_like: Optional[str] = None, cols: Optional[str] = None,
+                     db: Session = Depends(get_db)):
     """Экспорт текущих цен/скидок WB (price_snapshots) в Excel."""
     payload = api_prices(article_like=article_like, db=db)
     df = pd.DataFrame(payload["rows"], columns=[
         "article", "nm_id", "size", "name", "price", "discounted_price", "discount",
     ])
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "article": "Артикул", "nm_id": "Артикул WB", "size": "Размер",
         "name": "Наименование", "price": "Цена без скидки",
         "discounted_price": "Цена со скидкой", "discount": "Скидка, %",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     return _xlsx_response(df, "wb_prices.xlsx", payload["count"])
 
 
 @router.get("/export/wb/storage")
-def export_wb_storage(article_like: Optional[str] = None, db: Session = Depends(get_db)):
+def export_wb_storage(article_like: Optional[str] = None, cols: Optional[str] = None,
+                      db: Session = Depends(get_db)):
     """Экспорт стоимости хранения WB (storage_costs) в Excel."""
     payload = api_storage_cost(article_like=article_like, db=db)
     df = pd.DataFrame(payload["rows"], columns=[
         "nm_id", "article", "name", "barcodes_count", "volume", "storage_price",
         "warehouse_price",
     ])
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "nm_id": "Артикул WB", "article": "Артикул", "name": "Наименование",
         "barcodes_count": "Баркодов", "volume": "Объём, л",
         "storage_price": "Хранение за баркод", "warehouse_price": "Сумма хранения",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     return _xlsx_response(df, "wb_storage.xlsx", payload["count"])
 
 
@@ -1899,6 +1937,7 @@ def export_wb_funnel(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Экспорт воронки продаж WB (funnel_metric) в Excel."""
@@ -1907,13 +1946,14 @@ def export_wb_funnel(
         "date_from", "date_to", "nm_id", "article", "name", "views", "opens", "adds",
         "orders", "cancelled", "buyouts", "avg_price", "revenue", "buyout_sum",
     ])
-    df = df.rename(columns={
+    df, ru = excel_io.project_export(df, {
         "date_from": "С", "date_to": "По", "nm_id": "Артикул WB", "article": "Артикул",
         "name": "Наименование", "views": "Просмотры", "opens": "Открытия",
         "adds": "В корзину", "orders": "Заказы", "cancelled": "Отмены",
         "buyouts": "Выкупы", "avg_price": "Ср. цена", "revenue": "Выручка",
         "buyout_sum": "Сумма выкупа",
-    })
+    }, cols)
+    df = df.rename(columns=ru)
     return _xlsx_response(df, f"wb_funnel_{payload['date_from']}_{payload['date_to']}.xlsx",
                           payload["count"])
 

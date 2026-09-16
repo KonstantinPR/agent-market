@@ -360,37 +360,42 @@ async function renderDashboard(p) {
   });
 }
 
+const marginTableHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money },
+  { k: "logistics", label: "Логистика", num: true, render: cellFmts.money },
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
+  { k: "margin", label: "Маржа", num: true, render: cellFmts.moneyCls },
+  { k: "margin_per_one", label: "Маржа на ед.", num: true, render: cellFmts.moneyCls },
+  { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct },
+];
 async function renderMargin(p) {
   const data = await api("/margin" + p);
-  const headers = [
-    { k: "article", label: "Артикул", render: cellFmts.text },
-    { k: "name", label: "Наименование", render: cellFmts.text },
-    { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
-    { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-    { k: "commission", label: "Комиссия", num: true, render: cellFmts.money },
-    { k: "logistics", label: "Логистика", num: true, render: cellFmts.money },
-    { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
-    { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-    { k: "margin", label: "Маржа", num: true, render: cellFmts.moneyCls },
-    { k: "margin_per_one", label: "Маржа на ед.", num: true, render: cellFmts.moneyCls },
-    { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct },
-  ];
+  const headers = colViewHeaders("margin", marginTableHeaders);
   const draw = (rows) => { pagedTable($("#marginTable"), headers, rows); };
   draw(data.rows);
   $("#marginSearch").oninput = (e) => {
     const q = e.target.value.trim().toLowerCase();
     draw(data.rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q)));
   };
-  $("#exportMargin").href = "/api/export/margin" + p;
+  const cp = colViewParam("margin");
+  $("#exportMargin").href = "/api/export/margin" + p + (cp ? (p ? "&" : "?") + cp : "");
 }
 
 const marginHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name",    label: "Наименование", render: cellFmts.text },
   { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int },
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
   { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
   { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
   { k: "logistics", label: "Логистика", num: true, render: cellFmts.moneyCls },
+  { k: "logistics_out", label: "Логистика туда", num: true, render: cellFmts.moneyCls, tip: "Доставка покупателю (строки Продажа)" },
+  { k: "logistics_in", label: "Логистика обратно", num: true, render: cellFmts.moneyCls, tip: "Обратная доставка (строки Возврат)" },
   { k: "storage", label: "Хранение (оц)", num: true, render: cellFmts.moneyCls, tip: "Безартикульные платы WB разнесены по «объём × тариф × остаток»" },
   { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
   { k: "income",  label: "К перечислению", num: true, render: cellFmts.money },
@@ -399,41 +404,169 @@ const marginHeaders = [
   { k: "margin",  label: "Прибыль", num: true, render: cellFmts.moneyCls },
   { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls },
   { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct },
+  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls },
+  { k: "logistics_per_one", label: "Логистика/ед.", num: true, render: cellFmts.moneyCls },
+  { k: "logistics_out_per_one", label: "Логистика туда/ед.", num: true, render: cellFmts.moneyCls },
+  { k: "logistics_in_per_one", label: "Логистика обратно/ед.", num: true, render: cellFmts.moneyCls },
+  { k: "storage_per_one", label: "Хранение/ед.", num: true, render: cellFmts.moneyCls },
+  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls },
+  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls },
+  { k: "margin_gross_per_one", label: "Маржа до себест./ед.", num: true, render: cellFmts.moneyCls },
+  { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct },
 ];
 const MARGIN_DETAIL_OPTIONAL = [
+  { k: "returns_qty", label: "Возвращено, шт" },
+  { k: "logistics_out", label: "Логистика туда" },
+  { k: "logistics_in", label: "Логистика обратно" },
   { k: "storage", label: "Хранение (оц)" },
   { k: "services", label: "Услуги" },
   { k: "net_cost", label: "Себестоимость" },
   { k: "margin_gross", label: "Маржа до себестоимости" },
   { k: "margin_per_one", label: "Прибыль на ед." },
+  { k: "commission_per_one", label: "Комиссия/ед." },
+  { k: "logistics_per_one", label: "Логистика/ед." },
+  { k: "logistics_out_per_one", label: "Логистика туда/ед." },
+  { k: "logistics_in_per_one", label: "Логистика обратно/ед." },
+  { k: "storage_per_one", label: "Хранение/ед." },
+  { k: "income_per_one", label: "К перечисл./ед." },
+  { k: "revenue_per_one", label: "Средняя цена" },
+  { k: "margin_gross_per_one", label: "Маржа до себест./ед." },
+  { k: "return_rate", label: "Доля возвратов, %" },
 ];
-let marginColumns;
-function loadMarginColumns() {
-  try {
-    const saved = JSON.parse(localStorage.getItem("marginDetailCols"));
-    if (saved && typeof saved === "object") { marginColumns = saved; return; }
-  } catch (e) { /* ignore */ }
-  marginColumns = {};
-  for (const c of MARGIN_DETAIL_OPTIONAL) marginColumns[c.k] = true;
+const _OLD_OPTIONAL = new Set(["storage", "services", "net_cost", "margin_gross", "margin_per_one"]);
+// ----------------------------------------------------- «Вид таблицы» — единый механизм
+// Для каждого таба регистрируется набор настраиваемых колонок. Состояние живёт в
+// localStorage под ключом `<storageKey>[_<mode>]` (mode — активный режим таба, напр.
+// "rows"/"summary" у wb-detail). Значение — { колонка: true/false }. По умолчанию
+// колонка видна (def=true), пока её не скрыли.
+const _COLVIEWS = {};
+function registerColView(tab, cfg) { _COLVIEWS[tab] = cfg; }
+function ccTab(tab) {
+  const [head, ...rest] = tab.split("-");
+  return head + rest.map((s) => s[0].toUpperCase() + s.slice(1)).join("");
 }
-function saveMarginColumns() { localStorage.setItem("marginDetailCols", JSON.stringify(marginColumns)); }
-function buildMarginDetailViewPanel() {
-  const panel = $("#marginDetailViewPanel");
-  if (!panel) return;
+function viewBtnId(tab) { return "btn" + ccTab(tab) + "View"; }
+function viewMenuId(tab) { return ccTab(tab) + "ViewMenu"; }
+function viewPanelId(tab) { return ccTab(tab) + "ViewPanel"; }
+function colViewSet(tab) {
+  const c = _COLVIEWS[tab];
+  if (!c) return null;
+  const mode = c.mode ? c.mode() : "base";
+  const set = c.sets ? c.sets[mode] : { headers: c.headers, optional: c.optional };
+  if (!set) return null;
+  return {
+    key: c.storageKey + (c.mode ? "_" + mode : ""),
+    headers: set.headers,
+    optional: set.optional,
+  };
+}
+function colViewState(tab) {
+  const set = colViewSet(tab);
+  if (!set) return null;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(set.key)); } catch (e) { saved = null; }
+  if (!saved || typeof saved !== "object") saved = {};
+  const st = {};
+  for (const o of set.optional) st[o.k] = (o.k in saved) ? !!saved[o.k] : !!o.def;
+  return st;
+}
+function colViewSave(tab, state) {
+  const set = colViewSet(tab);
+  if (!set) return;
+  localStorage.setItem(set.key, JSON.stringify(state));
+}
+function colViewHeaders(tab, headersList) {
+  const set = colViewSet(tab);
+  if (!set) return headersList;
+  const st = colViewState(tab);
+  return headersList.filter((h) => st[h.k] !== false);
+}
+// Параметр экспорта «cols» — только видимые колонки. Если видны все — не отправляем
+// ничего (бэкенд отдаёт полный набор). extraKeys — всегда добавляемые ключи (напр.
+// колонки сравнения у margin-detail). modeHint — принудительный режим (напр. wb-prices
+// в свёрнутом режиме экспортируется по базовым колонкам, т.к. агрегат на сервере не считается).
+function colViewParam(tab, extraKeys, modeHint) {
+  const c = _COLVIEWS[tab];
+  if (!c) return "";
+  const mode = modeHint || (c.mode ? c.mode() : "base");
+  const set = c.sets ? c.sets[mode] : { headers: c.headers, optional: c.optional };
+  if (!set) return "";
+  const st = colViewState(tab);
+  const optKeys = new Set(set.optional.map((o) => o.k));
+  const keys = [];
+  for (const h of set.headers) {
+    if (optKeys.has(h.k)) {
+      if (st[h.k] !== false) keys.push(h.k);
+    } else {
+      keys.push(h.k);
+    }
+  }
+  if (extraKeys) keys.push(...extraKeys);
+  return keys.length ? "cols=" + keys.join(",") : "";
+}
+function buildColViewMenu(tab) {
+  const set = colViewSet(tab);
+  const panel = $("#" + viewPanelId(tab));
+  if (!set || !panel) return;
   panel.innerHTML = "";
-  for (const c of MARGIN_DETAIL_OPTIONAL) {
+  const st = colViewState(tab);
+  const mkChk = (k, label, checked, onChange) => {
     const lbl = document.createElement("label");
     lbl.className = "chk";
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.checked = !!marginColumns[c.k];
-    cb.addEventListener("change", () => { marginColumns[c.k] = cb.checked; saveMarginColumns(); if (currentTab === "margin-detail") loadTab(currentTab); });
+    cb.checked = checked;
+    cb.addEventListener("change", onChange);
     lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(" " + c.label));
+    lbl.appendChild(document.createTextNode(" " + label));
     panel.appendChild(lbl);
+    return cb;
+  };
+  const allOn = set.optional.every((o) => !!st[o.k]);
+  mkChk("__all", "Показать все", allOn, (e) => {
+    for (const o of set.optional) st[o.k] = e.target.checked;
+    colViewSave(tab, st);
+    if (currentTab === tab) loadTab(tab);
+    buildColViewMenu(tab);
+  });
+  const sep = document.createElement("hr");
+  sep.style.margin = "4px 0";
+  panel.appendChild(sep);
+  for (const o of set.optional) {
+    mkChk(o.k, o.label, !!st[o.k], (e) => {
+      st[o.k] = e.target.checked;
+      colViewSave(tab, st);
+      if (currentTab === tab) loadTab(tab);
+      buildColViewMenu(tab);
+    });
   }
 }
-loadMarginColumns();
+// Общий обработчик кнопки «Вид таблицы» (открыть/закрыть панель).
+function initColViewMenu(tab) {
+  const btn = $("#" + viewBtnId(tab));
+  const menu = $("#" + viewMenuId(tab));
+  if (!btn || !menu) return;
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const panel = $("#" + viewPanelId(tab));
+    const wasHidden = !panel || panel.classList.contains("hidden");
+    for (const t of Object.keys(_COLVIEWS)) {
+      const p = $("#" + viewPanelId(t));
+      if (p) p.classList.add("hidden");
+    }
+    if (panel && wasHidden) {
+      buildColViewMenu(tab);
+      panel.classList.remove("hidden");
+    }
+  });
+}
+document.addEventListener("click", () => {
+  for (const t of Object.keys(_COLVIEWS)) {
+    const p = $("#" + viewPanelId(t));
+    if (p) p.classList.add("hidden");
+  }
+});
 
 const wbDetailRowHeaders = [
   { k: "date", label: "Дата", num: true, render: cellFmts.text },
@@ -488,8 +621,9 @@ const funnelHeaders = [
 
 async function renderMarginFunnel(p) {
   const data = await api("/margin/funnel" + p);
-  pagedTable($("#marginFunnelTable"), funnelHeaders, data.rows || []);
-  $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p;
+  pagedTable($("#marginFunnelTable"), colViewHeaders("margin-funnel", funnelHeaders), data.rows || []);
+  const cp = colViewParam("margin-funnel");
+  $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p + (cp ? (p ? "&" : "?") + cp : "");
   const msg = $("#marginFunnelMsg");
   if (data.snapshot_from && data.snapshot_to) {
     msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to;
@@ -501,7 +635,7 @@ async function renderMarginFunnel(p) {
 async function renderMarginDetail(p) {
   const compare = /compare=1/.test(p || "");
   const data = await api("/margin/detail" + p);
-  let headers = marginColumns ? marginHeaders.filter((c) => marginColumns[c.k] !== false) : marginHeaders.slice();
+  let headers = colViewHeaders("margin-detail", marginHeaders);
   if (compare) {
     headers = headers.concat([
       { k: "sells_pp", label: "Пред. период: шт", num: true, render: cellFmts.int },
@@ -512,7 +646,10 @@ async function renderMarginDetail(p) {
   }
   pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals);
   const exportBtn = $("#exportMarginDetail");
-  if (exportBtn) exportBtn.dataset.url = "/api/export/margin/detail" + p;
+  if (exportBtn) {
+    const cp = colViewParam("margin-detail", compare ? ["sells_pp", "margin_pp", "delta_ru", "delta_pct"] : null);
+    exportBtn.dataset.url = "/api/export/margin/detail" + p + (cp ? (p ? "&" : "?") + cp : "");
+  }
   const msg = $("#marginDetailMsg");
   const cmpMsg = $("#marginDetailCompareMsg");
   if (cmpMsg) {
@@ -1193,7 +1330,7 @@ async function renderCards(name) {
     }
     box.appendChild(bar);
     const wrap = document.createElement("div");
-    wrap.innerHTML = table(cardsHeaders, st.rows);
+    wrap.innerHTML = table(name === "wb-cards" ? colViewHeaders("wb-cards", cardsHeaders) : cardsHeaders, st.rows);
     box.appendChild(wrap);
   };
 
@@ -1291,7 +1428,7 @@ async function renderWbFunnel() {
     const total = (data.rows || []).reduce((s, r) => s + Number(r.buyouts || 0), 0);
     note.style.display = total ? "none" : "block";
   }
-  const headers = expandedEl && expandedEl.checked ? wbFunnelHeaders : wbFunnelCompact;
+  const headers = colViewHeaders("wb-funnel", expandedEl && expandedEl.checked ? wbFunnelHeaders : wbFunnelCompact);
   pagedTable(box, headers, data.rows || []);
 }
 
@@ -1351,7 +1488,7 @@ async function renderWbStocks() {
     const needle = q.toLowerCase();
     rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
   }
-  const headers = agg && agg.checked ? wbStockAggHeaders : wbStockHeaders;
+  const headers = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = document.querySelector("#wbMsg-stock-table");
   if (msg) msg.textContent = data.date && rows.length ? "Остатки на " + data.date + " · показ: " + fmt(rows.length) : "Нет данных";
   pagedTable(box, headers, rows);
@@ -1426,7 +1563,7 @@ async function renderWbPrices() {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, agg ? wbPricesAggHeaders : wbPricesHeaders, rows);
+  pagedTable(box, colViewHeaders("wb-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows);
 }
 
 const wbStorageHeaders = [
@@ -1454,7 +1591,7 @@ async function renderWbStorage() {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, wbStorageHeaders, data.rows || []);
+  pagedTable(box, colViewHeaders("wb-storage", wbStorageHeaders), data.rows || []);
 }
 
 const salesHeaders = [
@@ -1489,7 +1626,7 @@ async function renderWbSales() {
   }
   const msg = document.querySelector("#wbMsg-sales-table");
   if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
-  pagedTable(box, salesHeaders, rows);
+  pagedTable(box, colViewHeaders("wb-sales", salesHeaders), rows);
 }
 
 async function renderWbDetail() {
@@ -1514,7 +1651,7 @@ async function renderWbDetail() {
       tipEl.classList.add("hidden");
       if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
-      pagedTable(box, wbDetailRowHeaders, rows, null, "#wbDetailTablePager");
+      pagedTable(box, colViewHeaders("wb-detail", wbDetailRowHeaders), rows, null, "#wbDetailTablePager");
     } else {
       const data = await api("/wb/detail-summary" + qs({
         date_from: p.date_from || undefined,
@@ -1524,7 +1661,7 @@ async function renderWbDetail() {
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
       if (msg) msg.textContent = "По артикулам: " + fmt(data.count || 0);
-      pagedTable(box, wbDetailSummaryHeaders, rows, data.totals, "#wbDetailTablePager");
+      pagedTable(box, colViewHeaders("wb-detail", wbDetailSummaryHeaders), rows, data.totals, "#wbDetailTablePager");
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию: ' + escapeHtml(err.message) + "</div>";
@@ -1538,11 +1675,13 @@ function wbDetailExportUrl() {
   const raw = rawEl ? rawEl.checked : false;
   const q = likeEl ? likeEl.value.trim() : "";
   const path = raw ? "/api/export/wb/detail-rows" : "/api/export/wb/detail-summary";
-  return path + qs({
+  const p = qs({
     date_from: f.date_from || undefined,
     date_to: f.date_to || undefined,
     article_like: q || undefined,
   });
+  const cp = colViewParam("wb-detail");
+  return path + p + (cp ? (p ? "&" : "?") + cp : "");
 }
 
 async function downloadWbDetailExcel() {
@@ -1612,28 +1751,43 @@ function wbViewExportUrl() {
   const p = paneDates();
   switch (currentTab) {
     case "wb-cards":
-      return "/api/export/wb/cards" + qs({ marketplace: "wb", like: wbLikeVal("wbCardsLike") || undefined });
+      return "/api/export/wb/cards" + qs({ marketplace: "wb", like: wbLikeVal("wbCardsLike") || undefined })
+        + (colViewParam("wb-cards") ? "&" + colViewParam("wb-cards") : "");
     case "wb-stock": {
       const agg = document.getElementById("wbStockAgg");
-      return "/api/export/wb/stock" + qs({ marketplace: "wb", by_size: agg && agg.checked ? 0 : 1 });
+      const q = qs({ marketplace: "wb", by_size: agg && agg.checked ? 0 : 1 });
+      const cp = colViewParam("wb-stock");
+      return "/api/export/wb/stock" + q + (cp ? "&" + cp : "");
     }
-    case "wb-funnel":
-      return "/api/export/wb/funnel" + qs({
+    case "wb-funnel": {
+      const q = qs({
         date_from: p.date_from || undefined,
         date_to: p.date_to || undefined,
         article_like: wbLikeVal("wbFunnelLike") || undefined,
       });
-    case "wb-sales":
-      return "/api/export/sales" + qs({
+      const cp = colViewParam("wb-funnel");
+      return "/api/export/wb/funnel" + q + (cp ? "&" + cp : "");
+    }
+    case "wb-sales": {
+      const q = qs({
         marketplace: "wb",
         date_from: p.date_from || undefined,
         date_to: p.date_to || undefined,
         article_like: wbLikeVal("wbSalesLike") || undefined,
       });
-    case "wb-prices":
-      return "/api/export/wb/prices" + qs({ article_like: wbLikeVal("wbPricesLike") || undefined });
-    case "wb-storage":
-      return "/api/export/wb/storage" + qs({ article_like: wbLikeVal("wbStorageLike") || undefined });
+      const cp = colViewParam("wb-sales");
+      return "/api/export/sales" + q + (cp ? "&" + cp : "");
+    }
+    case "wb-prices": {
+      const q = qs({ article_like: wbLikeVal("wbPricesLike") || undefined });
+      const cp = colViewParam("wb-prices", null, "base");
+      return "/api/export/wb/prices" + q + (cp ? "&" + cp : "");
+    }
+    case "wb-storage": {
+      const q = qs({ article_like: wbLikeVal("wbStorageLike") || undefined });
+      const cp = colViewParam("wb-storage");
+      return "/api/export/wb/storage" + q + (cp ? "&" + cp : "");
+    }
     case "wb-detail":
       return wbDetailExportUrl();
     default:
@@ -2089,6 +2243,52 @@ const pricingHeaders = [
   { k: "reason", label: "Причина", render: cellFmts.text },
 ];
 
+// ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
+const mkOpt = (list) => list.map((h) => ({ k: h.k, label: h.label, def: true }));
+registerColView("wb-detail", {
+  storageKey: "wbDetailCols",
+  mode: () => { const rawEl = document.getElementById("wbDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
+  sets: {
+    rows: { headers: wbDetailRowHeaders, optional: mkOpt(wbDetailRowHeaders) },
+    summary: { headers: wbDetailSummaryHeaders, optional: mkOpt(wbDetailSummaryHeaders) },
+  },
+});
+registerColView("wb-cards", { storageKey: "wbCardsCols", headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
+registerColView("wb-stock", {
+  storageKey: "wbStockCols",
+  mode: () => { const agg = document.getElementById("wbStockAgg"); return agg && agg.checked ? "agg" : "base"; },
+  sets: {
+    base: { headers: wbStockHeaders, optional: mkOpt(wbStockHeaders) },
+    agg: { headers: wbStockAggHeaders, optional: mkOpt(wbStockAggHeaders) },
+  },
+});
+registerColView("wb-funnel", {
+  storageKey: "wbFunnelCols",
+  mode: () => { const exp = document.getElementById("wbFunnelExpanded"); return exp && exp.checked ? "expanded" : "compact"; },
+  sets: {
+    compact: { headers: wbFunnelCompact, optional: mkOpt(wbFunnelCompact) },
+    expanded: { headers: wbFunnelHeaders, optional: mkOpt(wbFunnelHeaders) },
+  },
+});
+registerColView("wb-sales", { storageKey: "wbSalesCols", headers: salesHeaders, optional: mkOpt(salesHeaders) });
+registerColView("wb-prices", {
+  storageKey: "wbPricesCols",
+  mode: () => { const agg = document.getElementById("wbPriceAgg"); return agg && agg.checked ? "agg" : "base"; },
+  sets: {
+    base: { headers: wbPricesHeaders, optional: mkOpt(wbPricesHeaders) },
+    agg: { headers: wbPricesAggHeaders, optional: mkOpt(wbPricesAggHeaders) },
+  },
+});
+registerColView("wb-storage", { storageKey: "wbStorageCols", headers: wbStorageHeaders, optional: mkOpt(wbStorageHeaders) });
+registerColView("margin", { storageKey: "marginCols", headers: marginTableHeaders, optional: mkOpt(marginTableHeaders) });
+registerColView("margin-funnel", { storageKey: "marginFunnelCols", headers: funnelHeaders, optional: mkOpt(funnelHeaders) });
+registerColView("margin-detail", {
+  storageKey: "marginDetailCols",
+  headers: marginHeaders,
+  optional: MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: _OLD_OPTIONAL.has(c.k) })),
+});
+registerColView("pricing", { storageKey: "pricingCols", headers: pricingHeaders, optional: mkOpt(pricingHeaders) });
+
 function loadPricingSettings() {
   try {
     return JSON.parse(localStorage.getItem("pricing_settings") || "{}");
@@ -2206,7 +2406,7 @@ async function renderPricing(apply) {
     if (data.as_of) summary += " · на " + data.as_of;
     $("#pricingSummary").textContent = summary;
     msg.textContent = data.note || "";
-    pagedTable($("#pricingTable"), pricingHeaders, rows);
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows);
     await renderPricingHistory();
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
@@ -2216,6 +2416,8 @@ async function renderPricing(apply) {
 async function exportPricing() {
   await buildPricingSettings();
   const s = collectPricingSettings();
+  const cp = colViewParam("pricing").replace(/^cols=/, "");
+  if (cp) s.cols = cp;
   const msg = $("#pricingMsg");
   msg.textContent = "Формирую Excel…";
   try {
@@ -2242,6 +2444,101 @@ async function exportPricing() {
     a.remove();
     URL.revokeObjectURL(a.href);
     msg.textContent = "Excel сохранён: строк " + (count == null ? "—" : count);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+function yandexStamp() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
+}
+async function uploadBlobToYandex(blob, name, msg) {
+  const fd = new FormData();
+  fd.append("file", blob, name);
+  msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
+  const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
+  const j = await up.json();
+  if (!up.ok) throw new Error(j.detail || up.status);
+  msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+}
+
+async function uploadMarginToDisk() {
+  const msg = $("#marginMsg");
+  const url = $("#exportMargin") ? $("#exportMargin").href : "";
+  if (!url || !msg) return;
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const f = filters();
+    const name = "margin_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + yandexStamp() + ".xlsx";
+    await uploadBlobToYandex(blob, name, msg);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadMarginFunnelToDisk() {
+  const msg = $("#marginFunnelMsg");
+  const url = $("#exportMarginFunnel") ? $("#exportMarginFunnel").href : "";
+  if (!url || !msg) return;
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const f = filters();
+    const name = "margin_funnel_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + yandexStamp() + ".xlsx";
+    await uploadBlobToYandex(blob, name, msg);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadMarginDetailToDisk() {
+  const msg = $("#marginDetailMsg");
+  const url = $("#exportMarginDetail") ? $("#exportMarginDetail").dataset.url : "";
+  if (!url || !msg) return;
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const f = filters();
+    const name = "margin_detail_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + yandexStamp() + ".xlsx";
+    await uploadBlobToYandex(blob, name, msg);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadPricingToDisk() {
+  await buildPricingSettings();
+  const s = collectPricingSettings();
+  const cp = colViewParam("pricing").replace(/^cols=/, "");
+  if (cp) s.cols = cp;
+  const msg = $("#pricingMsg");
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch("/api/pricing/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(s),
+    });
+    if (!resp.ok) {
+      let detail = "";
+      try {
+        const j = await resp.json();
+        detail = j.detail || "";
+      } catch (e) { /* не Json */ }
+      throw new Error(resp.status + " " + detail);
+    }
+    const blob = await resp.blob();
+    const name = "pricing_" + yandexStamp() + ".xlsx";
+    await uploadBlobToYandex(blob, name, msg);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -2445,20 +2742,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));
   if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
   syncHeaderForTab(currentTab);
-  buildMarginDetailViewPanel();
-  const btnView = $("#btnMarginDetailView");
-  const viewPanel = $("#marginDetailViewPanel");
-  if (btnView && viewPanel) {
-    btnView.addEventListener("click", (e) => {
-      e.stopPropagation();
-      viewPanel.classList.toggle("hidden");
-    });
-    document.addEventListener("click", (e) => {
-      if (!viewPanel.classList.contains("hidden") && !viewPanel.contains(e.target) && e.target !== btnView) {
-        viewPanel.classList.add("hidden");
-      }
-    });
-  }
+  for (const t of Object.keys(_COLVIEWS)) initColViewMenu(t);
   const btnExportMarginDetail = $("#exportMarginDetail");
   if (btnExportMarginDetail) {
     btnExportMarginDetail.addEventListener("click", () => {
@@ -2466,6 +2750,14 @@ document.addEventListener("DOMContentLoaded", () => {
       if (url) window.open(url, "_blank");
     });
   }
+  const uploadMargin = $("#uploadMargin");
+  if (uploadMargin) uploadMargin.addEventListener("click", () => uploadMarginToDisk());
+  const uploadMarginFunnel = $("#uploadMarginFunnel");
+  if (uploadMarginFunnel) uploadMarginFunnel.addEventListener("click", () => uploadMarginFunnelToDisk());
+  const uploadMarginDetail = $("#uploadMarginDetail");
+  if (uploadMarginDetail) uploadMarginDetail.addEventListener("click", () => uploadMarginDetailToDisk());
+  const pricingUpload = $("#pricingUpload");
+  if (pricingUpload) pricingUpload.addEventListener("click", () => uploadPricingToDisk());
   initTicketsTab();
   loadTab(currentTab);
 });

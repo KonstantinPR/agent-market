@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import re
 from io import BytesIO
@@ -35,6 +37,22 @@ def df_to_excel_stream(df: pd.DataFrame, sheet_name: str = "Данные") -> By
         out.to_excel(writer, sheet_name=sheet_name, index=False)
     buf.seek(0)
     return buf
+
+
+def project_export(df: pd.DataFrame, rename: dict, cols: str | None):
+    """Ограничивает экспорт до видимых колонок.
+
+    ``cols`` — csv-список внутренних ключей (до русского ренейма). Ключи, которых
+    нет в ``rename`` или в датафрейме, игнорируются (допустимо, если колонка
+    считается только во фронтенде). Пуст/отсутствует — вернуть всё как есть.
+    Returns: (df_подмножества, rename_подмножества).
+    """
+    if not cols:
+        return df, rename
+    keys = [k for k in cols.split(",") if k and k in rename and k in df.columns]
+    if not keys:
+        return df, rename
+    return df[keys].copy(), {k: rename[k] for k in keys}
 
 
 def read_excel_bytes(data: bytes, sheet=0) -> pd.DataFrame:

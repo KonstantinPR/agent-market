@@ -692,6 +692,57 @@ def storage_split(
     return {k: round(v, 2) for k, v in out.items()}
 
 
+def _redistribute_articleless(rows, cells, fields, weight_idx=(6, 7)):
+    """Распределяет безартикульные расходы по артикулам пропорционально весу.
+
+    fields — словарь {имя: (индекс_в_cells, getter)} где getter(row) -> float.
+    Имя с суффиксом '.int' распределяется целыми числами (largest remainder),
+    чтобы суммы в точности сходились.
+
+    weight_idx — индексы ячеек, сумма которых даёт вес статьи
+    (по умолчанию delivery_count + return_delivery_count). Если сумма <= 0,
+    фолбэк: abs(sells) (индекс 0). Если весов нет — равномерно.
+    """
+    if not cells:
+        return
+    art_less = [r for r in rows if not (r.article or "").strip() or r.sale_dt is None]
+    if not art_less:
+        return
+    totals = {name: sum(getter(r) for r in art_less) for name, (_, getter) in fields.items()}
+    if all(v == 0 for v in totals.values()):
+        return
+    weights = {}
+    for art, c in cells.items():
+        w = 0
+        if all(0 <= i < len(c) for i in weight_idx):
+            w = max(0, sum(c[i] for i in weight_idx))
+        if w <= 0:
+            w = max(0, abs(c[0]))
+        weights[art] = w
+    total_w = sum(weights.values())
+    if total_w <= 0:
+        weights = {a: 1.0 for a in cells}
+        total_w = len(cells)
+
+    # Целые поля (счётчики) разносим largest-remainder, денежные — долями.
+    for name, (idx, _) in fields.items():
+        total = totals[name]
+        if name.endswith(".int"):
+            total = int(round(total))
+            shares = {a: int(total * w // total_w) for a, w in weights.items()}
+            rest = total - sum(shares.values())
+            if rest > 0:
+                rs = sorted(weights, key=lambda a: (
+                    weights[a] / total_w - shares[a] / max(1, total), -weights[a]), reverse=True)
+                for i in range(rest):
+                    shares[rs[i % len(rs)]] += 1
+            for a, c in cells.items():
+                c[idx] += shares[a]
+        else:
+            for a, c in cells.items():
+                c[idx] += total * weights[a] / total_w
+
+
 def detail_summary_dataframe(
     db,
     date_from=None,
@@ -752,6 +803,19 @@ def detail_summary_dataframe(
         c[13].add(str(r.source or ""))
         if (r.title or "").strip():
             titles.setdefault(art, str(r.title).strip())
+
+    # Безартикульные расходы (логистика, услуги, компенсации ПВЗ и др.)
+    # распределяются пропорционально весу статьи (delivery_count +
+    # return_delivery_count, фолбэк abs(sells)) — аналог storage_split.
+    _redistribute_articleless(rows, cells, {
+        "logistics": (5, lambda r: float(r.delivery_service or 0)),
+        "delivery_count.int": (6, lambda r: float(int(r.delivery_count or 0))),
+        "return_delivery_count.int": (7, lambda r: float(int(r.return_delivery_count or 0))),
+        "pvz_compensation": (9, lambda r: float(r.pvz_compensation or 0)),
+        "payment_services": (10, lambda r: float(r.payment_services or 0)),
+        "services": (11, lambda r: float(r.penalty or 0) + float(r.deduction or 0)
+                     + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)),
+    })
 
     # Безартикульные платы «Хранение» распределяются по товарам свода пропорц.
     # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +

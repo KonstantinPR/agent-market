@@ -416,3 +416,62 @@ def test_storage_split_sold_fraction_adds_to_existing_stock(db):
     # sold_fraction=0 → старое поведение, только остаток (10): вес 20
     assert storage_split(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5),
                          sold_fraction=0.0) == {"A1": 100.0}
+
+
+def test_margin_detail_logistics_split_and_per_unit(db):
+    """Логистика туда/обратно, возвраты, *_per_one и return_rate."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                           quantity=10, retail_amount=5000.0, for_pay=3000.0,
+                           delivery_service=200.0, ppvz_sales_commission=200.0),
+        models.WbDetailRow(op_key="sr:r1", source="excel", article="A1",
+                           doc_type_name="Возврат", sale_dt=date(2026, 9, 2),
+                           quantity=2, retail_amount=1000.0, for_pay=1000.0,
+                           delivery_service=50.0),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(db, default_net_cost=100.0)
+    row = out.iloc[0]
+    # sells = 10 − 2 = 8; returns_qty = 2
+    assert row["sells"] == 8
+    assert row["returns_qty"] == 2
+    # logistics_out = 200 (Продажа), logistics_in = 50 (Возврат)
+    assert row["logistics_out"] == 200.0
+    assert row["logistics_in"] == 50.0
+    assert row["logistics"] == 250.0
+    # *_per_one: sells=8 (комиссия только с Продажи = 200)
+    assert row["commission_per_one"] == round(200.0 / 8, 2)
+    assert row["logistics_per_one"] == round(250.0 / 8, 2)
+    assert row["logistics_out_per_one"] == round(200.0 / 8, 2)
+    assert row["logistics_in_per_one"] == round(50.0 / 8, 2)
+    assert row["income_per_one"] == round(2000.0 / 8, 2)
+    assert row["revenue_per_one"] == round(4000.0 / 8, 2)
+    assert row["margin_gross_per_one"] == round(
+        (2000.0 - 250.0 - 0.0 - 0.0) / 8, 2)  # no storage estimate → 0
+    # return_rate = 2 / (8 + 2) * 100 = 20%
+    assert row["return_rate"] == 20.0
+
+
+def test_margin_detail_per_unit_zero_sells_no_division(db):
+    """При sells=0 (продажа и возврат уравновесили друг друга) все *_per_one = 0,
+    return_rate считает по знаменателю sells+returns_qty."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A2",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                           quantity=1, retail_amount=500.0, for_pay=500.0),
+        models.WbDetailRow(op_key="sr:r1", source="excel", article="A2",
+                           doc_type_name="Возврат", sale_dt=date(2026, 9, 2),
+                           quantity=1, retail_amount=500.0, for_pay=500.0,
+                           delivery_service=30.0),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(db)
+    row = out.iloc[0]
+    assert row["sells"] == 0
+    assert row["returns_qty"] == 1
+    assert row["logistics_out"] == 0.0
+    assert row["logistics_in"] == 30.0
+    assert row["commission_per_one"] == 0.0
+    assert row["logistics_per_one"] == 0.0
+    assert row["return_rate"] == 100.0  # 1 / (0+1) * 100
