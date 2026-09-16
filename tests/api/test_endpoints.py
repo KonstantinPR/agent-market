@@ -60,6 +60,10 @@ def test_wb_stock_fills_stocks_by_size(api_client):
     assert by_card["TST-1"]["size"] == "46"
     assert by_card["TST-2"]["size"] == "47"
     assert by_card["TST-1"]["chrt_id"] == "101"
+    assert by_card["TST-1"]["quantity"] == 5
+    assert by_card["TST-1"]["quantity_full"] == 9
+    assert by_card["TST-1"]["in_way"] == 3
+    assert by_card["TST-2"]["quantity_full"] == 11
 
 
 def test_wb_stock_excel_groups_without_sizes(api_client):
@@ -67,8 +71,22 @@ def test_wb_stock_excel_groups_without_sizes(api_client):
     r = api_client.post("/api/wb/stock", params={"by_size": 0})
     assert r.status_code == 200
     df = pd.read_excel(r.content)
-    assert set(df.columns) == {"date", "article", "warehouse", "quantity"}
+    assert set(df.columns) == {"date", "article", "warehouse", "quantity", "quantity_full", "in_way"}
     assert len(df) == 2  # агрегат по артикулу+склад
+    assert df["quantity_full"].sum() == 20
+    assert df["in_way"].sum() == 6
+
+
+def test_wb_stock_json_only_updates_db_no_file(api_client):
+    api_client.post("/api/wb/cards")
+    r = api_client.post("/api/wb/stock", params={"excel": 0})
+    assert r.status_code == 200
+    assert "Content-Disposition" not in r.headers
+    data = r.json()
+    assert data["ok"] is True
+    assert data["count"] == 2
+    stocks = api_client.get("/api/stocks", params={"marketplace": "wb"}).json()
+    assert stocks["count"] == 2
 
 
 def test_ozon_realization_fills_sales(api_client):
@@ -301,3 +319,38 @@ def test_import_custom_stock(api_client):
         ])), XLSX)})
     assert r.status_code == 200
     assert r.json()["imported"] == 1
+
+
+# ------------------------------------------------------------------ Яндекс.Диск
+def test_yandex_requires_token(api_client, monkeypatch):
+    from app.config import settings
+    from app.services import yandex_disk
+
+    monkeypatch.setattr(settings, "yandex_disk_token", "")
+    r = api_client.get("/api/yandex/list")
+    assert r.status_code == 400
+    assert "не задан" in r.json()["detail"]
+
+
+def test_yandex_upload_ok(api_client, monkeypatch):
+    from app.config import settings
+    from app.services import yandex_disk
+
+    monkeypatch.setattr(settings, "yandex_disk_token", "tok")
+    monkeypatch.setattr(yandex_disk, "upload_bytes",
+                        lambda token, folder, name, data: {"ok": True, "folder": folder, "name": name, "size": len(data)})
+    r = api_client.post("/api/yandex/upload", files={"file": ("wb_stock.xlsx", b"XLSX", XLSX)}, data={"folder": "/agent_market"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "wb_stock.xlsx"
+
+
+def test_yandex_list_ok(api_client, monkeypatch):
+    from app.config import settings
+    from app.services import yandex_disk
+
+    monkeypatch.setattr(settings, "yandex_disk_token", "tok")
+    monkeypatch.setattr(yandex_disk, "list_files", lambda token, folder: {"folder": folder, "files": []})
+    r = api_client.get("/api/yandex/list")
+    assert r.status_code == 200
+    assert r.json()["files"] == []
+

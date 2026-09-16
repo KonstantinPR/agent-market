@@ -1,4 +1,5 @@
 """Синхронизация данных провайдеров в PostgreSQL (upsert-логика)."""
+from datetime import timedelta
 from typing import Optional
 
 import pandas as pd
@@ -14,9 +15,12 @@ NUMERIC_COLUMNS = ["quantity", "returns_qty", "revenue", "commission",
 
 def _f(value, default=0.0) -> float:
     try:
-        return float(value)
+        v = float(value)
     except (TypeError, ValueError):
         return default
+    if v != v:  # NaN
+        return default
+    return v
 
 
 def normalize_ozon_realization(df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -146,13 +150,13 @@ DETAIL_FIELD_ALIASES = {
     "report_id": ["reportId", "realizationreport_id", "realizationsreport_id", "Номер отчёта"],
     "rrd_id": ["rrdId", "rrd_id", "ID строки"],
     "gi_id": ["giId", "gi_id", "ID поставки"],
-    "nm_id": ["nmId", "nm_id", "Артикул WB"],
+    "nm_id": ["nmId", "nm_id", "Артикул WB", "Код номенклатуры"],
     "article": ["vendorCode", "sa_name", "article", "Артикул поставщика", "Артикул продавца"],
     "brand": ["brandName", "brand", "Бренд"],
     "title": ["title", "Название товара"],
     "tech_size": ["techSize", "ts_name", "size", "Размер"],
     "sku": ["sku", "barcode", "Баркод", "ШК", "ШК (shk_id)"],
-    "doc_type_name": ["docTypeName", "doc_type_name", "Тип документа"],
+    "doc_type_name": ["docTypeName", "doc_type_name", "Тип документа", "Обоснование для оплаты"],
     "quantity": ["quantity", "Кол-во"],
     "retail_price": ["retailPrice", "retail_price", "Цена розничная"],
     "retail_amount": ["retailAmount", "retail_amount", "Вайлдберриз реализовал Товар (Пр)"],
@@ -169,13 +173,29 @@ DETAIL_FIELD_ALIASES = {
         "deliveryService", "delivery_rub",
         "Услуги по доставке товара покупателю", "Услуги по доставке товара покупателю (квВВ)",
     ],
+    "delivery_count": ["deliveryCount", "delivery_count", "Количество доставок"],
+    "return_delivery_count": ["returnDeliveryCount", "return_delivery_count", "Количество возврата"],
     "paid_storage": ["paidStorage", "storage_fee", "Хранение (пр)", "Хранение"],
-    "penalty": ["penalty", "Штраф"],
-    "deduction": ["deduction", "Удержанный штраф"],
-    "additional_payment": ["additionalPayment", "additional_payment", "Корректировка ВВ"],
+    "penalty": ["penalty", "Штраф", "Общая сумма штрафов"],
+    "deduction": ["deduction", "Удержанный штраф", "Удержания"],
+    "additional_payment": [
+        "additionalPayment", "additional_payment", "Корректировка ВВ",
+        "Корректировка Вознаграждения Вайлдберриз (ВВ)",
+    ],
     "rebill_logistic_cost": [
         "rebillLogisticCost", "rebill_logistic_cost",
         "Возмещение издержек по перевозке/складским операциям",
+        "Возмещение издержек по перевозке/по складским операциям с товаром",
+        "Возмещение издержек по перемещению и операционной обработке товара",
+    ],
+    "pvz_compensation": [
+        "pvzCompensation", "pvz_compensation",
+        "Возмещение за выдачу и возврат товаров на ПВЗ",
+    ],
+    "payment_services": [
+        "paymentServices", "payment_services",
+        "Компенсация платёжных услуг/Комиссия за интеграцию платёжных сервисов",
+        "Компенсация платёжных услуг/Комиссии за интеграцию платёжных сервисов",
     ],
     "srid": ["srid", "Srid", "SRID"],
     "order_uid": ["orderUid", "order_uid", "Id корзины заказа"],
@@ -184,16 +204,21 @@ DETAIL_FIELD_ALIASES = {
 DETAIL_TEXT_COLS = ["report_id", "rrd_id", "gi_id", "nm_id", "article", "brand", "title",
                     "tech_size", "sku", "doc_type_name", "office_name", "srid", "order_uid"]
 DETAIL_NUM_COLS = ["quantity", "retail_price", "retail_amount", "commission_percent",
-                   "ppvz_sales_commission", "for_pay", "delivery_service", "paid_storage",
-                   "penalty", "deduction", "additional_payment", "rebill_logistic_cost"]
+                   "ppvz_sales_commission", "for_pay", "delivery_service",
+                   "delivery_count", "return_delivery_count",
+                   "paid_storage", "penalty", "deduction", "additional_payment",
+                   "rebill_logistic_cost", "pvz_compensation", "payment_services"]
 DETAIL_DATE_COLS = ["sale_dt", "order_dt"]
 
 
-def normalize_wb_detail(df: pd.DataFrame, source: str = "excel") -> Optional[pd.DataFrame]:
+def normalize_wb_detail(df: pd.DataFrame, source: str = "excel",
+                        row_base: int = 0) -> Optional[pd.DataFrame]:
     """Приводит «Детализацию продаж» WB (Excel ЛК или finance-API) к схеме wb_detail_rows.
 
     op_key: srid -> 'sr:<srid>'; иначе report_id:rrd_id -> 'rr:<report_id>:<rrd_id>'
     (для API rrd_id гарантирован пагинацией); иначе rrd_id; иначе 'row:<n>'.
+    row_base — стартовый индекс для fallback 'row:<n>' (глобально нарастающий
+    при обработке нескольких файлов батчем, чтобы ключи не пересекались).
     Служебные строки без идентификатора и без артикула отбрасываются.
     """
     if df is None or df.empty:
@@ -220,6 +245,19 @@ def normalize_wb_detail(df: pd.DataFrame, source: str = "excel") -> Optional[pd.
     ndf = pd.DataFrame(out)
     ndf["quantity"] = pd.to_numeric(ndf["quantity"], errors="coerce").fillna(0).astype(int)
 
+    # В новых отчётах WB (2026) «Тип документа» почти всегда пуст, а на строках
+    # ПВЗ-компенсации он бывает ошибочно = «Продажа». Реальный тип строки лежит в
+    # «Обоснование для оплаты» — используем его как приоритетный источник.
+    if "doc_type_name" in ndf.columns:
+        obos = _pick_col(df, ["Обоснование для оплаты", "основание для оплаты"])
+        if obos is not None:
+            dt_fill = df[obos].fillna("").astype(str).str.strip()
+            non_empty = dt_fill.ne("")
+            ndf.loc[non_empty, "doc_type_name"] = dt_fill[non_empty]
+    # колонка doc_type_name в БД — VARCHAR(60); классификация работает по
+    # подстрокам, поэтому усекаем длинные «Обоснование…» без потери смысла.
+    ndf["doc_type_name"] = ndf["doc_type_name"].astype(str).str.strip().str[:60]
+
     rows_out = []
     for i, r in enumerate(ndf.to_dict("records")):
         srid = str(r["srid"] or "").strip()
@@ -233,7 +271,7 @@ def normalize_wb_detail(df: pd.DataFrame, source: str = "excel") -> Optional[pd.
         elif rrd:
             key = "rr:" + rrd
         elif article:
-            key = "row:" + str(i)
+            key = "row:" + str(row_base + i)
         else:
             continue  # служебная строка без id и без артикула
         r["op_key"] = key
@@ -246,11 +284,126 @@ def normalize_wb_detail(df: pd.DataFrame, source: str = "excel") -> Optional[pd.
 
 
 def upsert_wb_detail_rows(db, df: pd.DataFrame, source: str = "excel") -> int:
-    """Строки детализации WB -> wb_detail_rows, upsert по op_key (идемпотентно)."""
+    """Строки детализации WB -> wb_detail_rows, upsert по op_key (идемпотентно).
+
+    Один SRID в отчёте WB — корзина заказа, в которой могут повторяться строки
+    Продажа/Возврат/Доставка/Хранение/Возмещение издержек/Штраф. Чтобы не терять
+    артикул/дату/тип операции (последняя строка корзины — служебная, без
+    артикула), каждая корзина разбивается на ОТДЕЛЬНЫЕ операции:
+    - товарные строки («Продажа»/«Возврат», есть деньги продажи) — своя строка
+      на op_key;
+    - если в корзине и продажа, и возврат — они дают ДВЕ строки (Продажа и
+      Возврат), чтобы «Продано» и «Возврат» считались раздельно;
+    - служебные строки (Доставка/Хранение/Возмещение/Штраф) денежно прикрепляются
+      к товарной операции корзины (расходы WB всегда расход, знак не зависит).
+    Ключ коллизии: если SRID-группа без товарных строк (чистая логистика/
+    хранение) — сворачивается в одну служебную строку, «Кол-во» не считается.
+    """
     if df is None or df.empty:
         return 0
+    keep = ["op_key"] + DETAIL_TEXT_COLS + DETAIL_NUM_COLS + DETAIL_DATE_COLS
+    # normalize может отдавать подмножество схемы (тесты/частичные файлы):
+    # работаем только с присутствующими колонками, остальные запишутся дефолтами.
+    cols = [c for c in keep if c in df.columns]
+    gdf = df[cols].copy()
+    # Дубликаты снимаем ДО группировки, чтобы идентичные служебные строки не
+    # дублировали деньги при свёртке.
+    gdf = gdf.drop_duplicates(subset=[c for c in cols if c != "op_key"])
+    num_cols = [c for c in DETAIL_NUM_COLS if c in gdf.columns]
+    text_cols = [c for c in DETAIL_TEXT_COLS if c in gdf.columns and c != "op_key"]
+    date_cols = [c for c in DETAIL_DATE_COLS if c in gdf.columns]
+
+    def _op_kind(row: dict) -> str:
+        """Тип операции строки: 'Продажа' / 'Возврат' / '' (служебная)."""
+        art = str(row.get("article") or "")
+        if not art:
+            return ""
+        dt = str(row.get("doc_type_name") or "")
+        if _is_return_row(dt):
+            return "Возврат"
+        if _is_goods_row(dt, row.get("retail_amount", 0), row.get("for_pay", 0)):
+            return "Продажа"
+        return ""
+
+    def _sum_num(rows, col) -> float:
+        return _f(sum(_f(r.get(col, 0)) for r in rows))
+
+    out_rows = []
+    for op_key, grp in gdf.groupby("op_key", sort=False):
+        rows = grp.to_dict("records")
+        base_key = str(op_key)
+
+        goods = [r for r in rows if _op_kind(r)]
+        svc = [r for r in rows if not _op_kind(r)]
+        if not goods:
+            # Корзина целиком служебная (логистика/хранение/возмещение без товара):
+            # сворачиваем в одну строку; «Кол-во» не считаем (это не продажа).
+            last = rows[-1]
+            rec = {"op_key": base_key, "source": source}
+            for c in text_cols:
+                rec[c] = str(last.get(c, "") or "")
+            for c in date_cols:
+                rec[c] = _as_date(last.get(c))
+            rec["quantity"] = 0
+            for c in num_cols:
+                if c == "quantity":
+                    continue
+                rec[c] = _sum_num(rows, c)
+            out_rows.append(rec)
+            continue
+
+        # Разделяем операции корзины: продажи и возвраты независимы.
+        sale_rows = [r for r in goods if _op_kind(r) == "Продажа"]
+        ret_rows = [r for r in goods if _op_kind(r) == "Возврат"]
+        kinds = []
+        if sale_rows:
+            kinds.append(("Продажа", sale_rows))
+        if ret_rows:
+            kinds.append(("Возврат", ret_rows))
+        multi = len(kinds) > 1
+
+        # Привязка служебных строк к операции: строка «Доставка» с «Количество
+        # возврата» относится к возврату, с «Количество доставок» — к продаже;
+        # остальные расходы корзины (Возмещение/Хранение/Штраф/ПВЗ/платёжные)
+        # крепим к продаже (первой операции), чтобы не задваивать деньги.
+        def _svc_target(svc_row) -> str:
+            if multi:
+                if _f(svc_row.get("return_delivery_count")) > 0 and ret_rows:
+                    return "Возврат"
+                if _f(svc_row.get("delivery_count")) > 0 and sale_rows:
+                    return "Продажа"
+            return kinds[0][0]
+
+        for kind, op_rows in kinds:
+            key = f"{base_key}:{kind}" if multi else base_key
+            last = op_rows[-1]
+            rec = {"op_key": key, "source": source}
+            for c in text_cols:
+                rec[c] = str(last.get(c, "") or "")
+            for c in date_cols:
+                rec[c] = _as_date(last.get(c))
+            rec["article"] = str(last.get("article") or "")
+            rec["doc_type_name"] = kind
+            rec["quantity"] = int(_sum_num(op_rows, "quantity"))
+            # деньги/количество самой операции
+            for c in num_cols:
+                if c == "quantity":
+                    continue
+                rec[c] = _sum_num(op_rows, c)
+            # служебные строки, относящиеся К ЭТОЙ операции
+            for svc_row in svc:
+                if _svc_target(svc_row) != kind:
+                    continue
+                for c in num_cols:
+                    if c == "quantity":
+                        continue
+                    rec[c] = _f(rec[c]) + _f(svc_row.get(c, 0))
+            out_rows.append(rec)
+
+    if not out_rows:
+        return 0
     values = []
-    for r in df.to_dict("records"):
+    for r in out_rows:
         values.append({
             "op_key": str(r["op_key"]),
             "source": source,
@@ -264,21 +417,25 @@ def upsert_wb_detail_rows(db, df: pd.DataFrame, source: str = "excel") -> int:
             "tech_size": str(r.get("tech_size", "") or ""),
             "sku": str(r.get("sku", "") or ""),
             "doc_type_name": str(r.get("doc_type_name", "") or ""),
-            "quantity": int(_f(r.get("quantity", 0))),
+            "quantity": int(r.get("quantity", 0)),
             "retail_price": _f(r.get("retail_price")),
             "retail_amount": _f(r.get("retail_amount")),
             "commission_percent": _f(r.get("commission_percent")),
             "office_name": str(r.get("office_name", "") or ""),
-            "sale_dt": _as_date(r.get("sale_dt")),
-            "order_dt": _as_date(r.get("order_dt")),
+            "sale_dt": r.get("sale_dt"),
+            "order_dt": r.get("order_dt"),
             "ppvz_sales_commission": _f(r.get("ppvz_sales_commission")),
             "for_pay": _f(r.get("for_pay")),
             "delivery_service": _f(r.get("delivery_service")),
+            "delivery_count": int(_f(r.get("delivery_count"))),
+            "return_delivery_count": int(_f(r.get("return_delivery_count"))),
             "paid_storage": _f(r.get("paid_storage")),
             "penalty": _f(r.get("penalty")),
             "deduction": _f(r.get("deduction")),
             "additional_payment": _f(r.get("additional_payment")),
             "rebill_logistic_cost": _f(r.get("rebill_logistic_cost")),
+            "pvz_compensation": _f(r.get("pvz_compensation")),
+            "payment_services": _f(r.get("payment_services")),
             "srid": str(r.get("srid", "") or ""),
             "order_uid": str(r.get("order_uid", "") or ""),
         })
@@ -298,11 +455,25 @@ def _is_return_row(doc_type: str) -> bool:
     return "возврат" in s or "return" in s
 
 
+def _is_goods_row(doc_type=None, retail_amount=0, for_pay=0) -> bool:
+    """Товарная ли это строка операции (продажа/возврат), а не логистика.
+
+    В отчёте WB строки логистики/возмещения (пустой «Тип документа»,
+    «Возмещение издержек…») несут служебное «Кол-во» и не имеют денег продажи
+    (retail_amount/for_pay = 0). Такие строки не должны считаться «продано, шт».
+    """
+    s = str(doc_type or "").lower()
+    if "возврат" in s or "return" in s or "продаж" in s or "sale" in s:
+        return True
+    return abs(float(retail_amount or 0)) >= 0.005 or abs(float(for_pay or 0)) >= 0.005
+
+
 def rebuild_sales_from_detail(db, sale_from=None, sale_to=None, source: str = "detail") -> int:
     """Пересчитывает продажи source='detail' из wb_detail_rows (сумма по дата+артикул).
 
-    Продажи = строки не-возвратов, возвраты — отдельная колонка; финансовые
-    поля суммируются по всем строкам (WB передаёт их со знаком).
+    Каждая строка wb_detail_rows — операция (SRID уже сведён из основной строки
+    и строк логистики). Знак: возвраты вычитают кол-во/выручку/к перечислению,
+    расходы (логистика, хранение, услуги) — всегда расход независимо от типа.
     """
     q = select(models.WbDetailRow)
     if sale_from is not None:
@@ -317,21 +488,304 @@ def rebuild_sales_from_detail(db, sale_from=None, sale_to=None, source: str = "d
         if r.sale_dt is None or not r.article:
             continue
         is_ret = _is_return_row(r.doc_type_name)
+        sign = -1 if is_ret else 1
+        # Легаси-строки логистики (свёрнутые до фикса) не считаем «продано, шт».
+        qty = r.quantity if _is_goods_row(
+            r.doc_type_name, r.retail_amount, r.for_pay) else 0
         recs.append({
             "date": r.sale_dt,
             "article": r.article,
-            "quantity": r.quantity if not is_ret else 0,
-            "returns_qty": r.quantity if is_ret else 0,
-            "revenue": r.retail_amount if not is_ret else 0,
-            "commission": _f(r.ppvz_sales_commission),
+            "quantity": qty * sign,
+            "returns_qty": qty if is_ret else 0,
+            "revenue": _f(r.retail_amount) * sign,
+            "commission": _f(r.ppvz_sales_commission) * sign,
+            # Расходы WB — всегда расход, независимо от типа операции (возврат
+            # не «возвращает» доставку/хранение/штрафы продавцу).
             "logistics": _f(r.delivery_service),
             "storage": _f(r.paid_storage),
-            "services": _f(r.penalty) + _f(r.deduction) + _f(r.additional_payment),
-            "income": _f(r.for_pay),
+            "services": (_f(r.penalty) + _f(r.deduction)
+                          + _f(r.additional_payment) + _f(r.rebill_logistic_cost)),
+            "income": _f(r.for_pay) * sign,
         })
     if not recs:
         return 0
     return upsert_sales(db, pd.DataFrame(recs), "wb", source=source)
+
+
+def storage_split(
+    db,
+    date_from=None,
+    date_to=None,
+    window_days: int = 7,
+    target_articles: Optional[set] = None,
+    sold_fraction: float = 0.5,
+) -> dict:
+    """Распределение безартикульных плат «Хранение» по товарам.
+
+    Строки хранения в детализации WB не содержат артикула (одна плата за день
+    за весь склад, поле paid_storage). Чтобы отнести их к товарам, вес каждого
+    товара считается как «занимаемый объём × дневной тариф × остаток»:
+    storage_costs.volume × (storage_price, если >0, иначе 1) × stocks.quantity.
+    Для каждого дня с платой хранения S берётся остаток на этот день —
+    ближайший срез стоков в окне ±window_days дней с максимальным суммарным
+    весом (самый «полный» срез рядом); если полезного среза в окне нет —
+    ближайший по календарной дистанции срез с весом > 0 (в обе стороны,
+    предпочтение срезу ≤ дня). Доля товара = S × вес / Σвес.
+
+    Товар, который продали за период, тоже занимал место на складе (в среднем
+    ~половину отчёта), поэтому к остатку при вычислении веса прибавляется
+    проданное количество периода × sold_fraction (0.5 — «продано на середине
+    отчёта»). Это не даёт топ-товарам с опустевшим остатком уходить с нулевым
+    «Хранением». Артикулы без строк в стоках, но с продажами в периоде,
+    учитываются по проданному количеству.
+
+    target_articles — множество артикулов (UPPER). Если задано, веса считаются
+    только по этим артикулам и нормализуются в их пределах: 100% платы
+    распределяется внутри множества, «орфанов» (артикулы без продаж в окне)
+    не возникает. Артикулы target без объёма/тарифа в storage_costs получают
+    fallback-вес = средний «volume × tariff» целевых артикулов с объёмом,
+    умноженный на «остаток + проданное × sold_fraction» из среза.
+
+    Возвращает {article_upper: сумма_руб} за период (только товары с весом).
+    Без target_articles — распределение по всем артикулам с весом.
+    """
+    day_totals: dict = {}
+    q = select(models.WbDetailRow.sale_dt, models.WbDetailRow.paid_storage).where(
+        models.WbDetailRow.paid_storage != 0,
+        models.WbDetailRow.sale_dt.isnot(None),
+    )
+    if date_from:
+        q = q.where(models.WbDetailRow.sale_dt >= date_from)
+    if date_to:
+        q = q.where(models.WbDetailRow.sale_dt <= date_to)
+    for dt, ps in db.execute(q):
+        day_totals[dt] = day_totals.get(dt, 0.0) + float(ps or 0)
+    if not day_totals:
+        return {}
+    days = sorted(day_totals)
+
+    # объём и тариф по артикулу (UPPER): (volume, storage_price)
+    vol_rate: dict = {}
+    for sc in db.execute(
+        select(models.StorageCost).where(models.StorageCost.volume != 0)
+    ).scalars():
+        art = (sc.article or "").strip().upper()
+        if not art:
+            continue
+        vol_rate.setdefault(art, (float(sc.volume or 0), float(sc.storage_price or 0)))
+    if not vol_rate:
+        return {}
+
+    # Средний «volume × tariff» целевых артикулов с объёмом — fallback-вес для
+    # артикулов target, у которых в storage_costs данных нет (вариант A).
+    mean_unit_weight = 0.0
+    if target_articles:
+        have = [
+            (float(v), float(r))
+            for a, (v, r) in vol_rate.items()
+            if a in target_articles
+        ]
+        if have:
+            mean_unit_weight = sum(
+                v * (r if r > 0 else 1.0) for v, r in have
+            ) / len(have)
+
+    # Продажи периода (нетто по товарным строкам): то, что покинуло склад.
+    sold_qty: dict = {}
+    if sold_fraction:
+        sq = select(
+            models.WbDetailRow.article,
+            models.WbDetailRow.quantity,
+            models.WbDetailRow.doc_type_name,
+            models.WbDetailRow.retail_amount,
+            models.WbDetailRow.for_pay,
+        )
+        if date_from:
+            sq = sq.where(models.WbDetailRow.sale_dt >= date_from)
+        if date_to:
+            sq = sq.where(models.WbDetailRow.sale_dt <= date_to)
+        for r in db.execute(sq):
+            art = (r.article or "").strip().upper()
+            if not art or not _is_goods_row(
+                    r.doc_type_name, r.retail_amount, r.for_pay):
+                continue
+            sign = -1 if _is_return_row(r.doc_type_name) else 1
+            sold_qty[art] = sold_qty.get(art, 0.0) + float(r.quantity or 0) * sign
+
+    srows = db.execute(
+        select(models.Stock.date, models.Stock.article,
+               func.sum(models.Stock.quantity).label("q"))
+        .where(models.Stock.quantity != 0)
+        .group_by(models.Stock.date, models.Stock.article)
+    ).all()
+    by_date: dict = {}
+    for sdt, art, qty in srows:
+        by_date.setdefault(sdt, {})[(art or "").strip().upper()] = int(qty or 0)
+    sdates = sorted(by_date)
+    if not sdates:
+        # Срезов стоков нет вовсе — используем дни с платой как опорные даты,
+        # вес берётся только из проданного количества × sold_fraction.
+        sdates = days
+        for sd in sdates:
+            by_date[sd] = {}
+
+    # веса по всем срезам: {date: (wmap, total_w)} — только target при задании
+    weight_cache: dict = {}
+    for sd in sdates:
+        wmap: dict = {}
+        total_w = 0.0
+        arts = set(by_date.get(sd, {}))
+        if sold_qty:
+            arts |= set(sold_qty)
+        for art in arts:
+            if target_articles is not None and art not in target_articles:
+                continue
+            qty = float(by_date.get(sd, {}).get(art, 0) or 0)
+            if sold_fraction:
+                qty += sold_qty.get(art, 0.0) * sold_fraction
+            if qty <= 0:
+                continue
+            vol, rate = vol_rate.get(art, (0.0, 0.0))
+            if vol > 0:
+                w = vol * (rate if rate > 0 else 1.0) * qty
+            elif mean_unit_weight > 0:
+                w = mean_unit_weight * qty
+            else:
+                w = 0.0
+            if w > 0:
+                wmap[art] = w
+                total_w += w
+        weight_cache[sd] = (wmap, total_w)
+
+    def pick_snapshot(d):
+        """Лучший срез стоков для дня d.
+
+        Самый весомый в окне ±window_days; если полезного (вес > 0) в окне нет —
+        ближайший по календарной дистанции срез с весом > 0; иначе — срез ≤ дня,
+        иначе первый доступный.
+        """
+        lo = d - timedelta(days=window_days)
+        hi = d + timedelta(days=window_days)
+        cands = [sd for sd in sdates if lo <= sd <= hi]
+        if cands:
+            best = max(cands, key=lambda sd: weight_cache[sd][1])
+            if weight_cache[best][1] > 0:
+                return best
+        useful = [sd for sd in sdates if weight_cache[sd][1] > 0]
+        if useful:
+            def dist(sd):
+                delta = (sd - d).days
+                return (abs(delta), 0 if delta <= 0 else 1)
+            return min(useful, key=dist)
+        le = [sd for sd in sdates if sd <= d]
+        return le[-1] if le else sdates[0]
+
+    out: dict = {}
+    for d in days:
+        sdate = pick_snapshot(d)
+        wmap, total_w = weight_cache[sdate]
+        if total_w <= 0:
+            continue
+        S = day_totals[d]
+        for art, w in wmap.items():
+            out[art] = out.get(art, 0.0) + S * w / total_w
+    return {k: round(v, 2) for k, v in out.items()}
+
+
+def detail_summary_dataframe(
+    db,
+    date_from=None,
+    date_to=None,
+    article_like: Optional[str] = None,
+) -> pd.DataFrame:
+    """Свод «Детализации продаж» WB по артикулам — сырые деньги операций.
+
+    В отличие от margin_detail_dataframe тут НЕТ себестоимости и маржи —
+    только то, что фактически пришло/ушло по WB-отчёту. Строится напрямую
+    из wb_detail_rows (операции). Возврат вычитает кол-во/выручку/комиссию/
+    «к перечислению»; расходы WB (логистика, хранение, услуги) всегда
+    остаются расходами. Полезно для выгрузки «как в отчёте» без аналитики.
+    """
+    cols = ["article", "title", "sells", "returns_qty", "revenue", "commission",
+            "for_pay", "logistics", "delivery_count", "return_delivery_count",
+            "storage", "pvz_compensation", "payment_services", "services",
+            "ops_count", "sources"]
+    out = pd.DataFrame(columns=cols)
+    q = select(models.WbDetailRow)
+    if date_from:
+        q = q.where(models.WbDetailRow.sale_dt >= date_from)
+    if date_to:
+        q = q.where(models.WbDetailRow.sale_dt <= date_to)
+    if article_like:
+        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+    rows = list(db.execute(q).scalars().all())
+    if not rows:
+        return out
+
+    cells: dict = {}
+    titles: dict = {}
+    for r in rows:
+        art = r.article
+        if not art or r.sale_dt is None:
+            continue
+        is_ret = _is_return_row(r.doc_type_name)
+        sign = -1 if is_ret else 1
+        qty = r.quantity if _is_goods_row(
+            r.doc_type_name, r.retail_amount, r.for_pay) else 0
+        if art not in cells:
+            cells[art] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0, set()]
+        c = cells[art]
+        c[0] += qty * sign                     # sells (нетто)
+        c[1] += qty if is_ret else 0           # returns_qty
+        c[2] += float(r.retail_amount or 0) * sign   # revenue
+        c[3] += float(r.ppvz_sales_commission or 0) * sign
+        c[4] += float(r.for_pay or 0) * sign         # for_pay
+        c[5] += float(r.delivery_service or 0)       # logistics
+        c[6] += int(r.delivery_count or 0)           # delivery_count
+        c[7] += int(r.return_delivery_count or 0)    # return_delivery_count
+        c[8] += float(r.paid_storage or 0)           # storage (по артикулу, обычно 0)
+        c[9] += float(r.pvz_compensation or 0)       # pvz_compensation
+        c[10] += float(r.payment_services or 0)      # payment_services
+        c[11] += float(r.penalty or 0) + float(r.deduction or 0) \
+            + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)
+        c[12] += 1                                # ops_count
+        c[13].add(str(r.source or ""))
+        if (r.title or "").strip():
+            titles.setdefault(art, str(r.title).strip())
+
+    # Безартикульные платы «Хранение» распределяются по товарам свода пропорц.
+    # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
+    # продажи периода). Распределение идёт только по артикулам с операциями
+    # в окне — 100% платы разносится внутри свода, отдельной строки-остатка
+    # не остаётся.
+    storage_est_map = storage_split(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        target_articles={art.strip().upper() for art in cells},
+    )
+
+    recs = []
+    for art, c in cells.items():
+        (sells, returns_qty, revenue, commission, for_pay, logistics,
+         delivery_count, return_delivery_count, storage, pvz_compensation,
+         payment_services, services, ops, srcs) = c
+        storage = storage + storage_est_map.get(art.strip().upper(), 0.0)
+        recs.append({
+            "article": art, "title": titles.get(art, ""),
+            "sells": sells, "returns_qty": returns_qty,
+            "revenue": round(revenue, 2), "commission": round(commission, 2),
+            "for_pay": round(for_pay, 2), "logistics": round(logistics, 2),
+            "delivery_count": delivery_count, "return_delivery_count": return_delivery_count,
+            "storage": round(storage, 2), "pvz_compensation": round(pvz_compensation, 2),
+            "payment_services": round(payment_services, 2),
+            "services": round(services, 2),
+            "ops_count": ops,
+            "sources": ",".join(sorted(s for s in srcs if s)),
+        })
+    out = pd.DataFrame(recs)
+    out = out.sort_values("for_pay", ascending=False).reset_index(drop=True)
+    return out
 
 
 def _pick_col(df: pd.DataFrame, names) -> Optional[str]:
@@ -522,14 +976,18 @@ def upsert_sales(db, df: pd.DataFrame, code: str, source: str = "v5") -> int:
 
 
 def upsert_stocks(db, df: pd.DataFrame, code: str) -> int:
-    df = _norm_num(df, ["quantity"])
+    df = _norm_num(df, ["quantity", "quantity_full", "in_way"])
     mp_id = marketplace_id(db, code)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     for c in ["chrt_id", "size", "barcode"]:
         if c not in df.columns:
             df[c] = ""
+    for c in ["quantity_full", "in_way"]:
+        if c not in df.columns:
+            df[c] = 0
     df = df.groupby(["date", "article", "warehouse", "chrt_id"], as_index=False).agg({
-        "quantity": "sum", "size": "first", "barcode": "first",
+        "quantity": "sum", "quantity_full": "sum", "in_way": "sum",
+        "size": "first", "barcode": "first",
     })
     values = []
     for row in df.to_dict("records"):
@@ -542,11 +1000,15 @@ def upsert_stocks(db, df: pd.DataFrame, code: str) -> int:
             "size": str(row.get("size", "")).strip(),
             "barcode": str(row.get("barcode", "")).strip(),
             "quantity": int(row["quantity"]),
+            "quantity_full": int(row["quantity_full"]),
+            "in_way": int(row["in_way"]),
         })
     ins = insert(models.Stock)
     stmt = ins.on_conflict_do_update(
         index_elements=["marketplace_id", "date", "article", "warehouse", "chrt_id"],
         set_={"quantity": ins.excluded.quantity,
+              "quantity_full": ins.excluded.quantity_full,
+              "in_way": ins.excluded.in_way,
               "size": ins.excluded.size, "barcode": ins.excluded.barcode},
     )
     db.execute(stmt, values)
@@ -662,11 +1124,64 @@ def upsert_price_snapshots(db, df: pd.DataFrame) -> int:
         "nm_id": "first", "price": "first",
         "discounted_price": "first", "discount": "first",
     })
+    df["marketplace"] = "wb"
     values = [dict(r) for r in df.to_dict("records")]
     ins = insert(models.PriceSnapshot)
     stmt = ins.on_conflict_do_update(
         index_elements=["article", "size"],
-        set_={c: ins.excluded[c] for c in ["nm_id", "price", "discounted_price", "discount"]},
+        set_={c: ins.excluded[c]
+              for c in ["nm_id", "price", "discounted_price", "discount"]},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
+def upsert_ozon_price_snapshots(db, df: pd.DataFrame) -> int:
+    """Снимок цен/скидок Ozon (v5/product/info/prices) -> price_snapshots.
+
+    Схема Ozon: offer_id (артикул), product_id, price_price (текущая),
+    price_old_price (зачёркнутая), price_min_price. size у Ozon один на карточку.
+    """
+    if df is None or df.empty:
+        return 0
+    if "offer_id" not in df.columns:
+        return 0
+    df = df.copy()
+
+    def col(name, default=""):
+        if name in df.columns:
+            s = df[name]
+            return pd.to_numeric(s, errors="coerce").fillna(default) \
+                if not s.dtype == object else s.astype(str)
+        return pd.Series(default, index=df.index)
+
+    price = pd.to_numeric(df["price_price"], errors="coerce").fillna(0) \
+        if "price_price" in df.columns else pd.Series(0, index=df.index)
+    old = pd.to_numeric(df["price_old_price"], errors="coerce").fillna(0) \
+        if "price_old_price" in df.columns else pd.Series(0, index=df.index)
+    discount = pd.Series(0.0, index=df.index)
+    m = price > 0
+    discount[m] = ((1 - price[m] / old[m].where(old[m] > 0, price[m])) * 100).clip(lower=0)
+    out = pd.DataFrame({
+        "marketplace": "ozon",
+        "article": df["offer_id"].astype(str).str.strip(),
+        "nm_id": col("product_id", "").astype(str).str.strip(),
+        "size": "",
+        "price": price,
+        "discounted_price": price,
+        "discount": discount.round(2),
+    })
+    out = out[out["article"] != ""]
+    out = out[(out["price"] > 0)].drop_duplicates("article")
+    if out.empty:
+        return 0
+    values = [dict(r) for r in out.to_dict("records")]
+    ins = insert(models.PriceSnapshot)
+    stmt = ins.on_conflict_do_update(
+        index_elements=["article", "size"],
+        set_={c: ins.excluded[c]
+              for c in ["nm_id", "price", "discounted_price", "discount"]},
     )
     db.execute(stmt, values)
     db.commit()

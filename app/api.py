@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
 from app.database import get_db
 from app.providers import factory as provider_factory
 from app.providers.ozon import OZON_RU_COLUMNS
@@ -22,6 +23,9 @@ from app.services import (
     pricing as pricing_service,
     refresh as refresh_service,
     sync as sync_service,
+    tickets as tickets_service,
+    warehouse as warehouse_service,
+    yandex_disk as yandex_service,
 )
 from app.services.window import parse_window
 
@@ -34,6 +38,21 @@ def _parse_window400(date_from=None, date_to=None):
         return parse_window(date_from, date_to)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Некорректная дата: {e}")
+
+
+def _df_totals(df: pd.DataFrame) -> dict:
+    """Итоговая строка по числовым колонкам df (для UI-футера)."""
+    if df is None or df.empty:
+        return {}
+    skip = {"margin_pct", "delta_pct", "margin_per_one", "net_cost_est"}
+    out: dict = {}
+    for c in df.columns:
+        if c in skip:
+            continue
+        s = df[c]
+        if s.dtype.kind in "iuf":
+            out[c] = round(float(s.sum()), 2)
+    return out
 
 
 @router.get("/sales")
@@ -109,15 +128,40 @@ def api_margin_detail(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    compare: int = 0,
     db: Session = Depends(get_db),
 ):
-    """Прибыльность по Детализации Продаж WB (строки sales с source='detail')."""
+    """Прибыльность по Детализации Продаж WB напрямую из wb_detail_rows.
+
+    Себестоимость из каталога; без неё — оценка (settings.default_net_cost),
+    помечается net_cost_est=True.
+
+    compare=1 добавляет показатели предыдущего аналогичного периода
+    (та же длительность окна, сдвинутая назад): sells_pp, margin_pp,
+    delta_ru (руб), delta_pct (%). Требует даты date_from/date_to.
+    """
     from_, to_ = _parse_window400(date_from, date_to)
 
-    df = margin_service.margin_dataframe(
-        db, date_from=from_, date_to=to_, marketplace=None,
-        article_like=article_like, source="detail",
+    df = margin_service.margin_detail_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like,
+        default_net_cost=settings.default_net_cost,
     )
+    prev_window = None
+    if compare and date_from and date_to:
+        try:
+            f = date.fromisoformat(date_from)
+            t = date.fromisoformat(date_to)
+            delta = (t - f).days
+            prev_from = f - timedelta(days=delta)
+            prev_to = f - timedelta(days=1)
+            prev_df = margin_service.margin_detail_dataframe(
+                db, date_from=prev_from, date_to=prev_to, article_like=article_like,
+                default_net_cost=settings.default_net_cost,
+            )
+            df = margin_service.compare_margin_periods(df, prev_df)
+            prev_window = {"date_from": prev_from.isoformat(), "date_to": prev_to.isoformat()}
+        except (ValueError, TypeError):
+            prev_window = None
     detail_articles = 0
     if from_ and to_:
         q = select(func.count(func.distinct(models.WbDetailRow.article))).where(
@@ -129,10 +173,16 @@ def api_margin_detail(
         if article_like:
             q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
         detail_articles = int(db.execute(q).scalar_one() or 0)
+    estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
+    totals = _df_totals(df)
     return {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
         "detail_articles": detail_articles,
+        "estimated": estimated,
+        "default_net_cost": settings.default_net_cost,
+        "prev_window": prev_window,
+        "totals": totals,
     }
 
 
@@ -545,6 +595,8 @@ def api_stocks(
             models.Stock.barcode,
             models.Stock.warehouse,
             models.Stock.quantity,
+            models.Stock.quantity_full,
+            models.Stock.in_way,
         )
         .select_from(models.Stock)
         .join(models.Marketplace, models.Stock.marketplace_id == models.Marketplace.id)
@@ -565,6 +617,8 @@ def api_stocks(
             "barcode": str(r.barcode or ""),
             "warehouse": r.warehouse,
             "quantity": int(r.quantity or 0),
+            "quantity_full": int(r.quantity_full or 0),
+            "in_way": int(r.in_way or 0),
         }
         for r in db.execute(query)
     ]
@@ -594,6 +648,7 @@ def api_prices(
             models.PriceSnapshot.discount,
             models.PriceSnapshot.updated_at,
         )
+        .where(models.PriceSnapshot.marketplace == "wb")
         .order_by(models.PriceSnapshot.article, models.PriceSnapshot.size)
     )
     if article_like:
@@ -870,6 +925,225 @@ async def import_custom_stock(file: UploadFile = File(...), db: Session = Depend
     return {"imported": n, "filename": file.filename}
 
 
+# ── «Наш склад»: контрагенты, приход/отгрузка, остатки ────────────────────────
+
+@router.get("/warehouse/counterparties")
+def api_cp_list(db: Session = Depends(get_db)):
+    rows = [
+        {
+            "id": cp.id, "name": cp.name, "inn": cp.inn, "ctype": cp.ctype,
+            "phone": cp.phone, "note": cp.note,
+        }
+        for cp in db.query(models.Counterparty).order_by(models.Counterparty.name).all()
+    ]
+    return {"rows": rows, "count": len(rows), "labels": warehouse_service.CP_TYPE_LABELS}
+
+
+@router.post("/warehouse/counterparties")
+def api_cp_save(
+    id: Optional[int] = None,
+    name: str = Body(...),
+    inn: str = Body(""),
+    ctype: str = Body("other"),
+    phone: str = Body(""),
+    note: str = Body(""),
+    db: Session = Depends(get_db),
+):
+    if id:
+        cp = db.get(models.Counterparty, id)
+        if not cp:
+            raise HTTPException(404, "Контрагент не найден")
+    else:
+        existing = db.query(models.Counterparty).filter(models.Counterparty.name == name).first()
+        if existing:
+            cp = existing
+        else:
+            cp = models.Counterparty(name=name)
+            db.add(cp)
+    cp.name = name
+    cp.inn = inn
+    cp.ctype = ctype
+    cp.phone = phone
+    cp.note = note
+    db.commit()
+    return {"id": cp.id, "ok": True}
+
+
+@router.delete("/warehouse/counterparties/{cp_id}")
+def api_cp_delete(cp_id: int, db: Session = Depends(get_db)):
+    cp = db.get(models.Counterparty, cp_id)
+    if not cp:
+        raise HTTPException(404)
+    db.delete(cp)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/warehouse/import/counterparties")
+async def import_cp(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    df = excel_io.read_excel_bytes(await file.read(), sheet=0)
+    r = warehouse_service.import_counterparties(db, df)
+    return {"filename": file.filename, **r}
+
+
+@router.post("/warehouse/import/docs")
+async def import_docs(
+    type: str = "receipt",
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    if type not in ("receipt", "shipment"):
+        raise HTTPException(400, f"Тип {type!r} не поддерживается")
+    df = excel_io.read_excel_bytes(await file.read(), sheet=0)
+    r = warehouse_service.import_docs(db, df, doc_type=type)
+    return {"filename": file.filename, "type": type, **r}
+
+
+@router.get("/warehouse/docs")
+def api_docs_list(
+    type: str = "receipt",
+    from_: Optional[str] = None,
+    to: Optional[str] = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    if type not in ("receipt", "shipment"):
+        raise HTTPException(400, "type должен быть receipt или shipment")
+    q = db.query(models.WarehouseDoc).filter(models.WarehouseDoc.doc_type == type)
+    if from_:
+        q = q.filter(models.WarehouseDoc.doc_date >= from_)
+    if to:
+        q = q.filter(models.WarehouseDoc.doc_date <= to)
+    docs = q.order_by(models.WarehouseDoc.doc_date.desc()).limit(limit).all()
+    cp_ids = {d.counterparty_id for d in docs if d.counterparty_id}
+    names = {}
+    if cp_ids:
+        names = {c.id: c.name for c in db.query(models.Counterparty).filter(models.Counterparty.id.in_(cp_ids)).all()}
+    rows = [
+        {
+            "id": d.id, "doc_num": d.doc_num, "date": d.doc_date.isoformat() if d.doc_date else "",
+            "counterparty": names.get(d.counterparty_id, ""), "total": float(d.total or 0),
+            "items_count": len(d.items), "source": d.source,
+        }
+        for d in docs
+    ]
+    return {"rows": rows, "count": len(rows), "type": type}
+
+
+@router.get("/warehouse/docs/{doc_id}/items")
+def api_doc_items(doc_id: int, db: Session = Depends(get_db)):
+    d = db.get(models.WarehouseDoc, doc_id)
+    if not d:
+        raise HTTPException(404)
+    rows = [
+        {"article": it.article, "name": it.name, "quantity": float(it.quantity), "price": float(it.price), "amount": float(it.amount)}
+        for it in d.items
+    ]
+    return {"doc_id": doc_id, "doc_num": d.doc_num, "date": d.doc_date.isoformat() if d.doc_date else "", "type": d.doc_type, "rows": rows}
+
+
+@router.post("/warehouse/docs")
+def api_doc_create(
+    type: str = Body("receipt"),
+    doc_num: str = Body(""),
+    doc_date: str = Body("..."),
+    counterparty_id: Optional[int] = Body(None),
+    note: str = Body(""),
+    items: List[dict] = Body(...),
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime as _dt
+    try:
+        dt = _dt.fromisoformat(doc_date).date()
+    except Exception:
+        raise HTTPException(400, "Некорректная дата")
+    if not items:
+        raise HTTPException(400, "Строки документа пусты")
+    r = warehouse_service.create_doc(db, doc_type=type, doc_num=doc_num, doc_date=dt,
+                                     counterparty_id=counterparty_id, note=note, items=items)
+    return r
+
+
+@router.delete("/warehouse/docs/{doc_id}")
+def api_doc_delete(doc_id: int, db: Session = Depends(get_db)):
+    try:
+        warehouse_service.delete_doc(db, doc_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
+
+@router.get("/warehouse/stock")
+def api_stock(article_like: Optional[str] = None, db: Session = Depends(get_db)):
+    rows = warehouse_service.stock_view(db, article_like=article_like or "")
+    return {"rows": rows, "count": len(rows)}
+
+
+@router.get("/warehouse/turnover")
+def api_turnover(db: Session = Depends(get_db)):
+    return {"rows": warehouse_service.turnover_view(db)}
+
+
+@router.get("/warehouse/export/{kind}")
+def api_wh_export(kind: str, type: str = "receipt", db: Session = Depends(get_db)):
+    try:
+        buf = warehouse_service.file_for(kind, db, doc_type=type)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    filename = f"{kind}_{type}.xlsx" if "docs" in kind else f"{kind}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/warehouse/todisk")
+async def api_wh_todisk(kind: str = "docs", type: str = "receipt", db: Session = Depends(get_db)):
+    """Сформировать Excel и загрузить на Яндекс.Диск в папку /agent_market/Наш склад/<kind>."""
+    if kind == "docs" and type not in ("receipt", "shipment"):
+        raise HTTPException(400, "type должен быть receipt или shipment")
+    try:
+        token = yandex_service.require_token()
+        buf = warehouse_service.file_for(kind, db, doc_type=type)
+        filename = f"{kind}_{type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx" if kind == "docs" else f"{kind}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        folder = f"/agent_market/Наш склад"
+        r = yandex_service.upload_bytes(token, folder, filename, buf.read())
+        return {"ok": True, "path": r.get("path", f"{folder}/{filename}")}
+    except yandex_service.YandexDiskError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.post("/warehouse/fromdisk")
+async def api_wh_fromdisk(
+    type: str = "receipt",
+    db: Session = Depends(get_db),
+):
+    """Импорт всех .xlsx из папки «Наш склад/Приход или Отгрузка» на Диске."""
+    folder_map = {"receipt": "/agent_market/Наш склад/Приход", "shipment": "/agent_market/Наш склад/Отгрузка",
+                  "counterparties": "/agent_market/Наш склад/Контрагенты"}
+    folder = folder_map.get(type)
+    if not folder:
+        raise HTTPException(400, f"type {type!r} не поддерживается")
+    results = []
+    try:
+        token = yandex_service.require_token()
+        files = yandex_service.list_files(token, folder).get("items", [])
+        for f in files:
+            if not f["name"].endswith(".xlsx"):
+                continue
+            data = yandex_service.download_bytes(token, f["path"])
+            df = excel_io.read_excel_bytes(data, sheet=0)
+            if type == "counterparties":
+                r = warehouse_service.import_counterparties(db, df)
+            else:
+                r = warehouse_service.import_docs(db, df, doc_type=type, source="disk")
+            results.append({"file": f["name"], **r})
+    except yandex_service.YandexDiskError as e:
+        raise HTTPException(502, str(e))
+    return {"results": results}
+
+
 _MAX_CARDS_UPLOAD = 100 * 1024 * 1024  # 100 МБ
 
 
@@ -1037,6 +1311,7 @@ def export_margin(
         "logistics": "Логистика, руб", "storage": "Хранение, руб",
         "services": "Услуги, руб", "income": "К перечислению, руб",
         "net_cost": "Себестоимость, руб", "other": "Прочее, руб",
+        "margin_gross": "Маржа, до себестоимости, руб",
         "margin": "Маржа, руб",
         "margin_per_one": "Маржа на ед., руб", "margin_pct": "Маржа, %",
     })
@@ -1053,25 +1328,46 @@ def export_margin_detail(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    missing_only: int = 0,
+    compare: int = 0,
     db: Session = Depends(get_db),
 ):
     from_, to_ = _parse_window400(date_from, date_to)
 
-    df = margin_service.margin_dataframe(
-        db, date_from=from_, date_to=to_, marketplace=None,
-        article_like=article_like, source="detail",
+    df = margin_service.margin_detail_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like,
+        default_net_cost=settings.default_net_cost,
     )
+    if compare and date_from and date_to:
+        try:
+            f = date.fromisoformat(date_from)
+            t = date.fromisoformat(date_to)
+            delta = (t - f).days
+            prev_df = margin_service.margin_detail_dataframe(
+                db, date_from=f - timedelta(days=delta), date_to=f - timedelta(days=1),
+                article_like=article_like, default_net_cost=settings.default_net_cost,
+            )
+            df = margin_service.compare_margin_periods(df, prev_df)
+        except (ValueError, TypeError):
+            pass
     df = df.rename(columns={
         "article": "Артикул", "name": "Наименование", "sells": "Продано, шт",
         "revenue": "Выручка, руб", "commission": "Комиссия, руб",
         "logistics": "Логистика, руб", "storage": "Хранение, руб",
         "services": "Услуги, руб", "income": "К перечислению, руб",
-        "net_cost": "Себестоимость, руб", "other": "Прочее, руб",
-        "margin": "Маржа, руб",
-        "margin_per_one": "Маржа на ед., руб", "margin_pct": "Маржа, %",
+        "net_cost": "Себестоимость, руб", "margin_gross": "Маржа, до себестоимости, руб",
+        "margin": "Прибыль, руб",
+        "margin_per_one": "Прибыль на ед., руб", "margin_pct": "Прибыль, %",
+        "net_cost_est": "Себестоимость оценка",
+        "sells_pp": "Пред. период: Продано, шт", "margin_pp": "Пред. период: Прибыль, руб",
+        "delta_ru": "Δ прибыли, руб", "delta_pct": "Δ прибыли, %",
     })
+    if missing_only:
+        df = df[df["Себестоимость оценка"] == True].drop(columns=["Себестоимость оценка"])
     buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
-    fname = f"margin_detail_{from_}_{to_}.xlsx"
+    fname = (("detail_missing_cost" if missing_only else "margin_detail")) + f"_{from_}_{to_}.xlsx"
+    if compare:
+        fname = fname.replace(".xlsx", "_compare.xlsx")
     return StreamingResponse(
         buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
@@ -1155,66 +1451,85 @@ def _xlsx_response(df: pd.DataFrame, filename: str, count: int):
     )
 
 
+def _pull_json(res: dict):
+    return {"ok": True, "count": res.get("count", 0), "rows": res.get("rows", 0),
+            "window": res.get("window", "")}
+
+
 @router.post("/wb/cards")
-def wb_cards(write_db: int = 1, db: Session = Depends(get_db)):
+def wb_cards(write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_wb_cards(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(refresh_service.expand_wb_card_export(res["df"]), "wb_cards.xlsx", res["count"])
 
 
 @router.post("/wb/stock")
-def wb_stock(write_db: int = 1, by_size: int = 1, db: Session = Depends(get_db)):
+def wb_stock(write_db: int = 1, by_size: int = 1, excel: int = 1,
+             db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_wb_stock(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         wb_error(e)
+    if not int(excel):
+        return _pull_json(res)
     df = res["df"]
     if not df.empty and not int(by_size):
         df = df.groupby(["article", "warehouse"], as_index=False).agg({
-            "quantity": "sum", "date": "first",
+            "quantity": "sum", "quantity_full": "sum", "in_way": "sum", "date": "first",
         })
     return _xlsx_response(df, "wb_stock.xlsx", len(df))
 
 
 @router.post("/wb/funnel")
 def wb_funnel(date_from: Optional[str] = None, date_to: Optional[str] = None,
-              write_db: int = 1, db: Session = Depends(get_db)):
+              write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_wb_funnel(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(res["df"], f"wb_funnel_{from_}_{to_}.xlsx", res["count"])
 
 
 @router.post("/wb/prices")
-def wb_prices(write_db: int = 1, db: Session = Depends(get_db)):
+def wb_prices(write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_wb_prices(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(res["df"], "wb_prices.xlsx", res["count"])
 
 
 @router.post("/wb/storage")
-def wb_storage(days: int = 7, write_db: int = 1, db: Session = Depends(get_db)):
+def wb_storage(days: int = 7, write_db: int = 1, excel: int = 1,
+               db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_wb_storage(db, days, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(res["df"], "wb_storage.xlsx", res["count"])
 
 
 @router.post("/wb/sales")
 def wb_sales(date_from: Optional[str] = None, date_to: Optional[str] = None,
-             write_db: int = 1, db: Session = Depends(get_db)):
+             write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_wb_sales(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
+    if not int(excel):
+        return _pull_json(res)
     df = res["df"]
     if "sa_name" in df.columns:
         export = df.rename(columns=V5_RU_COLUMNS)
@@ -1227,12 +1542,14 @@ def wb_sales(date_from: Optional[str] = None, date_to: Optional[str] = None,
 
 @router.post("/wb/detail")
 def wb_detail(date_from: Optional[str] = None, date_to: Optional[str] = None,
-              write_db: int = 1, db: Session = Depends(get_db)):
+              write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_wb_detail(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.wb_error(e)
+    if not int(excel):
+        return _pull_json(res)
     df = res["df"]
     export = df.rename(columns=DETAIL_RU_COLUMNS) if not df.empty else df
     return _xlsx_response(export, f"wb_detail_{from_}_{to_}.xlsx", res["count"])
@@ -1308,8 +1625,13 @@ async def wb_detail_upload(
         )
     n = 0
     if write_db:
-        sync_service.upsert_wb_detail_rows(db, ndf, source="excel")
-        n = sync_service.rebuild_sales_from_detail(db)
+        try:
+            sync_service.upsert_wb_detail_rows(db, ndf, source="excel")
+            n = sync_service.rebuild_sales_from_detail(db)
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            raise HTTPException(status_code=500,
+                                detail=f"Ошибка записи детализации: {e}") from e
     sync_service.record_api_pull(db, "wb", "detail", int(total_rows), int(n), "ручной импорт")
     return {
         "imported": int(n),
@@ -1361,6 +1683,111 @@ def api_wb_detail_rows(
     } for r in rows]
     return {"rows": out, "total": int(total)}
 
+
+@router.get("/wb/detail-summary")
+def api_wb_detail_summary(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Свод «Детализации продаж» WB по артикулам (сырые деньги операций, без маржи)."""
+    from_, to_ = _parse_window400(date_from, date_to)
+    df = sync_service.detail_summary_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like
+    )
+    return {
+        "rows": df.replace({None: ""}).to_dict("records"),
+        "count": len(df),
+        "totals": _df_totals(df),
+    }
+
+
+@router.get("/export/wb/detail-summary")
+def export_wb_detail_summary(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from_, to_ = _parse_window400(date_from, date_to)
+    df = sync_service.detail_summary_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like
+    )
+    df = df.rename(columns={
+        "article": "Артикул", "title": "Наименование", "sells": "Продано, шт",
+        "returns_qty": "Возвращено, шт", "revenue": "Реализовано, руб",
+        "commission": "Комиссия, руб", "for_pay": "К перечислению, руб",
+        "logistics": "Доставка, руб", "delivery_count": "Доставок, шт",
+        "return_delivery_count": "Возврат доставок, шт",
+        "storage": "Хранение, руб",
+        "pvz_compensation": "ПВЗ-компенсации, руб",
+        "payment_services": "Платёжные услуги, руб",
+        "services": "Услуги/штрафы, руб", "ops_count": "Операций",
+        "sources": "Источник",
+    })
+    buf = excel_io.df_to_excel_stream(df, sheet_name="Детализация по артикулам")
+    fname = f"wb_detail_summary_{from_}_{to_}.xlsx"
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/export/wb/detail-rows")
+def export_wb_detail_rows(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    limit: int = 5000,
+    db: Session = Depends(get_db),
+):
+    """Экспорт сырых строк «Детализации продаж» WB (wb_detail_rows) в Excel."""
+    from_, to_ = _parse_window400(date_from, date_to)
+    q = (
+        select(models.WbDetailRow)
+        .where(models.WbDetailRow.sale_dt.isnot(None))
+        .order_by(models.WbDetailRow.sale_dt, models.WbDetailRow.id)
+        .limit(limit)
+    )
+    if from_:
+        q = q.where(models.WbDetailRow.sale_dt >= from_)
+    if to_:
+        q = q.where(models.WbDetailRow.sale_dt <= to_)
+    if article_like:
+        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+    rows = db.execute(q).scalars().all()
+    recs = [{
+        "date": r.sale_dt.isoformat() if r.sale_dt else "",
+        "article": r.article, "title": r.title, "doc_type": r.doc_type_name,
+        "quantity": r.quantity, "retail_price": float(r.retail_price or 0),
+        "retail_amount": float(r.retail_amount or 0),
+        "commission": float(r.ppvz_sales_commission or 0),
+        "for_pay": float(r.for_pay or 0),
+        "logistics": float(r.delivery_service or 0),
+        "storage": float(r.paid_storage or 0),
+        "services": float((r.penalty or 0) + (r.deduction or 0) + (r.additional_payment or 0)),
+        "office": r.office_name, "srid": r.srid, "source": r.source,
+    } for r in rows]
+    df = pd.DataFrame(recs, columns=["date", "article", "title", "doc_type", "quantity",
+                                     "retail_price", "retail_amount", "commission",
+                                     "for_pay", "logistics", "storage", "services",
+                                     "office", "srid", "source"])
+    df = df.rename(columns={
+        "date": "Дата", "article": "Артикул", "title": "Наименование",
+        "doc_type": "Тип документа", "quantity": "Кол-во",
+        "retail_price": "Цена розничная", "retail_amount": "Реализовано, руб",
+        "commission": "Комиссия, руб", "for_pay": "К перечислению, руб",
+        "logistics": "Доставка, руб", "storage": "Хранение, руб",
+        "services": "Услуги/штрафы, руб", "office": "Склад",
+        "srid": "SRID", "source": "Источник",
+    })
+    buf = excel_io.df_to_excel_stream(df, sheet_name="Строки детализации")
+    fname = f"wb_detail_rows_{from_}_{to_}.xlsx"
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 @router.post("/ozon/cards")
 def ozon_cards(write_db: int = 1, db: Session = Depends(get_db)):
@@ -1445,3 +1872,109 @@ def api_refresh_state(job_id: int):
     if state is None:
         raise HTTPException(status_code=404, detail="Задание не найдено")
     return state
+
+
+# ------------------------------------------------------- Яндекс.Диск (файлы отчётов)
+@router.post("/yandex/upload")
+async def yandex_upload(file: UploadFile = File(...), folder: str = "/agent_market"):
+    try:
+        token = yandex_service.require_token()
+        data = await file.read()
+        name = file.filename or "file.xlsx"
+        return yandex_service.upload_bytes(token, folder, name, data)
+    except yandex_service.YandexDiskError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/yandex/list")
+def yandex_list(folder: str = "/agent_market"):
+    try:
+        token = yandex_service.require_token()
+        return yandex_service.list_files(token, folder)
+    except yandex_service.YandexDiskError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/yandex/download")
+def yandex_download(path: str):
+    try:
+        token = yandex_service.require_token()
+        data = yandex_service.download_bytes(token, path)
+    except yandex_service.YandexDiskError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    name = path.rsplit("/", 1)[-1] or "file.xlsx"
+    return StreamingResponse(
+        BytesIO(data),
+        media_type=XLSX_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.delete("/yandex/delete")
+def yandex_delete(path: str):
+    try:
+        token = yandex_service.require_token()
+        yandex_service.delete_file(token, path)
+    except yandex_service.YandexDiskError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "path": path}
+
+
+# ------------------------------------------------------------------ тикеты
+
+def _ticket_or_error(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except tickets_service.TicketError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+
+@router.get("/tickets")
+def api_tickets():
+    """Очередь тикетов из TICKETS.md."""
+    return tickets_service.load()
+
+
+@router.post("/tickets")
+def api_tickets_create(body: dict = Body(...)):
+    """Создаёт тикет в «Открытые»."""
+    title = str(body.get("title", "")).strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Заголовок тикета обязателен")
+    priority = str(body.get("priority", "medium")).strip().lower()
+    return _ticket_or_error(
+        tickets_service.create, title=title,
+        body=str(body.get("body", "")), priority=priority,
+    )
+
+
+@router.post("/tickets/{tid}/start")
+def api_ticket_start(tid: str):
+    return _ticket_or_error(tickets_service.start, tid)
+
+
+@router.post("/tickets/{tid}/block")
+def api_ticket_block(tid: str):
+    return _ticket_or_error(tickets_service.block, tid)
+
+
+@router.post("/tickets/{tid}/unblock")
+def api_ticket_unblock(tid: str):
+    return _ticket_or_error(tickets_service.unblock, tid)
+
+
+@router.post("/tickets/{tid}/close")
+def api_ticket_close(tid: str, body: dict = Body(default={})):
+    return _ticket_or_error(
+        tickets_service.close, tid, commit=str(body.get("commit", "")),
+    )
+
+
+@router.post("/tickets/{tid}/decline")
+def api_ticket_decline(tid: str):
+    return _ticket_or_error(tickets_service.decline, tid)
+
+
+@router.post("/tickets/{tid}/reopen")
+def api_ticket_reopen(tid: str):
+    return _ticket_or_error(tickets_service.reopen, tid)

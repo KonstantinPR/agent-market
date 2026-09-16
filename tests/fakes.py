@@ -51,6 +51,9 @@ class FakeWb:
             "chrtId": [101, 102],
             "techSize": ["46", "47"],
             "quantity": [5, 7],
+            "quantityFull": [9, 11],
+            "inWayToClient": [2, 3],
+            "inWayFromClient": [1, 0],
         })
 
     def get_sales_funnel(self, date_from, date_to):
@@ -162,7 +165,13 @@ class FakeOz:
     def get_prices(self):
         if self.prices_error:
             raise self.prices_error
-        return pd.DataFrame({"offer_id": ["OZ-1", "OZ-2"], "price": [1200, 800]})
+        return pd.DataFrame({
+            "offer_id": ["OZ-1", "OZ-2"],
+            "product_id": ["P1", "P2"],
+            "price_price": [1200, 800],
+            "price_old_price": [1500, 1000],
+            "price_min_price": [1000, 700],
+        })
 
     def get_realization(self, month, year):
         if self.realization_error:

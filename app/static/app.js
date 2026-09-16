@@ -11,6 +11,15 @@ function fmt(n) {
 function fmtMoney(n) {
   return fmt(Math.round(n || 0)) + " \u20BD";
 }
+function fmtMoney2(n) {
+  return new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0) + " \u20BD";
+}
+function fmtMoney4(n) {
+  return new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(n || 0) + " \u20BD";
+}
+function fmtVol(n) {
+  return new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 1, maximumFractionDigits: 3 }).format(n || 0);
+}
 function fmtFloat(n, d) {
   return new Intl.NumberFormat("ru-RU", { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 }).format(n || 0);
 }
@@ -18,6 +27,24 @@ function fmtPct(n) {
   return (n == null || n === "" || isNaN(Number(n))) ? "—" : Number(n).toFixed(1) + "%";
 }
 function cls(n) { return Number(n) < 0 ? "neg" : "pos"; }
+
+let busyDepth = 0;
+function busyRun(fn) {
+  const spin = document.getElementById("busySpinner");
+  if (spin) spin.classList.remove("hidden");
+  document.body.classList.add("busy");
+  busyDepth++;
+  return Promise.resolve(fn())
+    .catch((err) => { console.error("busyRun:", err); throw err; })
+    .finally(() => {
+      busyDepth--;
+      if (busyDepth <= 0) {
+        busyDepth = 0;
+        if (spin) spin.classList.add("hidden");
+        document.body.classList.remove("busy");
+      }
+    });
+}
 
 function writeDbStorage(api, kind) {
   const v = localStorage.getItem("write_db_" + api + "_" + kind);
@@ -83,16 +110,38 @@ async function apiPost(path, body) {
   return resp.json();
 }
 
-function table(headers, rows, sort) {
+function table(headers, rows, sort, footers) {
   if (!rows.length) return '<div class="empty">Нет данных за выбранный период</div>';
   let h = "<thead><tr>";
   for (const c of headers) {
     let arrow = "";
     if (sort && sort.k === c.k) arrow = sort.dir === "asc" ? " \u25B2" : " \u25BC";
     h += '<th data-k="' + c.k + '" class="' + (c.num ? "num sortable" : "sortable") +
-      '" title="Сортировать">' + c.label + arrow + "</th>";
+      '" title="' + (c.tip ? c.tip : "Сортировать") + '">' + c.label + arrow + "</th>";
   }
-  h += "</tr></thead><tbody>";
+  h += "</tr>";
+  if (footers) {
+    h += '<tr class="totals-row">';
+    for (let i = 0; i < headers.length; i++) {
+      const c = headers[i];
+      const v = footers[c.k];
+      if (i === 0) {
+        h += '<th class="totals"><b>ИТОГО</b></th>';
+      } else if (v == null) {
+        h += "<th class=\"totals\"></th>";
+      } else if (c.render === cellFmts.money) {
+        h += '<th class="num totals"><b>' + fmtMoney(v) + "</b></th>";
+      } else if (c.render === cellFmts.int) {
+        h += '<th class="num totals"><b>' + fmt(Math.round(v)) + "</b></th>";
+      } else if (c.render === cellFmts.pct) {
+        h += '<th class="num totals"><b>' + fmtPct(v) + "</b></th>";
+      } else {
+        h += '<th class="num totals"><b>' + fmtMoney(v) + "</b></th>";
+      }
+    }
+    h += "</tr>";
+  }
+  h += "</thead><tbody>";
   for (const r of rows) {
     h += "<tr>";
     for (const c of headers) h += '<td class="' + (c.num ? "num" : "") + '">' + c.render(r[c.k], r) + "</td>";
@@ -103,21 +152,32 @@ function table(headers, rows, sort) {
 
 const cellFmts = {
   money: (v) => v == null ? "—" : fmtMoney(v),
+  money2: (v) => v == null ? "—" : fmtMoney2(v),
+  money4: (v) => v == null ? "—" : fmtMoney4(v),
   moneyCls: (v) => v == null ? "—" : `<span class="${cls(v)}">${fmtMoney(v)}</span>`,
   pct: (v) => v == null ? "—" : `<span class="${cls(v)}">${fmtPct(v)}</span>`,
   int: (v) => v == null ? "—" : fmt(v),
   intZero: (v) => !v ? "—" : fmt(v),
   moneyZero: (v) => !v ? "—" : fmtMoney(v),
+  moneyEst: (v, r) => r && r.net_cost_est
+    ? '<span class="est" title="Себестоимость не задана — оценка">~' + fmtMoney(v) + "</span>"
+    : fmtMoney(v),
   text: (v) => (v == null || v === "") ? "—" : v,
   tag: (v) => `<span class="tag ${v}">${MP_LABELS[v] || v}</span>`,
 };
 
-function pagedTable(container, headers, rows) {
+function pagedTable(container, headers, rows, footers, pagerSel) {
   if (!container._pt) container._pt = { limit: 100, showAll: false, sort: null };
   const st = container._pt;
-  if (st.sort && !headers.some((x) => x.k === st.sort.k)) st.sort = null;
   st.headers = headers;
   st.rows = rows;
+  st.footers = footers || null;
+  st.pagerSel = pagerSel || null;
+  if (!pagerSel && container.id) {
+    const auto = document.getElementById(container.id + "Pager");
+    if (auto) st.pagerSel = "#" + auto.id;
+  }
+  if (st.sort && !st.headers.some((x) => x.k === st.sort.k)) st.sort = null;
   if (!container._bound) {
     container._bound = true;
     container.addEventListener("click", (ev) => {
@@ -135,17 +195,19 @@ function pagedTable(container, headers, rows) {
   }
   const paint = () => {
     container.innerHTML = "";
-    if (!rows || !rows.length) {
+    const pagerHost = st.pagerSel ? document.querySelector(st.pagerSel) : null;
+    if (pagerHost) pagerHost.innerHTML = "";
+    if (!st.rows || !st.rows.length) {
       container.innerHTML = '<div class="empty">Нет данных за выбранный период</div>';
       return;
     }
-    let list = rows;
+    let list = st.rows;
     if (st.sort) {
-      const hd = headers.find((x) => x.k === st.sort.k);
+      const hd = st.headers.find((x) => x.k === st.sort.k);
       if (hd) {
         const k = st.sort.k;
         const dir = st.sort.dir === "asc" ? 1 : -1;
-        list = rows.slice().sort((a, b) => {
+        list = st.rows.slice().sort((a, b) => {
           let cmp;
           if (hd.num) {
             cmp = (Number(a[k]) || 0) - (Number(b[k]) || 0);
@@ -175,12 +237,12 @@ function pagedTable(container, headers, rows) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "btn pager-all";
-      btn.textContent = "Загрузить все (" + fmt(Math.max(0, rows.length - st.limit)) + ")";
+      btn.textContent = "Загрузить все (" + fmt(Math.max(0, st.rows.length - st.limit)) + ")";
       bar.appendChild(btn);
       input.addEventListener("change", () => {
         let v = parseInt(input.value, 10);
         if (!v || v < 1) v = 1;
-        st.limit = Math.min(v, rows.length);
+        st.limit = Math.min(v, st.rows.length);
         paint();
       });
       btn.addEventListener("click", () => {
@@ -189,11 +251,17 @@ function pagedTable(container, headers, rows) {
       });
     }
     const visible = st.showAll ? list : list.slice(0, st.limit);
-    span.textContent = "Показано " + fmt(visible.length) + " из " + fmt(rows.length);
-    container.appendChild(bar);
+    span.textContent = "Показано " + fmt(visible.length) + " из " + fmt(st.rows.length);
+    (pagerHost || container).appendChild(bar);
     const wrap = document.createElement("div");
-    wrap.innerHTML = table(headers, visible, st.sort);
+    wrap.innerHTML = table(st.headers, visible, st.sort, st.footers);
     container.appendChild(wrap);
+    const tr = wrap.querySelector("tr.totals-row");
+    if (tr) {
+      const hdr = wrap.querySelector("thead tr:not(.totals-row)");
+      const h = hdr ? hdr.offsetHeight : 0;
+      tr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
+    }
   };
   paint();
 }
@@ -204,6 +272,11 @@ function tabLike(id) {
 
 async function loadTab(name) {
   const f = filters();
+  await busyRun(() => loadTabInner(name, f));
+}
+
+async function loadTabInner(name, f) {
+
   try {
     if (name === "dashboard") await renderDashboard(qs(f));
     else if (name === "margin") {
@@ -211,11 +284,17 @@ async function loadTab(name) {
     } else if (name === "margin-funnel") {
       await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined }));
     } else if (name === "margin-detail") {
-      await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined }));
+      const cmpEl = $("#marginDetailCompare");
+      await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined }));
     } else if (name === "sales") await renderSales(qs(f));
     else if (name === "stocks") await renderStocks(f.marketplace);
     else if (name === "ours") await renderOurs();
     else if (name === "products") await renderProducts();
+    else if (name === "wh-cp") await renderWhCp();
+    else if (name === "wh-receipt") await renderWhDocs("receipt", "whRTable", "whRMsg", "whRDetail");
+    else if (name === "wh-shipment") await renderWhDocs("shipment", "whSTable", "whSMsg", "whSDetail");
+    else if (name === "wh-stock") await renderWhStock();
+    else if (name === "wh-turnover") await renderWhTurnover();
     else if (name === "pricing") await renderPricing(false);
     else if (name === "wb-cards" || name === "oz-cards") await renderCards(name);
     else if (name === "wb-funnel") await renderWbFunnel();
@@ -224,6 +303,8 @@ async function loadTab(name) {
     else if (name === "wb-storage") await renderWbStorage();
     else if (name === "wb-sales") await renderWbSales();
     else if (name === "wb-detail") await renderWbDetail();
+    else if (name === "yandex") await renderYandexFiles();
+    else if (name === "tickets") await renderTickets();
   } catch (err) {
     console.error("loadTab error:", err);
   }
@@ -305,20 +386,54 @@ async function renderMargin(p) {
 
 const marginHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
+  { k: "name",    label: "Наименование", render: cellFmts.text },
+  { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int },
   { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money },
-  { k: "logistics", label: "Логистика", num: true, render: cellFmts.money },
-  { k: "storage", label: "Хранение", num: true, render: cellFmts.money },
-  { k: "services", label: "Услуги", num: true, render: cellFmts.money },
-  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "other", label: "Прочее", num: true, render: cellFmts.moneyCls },
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
+  { k: "logistics", label: "Логистика", num: true, render: cellFmts.moneyCls },
+  { k: "storage", label: "Хранение (оц)", num: true, render: cellFmts.moneyCls, tip: "Безартикульные платы WB разнесены по «объём × тариф × остаток»" },
+  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
+  { k: "income",  label: "К перечислению", num: true, render: cellFmts.money },
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-  { k: "margin", label: "Маржа", num: true, render: cellFmts.moneyCls },
-  { k: "margin_per_one", label: "Маржа на ед.", num: true, render: cellFmts.moneyCls },
-  { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct },
+  { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.moneyCls },
+  { k: "margin",  label: "Прибыль", num: true, render: cellFmts.moneyCls },
+  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls },
+  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct },
 ];
+const MARGIN_DETAIL_OPTIONAL = [
+  { k: "storage", label: "Хранение (оц)" },
+  { k: "services", label: "Услуги" },
+  { k: "net_cost", label: "Себестоимость" },
+  { k: "margin_gross", label: "Маржа до себестоимости" },
+  { k: "margin_per_one", label: "Прибыль на ед." },
+];
+let marginColumns;
+function loadMarginColumns() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("marginDetailCols"));
+    if (saved && typeof saved === "object") { marginColumns = saved; return; }
+  } catch (e) { /* ignore */ }
+  marginColumns = {};
+  for (const c of MARGIN_DETAIL_OPTIONAL) marginColumns[c.k] = true;
+}
+function saveMarginColumns() { localStorage.setItem("marginDetailCols", JSON.stringify(marginColumns)); }
+function buildMarginDetailViewPanel() {
+  const panel = $("#marginDetailViewPanel");
+  if (!panel) return;
+  panel.innerHTML = "";
+  for (const c of MARGIN_DETAIL_OPTIONAL) {
+    const lbl = document.createElement("label");
+    lbl.className = "chk";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!marginColumns[c.k];
+    cb.addEventListener("change", () => { marginColumns[c.k] = cb.checked; saveMarginColumns(); if (currentTab === "margin-detail") loadTab(currentTab); });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(" " + c.label));
+    panel.appendChild(lbl);
+  }
+}
+loadMarginColumns();
 
 const wbDetailRowHeaders = [
   { k: "date", label: "Дата", num: true, render: cellFmts.text },
@@ -333,6 +448,25 @@ const wbDetailRowHeaders = [
   { k: "storage", label: "Хранение", num: true, render: cellFmts.money },
   { k: "office", label: "Склад", render: cellFmts.text },
   { k: "source", label: "Источник", render: cellFmts.tag },
+];
+
+const wbDetailSummaryHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "title", label: "Наименование", render: cellFmts.text },
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
+  { k: "revenue", label: "Реализовано", num: true, render: cellFmts.money },
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money },
+  { k: "for_pay", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "logistics", label: "Доставка", num: true, render: cellFmts.money },
+  { k: "delivery_count", label: "Доставок", num: true, render: cellFmts.int },
+  { k: "return_delivery_count", label: "Возврат доставок", num: true, render: cellFmts.int },
+  { k: "storage", label: "Хранение (оц)", num: true, render: cellFmts.money, tip: "Оценка: безартикульные платы WB разнесены по «объём × тариф × остаток»" },
+  { k: "pvz_compensation", label: "ПВЗ-компенсации", num: true, render: cellFmts.money },
+  { k: "payment_services", label: "Платёжные услуги", num: true, render: cellFmts.money },
+  { k: "services", label: "Услуги/штрафы", num: true, render: cellFmts.money },
+  { k: "ops_count", label: "Операций", num: true, render: cellFmts.int },
+  { k: "sources", label: "Источник", render: cellFmts.tag },
 ];
 
 const funnelHeaders = [
@@ -358,26 +492,40 @@ async function renderMarginFunnel(p) {
   $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p;
   const msg = $("#marginFunnelMsg");
   if (data.snapshot_from && data.snapshot_to) {
-    msg.textContent = "Оценка прибыльности по срезу воронки за " + data.snapshot_from + " … " + data.snapshot_to +
-      " (до комиссий WB). Обновите: WB API ▸ Воронка продаж.";
+    msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to;
   } else {
     msg.textContent = "Нет данных. Сначала скачайте WB API ▸ Воронка продаж.";
   }
 }
 
 async function renderMarginDetail(p) {
+  const compare = /compare=1/.test(p || "");
   const data = await api("/margin/detail" + p);
-  pagedTable($("#marginDetailTable"), marginHeaders, data.rows || []);
-  $("#exportMarginDetail").href = "/api/export/margin/detail" + p;
+  let headers = marginColumns ? marginHeaders.filter((c) => marginColumns[c.k] !== false) : marginHeaders.slice();
+  if (compare) {
+    headers = headers.concat([
+      { k: "sells_pp", label: "Пред. период: шт", num: true, render: cellFmts.int },
+      { k: "margin_pp", label: "Пред. период: Прибыль", num: true, render: cellFmts.moneyCls },
+      { k: "delta_ru", label: "Δ прибыли", num: true, render: cellFmts.moneyCls },
+      { k: "delta_pct", label: "Δ, %", num: true, render: cellFmts.pct },
+    ]);
+  }
+  pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals);
+  const exportBtn = $("#exportMarginDetail");
+  if (exportBtn) exportBtn.dataset.url = "/api/export/margin/detail" + p;
   const msg = $("#marginDetailMsg");
+  const cmpMsg = $("#marginDetailCompareMsg");
+  if (cmpMsg) {
+    cmpMsg.textContent = (compare && data.prev_window) ?
+      "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
+      (compare ? "для сравнения нужны даты «С» и «По»" : "");
+  }
   if ((data.rows || []).length === 0) {
     msg.textContent =
       "Нет данных. Финансовый отчёт WB скачивается отдельным ключом (finance): WB API ▸ Детализация продаж. " +
       "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день.";
   } else {
-    msg.textContent =
-      "Данные из финансового отчёта WB (детализация продаж). Маржа = \"К перечислению\" − себестоимость. " +
-      "\"Прочее\" — разница (возвраты/корректировки).";
+    msg.textContent = "Строк: " + fmt((data.rows || []).length);
   }
 }
 
@@ -424,6 +572,109 @@ async function renderOurs() {
     { k: "updated_at", label: "Обновлено", render: cellFmts.text },
   ];
   pagedTable($("#oursTable"), headers, data.rows || []);
+}
+
+// ─────────────────────────────── «Наш склад» ───────────────────────────────
+
+let whCpLabels = {};
+
+const whCpHeaders = [
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "ctype", label: "Тип", render: (v) => v == null ? "—" : (whCpLabels[v] || v) },
+  { k: "inn", label: "ИНН", render: cellFmts.text },
+  { k: "phone", label: "Телефон", render: cellFmts.text },
+  { k: "note", label: "Примечание", render: cellFmts.text },
+];
+
+async function renderWhCp() {
+  const box = $("#whCpTable");
+  let data;
+  try {
+    data = await api("/warehouse/counterparties");
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить контрагентов: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  whCpLabels = data.labels || {};
+  pagedTable(box, whCpHeaders, data.rows || []);
+}
+
+const whDocHeaders = [
+  { k: "date", label: "Дата", render: cellFmts.text },
+  { k: "doc_num", label: "№ документа", render: cellFmts.text },
+  { k: "counterparty", label: "Контрагент", render: cellFmts.text },
+  { k: "total", label: "Сумма", num: true, render: cellFmts.money },
+  { k: "items_count", label: "Строк", num: true, render: cellFmts.int },
+  { k: "source", label: "Источник", render: cellFmts.text },
+  { k: "_d", label: "", render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "" },
+];
+
+const whDocItemHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "quantity", label: "Кол-во", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
+  { k: "price", label: "Цена", num: true, render: cellFmts.money2 },
+  { k: "amount", label: "Сумма", num: true, render: cellFmts.money2 },
+];
+
+async function renderWhDocs(type, boxId, msgId, detailId) {
+  const box = $("#" + boxId);
+  const detail = $("#" + detailId);
+  let data;
+  try {
+    data = await api("/warehouse/docs" + qs({ type }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить ' + (type === "receipt" ? "приход" : "отгрузки") + ": " + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const msg = $("#" + msgId);
+  if (msg) msg.textContent = "Документов: " + fmt(data.count);
+  detail.innerHTML = "";
+  pagedTable(box, whDocHeaders, data.rows || []);
+}
+
+const whStockHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "start_qty", label: "Начальный", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
+  { k: "received", label: "Приход", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
+  { k: "shipped", label: "Отгрузка", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
+  { k: "balance", label: "Остаток", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
+  { k: "avg_cost", label: "Себестоимость ед.", num: true, render: cellFmts.money2 },
+  { k: "stock_value", label: "Стоимость остатков", num: true, render: cellFmts.money },
+];
+
+async function renderWhStock() {
+  const box = $("#whStockTable");
+  const q = tabLike("whStockLike");
+  let data;
+  try {
+    data = await api("/warehouse/stock" + qs({ article_like: q || undefined }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить остатки: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  pagedTable(box, whStockHeaders, data.rows || []);
+}
+
+const whTurnoverHeaders = [
+  { k: "counterparty", label: "Контрагент", render: cellFmts.text },
+  { k: "in_n", label: "Приход, док.", num: true, render: cellFmts.int },
+  { k: "in_sum", label: "Приход, сумма", num: true, render: cellFmts.money },
+  { k: "out_n", label: "Отгрузка, док.", num: true, render: cellFmts.int },
+  { k: "out_sum", label: "Отгрузка, сумма", num: true, render: cellFmts.money },
+];
+
+async function renderWhTurnover() {
+  const box = $("#whTurnoverTable");
+  let data;
+  try {
+    data = await api("/warehouse/turnover");
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить обороты: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  pagedTable(box, whTurnoverHeaders, data.rows || []);
 }
 
 async function renderProducts() {
@@ -503,7 +754,61 @@ function filenameFromDisposition(d) {
   return m ? decodeURIComponent(m[1]) : "wb_download.xlsx";
 }
 
-async function apiDownload(api, kind, msgSel) {
+async function apiDownload(api, kind, msgSel, jsonMode) {
+  const pane = document.querySelector(".pane.active");
+  const from = pane.querySelector('input[data-date="from"]');
+  const to = pane.querySelector('input[data-date="to"]');
+  const days = pane.querySelector("input[data-days]");
+  const month = pane.querySelector("input[data-month]");
+  const year = pane.querySelector("input[data-year]");
+  const writeDb = pane.querySelector(".write-db");
+  const bySize = pane.querySelector(".by-size");
+  const params = {};
+  if (from) params.date_from = from.value;
+  else if ($("#fFrom").value) params.date_from = $("#fFrom").value;
+  if (to) params.date_to = to.value;
+  else if ($("#fTo").value) params.date_to = $("#fTo").value;
+  if (days) params.days = days.value;
+  if (month) params.month = month.value;
+  if (year) params.year = year.value;
+  if (writeDb) params.write_db = writeDb.checked ? 1 : 0;
+  if (bySize) params.by_size = bySize.checked ? 1 : 0;
+  if (jsonMode) params.excel = 0;
+  const msg = document.querySelector(msgSel);
+  msg.textContent = "Обновляю…";
+  try {
+    const resp = await fetch("/api/" + api + "/" + kind + qs(params), { method: "POST" });
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    if (jsonMode) {
+      const j = await resp.json();
+      let m = "База обновлена: строк " + fmt(j.count || 0);
+      if (j.window) m += " · период: " + j.window;
+      if (writeDb && !writeDb.checked) m += " (без записи в базу)";
+      msg.textContent = m;
+      pullsCache = null;
+      updateLastPull(currentTab);
+      if (currentTab.startsWith("wb-") || currentTab.startsWith("oz-")) loadTab(currentTab);
+      return;
+    }
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition"));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Готово, строк: " + count + (writeDb && !writeDb.checked ? " (без записи в базу)" : "");
+    pullsCache = null;
+    updateLastPull(currentTab);
+    if (currentTab.startsWith("wb-") || currentTab.startsWith("oz-")) loadTab(currentTab);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function apiUploadDisk(api, kind, msgSel) {
   const pane = document.querySelector(".pane.active");
   const from = pane.querySelector('input[data-date="from"]');
   const to = pane.querySelector('input[data-date="to"]');
@@ -521,26 +826,111 @@ async function apiDownload(api, kind, msgSel) {
   if (writeDb) params.write_db = writeDb.checked ? 1 : 0;
   if (bySize) params.by_size = bySize.checked ? 1 : 0;
   const msg = document.querySelector(msgSel);
-  msg.textContent = "Загрузка…";
+  msg.textContent = "Формирую файл…";
   try {
     const resp = await fetch("/api/" + api + "/" + kind + qs(params), { method: "POST" });
     if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
     const blob = await resp.blob();
-    const count = resp.headers.get("X-Count");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition"));
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
-    msg.textContent = "Готово, строк: " + count + (writeDb && !writeDb.checked ? " (без записи в базу)" : "");
-    pullsCache = null;
-    updateLastPull(currentTab);
-    if (currentTab.startsWith("wb-") || currentTab.startsWith("oz-")) loadTab(currentTab);
+    const name = filenameFromDisposition(resp.headers.get("Content-Disposition"));
+    const fd = new FormData();
+    fd.append("file", blob, name);
+    msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
+    const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
+    const j = await up.json();
+    if (!up.ok) throw new Error(j.detail || up.status);
+    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
+}
+
+async function wireWhDisk(btnSel, params, msgSel, tab, fromDisk) {
+  const btn = $(btnSel);
+  if (!btn) return;
+  const msg = $(msgSel);
+  btn.addEventListener("click", async () => {
+    msg.textContent = fromDisk ? "Синхронизирую с Диска…" : "Формирую и загружаю на Диск…";
+    try {
+      if (fromDisk) {
+        const r = await apiPost("/warehouse/fromdisk" + qs(params), {});
+        const res = r.results || [];
+        const ok = res.filter((x) => !x.error).length;
+        const imports = res.map((x) => {
+          const n = (x.docs_created || 0) + (x.docs_updated || 0);
+          return x.file + (n ? " (" + n + " док.)" : "");
+        }).join(", ");
+        msg.textContent = "Импортировано с Диска: " + fmt(ok) + " из " + fmt(res.length) + (imports ? " — " + imports : "");
+        await loadTab(tab);
+      } else {
+        const r = await apiPost("/warehouse/todisk" + qs(params), {});
+        msg.textContent = "На Диске: " + (r.path || "ok");
+      }
+    } catch (err) {
+      msg.textContent = "Ошибка: " + err.message;
+    }
+  });
+}
+
+function humanSize(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + " Б";
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + " КБ";
+  return (v / (1024 * 1024)).toFixed(2) + " МБ";
+}
+
+async function renderYandexFiles() {
+  const box = document.getElementById("yandexTable");
+  const msg = document.getElementById("yandexMsg");
+  if (msg) msg.textContent = "Загружаю список…";
+  let data;
+  try {
+    data = await api("/yandex/list");
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Ошибка: ' + escapeHtml(err.message) + "</div>";
+    if (msg) msg.textContent = "";
+    return;
+  }
+  const files = (data.files || []).slice().sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
+  if (msg) msg.textContent = "Файлов в /agent_market: " + fmt(files.length);
+  if (!files.length) {
+    box.innerHTML = '<div class="empty">В папке /agent_market пока нет файлов. Воспользуйтесь кнопкой «Загрузить на диск» в панелях отчётов.</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Файл</th><th>Изменён</th><th>Размер</th><th></th><th></th></tr></thead><tbody>';
+  for (const f of files) {
+    html += "<tr><td>" + escapeHtml(f.name) + "</td><td>"
+      + (f.modified ? new Date(f.modified).toLocaleString("ru-RU") : "—")
+      + "</td><td>" + humanSize(f.size)
+      + '</td><td><a class="btn small" href="/api/yandex/download' + qs({ path: f.path }) + '">Скачать</a></td>'
+      + '<td><button class="btn small danger" data-yandex-del="' + escapeHtml(f.path) + '">Удалить</button></td></tr>';
+  }
+  html += "</tbody></table>";
+  box.innerHTML = html;
+}
+
+function initYandexTab() {
+  const del = document.getElementById("yandexTable");
+  if (del) {
+    del.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-yandex-del]");
+      if (!btn) return;
+      if (!confirm("Удалить файл с Яндекс.Диска?")) return;
+      const path = btn.dataset.yandexDel;
+      const msg = document.getElementById("yandexMsg");
+      msg.textContent = "Удаляю…";
+      try {
+        const resp = await fetch("/api/yandex/delete" + qs({ path }), { method: "DELETE" });
+        const j = await resp.json();
+        if (!resp.ok) throw new Error(j.detail || resp.status);
+        msg.textContent = "Удалено: " + path.split("/").pop();
+        await renderYandexFiles();
+      } catch (err) {
+        msg.textContent = "Ошибка: " + err.message;
+      }
+    });
+  }
+  const ref = document.getElementById("yandexRefresh");
+  if (ref) ref.addEventListener("click", () => renderYandexFiles());
 }
 
 let pullsCache = null;
@@ -584,6 +974,165 @@ async function updateLastPull(name) {
   }
   if (p.window) parts.push("период: " + p.window);
   el.textContent = parts.join(" · ");
+}
+
+// ------------------------------------------------------------- тикеты
+const TICKET_COLS = [
+  ["open", "Открытые"],
+  ["in_progress", "В работе"],
+  ["blocked", "Заблокированные"],
+  ["closed", "Закрытые"],
+];
+
+function ticketPriBadge(pri) {
+  if (!pri) return "";
+  return '<span class="ticket-pri pri-' + escapeHtml(pri) + '">' + escapeHtml(pri) + "</span>";
+}
+
+function ticketCard(key, t) {
+  let body = "";
+  if (t.body) body = '<div class="ticket-body">' + escapeHtml(t.body) + "</div>";
+  let commit = "";
+  if (t.commit) commit = '<span class="ticket-commit">' + escapeHtml(t.commit) + "</span>";
+  const id = escapeHtml(t.id);
+  const actions = [];
+  if (key === "open") {
+    actions.push('<button class="btn" data-act="start" data-id="' + id + '">Взять в работу</button>');
+    actions.push('<button class="btn" data-act="block" data-id="' + id + '">Заблокировать</button>');
+  } else if (key === "in_progress") {
+    actions.push('<button class="btn" data-act="close" data-id="' + id + '">Закрыть</button>');
+    actions.push('<button class="btn" data-act="decline" data-id="' + id + '">Отклонить</button>');
+    actions.push('<button class="btn" data-act="block" data-id="' + id + '">Заблокировать</button>');
+  } else if (key === "blocked") {
+    actions.push('<button class="btn" data-act="start" data-id="' + id + '">В работу</button>');
+    actions.push('<button class="btn" data-act="unblock" data-id="' + id + '">Вернуть в очередь</button>');
+  } else {
+    actions.push('<button class="btn" data-act="reopen" data-id="' + id + '">Открыть снова</button>');
+  }
+  let closeForm = "";
+  if (key === "in_progress") {
+    closeForm = '<div class="ticket-close-form hidden">'
+      + '<input type="text" placeholder="хеш коммита (необязательно)">'
+      + '<button class="btn btn-primary" data-act="confirm-close" data-id="' + id + '">Подтвердить</button></div>';
+  }
+  return '<div class="ticket-card state-' + key + '">'
+    + '<div class="ticket-head"><b>' + id + "</b>" + ticketPriBadge(t.priority) + "</div>"
+    + '<div class="ticket-title">' + escapeHtml(t.title) + "</div>"
+    + body + commit
+    + '<div class="ticket-actions">' + actions.join("") + "</div>"
+    + closeForm
+    + "</div>";
+}
+
+async function renderTickets() {
+  const board = document.getElementById("ticketsBoard");
+  const msg = document.getElementById("ticketsMsg");
+  if (!board) return;
+  board.innerHTML = '<div class="empty">Загружаю…</div>';
+  let d;
+  try {
+    d = await api("/tickets");
+  } catch (err) {
+    board.innerHTML = '<div class="empty">Ошибка: ' + escapeHtml(err.message) + "</div>";
+    if (msg) msg.textContent = "";
+    return;
+  }
+  if (msg) msg.textContent = d.counter ? "Счётчик следующих номеров: T-" + d.counter : "Файл TICKETS.md ещё не создан";
+  let html = '<div class="tickets-board">';
+  for (const [key, label] of TICKET_COLS) {
+    const list = (d.sections && d.sections[key]) || [];
+    html += '<div class="ticket-col"><h3 class="ticket-col-h">' + label
+      + ' <span class="ticket-count">' + fmt(list.length) + "</span></h3>";
+    if (!list.length) {
+      html += '<div class="empty">пусто</div>';
+    } else {
+      for (const t of list) html += ticketCard(key, t);
+    }
+    html += "</div>";
+  }
+  html += "</div>";
+  board.innerHTML = html;
+}
+
+async function ticketAction(act, id, card) {
+  const msg = document.getElementById("ticketsMsg");
+  try {
+    if (act === "close") {
+      const form = card.querySelector(".ticket-close-form");
+      if (!form) return;
+      form.classList.remove("hidden");
+      const inp = form.querySelector("input");
+      if (inp) inp.focus();
+      return;
+    }
+    let commit = "";
+    if (act === "confirm-close") {
+      const inp = card.querySelector(".ticket-close-form input");
+      commit = inp ? inp.value.trim() : "";
+      act = "close";
+    }
+    await apiPost("/tickets/" + encodeURIComponent(id) + "/" + act, act === "close" ? { commit: commit } : undefined);
+    if (msg) { msg.textContent = "Тикет " + id + ": ok"; msg.classList.remove("error"); }
+  } catch (err) {
+    if (msg) { msg.textContent = err.message; msg.classList.add("error"); }
+    return;
+  }
+  await renderTickets();
+}
+
+function initTicketsTab() {
+  const board = document.getElementById("ticketsBoard");
+  if (!board) return;
+  board.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-act]");
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const act = btn.dataset.act;
+    const card = btn.closest(".ticket-card");
+    if (id && card && act) await ticketAction(act, id, card);
+  });
+  board.addEventListener("keydown", async (ev) => {
+    if (ev.key === "Enter" && ev.target.matches(".ticket-close-form input")) {
+      const btn = ev.target.closest(".ticket-card").querySelector('[data-act="confirm-close"]');
+      if (btn) btn.click();
+    }
+  });
+  const openModal = () => {
+    document.getElementById("ticketModal").classList.remove("hidden");
+    document.getElementById("ticketTitle").focus();
+  };
+  const closeModal = () => {
+    document.getElementById("ticketModal").classList.add("hidden");
+  };
+  document.getElementById("ticketAdd").addEventListener("click", openModal);
+  document.getElementById("ticketsRefresh").addEventListener("click", () => renderTickets());
+  document.getElementById("ticketModalClose").addEventListener("click", closeModal);
+  document.getElementById("ticketModalCancel").addEventListener("click", closeModal);
+  document.getElementById("ticketModal").addEventListener("click", (e) => {
+    if (e.target.id === "ticketModal") closeModal();
+  });
+  document.getElementById("ticketCreate").addEventListener("click", async () => {
+    const msg = document.getElementById("ticketsMsg");
+    const title = document.getElementById("ticketTitle").value.trim();
+    if (!title) {
+      if (msg) { msg.textContent = "Заголовок обязателен"; msg.classList.add("error"); }
+      document.getElementById("ticketTitle").focus();
+      return;
+    }
+    const priority = document.getElementById("ticketPriority").value;
+    const body = document.getElementById("ticketBody").value;
+    try {
+      await apiPost("/tickets", { title, body, priority });
+      closeModal();
+      document.getElementById("ticketTitle").value = "";
+      document.getElementById("ticketBody").value = "";
+      document.getElementById("ticketPriority").value = "medium";
+      if (msg) { msg.textContent = ""; msg.classList.remove("error"); }
+      await renderTickets();
+    } catch (err) {
+      if (msg) { msg.textContent = err.message; msg.classList.add("error"); }
+    }
+  });
 }
 
 // ----------------------------------------------------- карточки маркетплейса (Excel)
@@ -751,10 +1300,11 @@ function aggregateStocks(rows) {
   for (const r of rows) {
     const key = r.marketplace + "|" + r.article + "|" + r.warehouse;
     const a = map.get(key);
-    if (a) { a.quantity += r.quantity; continue; }
+    if (a) { a.quantity += r.quantity; a.quantity_full += r.quantity_full; a.in_way += r.in_way; continue; }
     map.set(key, {
       date: r.date, marketplace: r.marketplace, article: r.article, name: r.name,
       warehouse: r.warehouse, quantity: r.quantity,
+      quantity_full: r.quantity_full || 0, in_way: r.in_way || 0,
     });
   }
   return Array.from(map.values());
@@ -767,14 +1317,18 @@ const wbStockHeaders = [
   { k: "size", label: "Размер", render: cellFmts.text },
   { k: "barcode", label: "Баркод", render: cellFmts.text },
   { k: "warehouse", label: "Склад", render: cellFmts.text },
-  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
+  { k: "quantity", label: "Доступно", num: true, render: cellFmts.int },
+  { k: "quantity_full", label: "Всего на складах", num: true, render: cellFmts.int },
+  { k: "in_way", label: "В пути", num: true, render: cellFmts.int },
 ];
 
 const wbStockAggHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
   { k: "warehouse", label: "Склад", render: cellFmts.text },
-  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
+  { k: "quantity", label: "Доступно", num: true, render: cellFmts.int },
+  { k: "quantity_full", label: "Всего на складах", num: true, render: cellFmts.int },
+  { k: "in_way", label: "В пути", num: true, render: cellFmts.int },
 ];
 
 async function renderWbStocks() {
@@ -803,6 +1357,37 @@ async function renderWbStocks() {
   pagedTable(box, headers, rows);
 }
 
+function aggregatePrices(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    let a = map.get(r.article);
+    if (!a) {
+      map.set(r.article, {
+        article: r.article, name: r.name || "", sizes: 1,
+        disc_min: r.discounted_price, disc_max: r.discounted_price,
+        price_min: r.price, price_max: r.price,
+        disc_min_p: r.discount, disc_max_p: r.discount,
+      });
+      continue;
+    }
+    a.sizes += 1;
+    for (const [mn, mx, v] of [
+      ["disc_min", "disc_max", r.discounted_price],
+      ["price_min", "price_max", r.price],
+      ["disc_min_p", "disc_max_p", r.discount],
+    ]) {
+      if (v < a[mn]) a[mn] = v;
+      if (v > a[mx]) a[mx] = v;
+    }
+  }
+  return Array.from(map.values());
+}
+
+function rangeLabel(mn, mx, fmtFn) {
+  if (mn == null) return "—";
+  return mn === mx ? fmtFn(mn) : fmtFn(Math.min(mn, mx)) + "–" + fmtFn(Math.max(mn, mx));
+}
+
 const wbPricesHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
@@ -812,9 +1397,19 @@ const wbPricesHeaders = [
   { k: "discount", label: "Скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v, 1) + "%" },
 ];
 
+const wbPricesAggHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "sizes", label: "Размеров", num: true, render: cellFmts.int },
+  { k: "disc_min", label: "Цена со скид.", num: true, render: (v, r) => rangeLabel(r.disc_min, r.disc_max, fmtMoney) },
+  { k: "price_min", label: "Цена без скид.", num: true, render: (v, r) => rangeLabel(r.price_min, r.price_max, fmtMoney) },
+  { k: "disc_min_p", label: "Скидка, %", num: true, render: (v, r) => rangeLabel(r.disc_min_p, r.disc_max_p, (x) => fmt(x, 1) + "%") },
+];
+
 async function renderWbPrices() {
   const box = document.getElementById("wbPricesTable");
   const likeEl = document.getElementById("wbPricesLike");
+  const aggEl = document.getElementById("wbPriceAgg");
   const q = likeEl ? likeEl.value.trim() : "";
   let data;
   try {
@@ -823,21 +1418,24 @@ async function renderWbPrices() {
     box.innerHTML = '<div class="empty">Не удалось загрузить цены: ' + escapeHtml(err.message) + "</div>";
     return;
   }
+  let rows = data.rows || [];
+  const agg = aggEl ? aggEl.checked : false;
+  if (agg) rows = aggregatePrices(rows);
   const msg = document.querySelector("#wbMsg-prices-table");
   if (msg) {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, wbPricesHeaders, data.rows || []);
+  pagedTable(box, agg ? wbPricesAggHeaders : wbPricesHeaders, rows);
 }
 
 const wbStorageHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
   { k: "barcodes_count", label: "Баркодов", num: true, render: cellFmts.int },
-  { k: "volume", label: "Объём, м³", num: true, render: (v) => v == null ? "—" : fmt(v, 3) },
-  { k: "storage_price", label: "Хранение за баркод", num: true, render: cellFmts.money },
-  { k: "warehouse_price", label: "Сумма хранения", num: true, render: cellFmts.money },
+  { k: "volume", label: "Объём, л", num: true, render: (v) => v == null ? "—" : fmtVol(v) },
+  { k: "storage_price", label: "Хранение за баркод", num: true, render: cellFmts.money4 },
+  { k: "warehouse_price", label: "Сумма хранения", num: true, render: cellFmts.money4 },
 ];
 
 async function renderWbStorage() {
@@ -898,15 +1496,12 @@ async function renderWbDetail() {
   const box = document.getElementById("wbDetailTable");
   const likeEl = document.getElementById("wbDetailLike");
   const rawEl = document.getElementById("wbDetailRaw");
-  const p = paneDates();
+  const f = filters();
+  const p = { date_from: f.date_from, date_to: f.date_to };
   const q = likeEl ? likeEl.value.trim() : "";
   const raw = rawEl ? rawEl.checked : false;
-  const params = qs({
-    date_from: p.date_from || undefined,
-    date_to: p.date_to || undefined,
-    article_like: q || undefined,
-  });
   const msg = document.querySelector("#wbMsg-detail-table");
+  const tipEl = document.getElementById("wbDetailTip");
   try {
     if (raw) {
       const data = await api("/wb/detail-rows" + qs({
@@ -916,24 +1511,84 @@ async function renderWbDetail() {
         limit: 500,
       }));
       const rows = data.rows || [];
+      tipEl.classList.add("hidden");
       if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
-      pagedTable(box, wbDetailRowHeaders, rows);
+      pagedTable(box, wbDetailRowHeaders, rows, null, "#wbDetailTablePager");
     } else {
-      const data = await api("/margin/detail" + params);
+      const data = await api("/wb/detail-summary" + qs({
+        date_from: p.date_from || undefined,
+        date_to: p.date_to || undefined,
+        article_like: q || undefined,
+      }));
       const rows = data.rows || [];
-      if (msg) {
-        if (data.detail_articles != null) {
-          msg.textContent = "По товарам: " + fmt(data.count) + " (в детализации: " +
-            fmt(data.detail_articles) + " артикулов; есть в каталоге)";
-        } else {
-          msg.textContent = rows.length ? "Строк: " + fmt(rows.length) : "Нет данных. Отчёт формируется ~до следующего дня (finance-токен).";
-        }
-      }
-      pagedTable(box, marginHeaders, rows);
+      tipEl.classList.remove("hidden");
+      if (msg) msg.textContent = "По артикулам: " + fmt(data.count || 0);
+      pagedTable(box, wbDetailSummaryHeaders, rows, data.totals, "#wbDetailTablePager");
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию: ' + escapeHtml(err.message) + "</div>";
+  }
+}
+
+function wbDetailExportUrl() {
+  const rawEl = document.getElementById("wbDetailRaw");
+  const likeEl = document.getElementById("wbDetailLike");
+  const f = filters();
+  const raw = rawEl ? rawEl.checked : false;
+  const q = likeEl ? likeEl.value.trim() : "";
+  const path = raw ? "/api/export/wb/detail-rows" : "/api/export/wb/detail-summary";
+  return path + qs({
+    date_from: f.date_from || undefined,
+    date_to: f.date_to || undefined,
+    article_like: q || undefined,
+  });
+}
+
+async function downloadWbDetailExcel() {
+  const msg = document.querySelector("#wbMsg-detail-table");
+  msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch(wbDetailExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition"));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Excel выгружен" + (count != null ? " · строк: " + fmt(count) : "");
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadWbDetailToDisk() {
+  const msg = document.querySelector("#wbMsg-detail-table");
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(wbDetailExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
+    const f = filters();
+    const rawEl = document.getElementById("wbDetailRaw");
+    const kind = rawEl && rawEl.checked ? "rows" : "summary";
+    const name = "wb_detail_" + kind + "_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + stamp + ".xlsx";
+    const fd = new FormData();
+    fd.append("file", blob, name);
+    msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
+    const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
+    const j = await up.json();
+    if (!up.ok) throw new Error(j.detail || up.status);
+    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
   }
 }
 
@@ -988,11 +1643,10 @@ async function uploadDetailFiles(files) {
 
 function initDetailUpload() {
   const file = document.getElementById("wbDetailFile");
-  const btn = document.getElementById("wbDetailImport");
   const drop = document.getElementById("wbDetailDrop");
   const rawEl = document.getElementById("wbDetailRaw");
-  if (btn && file) btn.addEventListener("click", () => uploadDetailFiles(file.files));
-  if (rawEl) rawEl.addEventListener("change", () => renderWbDetail());
+  if (file) file.addEventListener("change", () => busyRun(() => uploadDetailFiles(file.files)));
+  if (rawEl) rawEl.addEventListener("change", () => loadTab("wb-detail"));
   if (drop) {
     drop.addEventListener("click", () => { if (file) file.click(); });
     drop.addEventListener("dragover", (e) => {
@@ -1003,7 +1657,7 @@ function initDetailUpload() {
     drop.addEventListener("drop", (e) => {
       e.preventDefault();
       drop.classList.remove("over");
-      if (e.dataTransfer && e.dataTransfer.files) uploadDetailFiles(e.dataTransfer.files);
+      if (e.dataTransfer && e.dataTransfer.files) busyRun(() => uploadDetailFiles(e.dataTransfer.files));
     });
   }
 }
@@ -1200,6 +1854,32 @@ function pollRefresh() {
   }, 1500);
 }
 
+function updateCrumb(name) {
+  const el = document.getElementById("crumb");
+  if (!el) return;
+  const link = document.querySelector('.nav-link[data-tab="' + name + '"]');
+  if (!link) { el.textContent = name === "dashboard" ? "Обзор" : ""; return; }
+  const dd = link.closest(".dropdown");
+  let group = "";
+  if (dd && dd.querySelector(".dropbtn")) {
+    group = dd.querySelector(".dropbtn").textContent.replace(/\s*\u25BE\s*/g, "").trim();
+  }
+  el.textContent = (group ? group + " \u2192 " : "") + link.textContent.trim();
+}
+
+function syncHeaderForTab(name) {
+  const mp = document.getElementById("fMarketplaceWrap");
+  const upd = document.getElementById("btnUpdateWbDetail");
+  if (mp) mp.classList.toggle("hidden", name === "wb-detail");
+  if (upd) upd.classList.toggle("hidden", name !== "wb-detail");
+  const tip = document.getElementById("hintTip");
+  const tipText = document.getElementById("hintTipText");
+  if (tip && tipText) {
+    tipText.textContent = TAB_HINTS[name] || "";
+    tip.classList.toggle("hidden", !TAB_HINTS[name]);
+  }
+}
+
 function openTab(name, linkEl) {
   document.querySelectorAll(".dropdown").forEach((d) => d.classList.remove("open"));
   document.querySelectorAll(".nav-link").forEach((l) => l.classList.remove("active"));
@@ -1208,8 +1888,25 @@ function openTab(name, linkEl) {
   const pane = document.getElementById("tab-" + name);
   if (pane) pane.classList.add("active");
   currentTab = name;
+  syncHeaderForTab(name);
+  updateCrumb(name);
   loadTab(currentTab);
   updateLastPull(name);
+}
+
+const TAB_HINTS = {};
+function initHelp() {
+  document.querySelectorAll(".pane .hint").forEach((p) => {
+    const pane = p.closest(".pane");
+    if (pane) {
+      const name = pane.id.replace(/^tab-/, "");
+      const txt = p.textContent.replace(/\s+/g, " ").trim();
+      if (txt) TAB_HINTS[name] = txt;
+    }
+    const parent = p.parentNode;
+    p.remove();
+    if (parent.classList.contains("toolbar") && !parent.textContent.trim()) parent.remove();
+  });
 }
 
 // ------------------------------------------------------------- автопилот цен WB
@@ -1452,6 +2149,9 @@ async function exportPricing() {
 document.addEventListener("DOMContentLoaded", () => {
   initDates();
   initWriteDb();
+  initHelp();
+  initYandexTab();
+  updateCrumb("dashboard");
   document.querySelectorAll('input[data-date="from"]').forEach((i) => (i.value = $("#fFrom").value));
   document.querySelectorAll('input[data-date="to"]').forEach((i) => (i.value = $("#fTo").value));
 
@@ -1493,8 +2193,31 @@ document.addEventListener("DOMContentLoaded", () => {
     const api = btn.dataset.api || "wb";
     const tag = api === "ozon" ? "oz" : "wb";
     const kind = btn.dataset.kind;
-    btn.addEventListener("click", () => apiDownload(api, kind, "#" + tag + "Msg-" + kind));
+    btn.addEventListener("click", () => busyRun(() => apiDownload(api, kind, "#" + tag + "Msg-" + kind)));
+    const yd = document.createElement("button");
+    yd.type = "button";
+    yd.className = "btn";
+    yd.textContent = "Загрузить на диск";
+    yd.title = "Заливает свежий Excel-отчёт в папку /agent_market на Яндекс.Диске";
+    yd.addEventListener("click", () => busyRun(() => apiUploadDisk(api, kind, "#" + tag + "Msg-" + kind)));
+    btn.parentNode.insertBefore(yd, btn.nextSibling);
+    if (api !== "wb") return;
+    const upd = document.createElement("button");
+    upd.type = "button";
+    upd.className = "btn";
+    upd.textContent = "Обновить базу";
+    upd.title = "Тянет данные из WB API и пишет в БД, файл не скачивается";
+    upd.addEventListener("click", () => busyRun(() => apiDownload(api, kind, "#" + tag + "Msg-" + kind, true)));
+    btn.parentNode.insertBefore(upd, yd.nextSibling);
+    btn.title = "Тянет данные из WB API → пишет в БД (если «в БД») → скачивает Excel";
   });
+  const btnExportWbDetail = document.getElementById("btnExportWbDetail");
+  if (btnExportWbDetail) btnExportWbDetail.addEventListener("click", () => busyRun(downloadWbDetailExcel));
+  const btnDiskWbDetail = document.getElementById("btnDiskWbDetail");
+  if (btnDiskWbDetail) btnDiskWbDetail.addEventListener("click", () => busyRun(uploadWbDetailToDisk));
+
+  const btnUpdateWbDetail = document.getElementById("btnUpdateWbDetail");
+  if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => apiDownload("wb", "detail", "#wbMsg-detail-table", true)));
   const funnelExp = document.getElementById("wbFunnelExpanded");
   if (funnelExp) funnelExp.addEventListener("change", () => loadTab("wb-funnel"));
   $("#btnApply").addEventListener("click", () => loadTab(currentTab));
@@ -1523,6 +2246,12 @@ document.addEventListener("DOMContentLoaded", () => {
       timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
     });
   });
+  const marginDetailCompare = $("#marginDetailCompare");
+  if (marginDetailCompare) {
+    marginDetailCompare.addEventListener("change", () => {
+      if (currentTab === "margin-detail") loadTab(currentTab);
+    });
+  }
   const funnelLike = $("#wbFunnelLike");
   if (funnelLike) {
     let timer;
@@ -1542,6 +2271,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const wbStockAgg = $("#wbStockAgg");
   if (wbStockAgg) {
     wbStockAgg.addEventListener("change", () => { if (currentTab === "wb-stock") loadTab(currentTab); });
+  }
+  const wbPriceAgg = $("#wbPriceAgg");
+  if (wbPriceAgg) {
+    wbPriceAgg.addEventListener("change", () => { if (currentTab === "wb-prices") loadTab(currentTab); });
   }
   [["wbPricesLike", "wb-prices"], ["wbStorageLike", "wb-storage"]].forEach(([id, tab]) => {
     const el = $("#" + id);
@@ -1564,11 +2297,68 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
   $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
   $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
+  // ── «Наш склад» — импорт/экспорт/диск ──
+  $("#whCpImport").addEventListener("click", () => uploadFile("/warehouse/import/counterparties", $("#whCpFile"), "#whCpMsg", "wh-cp"));
+  $("#whRImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=receipt", $("#whRFile"), "#whRMsg", "wh-receipt"));
+  $("#whSImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=shipment", $("#whSFile"), "#whSMsg", "wh-shipment"));
+  wireWhDisk("#whCpToDisk", { kind: "counterparties" }, "#whCpMsg", "wh-cp", false);
+  wireWhDisk("#whCpFromDisk", { type: "counterparties" }, "#whCpMsg", "wh-cp", true);
+  wireWhDisk("#whRToDisk", { kind: "docs", type: "receipt" }, "#whRMsg", "wh-receipt", false);
+  wireWhDisk("#whRFromDisk", { type: "receipt" }, "#whRMsg", "wh-receipt", true);
+  wireWhDisk("#whSToDisk", { kind: "docs", type: "shipment" }, "#whSMsg", "wh-shipment", false);
+  wireWhDisk("#whSFromDisk", { type: "shipment" }, "#whSMsg", "wh-shipment", true);
+  [["whRTable", "whRDetail"], ["whSTable", "whSDetail"]].forEach(([t, d]) => {
+    const box = $("#" + t);
+    const detail = $("#" + d);
+    if (!box || !detail) return;
+    box.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-doc-id]");
+      if (!btn) return;
+      detail.innerHTML = '<div class="empty">Загружаю…</div>';
+      try {
+        const data = await api("/warehouse/docs/" + btn.dataset.docId + "/items");
+        pagedTable(detail, whDocItemHeaders, data.rows || []);
+      } catch (err) {
+        detail.innerHTML = '<div class="empty">Ошибка: ' + escapeHtml(err.message) + "</div>";
+      }
+    });
+  });
+  const whStockLike = $("#whStockLike");
+  if (whStockLike) {
+    let timer;
+    whStockLike.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === "wh-stock") loadTab(currentTab); }, 400);
+    });
+  }
   initCardsUpload();
   initDetailUpload();
   const pricingRecalc = $("#pricingRecalc");
   const pricingExport = $("#pricingExport");
   if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));
   if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
+  syncHeaderForTab(currentTab);
+  buildMarginDetailViewPanel();
+  const btnView = $("#btnMarginDetailView");
+  const viewPanel = $("#marginDetailViewPanel");
+  if (btnView && viewPanel) {
+    btnView.addEventListener("click", (e) => {
+      e.stopPropagation();
+      viewPanel.classList.toggle("hidden");
+    });
+    document.addEventListener("click", (e) => {
+      if (!viewPanel.classList.contains("hidden") && !viewPanel.contains(e.target) && e.target !== btnView) {
+        viewPanel.classList.add("hidden");
+      }
+    });
+  }
+  const btnExportMarginDetail = $("#exportMarginDetail");
+  if (btnExportMarginDetail) {
+    btnExportMarginDetail.addEventListener("click", () => {
+      const url = btnExportMarginDetail.dataset.url;
+      if (url) window.open(url, "_blank");
+    });
+  }
+  initTicketsTab();
   loadTab(currentTab);
 });

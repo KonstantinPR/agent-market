@@ -41,6 +41,8 @@ def create_tables():
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS chrt_id varchar(40) DEFAULT ''"))
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS size varchar(50) DEFAULT ''"))
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS barcode varchar(100) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS quantity_full integer DEFAULT 0"))
+        conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS in_way integer DEFAULT 0"))
         # Фаза A: воронка — выкупы и сумма выкупа
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyouts integer DEFAULT 0"))
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyout_sum numeric(14,2) DEFAULT 0"))

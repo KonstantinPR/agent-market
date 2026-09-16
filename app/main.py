@@ -28,5 +28,7 @@ if __name__ == "__main__":
     import uvicorn
 
     from app.config import settings
+    from app.database import ensure_schema
 
+    ensure_schema()
     uvicorn.run(app, host=settings.app_host, port=settings.app_port)

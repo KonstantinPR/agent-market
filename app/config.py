@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     wb_finance_api_key_2: str = ""
     ozon_client_id: str = ""
     ozon_api_key: str = ""
+    yandex_disk_token: str = ""
+
+    default_net_cost: float = 500.0
 
     @property
     def database_url(self) -> str:

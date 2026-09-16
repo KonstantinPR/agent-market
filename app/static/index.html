@@ -15,7 +15,12 @@
       <button class="dropbtn" id="oursMenuBtn">Наш склад &#9662;</button>
       <div class="dropdown-menu" id="oursMenu">
         <a class="nav-link" data-tab="products" href="#">Товары</a>
-        <a class="nav-link" data-tab="ours" href="#">Остатки</a>
+        <a class="nav-link" data-tab="ours" href="#">Начальные остатки</a>
+        <a class="nav-link" data-tab="wh-cp" href="#">Контрагенты</a>
+        <a class="nav-link" data-tab="wh-receipt" href="#">Приход</a>
+        <a class="nav-link" data-tab="wh-shipment" href="#">Отгрузка</a>
+        <a class="nav-link" data-tab="wh-stock" href="#">Остатки</a>
+        <a class="nav-link" data-tab="wh-turnover" href="#">Обороты</a>
       </div>
     </div>
     <div class="dropdown" id="profitDropdown">
@@ -58,10 +63,19 @@
         <a class="nav-link is-disabled" id="magicDoAll" href="#" title="Сделать ВСЕ будет доступно позже: объединит обновление данных с операциями по ценам и другими действиями">Сделать ВСЕ</a>
       </div>
     </div>
+  <div class="dropdown" id="ydDropdown">
+      <button class="dropbtn" id="ydMenuBtn">Яндекс.Диск &#9662;</button>
+      <div class="dropdown-menu" id="ydMenu">
+        <a class="nav-link" data-tab="yandex" href="#">Файлы отчётов</a>
+      </div>
+    </div>
+    <a class="nav-link" data-tab="tickets" href="#">Тикеты</a>
   </div>
 </nav>
 <header class="filters">
-  <label>Маркетплейс
+  <span class="crumb" id="crumb"></span>
+  <span class="tip hidden" id="hintTip" tabindex="0" role="tooltip">?<span class="tip-text" id="hintTipText"></span></span>
+  <label id="fMarketplaceWrap">Маркетплейс
     <select id="fMarketplace">
       <option value="">Все</option>
       <option value="wb">Wildberries</option>
@@ -71,6 +85,8 @@
   <label>С <input type="date" id="fFrom"></label>
   <label>По <input type="date" id="fTo"></label>
   <button id="btnApply">Применить</button>
+  <button id="btnUpdateWbDetail" class="hidden">Обновить базу</button>
+  <span class="spinner hidden" id="busySpinner"></span>
 </header>
 <main>
   <section id="tab-dashboard" class="pane active">
@@ -89,25 +105,42 @@
       </span>
       <input id="marginSearch" placeholder="Поиск…">
       <input id="marginLike" placeholder="Артикул содержит… (напр. TIE)">
-      <a id="exportMargin" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      <span class="toolbar-right">
+        <span id="marginTablePager"></span>
+        <a id="exportMargin" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      </span>
     </div>
     <div class="table-wrap" id="marginTable"></div>
   </section>
 
   <section id="tab-margin-funnel" class="pane">
     <div class="toolbar">
-      <span class="msg" id="marginFunnelMsg">Нет данных. Сначала скачайте WB API ▸ Воронка продаж.</span>
+      <span class="msg" id="marginFunnelMsg"></span>
+      <span class="tip" id="marginFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Оценка прибыльности по срезу воронки за период (до комиссий WB). Обновите: WB API ▸ Воронка продаж.</span></span>
       <input id="marginFunnelLike" placeholder="Артикул содержит… (напр. TIE)">
-      <a id="exportMarginFunnel" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      <span class="toolbar-right">
+        <span id="marginFunnelTablePager"></span>
+        <a id="exportMarginFunnel" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      </span>
     </div>
     <div class="table-wrap" id="marginFunnelTable"></div>
   </section>
 
   <section id="tab-margin-detail" class="pane">
     <div class="toolbar">
-      <span class="msg" id="marginDetailMsg">Прибыльность по Детализации Продаж WB. Данные появятся после скачивания «WB API ▸ Детализация продаж» (финансовый токен, ~1 запрос в 12 ч; отчёт формируется на вчера).</span>
+      <span class="msg" id="marginDetailMsg"></span>
+      <span class="tip" id="marginDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из финансового отчёта WB (детализация продаж). Маржа = "К перечислению" − себестоимость. "Прочее" — разница (возвраты/корректировки).</span></span>
       <input id="marginDetailLike" placeholder="Артикул содержит… (напр. TIE)">
-      <a id="exportMarginDetail" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      <label class="chk"><input type="checkbox" id="marginDetailCompare"> Сравнить с пред. периодом</label>
+      <span class="msg" id="marginDetailCompareMsg"></span>
+      <span class="toolbar-right">
+        <span id="marginDetailTablePager"></span>
+        <div class="view-menu" id="marginDetailViewMenu">
+          <button type="button" class="btn" id="btnMarginDetailView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="marginDetailViewPanel"></div>
+        </div>
+        <button type="button" class="btn" id="exportMarginDetail">Экспорт в Excel</button>
+      </span>
     </div>
     <div class="table-wrap" id="marginDetailTable"></div>
   </section>
@@ -120,6 +153,7 @@
       <button id="pricingRecalc" class="btn">Пересчитать</button>
       <button id="pricingExport" class="btn btn-primary">Экспорт в Excel</button>
       <span class="msg" id="pricingMsg"></span>
+      <span class="toolbar-right"><span id="pricingTablePager"></span></span>
     </div>
     <div id="pricingSettings" class="pricing-settings"></div>
     <div class="pricing-summary" id="pricingSummary"></div>
@@ -131,12 +165,18 @@
   <section id="tab-sales" class="pane">
     <div class="toolbar">
       <input id="salesSearch" placeholder="Поиск…">
-      <a id="exportSales" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      <span class="toolbar-right">
+        <span id="salesTablePager"></span>
+        <a id="exportSales" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      </span>
     </div>
     <div class="table-wrap" id="salesTable"></div>
   </section>
 
   <section id="tab-stocks" class="pane">
+    <div class="toolbar">
+      <span class="toolbar-right"><span id="stocksTablePager"></span></span>
+    </div>
     <div class="table-wrap" id="stocksTable"></div>
   </section>
 
@@ -145,8 +185,77 @@
       <input type="file" id="oursFile" accept=".xlsx">
       <button id="oursImport" class="btn">Загрузить остатки</button>
       <span id="oursMsg" class="msg"></span>
+      <span class="toolbar-right"><span id="oursTablePager"></span></span>
     </div>
+    <p class="hint">Начальные (стартовые) остатки — отправная точка складского учёта. Дальше остатки считаются: начальные + Приход − Отгрузка.</p>
     <div class="table-wrap" id="oursTable"></div>
+  </section>
+
+  <section id="tab-wh-cp" class="pane">
+    <div class="toolbar">
+      <input type="file" id="whCpFile" accept=".xlsx">
+      <button id="whCpImport" class="btn">Загрузить контрагентов</button>
+      <a class="btn" id="whCpExport" href="/api/warehouse/export/counterparties">Выгрузить в Excel</a>
+      <button id="whCpToDisk" class="btn">На диск</button>
+      <button id="whCpFromDisk" class="btn">С диска</button>
+      <span id="whCpMsg" class="msg"></span>
+      <span class="toolbar-right"><span id="whCpTablePager"></span></span>
+    </div>
+    <p class="hint">Поставщики, покупатели и маркетплейсы (Wildberries и Ozon — тоже контрагенты). Колонки файла: Наименование | ИНН | Тип | Телефон | Примечание.</p>
+    <div class="table-wrap" id="whCpTable"></div>
+  </section>
+
+  <section id="tab-wh-receipt" class="pane" data-wh-type="receipt">
+    <div class="toolbar">
+      <input type="file" id="whRFile" accept=".xlsx">
+      <button id="whRImport" class="btn">Загрузить Приход</button>
+      <a class="btn" id="whRExport" href="/api/warehouse/export/docs?type=receipt">Выгрузить в Excel</a>
+      <a class="btn" id="whRTemplate" href="/api/warehouse/export/template-docs?type=receipt">Шаблон</a>
+      <button id="whRToDisk" class="btn">На диск</button>
+      <button id="whRFromDisk" class="btn">С диска</button>
+      <span id="whRMsg" class="msg"></span>
+      <span class="toolbar-right"><span id="whRTablePager"></span></span>
+    </div>
+    <p class="hint">Приход товара. Файл = пачка накладных: Дата | № документа | Контрагент | Артикул | Кол-во | Цена. Строки с одинаковыми №+дата+контрагент — один документ; повторная загрузка обновит документы.</p>
+    <div class="table-wrap" id="whRTable"></div>
+    <div class="table-wrap" id="whRDetail"></div>
+  </section>
+
+  <section id="tab-wh-shipment" class="pane" data-wh-type="shipment">
+    <div class="toolbar">
+      <input type="file" id="whSFile" accept=".xlsx">
+      <button id="whSImport" class="btn">Загрузить Отгрузку</button>
+      <a class="btn" id="whSExport" href="/api/warehouse/export/docs?type=shipment">Выгрузить в Excel</a>
+      <a class="btn" id="whSTemplate" href="/api/warehouse/export/template-docs?type=shipment">Шаблон</a>
+      <button id="whSToDisk" class="btn">На диск</button>
+      <button id="whSFromDisk" class="btn">С диска</button>
+      <span id="whSMsg" class="msg"></span>
+      <span class="toolbar-right"><span id="whSTablePager"></span></span>
+    </div>
+    <p class="hint">Отгрузка товара (покупателю или на склад маркетплейса — контрагент WB/Ozon). Тот же формат, что и Приход.</p>
+    <div class="table-wrap" id="whSTable"></div>
+    <div class="table-wrap" id="whSDetail"></div>
+  </section>
+
+  <section id="tab-wh-stock" class="pane">
+    <div class="toolbar">
+      <input type="text" id="whStockLike" placeholder="Поиск по артикулу или названию">
+      <span class="toolbar-right">
+        <span id="whStockTablePager"></span>
+        <a class="btn" id="whStockExport" href="/api/warehouse/export/stock">Выгрузить в Excel</a>
+      </span>
+      <span id="whStockMsg" class="msg"></span>
+    </div>
+    <div class="table-wrap" id="whStockTable"></div>
+  </section>
+
+  <section id="tab-wh-turnover" class="pane">
+    <div class="toolbar">
+      <a class="btn" id="whTurnoverExport" href="/api/warehouse/export/turnover">Выгрузить в Excel</a>
+      <span id="whTurnoverMsg" class="msg"></span>
+      <span class="toolbar-right"><span id="whTurnoverTablePager"></span></span>
+    </div>
+    <div class="table-wrap" id="whTurnoverTable"></div>
   </section>
 
   <section id="tab-products" class="pane">
@@ -159,6 +268,7 @@
       <input type="file" id="netCostFile" accept=".xlsx">
       <button id="netCostImport" class="btn">Загрузить себестоимость</button>
       <span id="netCostMsg" class="msg"></span>
+      <span class="toolbar-right"><span id="productsTablePager"></span></span>
     </div>
     <div class="table-wrap" id="productsTable"></div>
   </section>
@@ -183,6 +293,7 @@
     <div class="toolbar">
       <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд…">
       <span class="msg" id="wbMsg-cards-table"></span>
+      <span class="toolbar-right"><span id="wbCardsTablePager"></span></span>
     </div>
     <div class="table-wrap" id="wbCardsTable"></div>
   </section>
@@ -201,6 +312,7 @@
       <input id="wbStockLike" placeholder="Поиск: артикул, название, размер…">
       <label class="chk"><input type="checkbox" id="wbStockAgg"> свернуть по размерам</label>
       <span class="msg" id="wbMsg-stock-table"></span>
+      <span class="toolbar-right"><span id="wbStockTablePager"></span></span>
     </div>
     <div class="table-wrap" id="wbStockTable"></div>
   </section>
@@ -220,6 +332,7 @@
       <input id="wbFunnelLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="wbFunnelExpanded"> Расширенный вид</label>
       <span class="msg" id="wbMsg-funnel-table"></span>
+      <span class="toolbar-right"><span id="wbFunnelTablePager"></span></span>
     </div>
     <p class="notice" id="wbFunnelBuyoutNote" style="display:none">Выкупы: WB не отдаёт эти данные с текущим ключом (нужен доступ «Статистика», метод v1/main). Доступны только Просмотры/Корзина/Заказы/Отмены. При наличии доступа колонки заполнятся после нового скачивания воронки.</p>
     <div class="table-wrap" id="wbFunnelTable"></div>
@@ -239,33 +352,30 @@
     <div class="toolbar">
       <input id="wbSalesLike" placeholder="Поиск: артикул, название…">
       <span class="msg" id="wbMsg-sales-table"></span>
+      <span class="toolbar-right"><span id="wbSalesTablePager"></span></span>
     </div>
     <div class="table-wrap" id="wbSalesTable"></div>
   </section>
 
   <section id="tab-wb-detail" class="pane">
     <div class="wb-form">
-      <p class="hint">Детальный финансовый отчёт по продажам Wildberries (вознаграждения, доставка, хранение, штрафы и удержания). Использует отдельный финансовый токен (WB_FINANCE_API_KEY): доступен ~1 запрос в 12 часов, отчёт формируется до следующего дня — указывайте окно «По» не позже вчера. Также доступна ручная загрузка файла «Детализация продаж» из ЛК WB (Excel или zip-архив) — без лимитов finance-api.</p>
-      <div class="toolbar">
-        <label>С <input type="date" data-date="from"></label>
-        <label>По <input type="date" data-date="to"></label>
-        <button class="btn wb-dl" data-kind="detail">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="detail" checked> в БД</label>
-        <span class="msg" id="wbMsg-detail"></span>
-      </div>
-      <div class="toolbar">
-        <input type="file" id="wbDetailFile" accept=".xlsx,.xlsm,.zip" multiple>
-        <button id="wbDetailImport" class="btn">Загрузить файлы</button>
-        <span class="msg" id="wbMsg-detail-excel"></span>
-      </div>
+      <p class="hint">Детальный финансовый отчёт по продажам Wildberries (вознаграждения, доставка, хранение, штрафы и удержания). Нажмите «Обновить базу» в шапке, чтобы вытянуть данные из WB API (отдельный финансовый токен WB_FINANCE_API_KEY, ~1 запрос в 12 часов), затем «Применить» — перечитает таблицу из базы. Также доступна ручная загрузка файла «Детализация продаж» из ЛК WB (Excel или zip-архив) — без лимитов finance-api.</p>
+      <input type="file" id="wbDetailFile" class="hidden" accept=".xlsx,.xlsm,.zip" multiple>
       <div class="dropzone" id="wbDetailDrop">
         <span class="dz-label">Перетащите сюда Excel-файлы или zip-архив с детализацией Wildberries</span>
       </div>
+      <span class="msg" id="wbMsg-detail-excel"></span>
     </div>
     <div class="toolbar">
       <input id="wbDetailLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="wbDetailRaw"> Строками</label>
       <span class="msg" id="wbMsg-detail-table"></span>
+      <span class="tip hidden" id="wbDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Сырые деньги операций без себестоимости и маржи. Анализ прибыльности — в разделе «Прибыльность ▸ Детализация Продаж WB».</span></span>
+      <span class="toolbar-right">
+        <span id="wbDetailTablePager"></span>
+        <button id="btnExportWbDetail" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskWbDetail" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <div class="table-wrap" id="wbDetailTable"></div>
   </section>
@@ -281,7 +391,9 @@
     </div>
     <div class="toolbar">
       <input id="wbPricesLike" placeholder="Поиск: артикул, название…">
+      <label class="chk"><input type="checkbox" id="wbPriceAgg"> свернуть по размерам</label>
       <span class="msg" id="wbMsg-prices-table"></span>
+      <span class="toolbar-right"><span id="wbPricesTablePager"></span></span>
     </div>
     <div class="table-wrap" id="wbPricesTable"></div>
   </section>
@@ -299,6 +411,7 @@
     <div class="toolbar">
       <input id="wbStorageLike" placeholder="Поиск: артикул, название…">
       <span class="msg" id="wbMsg-storage-table"></span>
+      <span class="toolbar-right"><span id="wbStorageTablePager"></span></span>
     </div>
     <div class="table-wrap" id="wbStorageTable"></div>
   </section>
@@ -327,9 +440,10 @@
 
   <section id="tab-oz-prices" class="pane">
     <div class="wb-form">
-      <p class="hint">Текущие цены и скидки Ozon по карточкам.</p>
+      <p class="hint">Текущие цены и скидки Ozon по карточкам (снимок сохраняется в базу).</p>
       <div class="toolbar">
         <button class="btn wb-dl" data-api="ozon" data-kind="prices">Скачать Excel</button>
+        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="prices" checked> в БД</label>
         <span class="msg" id="ozMsg-prices"></span>
       </div>
     </div>
@@ -359,6 +473,24 @@
       </div>
     </div>
   </section>
+
+  <section id="tab-yandex" class="pane">
+    <p class="hint">Файлы отчётов на Яндекс.Диске в папке <b>/agent_market</b>. Свежие Excel-файлы загружаются кнопкой «Загрузить на диск» в панелях отчётов (файлы перезаписываются).</p>
+    <div class="toolbar">
+      <button class="btn" id="yandexRefresh">Обновить список</button>
+      <span class="msg" id="yandexMsg"></span>
+    </div>
+    <div class="table-wrap" id="yandexTable"></div>
+  </section>
+
+  <section id="tab-tickets" class="pane">
+    <div class="toolbar">
+      <button id="ticketAdd" class="btn btn-primary">Добавить тикет</button>
+      <button id="ticketsRefresh" class="btn">Обновить</button>
+      <span class="msg" id="ticketsMsg"></span>
+    </div>
+    <div id="ticketsBoard"></div>
+  </section>
 </main>
 <div id="refreshModal" class="modal hidden">
   <div class="modal-box">
@@ -381,6 +513,35 @@
     </div>
     <div class="modal-body modal-scroll">
       <div id="refreshHistory"></div>
+    </div>
+  </div>
+</div>
+<div id="ticketModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>Новый тикет</h3>
+      <button id="ticketModalClose" class="modal-close" aria-label="Закрыть">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="ticket-form">
+        <label>Заголовок
+          <input type="text" id="ticketTitle" placeholder="Кратко: что сделать">
+        </label>
+        <label>Приоритет
+          <select id="ticketPriority">
+            <option value="high">high — важное</option>
+            <option value="medium" selected>medium — обычное</option>
+            <option value="low">low — когда дойдут руки</option>
+          </select>
+        </label>
+        <label>Описание
+          <textarea id="ticketBody" rows="4" placeholder="Контекст, ссылки на файлы/строки…"></textarea>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button id="ticketModalCancel" class="btn">Отмена</button>
+        <button id="ticketCreate" class="btn btn-primary">Создать</button>
+      </div>
     </div>
   </div>
 </div>

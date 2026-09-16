@@ -318,6 +318,13 @@ def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
             raw["quantity"] if "quantity" in raw.columns else raw.get("quantityFull", 0),
             errors="coerce",
         ).fillna(0).astype(int)
+        qty_full = pd.to_numeric(
+            raw["quantityFull"] if "quantityFull" in raw.columns else qty,
+            errors="coerce",
+        ).fillna(0).astype(int)
+        in_way = pd.to_numeric(raw.get("inWayToClient", 0), errors="coerce").fillna(0) \
+            + pd.to_numeric(raw.get("inWayFromClient", 0), errors="coerce").fillna(0)
+        in_way = in_way.astype(int)
         sdf = pd.DataFrame({
             "date": str(date.today()),
             "article": raw.apply(
@@ -327,6 +334,8 @@ def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
             "warehouse": raw["warehouseName"].astype(str),
             "chrt_id": raw["chrtId"].astype(str).str.strip() if "chrtId" in raw.columns else "",
             "quantity": qty,
+            "quantity_full": qty_full,
+            "in_way": in_way,
         })
         if "chrtId" in raw.columns:
             dims = _wb_card_dims(db)
@@ -336,7 +345,7 @@ def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
             sdf["size"] = ""
             sdf["barcode"] = ""
         sdf["article"] = sdf["article"].astype(str).str.strip()
-        sdf = sdf[["date", "article", "chrt_id", "size", "barcode", "warehouse", "quantity"]]
+        sdf = sdf[["date", "article", "chrt_id", "size", "barcode", "warehouse", "quantity", "quantity_full", "in_way"]]
         if write_db:
             n = sync_service.upsert_stocks(db, sdf, "wb")
     else:
@@ -432,13 +441,21 @@ def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = 
     n = 0
     if write_db and not df.empty:
         qty = _col_num(df, ["free_to_sell_amount"])
+        free = pd.to_numeric(df.get("free_to_sell_amount", 0), errors="coerce").fillna(0).astype(int) \
+            if "free_to_sell_amount" in df.columns else pd.Series(0, index=df.index)
+        reserved = pd.to_numeric(df.get("reserved_amount", 0), errors="coerce").fillna(0).astype(int) \
+            if "reserved_amount" in df.columns else pd.Series(0, index=df.index)
+        promised = pd.to_numeric(df.get("promised_amount", 0), errors="coerce").fillna(0).astype(int) \
+            if "promised_amount" in df.columns else pd.Series(0, index=df.index)
         sdf = pd.DataFrame({
             "date": str(date.today()),
             "article": df.apply(
                 lambda r: str(r.get("item_code") or r.get("sku") or "").strip(), axis=1,
             ),
             "warehouse": df["warehouse_name"].astype(str),
-            "quantity": qty,
+            "quantity": free,
+            "quantity_full": free + reserved + promised,
+            "in_way": promised,
         })
         n = sync_service.upsert_stocks(db, sdf, "ozon")
     sync_service.record_api_pull(db, "ozon", "stock", len(df), n, "сегодня")
@@ -448,8 +465,12 @@ def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = 
 def pull_oz_prices(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_prices()
-    sync_service.record_api_pull(db, "ozon", "prices", len(df), 0, "")
-    return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": ""}
+    n = 0
+    if write_db and not df.empty:
+        n = sync_service.upsert_ozon_price_snapshots(db, df)
+    sync_service.record_api_pull(db, "ozon", "prices", len(df), n, "сейчас")
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": "сейчас"}
 
 
 def pull_oz_realization(db, month: int, year: int, provider: Optional[OzonProvider] = None,

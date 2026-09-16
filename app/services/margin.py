@@ -7,6 +7,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
+from app.services.sync import _is_goods_row, storage_split
 
 
 def funnel_dataframe(
@@ -99,7 +101,7 @@ def margin_columns() -> list:
     """Колонки итогового df маржинальности (в т.ч. вычисляемые)."""
     return [
         "article", "name", "sells", "revenue", "commission", "logistics",
-        "storage", "services", "income", "net_cost", "other",
+        "storage", "services", "income", "margin_gross", "net_cost", "other",
         "margin", "margin_per_one", "margin_pct",
     ]
 
@@ -109,6 +111,8 @@ def compute_margin(df: pd.DataFrame) -> pd.DataFrame:
 
     Ожидаются колонки: article, name, sells, revenue, commission, logistics,
     storage, services, income, net_cost. Ничего не пишет в БД — чистый расчёт.
+    Маржа (margin_gross) — прибыль до себестоимости, «Маржа-себест.» (margin)
+    — после вычета net_cost за проданный (не возвращённый) товар.
     """
     df = df.copy()
     df["net_cost"] = pd.to_numeric(df["net_cost"], errors="coerce").fillna(0)
@@ -116,11 +120,16 @@ def compute_margin(df: pd.DataFrame) -> pd.DataFrame:
         df["income"] - (df["revenue"] + df["commission"]
                         + df["logistics"] + df["storage"] + df["services"])
     ).round(2)
-    df["margin"] = df["income"] - df["net_cost"] * df["sells"]
+    df["margin_gross"] = round(
+        df["income"] - df["logistics"] - df["storage"] - df["services"], 2
+    )
+    df["margin"] = df["income"] - df["net_cost"] * np.maximum(0, df["sells"])
     df["margin_per_one"] = np.where(
         df["sells"] > 0, df["margin"] / np.where(df["sells"] == 0, 1, df["sells"]), 0
     )
-    df["margin_pct"] = np.where(df["income"] != 0, df["margin"] / df["income"] * 100, 0)
+    df["margin_pct"] = np.where(
+        (df["income"] > 0) & (df["sells"] > 0), df["margin"] / df["income"] * 100, 0
+    )
     df = df.sort_values("margin", ascending=False).reset_index(drop=True)
     df["article"] = df["article"].astype(str)
     return df
@@ -128,6 +137,194 @@ def compute_margin(df: pd.DataFrame) -> pd.DataFrame:
 
 def empty_margin_df() -> pd.DataFrame:
     return pd.DataFrame(columns=margin_columns())
+
+
+DETAIL_MARGIN_COLUMNS = [
+    "article", "name", "sells", "revenue", "commission", "logistics",
+    "storage", "services", "income", "margin_gross", "net_cost",
+    "net_cost_est", "margin", "margin_per_one", "margin_pct",
+]
+
+
+def margin_detail_dataframe(
+    db: Session,
+    date_from=None,
+    date_to=None,
+    article_like: Optional[str] = None,
+    default_net_cost: float = 0.0,
+) -> pd.DataFrame:
+    """Прибыльность по «Детализации продаж» WB напрямую из wb_detail_rows.
+
+    Одна строка — операция (SRID). Возврат («Возврат» в типе документа)
+    вычитается из выручки/комиссии/«к перечислению»; расходы WB (логистика,
+    хранение, услуги) всегда остаются расходами, знак не меняют.
+    Себестоимость: из каталога products — матчинг UPPER(article) (артикулы
+    в products.xlsx в верхнем регистре, в детализации — как в файле), при
+    промахе — фолбэк по barcode строк детализации (sku -> products.barcode).
+    Если себестоимость не найдена/0 — берётся default_net_cost,
+    и флаг net_cost_est=True помечает товар как «оценку».
+
+    Формула: margin_gross (Маржа, до себестоимости) = income (к перечислению,
+    с учётом знака возвратов) − логистика − хранение − услуги;
+    margin (Маржа-себест.) = margin_gross − net_cost × продано.
+    margin_pct — рентабельность от выручки (реализовано WB).
+
+    storage_est — распределённое безартикульное «Хранение» по товарам
+    пропорционально «объём × тариф × (остаток + проданное×0.5)»
+    (storage_costs.volume × storage_price × (stocks.quantity + sold×0.5)).
+    Складывается с фактическим storage — колонка «Хранение» уже содержит
+    оценку.
+    """
+    cols = ["article", "name", "sells", "revenue", "commission", "logistics",
+            "storage", "services", "income", "margin_gross",
+            "net_cost", "net_cost_est", "margin", "margin_per_one", "margin_pct"]
+    out = pd.DataFrame(columns=cols)
+
+    q = select(models.WbDetailRow)
+    if date_from:
+        q = q.where(models.WbDetailRow.sale_dt >= date_from)
+    if date_to:
+        q = q.where(models.WbDetailRow.sale_dt <= date_to)
+    if article_like:
+        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+    rows = list(db.execute(q).scalars().all())
+    if not rows:
+        return out
+
+    # Распределение безартикульных плат «Хранение» по товарам продаж пропорц.
+    # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
+    # продажи периода). Распределение идёт только по артикулам с операциями
+    # в окне — орфанные доли не теряются.
+    storage_est = storage_split(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        target_articles={r.article.strip().upper() for r in rows
+                         if (r.article or "").strip()},
+    )
+
+    prods = db.execute(select(models.Product).where(
+        func.upper(models.Product.article).in_(
+            {(r.article or "").strip().upper() for r in rows if (r.article or "").strip()})
+        | func.upper(func.coalesce(models.Product.barcode, "")).in_(
+            {(r.sku or "").strip().upper() for r in rows if (r.sku or "").strip()})
+    )).scalars().all()
+    # Себестоимость: UPPER(article) -> product; если артикул не матчится по
+    # регистру — пробуем barcode от любой строки этого артикула (sku-колонка).
+    prods_by_upper = {p.article.strip().upper(): p for p in prods}
+    prods_by_barcode = {p.barcode.strip().upper(): p for p in prods if (p.barcode or "").strip()}
+    art_skus: dict = {}
+    for r in rows:
+        art = (r.article or "").strip()
+        sku = (r.sku or "").strip().upper()
+        # sku из Excel хранится как float ('2047932869792.0')
+        if sku.endswith(".0"):
+            sku = sku[:-2]
+        if art and sku and sku in prods_by_barcode:
+            art_skus.setdefault(art.upper(), set())
+            art_skus[art.upper()].add(sku)
+
+    def _find_product(art: str):
+        """Находит Product для артикула: точный/UPPER, затем любой barcode строк."""
+        p = prods_by_upper.get(art.strip().upper())
+        if p is not None:
+            return p
+        for sku in art_skus.get(art.strip().upper(), set()):
+            q = prods_by_barcode.get(sku)
+            if q is not None:
+                return q
+        return None
+
+    is_ret = (lambda t: "возврат" in str(t or "").lower() or "return" in str(t or "").lower())
+    cells: dict = {}
+    titles: dict = {}
+    for r in rows:
+        art = r.article
+        if not art or r.sale_dt is None:
+            continue
+        sign = -1 if is_ret(r.doc_type_name) else 1
+        if art not in cells:
+            cells[art] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        c = cells[art]
+        qty = r.quantity if _is_goods_row(
+            r.doc_type_name, r.retail_amount, r.for_pay) else 0
+        c[0] += qty * sign                       # sells
+        c[1] += float(r.retail_amount or 0) * sign      # revenue
+        c[2] += float(r.ppvz_sales_commission or 0) * sign
+        c[3] += float(r.delivery_service or 0)
+        c[4] += float(r.paid_storage or 0)
+        c[5] += float(r.penalty or 0) + float(r.deduction or 0) \
+            + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)
+        c[6] += float(r.for_pay or 0) * sign            # income
+        if (r.title or "").strip():
+            titles.setdefault(art, str(r.title).strip())
+    if not cells:
+        return out
+
+    recs = []
+    for art, c in cells.items():
+        sells, revenue, commission, logistics, storage, services, income = c
+        prod = _find_product(art)
+        name = (prod.name or "") if prod else ""
+        if not name:
+            name = titles.get(art, "")
+        net_cost = float(prod.net_cost or 0) if prod else 0.0
+        if net_cost <= 0:
+            net_cost = default_net_cost
+            est = True
+        else:
+            est = False
+        # Хранение: фактическое по артикулу (обычно 0 — платы безартикульные)
+        # + распределённая оценка (объём × тариф × остаток).
+        storage_full = storage + storage_est.get(art.strip().upper(), 0.0)
+        margin_gross = round(income - logistics - storage_full - services, 2)
+        margin = round(margin_gross - net_cost * max(0, sells), 2)
+        margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
+        margin_pct = round(margin / revenue * 100, 2) if revenue > 0 and sells > 0 else 0.0
+        recs.append({
+            "article": art, "name": name, "sells": sells, "revenue": round(revenue, 2),
+            "commission": round(commission, 2), "logistics": round(logistics, 2),
+            "storage": round(storage_full, 2),
+            "services": round(services, 2),
+            "income": round(income, 2), "margin_gross": margin_gross,
+            "net_cost": round(net_cost, 2),
+            "net_cost_est": est, "margin": margin,
+            "margin_per_one": margin_per_one, "margin_pct": margin_pct,
+        })
+    out = pd.DataFrame(recs).sort_values("margin", ascending=False).reset_index(drop=True)
+    return out
+
+
+def compare_margin_periods(current: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
+    """Навешивает на текущую сводку маржинальности показатели пред. периода.
+
+    prev — сводка за предыдущий аналогичный период (та же длительность окна,
+    сдвинутая назад). Для каждого артикула текущей сводки ищется строка из prev:
+    sells_pp, margin_pp, delta_ru (руб), delta_pct (к предыдущей марже).
+    Артикулы без данных в пред. периоде получают пустые показатели.
+    """
+    cur = current.copy()
+    if prev is None or prev.empty:
+        for c in ("sells_pp", "margin_pp", "delta_ru", "delta_pct"):
+            cur[c] = pd.Series([None] * len(cur), index=cur.index, dtype=object)
+        return cur
+
+    prev_map = prev.set_index("article")["margin"].to_dict()
+    prev_sells_map = prev.set_index("article")["sells"].to_dict()
+    cur["sells_pp"] = cur["article"].map(prev_sells_map)
+    cur["margin_pp"] = cur["article"].map(prev_map)
+    cur["delta_ru"] = cur.apply(
+        lambda r: round(r["margin"] - r["margin_pp"], 2)
+        if pd.notna(r["margin_pp"]) else None, axis=1)
+    cur["delta_pct"] = cur.apply(
+        lambda r: round((r["margin"] - r["margin_pp"]) / abs(r["margin_pp"]) * 100, 2)
+        if pd.notna(r["margin_pp"]) and r["margin_pp"] != 0 else None, axis=1)
+    # NaN → None для JSON-безопасности. Сначала object-dtype: присвоение None
+    # в числовые колонки pandas-ом обратно превращается в NaN.
+    for c in ("sells_pp", "margin_pp", "delta_ru", "delta_pct"):
+        col = cur[c]
+        cur[c] = col.astype(object).where(col.notna(), None)
+    return cur
 
 
 def margin_dataframe(

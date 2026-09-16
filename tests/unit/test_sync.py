@@ -1,4 +1,5 @@
 import pandas as pd
+from datetime import date
 from sqlalchemy import select
 
 from app.services.sync import (
@@ -7,9 +8,12 @@ from app.services.sync import (
     normalize_wb_sales,
     rebuild_sales_from_detail,
     record_api_pull,
+    upsert_price_snapshots,
     upsert_products,
+    upsert_ozon_price_snapshots,
     upsert_sales,
     upsert_wb_detail_rows,
+    detail_summary_dataframe,
 )
 from app import models
 
@@ -104,6 +108,38 @@ def test_normalize_ozon_realization_maps_columns():
 def test_normalize_ozon_empty_or_missing_returns_none():
     assert normalize_ozon_realization(None) is None
     assert normalize_ozon_realization(pd.DataFrame({"x": [1]})) is None
+
+
+def test_upsert_ozon_price_snapshots(db):
+    df = pd.DataFrame([{
+        "offer_id": "OZ-1", "product_id": "P1",
+        "price_price": 1200, "price_old_price": 1500, "price_min_price": 1000,
+    }])
+    assert upsert_ozon_price_snapshots(db, df) == 1
+    row = db.execute(select(models.PriceSnapshot).where(
+        models.PriceSnapshot.article == "OZ-1")).scalars().one()
+    assert row.marketplace == "ozon"
+    assert row.price == 1200 and row.discounted_price == 1200
+    assert round(row.discount, 1) == 20.0
+
+
+def test_upsert_ozon_price_snapshots_skips_non_positive():
+    df = pd.DataFrame([{
+        "offer_id": "OZ-X", "product_id": "PX",
+        "price_price": 0, "price_old_price": 0, "price_min_price": 0,
+    }])
+    assert upsert_ozon_price_snapshots(None, df) == 0
+
+
+def test_wb_price_snapshots_tagged_marketplace(db):
+    df = pd.DataFrame([{
+        "nmID": "1001", "vendorCode": "TST-1", "techSizeName": "46",
+        "price": 1100, "discountedPrice": 990, "discount": 10,
+    }])
+    assert upsert_price_snapshots(db, df) == 1
+    row = db.execute(select(models.PriceSnapshot).where(
+        models.PriceSnapshot.article == "TST-1")).scalars().one()
+    assert row.marketplace == "wb"
 
 
 def test_upsert_products_is_idempotent(db):
@@ -210,6 +246,43 @@ def test_upsert_wb_detail_rows_idempotent_by_op_key(db):
     assert next(r for r in rows if r.op_key == "sr:op1").quantity == 5
 
 
+def test_upsert_wb_detail_rows_sums_only_goods_quantity(db):
+    """Строка логистики в группе SRID (пустой «Тип документа», без денег)
+    не должна раздувать «Кол-во» при свёртке по op_key."""
+    df = pd.DataFrame([
+        {"op_key": "sr:op1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 2,
+         "retail_amount": 2000.0, "for_pay": 1800.0},
+        {"op_key": "sr:op1", "article": "A1", "doc_type_name": "",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 2,
+         "retail_amount": 0.0, "for_pay": 0.0},
+        # группа только из логистики — «Кол-во» вообще не считаем
+        {"op_key": "sr:op2", "article": "A1", "doc_type_name": "",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 4,
+         "retail_amount": 0.0, "for_pay": 0.0},
+    ])
+    assert upsert_wb_detail_rows(db, df, source="excel") == 2
+    rows = {r.op_key: r for r in db.execute(select(models.WbDetailRow)).scalars().all()}
+    assert rows["sr:op1"].quantity == 2
+    assert rows["sr:op2"].quantity == 0
+
+
+def test_rebuild_sales_from_detail_ignores_logistics_rows(db):
+    """Легаси-строка чистой логистики (без денег) не попадает в «продано»."""
+    rows = pd.DataFrame([
+        {"op_key": "sr:legacy1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 3,
+         "retail_amount": 3000.0, "for_pay": 2700.0},
+        {"op_key": "sr:legacy2", "article": "A1", "doc_type_name": "",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 100,
+         "retail_amount": 0.0, "for_pay": 0.0},
+    ])
+    upsert_wb_detail_rows(db, rows, source="excel")
+    assert rebuild_sales_from_detail(db) == 1
+    a1 = db.execute(select(models.Sale).where(models.Sale.article == "A1")).scalar_one()
+    assert a1.quantity == 3
+
+
 def test_rebuild_sales_from_detail_splits_returns(db):
     rows = pd.DataFrame([
         {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
@@ -219,8 +292,8 @@ def test_rebuild_sales_from_detail_splits_returns(db):
          "paid_storage": 50.0, "penalty": 10.0},
         {"op_key": "sr:s2", "article": "A1", "doc_type_name": "Возврат",
          "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
-         "retail_amount": -1000.0, "for_pay": -900.0,
-         "ppvz_sales_commission": -100.0, "delivery_service": -50.0},
+         "retail_amount": 1000.0, "for_pay": 900.0,
+         "ppvz_sales_commission": 100.0, "delivery_service": 50.0},
         {"op_key": "sr:s3", "article": "A2", "doc_type_name": "Продажа",
          "sale_dt": pd.Timestamp("2026-09-02"), "quantity": 1,
          "retail_amount": 1000.0, "for_pay": 900.0},
@@ -230,11 +303,143 @@ def test_rebuild_sales_from_detail_splits_returns(db):
     a1 = db.execute(
         select(models.Sale).where(models.Sale.article == "A1")
     ).scalar_one()
-    assert a1.quantity == 2
+    # возврат вычитается из продаж; расходы WB всегда расход (без знака)
+    assert a1.quantity == 1
     assert a1.returns_qty == 1
-    assert a1.revenue == 2000.0
+    assert a1.revenue == 1000.0
+    assert a1.income == 900.0
+    assert a1.logistics == 150.0  # доставка продажи + доставка возврата
     assert a1.services == 10.0  # penalty не-возврата
     a2 = db.execute(
         select(models.Sale).where(models.Sale.article == "A2")
     ).scalar_one()
     assert a2.quantity == 1
+
+
+def test_detail_summary_dataframe_aggregates_by_article(db):
+    rows = pd.DataFrame([
+        {"op_key": "sr:s1", "source": "excel", "article": "A1", "title": "Товар A1",
+         "doc_type_name": "Продажа", "sale_dt": pd.Timestamp("2026-09-01"),
+         "quantity": 2, "retail_amount": 2000.0, "for_pay": 1800.0,
+         "ppvz_sales_commission": 200.0, "delivery_service": 100.0,
+         "paid_storage": 50.0, "penalty": 10.0},
+        {"op_key": "sr:s2", "source": "excel", "article": "A1", "title": "Товар A1",
+         "doc_type_name": "Возврат", "sale_dt": pd.Timestamp("2026-09-02"),
+         "quantity": 1, "retail_amount": 1000.0, "for_pay": 900.0,
+         "ppvz_sales_commission": 100.0, "delivery_service": 50.0},
+        {"op_key": "sr:s3", "source": "api", "article": "A2", "title": "Товар A2",
+         "doc_type_name": "Продажа", "sale_dt": pd.Timestamp("2026-09-03"),
+         "quantity": 1, "retail_amount": 1000.0, "for_pay": 900.0},
+    ])
+    # source в upsert_wb_detail_rows один на весь вызов — грузим двумя вызовами
+    upsert_wb_detail_rows(db, rows.iloc[:2], source="excel")
+    upsert_wb_detail_rows(db, rows.iloc[2:], source="api")
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    assert list(out.columns) == ["article", "title", "sells", "returns_qty", "revenue",
+                                  "commission", "for_pay", "logistics", "delivery_count",
+                                  "return_delivery_count", "storage", "pvz_compensation",
+                                  "payment_services", "services", "ops_count", "sources"]
+    by = {r["article"]: r for r in out.to_dict("records")}
+    a1 = by["A1"]
+    # нетто-продажи = 2 − 1, возвраты отдельным счётчиком
+    assert a1["sells"] == 1
+    assert a1["returns_qty"] == 1
+    assert a1["revenue"] == 1000.0
+    assert a1["for_pay"] == 900.0
+    assert a1["commission"] == 100.0
+    # расходы WB всегда расход независимо от типа
+    assert a1["logistics"] == 150.0
+    assert a1["storage"] == 50.0
+    assert a1["ops_count"] == 2
+    assert a1["sources"] == "excel"
+    a2 = by["A2"]
+    assert a2["sells"] == 1
+    assert a2["ops_count"] == 1
+    assert a2["sources"] == "api"
+
+
+def test_detail_summary_includes_storage_estimate(db):
+    """Безартикульная плата хранения разносится по артикулу свода (объём × остаток)."""
+    upsert_wb_detail_rows(db, pd.DataFrame([
+        {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
+         "retail_amount": 1000.0, "for_pay": 900.0},
+    ]), source="excel")
+    db.add_all([
+        models.StorageCost(nm_id="1", article="A1", volume=2.0),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 1), article="A1", quantity=10),
+        models.WbDetailRow(op_key="sr:st1", source="excel", article="",
+                           doc_type_name="Хранение", sale_dt=date(2026, 9, 1),
+                           paid_storage=100.0),
+    ])
+    db.commit()
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    row = out[out["article"] == "A1"].iloc[0]
+    assert row["storage"] == 100.0
+    assert not (out["article"] == "").any()  # всё разнесено — остатка нет
+
+
+def test_detail_summary_storage_full_distribution_db(db):
+    """Плата за день вне окна ±7 разносится по ближайшему полезному срезу,
+    излишка (строки-остатка) не остаётся."""
+    from app.services.sync import detail_summary_dataframe
+
+    db.add_all([
+        models.StorageCost(nm_id="d1", article="A1", volume=2.0),
+        models.StorageCost(nm_id="d2", article="B2", volume=4.0),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 11), article="A1", quantity=10),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 11), article="B2", quantity=10),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 4), article="1999", quantity=5),
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 3),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0),
+        models.WbDetailRow(op_key="sr:s2", source="excel", article="B2",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 3),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0),
+        models.WbDetailRow(op_key="sr:st1", source="excel", article="",
+                           doc_type_name="Хранение", sale_dt=date(2026, 9, 1),
+                           paid_storage=300.0),
+    ])
+    db.commit()
+    # Списание 09-01: окно ±7 = 08-25..09-08 → срез 09-04 имеет вес от продаж
+    # A1/B2 (объём × проданное×0.5: 1 и 2), срез 09-11 — от остатков (20/40).
+    # Выбранный срез (в окне — 09-04) даёт то же соотношение 1:2 → 100/200.
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    # 300 * 20/60 = 100; 300 * 40/60 = 200
+    assert out[out["article"] == "A1"].iloc[0]["storage"] == 100.0
+    assert out[out["article"] == "B2"].iloc[0]["storage"] == 200.0
+    assert not (out["article"] == "").any()  # строки-остатка нет
+
+
+def test_detail_summary_dataframe_empty_and_filters(db):
+    assert detail_summary_dataframe(db,
+                                    date_from="2026-01-01", date_to="2026-01-02").empty
+    rows = pd.DataFrame([
+        {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
+         "retail_amount": 1000.0, "for_pay": 900.0},
+    ])
+    upsert_wb_detail_rows(db, rows, source="excel")
+    # фильтр по артикулу
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10",
+                                   article_like="NOPE")
+    assert out.empty
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10",
+                                   article_like="A1")
+    assert len(out) == 1
+    assert out.iloc[0]["sells"] == 1
+
+
+def test_detail_summary_dataframe_is_goods_guard(db):
+    """Строка чистой логистики (пустой тип, без денег) не считается продажей."""
+    rows = pd.DataFrame([
+        {"op_key": "sr:log1", "article": "A1", "doc_type_name": "",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 100,
+         "retail_amount": 0.0, "for_pay": 0.0, "delivery_service": 50.0},
+    ])
+    upsert_wb_detail_rows(db, rows, source="excel")
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    a1 = out.iloc[0]
+    assert a1["sells"] == 0
+    assert a1["ops_count"] == 1
+    assert a1["logistics"] == 50.0
