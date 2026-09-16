@@ -1592,6 +1592,106 @@ async function uploadWbDetailToDisk() {
   }
 }
 
+const WB_VIEW_MSG = {
+  "wb-cards": "#wbMsg-cards-table",
+  "wb-stock": "#wbMsg-stock-table",
+  "wb-funnel": "#wbMsg-funnel-table",
+  "wb-sales": "#wbMsg-sales-table",
+  "wb-prices": "#wbMsg-prices-table",
+  "wb-storage": "#wbMsg-storage-table",
+  "wb-detail": "#wbMsg-detail-table",
+};
+
+function wbLikeVal(id) {
+  const el = document.getElementById(id);
+  return el ? el.value.trim() : "";
+}
+
+function wbViewExportUrl() {
+  const f = filters();
+  const p = paneDates();
+  switch (currentTab) {
+    case "wb-cards":
+      return "/api/export/wb/cards" + qs({ marketplace: "wb", like: wbLikeVal("wbCardsLike") || undefined });
+    case "wb-stock": {
+      const agg = document.getElementById("wbStockAgg");
+      return "/api/export/wb/stock" + qs({ marketplace: "wb", by_size: agg && agg.checked ? 0 : 1 });
+    }
+    case "wb-funnel":
+      return "/api/export/wb/funnel" + qs({
+        date_from: p.date_from || undefined,
+        date_to: p.date_to || undefined,
+        article_like: wbLikeVal("wbFunnelLike") || undefined,
+      });
+    case "wb-sales":
+      return "/api/export/sales" + qs({
+        marketplace: "wb",
+        date_from: p.date_from || undefined,
+        date_to: p.date_to || undefined,
+        article_like: wbLikeVal("wbSalesLike") || undefined,
+      });
+    case "wb-prices":
+      return "/api/export/wb/prices" + qs({ article_like: wbLikeVal("wbPricesLike") || undefined });
+    case "wb-storage":
+      return "/api/export/wb/storage" + qs({ article_like: wbLikeVal("wbStorageLike") || undefined });
+    case "wb-detail":
+      return wbDetailExportUrl();
+    default:
+      return "";
+  }
+}
+
+async function downloadViewExcel() {
+  const msg = document.querySelector(WB_VIEW_MSG[currentTab] || "");
+  const url = wbViewExportUrl();
+  if (!url || !msg) return;
+  msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition")) || (currentTab + ".xlsx");
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Excel выгружен" + (count != null ? " · строк: " + fmt(count) : "");
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadViewToDisk() {
+  const msg = document.querySelector(WB_VIEW_MSG[currentTab] || "");
+  const url = wbViewExportUrl();
+  if (!url || !msg) return;
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
+    const f = filters();
+    const p = paneDates();
+    const kind = currentTab.replace("wb-", "");
+    const name = "wb_" + kind + "_" + (p.date_from || f.date_from || "na") + "_" + (p.date_to || f.date_to || "na") + "_" + stamp + ".xlsx";
+    const fd = new FormData();
+    fd.append("file", blob, name);
+    msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
+    const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
+    const j = await up.json();
+    if (!up.ok) throw new Error(j.detail || up.status);
+    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
 async function uploadCardFiles(files, name) {
   if (!files || !files.length) return;
   const ids = cardIds(name);
@@ -1670,6 +1770,7 @@ function initCardsUpload() {
     const drop = document.getElementById(ids.prefix + "Drop");
     const likeEl = document.getElementById(ids.prefix + "Like");
     if (btn && file) btn.addEventListener("click", () => uploadCardFiles(file.files, name));
+    if (file) file.addEventListener("change", () => busyRun(() => uploadCardFiles(file.files, name)));
     if (likeEl) {
       let timer;
       likeEl.addEventListener("input", () => {
@@ -2215,6 +2316,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnExportWbDetail) btnExportWbDetail.addEventListener("click", () => busyRun(downloadWbDetailExcel));
   const btnDiskWbDetail = document.getElementById("btnDiskWbDetail");
   if (btnDiskWbDetail) btnDiskWbDetail.addEventListener("click", () => busyRun(uploadWbDetailToDisk));
+  [["wb-cards", "Cards"], ["wb-stock", "Stock"], ["wb-funnel", "Funnel"], ["wb-sales", "Sales"], ["wb-prices", "Prices"], ["wb-storage", "Storage"]].forEach(([tab, pfx]) => {
+    const ex = document.getElementById("btnExportWb" + pfx);
+    if (ex) ex.addEventListener("click", () => busyRun(() => { currentTab = tab; return downloadViewExcel(); }));
+    const ds = document.getElementById("btnDiskWb" + pfx);
+    if (ds) ds.addEventListener("click", () => busyRun(() => { currentTab = tab; return uploadViewToDisk(); }));
+  });
 
   const btnUpdateWbDetail = document.getElementById("btnUpdateWbDetail");
   if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => apiDownload("wb", "detail", "#wbMsg-detail-table", true)));

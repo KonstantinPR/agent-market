@@ -354,3 +354,138 @@ def test_yandex_list_ok(api_client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["files"] == []
 
+# ------------------------------------------------------- экспорт разделов WB API (вьюхи)
+def _read_xlsx(r):
+    return pd.read_excel(io.BytesIO(r.content))
+
+
+def test_export_wb_cards(api_client):
+    api_client.post("/api/wb/cards")
+    r = api_client.get("/api/export/wb/cards")
+    assert r.status_code == 200
+    assert XLSX in r.headers["content-type"]
+    assert r.headers["X-Count"] == "2"
+    df = _read_xlsx(r)
+    assert list(df.columns) == ["Код размера", "Артикул WB", "Артикул продавца", "Бренд",
+                                "Предмет", "Размер", "Баркод", "Объём, л", "Состав",
+                                "Наименование"]
+    assert set(df["Артикул продавца"]) == {"TST-1", "TST-2"}
+
+
+def test_export_wb_cards_like_filters(api_client):
+    api_client.post("/api/wb/cards")
+    r = api_client.get("/api/export/wb/cards", params={"like": "TST-2"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    assert _read_xlsx(r)["Артикул продавца"].tolist() == ["TST-2"]
+
+
+def test_export_wb_stock_by_size(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/stock")
+    r = api_client.get("/api/export/wb/stock", params={"by_size": 1})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    assert XLSX in r.headers["content-type"]
+    df = _read_xlsx(r)
+    assert list(df.columns) == ["Дата", "Маркетплейс", "Артикул", "Наименование",
+                                "Код размера", "Размер", "Баркод", "Склад", "Доступно",
+                                "Всего на складах", "В пути"]
+    assert df["Всего на складах"].sum() == 20
+
+
+def test_export_wb_stock_agg(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/stock")
+    r = api_client.get("/api/export/wb/stock", params={"by_size": 0})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    df = _read_xlsx(r)
+    assert list(df.columns) == ["Дата", "Маркетплейс", "Артикул", "Наименование",
+                                "Склад", "Доступно", "Всего на складах", "В пути"]
+    assert df["Всего на складах"].sum() == 20
+
+
+def test_export_wb_funnel(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    r = api_client.get("/api/export/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    assert XLSX in r.headers["content-type"]
+    df = _read_xlsx(r)
+    assert set(df["Артикул"]) == {"TST-1", "TST-2"}
+    assert df["Заказы"].sum() == 4
+
+
+def test_export_wb_funnel_article_like(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    r = api_client.get("/api/export/wb/funnel", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "article_like": "TST-2"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    assert _read_xlsx(r)["Артикул"].tolist() == ["TST-2"]
+
+
+def test_export_wb_prices(api_client, stub_wb):
+    stub_wb.get_prices = lambda: pd.DataFrame({
+        "nmID": ["1001", "1002"], "vendorCode": ["TST-1", "TST-2"],
+        "techSizeName": ["46", "47"], "price": [1100, 990],
+        "discountedPrice": [990, 891], "discount": [10, 10],
+    })
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/prices")
+    r = api_client.get("/api/export/wb/prices")
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    assert XLSX in r.headers["content-type"]
+    df = _read_xlsx(r)
+    assert set(df["Артикул"]) == {"TST-1", "TST-2"}
+    assert df["Цена без скидки"].tolist() == [1100, 990]
+
+
+def test_export_wb_prices_article_like(api_client, stub_wb):
+    stub_wb.get_prices = lambda: pd.DataFrame({
+        "nmID": ["1001", "1002"], "vendorCode": ["TST-1", "TST-2"],
+        "techSizeName": ["46", "47"], "price": [1100, 990],
+        "discountedPrice": [990, 891], "discount": [10, 10],
+    })
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/prices")
+    r = api_client.get("/api/export/wb/prices", params={"article_like": "TST-2"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    assert _read_xlsx(r)["Артикул"].tolist() == ["TST-2"]
+
+
+def test_export_wb_storage(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/storage")
+    r = api_client.get("/api/export/wb/storage")
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    assert XLSX in r.headers["content-type"]
+    df = _read_xlsx(r)
+    assert set(df["Артикул"]) == {"TST-1", "TST-2"}
+    assert df["Сумма хранения"].tolist() == [5000.0, 5400.0]
+
+
+def test_export_wb_storage_article_like(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/storage")
+    r = api_client.get("/api/export/wb/storage", params={"article_like": "TST-1"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    assert _read_xlsx(r)["Артикул"].tolist() == ["TST-1"]
+
+
+def test_export_sales_article_like(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/sales", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    r = api_client.get("/api/export/sales", params={"article_like": "TST-2"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    df = _read_xlsx(r)
+    assert df["Артикул"].tolist() == ["TST-2"]
+    assert df["Продано, шт"].tolist() == [3]

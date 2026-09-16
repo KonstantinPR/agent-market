@@ -281,19 +281,21 @@
         <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="cards" checked> в БД</label>
         <span class="msg" id="wbMsg-cards"></span>
       </div>
-      <div class="toolbar">
-        <input type="file" id="wbCardsFile" accept=".xlsx,.xlsm,.zip" multiple>
-        <button id="wbCardsImport" class="btn">Загрузить файлы</button>
-        <span class="msg" id="wbMsg-cards-excel"></span>
-      </div>
+      <input type="file" id="wbCardsFile" class="hidden" accept=".xlsx,.xlsm,.zip" multiple>
       <div class="dropzone" id="wbCardsDrop">
         <span class="dz-label">Перетащите сюда Excel-файлы или zip-архив с карточками Wildberries</span>
       </div>
+      <span class="msg" id="wbMsg-cards-excel"></span>
     </div>
     <div class="toolbar">
       <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд…">
       <span class="msg" id="wbMsg-cards-table"></span>
-      <span class="toolbar-right"><span id="wbCardsTablePager"></span></span>
+      <span class="tip hidden" id="wbCardsTip" tabindex="0" role="tooltip">?<span class="tip-text">Одна строка = размер/SKU товара из базы. Обновите «Скачать Excel → обновить базу» или загрузите файл, чтобы получить свежие карточки.</span></span>
+      <span class="toolbar-right">
+        <span id="wbCardsTablePager"></span>
+        <button id="btnExportWbCards" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskWbCards" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <div class="table-wrap" id="wbCardsTable"></div>
   </section>
@@ -312,7 +314,12 @@
       <input id="wbStockLike" placeholder="Поиск: артикул, название, размер…">
       <label class="chk"><input type="checkbox" id="wbStockAgg"> свернуть по размерам</label>
       <span class="msg" id="wbMsg-stock-table"></span>
-      <span class="toolbar-right"><span id="wbStockTablePager"></span></span>
+      <span class="tip hidden" id="wbStockTip" tabindex="0" role="tooltip">?<span class="tip-text">Последний срез остатков по артикулам и складам. «Свернуть по размерам» группирует суммы по артикулу+склад.</span></span>
+      <span class="toolbar-right">
+        <span id="wbStockTablePager"></span>
+        <button id="btnExportWbStock" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskWbStock" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <div class="table-wrap" id="wbStockTable"></div>
   </section>
@@ -332,7 +339,12 @@
       <input id="wbFunnelLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="wbFunnelExpanded"> Расширенный вид</label>
       <span class="msg" id="wbMsg-funnel-table"></span>
-      <span class="toolbar-right"><span id="wbFunnelTablePager"></span></span>
+      <span class="tip hidden" id="wbFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Срез воронки из базы за выбранный период. «Расширенный вид» добавляет конверсии и выкупы (если доступны).</span></span>
+      <span class="toolbar-right">
+        <span id="wbFunnelTablePager"></span>
+        <button id="btnExportWbFunnel" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskWbFunnel" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <p class="notice" id="wbFunnelBuyoutNote" style="display:none">Выкупы: WB не отдаёт эти данные с текущим ключом (нужен доступ «Статистика», метод v1/main). Доступны только Просмотры/Корзина/Заказы/Отмены. При наличии доступа колонки заполнятся после нового скачивания воронки.</p>
     <div class="table-wrap" id="wbFunnelTable"></div>
@@ -352,7 +364,12 @@
     <div class="toolbar">
       <input id="wbSalesLike" placeholder="Поиск: артикул, название…">
       <span class="msg" id="wbMsg-sales-table"></span>
-      <span class="toolbar-right"><span id="wbSalesTablePager"></span></span>
+      <span class="tip hidden" id="wbSalesTip" tabindex="0" role="tooltip">?<span class="tip-text">Отчёт о реализации из базы за выбранный период (строки без «Детализации»). Обновите через «Скачать Excel → обновить базу» в форме выше.</span></span>
+      <span class="toolbar-right">
+        <span id="wbSalesTablePager"></span>
+        <button id="btnExportWbSales" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskWbSales" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <div class="table-wrap" id="wbSalesTable"></div>
   </section>
@@ -393,7 +410,12 @@
       <input id="wbPricesLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="wbPriceAgg"> свернуть по размерам</label>
       <span class="msg" id="wbMsg-prices-table"></span>
-      <span class="toolbar-right"><span id="wbPricesTablePager"></span></span>
+      <span class="tip hidden" id="wbPricesTip" tabindex="0" role="tooltip">?<span class="tip-text">Текущие цены и скидки из последнего снимка в базе. «Свернуть по размерам» показывает одну строку на артикул.</span></span>
+      <span class="toolbar-right">
+        <span id="wbPricesTablePager"></span>
+        <button id="btnExportWbPrices" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskWbPrices" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <div class="table-wrap" id="wbPricesTable"></div>
   </section>
@@ -411,7 +433,12 @@
     <div class="toolbar">
       <input id="wbStorageLike" placeholder="Поиск: артикул, название…">
       <span class="msg" id="wbMsg-storage-table"></span>
-      <span class="toolbar-right"><span id="wbStorageTablePager"></span></span>
+      <span class="tip hidden" id="wbStorageTip" tabindex="0" role="tooltip">?<span class="tip-text">Стоимость хранения на складах WB за последние N дней из базы (метрики «Склад WB»). Обновите «Скачать Excel → обновить базу» в форме выше.</span></span>
+      <span class="toolbar-right">
+        <span id="wbStorageTablePager"></span>
+        <button id="btnExportWbStorage" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskWbStorage" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <div class="table-wrap" id="wbStorageTable"></div>
   </section>

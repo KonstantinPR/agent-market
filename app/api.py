@@ -1408,21 +1408,22 @@ def export_sales(
     marketplace: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     payload = api_sales(marketplace, date_from, date_to, db)
     df = pd.DataFrame(payload["rows"])
+    if article_like:
+        needle = article_like.lower()
+        keep = df["article"].str.lower().str.contains(needle, regex=False)
+        df = df[keep].reset_index(drop=True)
     df = df.rename(columns={
         "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
         "name": "Наименование", "quantity": "Продано, шт",
         "revenue": "Выручка, руб", "income": "К перечислению, руб",
     })
-    buf = excel_io.df_to_excel_stream(df, sheet_name="Продажи")
     fname = f"sales_{payload['date_from']}_{payload['date_to']}.xlsx"
-    return StreamingResponse(
-        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
+    return _xlsx_response(df, fname, len(df))
 
 
 @router.post("/sync/{code}")
@@ -1788,6 +1789,134 @@ def export_wb_detail_rows(
         buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+# ------------------------------------------------------- экспорт разделов WB API (вьюхи)
+@router.get("/export/wb/cards")
+def export_wb_cards(
+    marketplace: str = "wb",
+    like: Optional[str] = None,
+    limit: int = 5000,
+    db: Session = Depends(get_db),
+):
+    """Экспорт карточек WB из БД (marketplace_cards) в Excel."""
+    payload = api_cards(marketplace=marketplace, like=like, limit=limit, offset=0, db=db)
+    df = pd.DataFrame(payload["rows"], columns=[
+        "chrt_id", "nm_id", "vendor_code", "brand", "subject", "size", "barcode",
+        "volume_l", "composition", "name",
+    ])
+    df = df.rename(columns={
+        "chrt_id": "Код размера", "nm_id": "Артикул WB", "vendor_code": "Артикул продавца",
+        "brand": "Бренд", "subject": "Предмет", "size": "Размер", "barcode": "Баркод",
+        "volume_l": "Объём, л", "composition": "Состав", "name": "Наименование",
+    })
+    return _xlsx_response(df, "wb_cards.xlsx", payload["total"])
+
+
+@router.get("/export/wb/stock")
+def export_wb_stock(
+    marketplace: str = "wb",
+    by_size: int = 1,
+    db: Session = Depends(get_db),
+):
+    """Экспорт остатков WB (последний срез stocks) в Excel.
+
+    by_size=1 — по размерам (как таблица по умолчанию); иначе агрегат по артикулу+склад.
+    """
+    payload = api_stocks(marketplace=marketplace, db=db)
+    recs = payload["rows"]
+    if not by_size:
+        agg = {}
+        for r in recs:
+            key = (r["article"], r["warehouse"])
+            a = agg.setdefault(key, {
+                "date": r["date"], "marketplace": r["marketplace"], "article": r["article"],
+                "name": r["name"], "warehouse": r["warehouse"],
+                "quantity": 0, "quantity_full": 0, "in_way": 0,
+            })
+            a["quantity"] += r["quantity"]
+            a["quantity_full"] += r["quantity_full"]
+            a["in_way"] += r["in_way"]
+        recs = [
+            {"date": a["date"], "marketplace": a["marketplace"], "article": a["article"],
+             "name": a["name"], "warehouse": a["warehouse"], "quantity": a["quantity"],
+             "quantity_full": a["quantity_full"], "in_way": a["in_way"]}
+            for a in agg.values()
+        ]
+        cols = ["date", "marketplace", "article", "name", "warehouse", "quantity",
+                "quantity_full", "in_way"]
+        ru = {
+            "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
+            "name": "Наименование", "warehouse": "Склад", "quantity": "Доступно",
+            "quantity_full": "Всего на складах", "in_way": "В пути",
+        }
+    else:
+        cols = ["date", "marketplace", "article", "name", "chrt_id", "size", "barcode",
+                "warehouse", "quantity", "quantity_full", "in_way"]
+        ru = {
+            "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
+            "name": "Наименование", "chrt_id": "Код размера", "size": "Размер",
+            "barcode": "Баркод", "warehouse": "Склад", "quantity": "Доступно",
+            "quantity_full": "Всего на складах", "in_way": "В пути",
+        }
+    df = pd.DataFrame(recs, columns=cols).rename(columns=ru)
+    fname = "wb_stock.xlsx" if by_size else "wb_stock_agg.xlsx"
+    return _xlsx_response(df, fname, len(recs))
+
+
+@router.get("/export/wb/prices")
+def export_wb_prices(article_like: Optional[str] = None, db: Session = Depends(get_db)):
+    """Экспорт текущих цен/скидок WB (price_snapshots) в Excel."""
+    payload = api_prices(article_like=article_like, db=db)
+    df = pd.DataFrame(payload["rows"], columns=[
+        "article", "nm_id", "size", "name", "price", "discounted_price", "discount",
+    ])
+    df = df.rename(columns={
+        "article": "Артикул", "nm_id": "Артикул WB", "size": "Размер",
+        "name": "Наименование", "price": "Цена без скидки",
+        "discounted_price": "Цена со скидкой", "discount": "Скидка, %",
+    })
+    return _xlsx_response(df, "wb_prices.xlsx", payload["count"])
+
+
+@router.get("/export/wb/storage")
+def export_wb_storage(article_like: Optional[str] = None, db: Session = Depends(get_db)):
+    """Экспорт стоимости хранения WB (storage_costs) в Excel."""
+    payload = api_storage_cost(article_like=article_like, db=db)
+    df = pd.DataFrame(payload["rows"], columns=[
+        "nm_id", "article", "name", "barcodes_count", "volume", "storage_price",
+        "warehouse_price",
+    ])
+    df = df.rename(columns={
+        "nm_id": "Артикул WB", "article": "Артикул", "name": "Наименование",
+        "barcodes_count": "Баркодов", "volume": "Объём, л",
+        "storage_price": "Хранение за баркод", "warehouse_price": "Сумма хранения",
+    })
+    return _xlsx_response(df, "wb_storage.xlsx", payload["count"])
+
+
+@router.get("/export/wb/funnel")
+def export_wb_funnel(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Экспорт воронки продаж WB (funnel_metric) в Excel."""
+    payload = api_funnel(date_from=date_from, date_to=date_to, article_like=article_like, db=db)
+    df = pd.DataFrame(payload["rows"], columns=[
+        "date_from", "date_to", "nm_id", "article", "name", "views", "opens", "adds",
+        "orders", "cancelled", "buyouts", "avg_price", "revenue", "buyout_sum",
+    ])
+    df = df.rename(columns={
+        "date_from": "С", "date_to": "По", "nm_id": "Артикул WB", "article": "Артикул",
+        "name": "Наименование", "views": "Просмотры", "opens": "Открытия",
+        "adds": "В корзину", "orders": "Заказы", "cancelled": "Отмены",
+        "buyouts": "Выкупы", "avg_price": "Ср. цена", "revenue": "Выручка",
+        "buyout_sum": "Сумма выкупа",
+    })
+    return _xlsx_response(df, f"wb_funnel_{payload['date_from']}_{payload['date_to']}.xlsx",
+                          payload["count"])
+
 
 @router.post("/ozon/cards")
 def ozon_cards(write_db: int = 1, db: Session = Depends(get_db)):
