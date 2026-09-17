@@ -47,7 +47,8 @@ def _df_totals(df: pd.DataFrame) -> dict:
     skip = {"margin_pct", "delta_pct", "margin_per_one", "net_cost_est",
             "commission_per_one", "logistics_per_one", "logistics_out_per_one",
             "logistics_in_per_one", "storage_per_one", "income_per_one",
-            "revenue_per_one", "margin_gross_per_one", "return_rate"}
+            "revenue_per_one", "margin_gross_per_one", "return_rate",
+            "avg_price"}
     out: dict = {}
     for c in df.columns:
         if c in skip:
@@ -282,7 +283,12 @@ def api_funnel(
     ]
     return {"rows": rows, "count": len(rows),
             "date_from": str(from_), "date_to": str(to_),
-            "snapshot_to": str(snapshot or "")}
+            "snapshot_to": str(snapshot or ""),
+            "totals": _df_totals(pd.DataFrame(rows, columns=[
+                "date_from", "date_to", "nm_id", "article", "name", "views",
+                "opens", "adds", "orders", "cancelled", "buyouts",
+                "avg_price", "revenue", "buyout_sum",
+            ])) if rows else {}}
 
 
 @router.get("/pulls")

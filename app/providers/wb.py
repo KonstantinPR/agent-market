@@ -6,6 +6,7 @@
 """
 import time
 from datetime import date, datetime, timedelta
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -98,8 +99,9 @@ class WbProvider(BaseProvider):
     """Реальные данные Wildberries через API."""
 
     # ---------------------------------------------------------------- helpers
-    def _headers(self, finance: bool = False) -> dict:
-        key = settings.wb_finance_api_key if finance else settings.wb_api_key
+    def _headers(self, finance: bool = False, key: Optional[str] = None) -> dict:
+        if key is None:
+            key = settings.wb_finance_api_key if finance else settings.wb_api_key
         if not key:
             raise RuntimeError(
                 ("WB_FINANCE_API_KEY" if finance else "WB_API_KEY")
@@ -132,9 +134,11 @@ class WbProvider(BaseProvider):
             status_code=429,
         )
 
-    def _session_post(self, url, payload, num_retries=6, finance: bool = False):
+    def _session_post(self, url, payload, num_retries=6, finance: bool = False,
+                      key: Optional[str] = None):
         for attempt in range(num_retries):
-            resp = requests.post(url, headers=self._headers(finance), json=payload, timeout=60)
+            resp = requests.post(url, headers=self._headers(finance, key),
+                                 json=payload, timeout=60)
             if resp.status_code == 429:
                 alt = settings.wb_finance_api_key_2 if finance else None
                 if alt:
@@ -282,7 +286,11 @@ class WbProvider(BaseProvider):
 
     # --------------------------------------------------------- воронка продаж
     def get_sales_funnel(self, date_from, date_to) -> pd.DataFrame:
-        """Воронка продаж WB (analytics/v3/sales-funnel/products)."""
+        """Воронка продаж WB (analytics/v3/sales-funnel/products).
+
+        Токен подбирается автоматически из трёх WB-ключей (см. _pick_funnel_key):
+        права на этот отчёт могут быть только у одного из них.
+        """
         if self.testing:
             arts = self._mock_articles()
             days = self._mock_dates(date_from, date_to)
@@ -308,6 +316,7 @@ class WbProvider(BaseProvider):
             return pd.DataFrame(rows)
 
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
+        key = self._pick_funnel_key(url)
         chunk, offset, frames = 1000, 0, []
         while True:
             payload = {
@@ -317,7 +326,7 @@ class WbProvider(BaseProvider):
                 "orderBy": {"field": "orderCount", "mode": "asc"},
                 "limit": chunk, "offset": offset,
             }
-            resp = self._session_post(url, payload)
+            resp = self._session_post(url, payload, key=key)
             products = resp.json().get("data", {}).get("products", [])
             if not products:
                 break
@@ -329,6 +338,48 @@ class WbProvider(BaseProvider):
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True)
+
+    def _pick_funnel_key(self, url: str) -> str:
+        """Первый непустой WB-токен с доступом к отчёту воронки (не 403).
+
+        Порядок: WB_FINANCE_API_KEY_2, WB_API_KEY, WB_FINANCE_API_KEY.
+        Права на analytics/v3/sales-funnel могут быть только у одного из них;
+        квитируем 403 (нет прав) и переходим к следующему.
+        """
+        candidates = [settings.wb_finance_api_key_2, settings.wb_api_key,
+                      settings.wb_finance_api_key]
+        payload = {
+            "selectedPeriod": {"start": "2026-01-01", "end": "2026-01-02"},
+            "nmIds": [], "brandNames": [], "subjectIds": [], "tagIds": [],
+            "skipDeletedNm": False,
+            "orderBy": {"field": "orderCount", "mode": "asc"},
+            "limit": 1, "offset": 0,
+        }
+        last_err = None
+        for k in candidates:
+            if not k:
+                continue
+            try:
+                r = requests.post(url, headers=self._headers(key=k), json=payload, timeout=60)
+            except requests.RequestException as e:  # noqa: BLE001
+                last_err = e
+                continue
+            if r.status_code == 403:
+                continue
+            if r.status_code == 429:
+                self._wait_rate_limit(r)
+                return k
+            if r.status_code >= 400:
+                last_err = WbApiError(
+                    f"WB API: {r.status_code} {r.text[:200]}", status_code=r.status_code)
+                continue
+            return k
+        detail = str(last_err)[:200] if last_err else "все ключи вернули 403 (нет прав)"
+        raise WbApiError(
+            "Ни один из WB-токенов (WB_API_KEY / WB_FINANCE_API_KEY / "
+            f"WB_FINANCE_API_KEY_2) не дал доступ к отчёту воронки продаж: {detail}",
+            status_code=403,
+        )
 
     # ------------------------------------------------------------------ цены
     def get_prices(self) -> pd.DataFrame:

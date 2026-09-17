@@ -273,6 +273,23 @@ def test_funnel_view_returns_loaded_rows(api_client):
     assert all("buyouts" in row and "buyout_sum" in row for row in view["rows"])
 
 
+def test_funnel_view_totals_match_rows(api_client):
+    api_client.post("/api/wb/cards")
+    r = api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    t = view["totals"]
+    assert set(t) >= {"views", "opens", "adds", "orders", "buyouts", "revenue", "buyout_sum"}
+    assert "avg_price" not in t
+    for k in ("views", "opens", "adds", "orders", "buyouts"):
+        got = round(sum(float(row[k]) for row in view["rows"]), 2)
+        assert t[k] == got
+    for k in ("revenue", "buyout_sum"):
+        assert t[k] == round(sum(float(row[k]) for row in view["rows"]), 2)
+
+
 def test_funnel_view_defaults_to_latest_snapshot(api_client):
     api_client.post("/api/wb/cards")
     api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})

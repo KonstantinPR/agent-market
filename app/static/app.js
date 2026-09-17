@@ -1422,14 +1422,16 @@ async function renderWbFunnel() {
     return;
   }
   const msg = document.querySelector("#wbMsg-funnel-table");
-  if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных в базе";
+  if (msg) msg.textContent = data.count ? "По артикулам: " + fmt(data.count) : "Нет данных в базе";
   const note = document.getElementById("wbFunnelBuyoutNote");
   if (note) {
     const total = (data.rows || []).reduce((s, r) => s + Number(r.buyouts || 0), 0);
     note.style.display = total ? "none" : "block";
   }
+  const tipEl = document.getElementById("wbFunnelTip");
+  if (tipEl) tipEl.classList.toggle("hidden", !(data.rows && data.rows.length));
   const headers = colViewHeaders("wb-funnel", expandedEl && expandedEl.checked ? wbFunnelHeaders : wbFunnelCompact);
-  pagedTable(box, headers, data.rows || []);
+  pagedTable(box, headers, data.rows || [], data.totals || null, "#wbFunnelTablePager");
 }
 
 function aggregateStocks(rows) {
