@@ -39,6 +39,17 @@ PRICING_DEFAULTS = {
     "low_conv_pct": 0.7,
     "fallback_window_days": 90,
     "raise_pct_replenishable": 10.0,
+    # T-14: quality gates for RAISE
+    "min_rating_for_raise": 4.2,
+    "min_conv_buyout_for_raise": 40.0,
+    "max_cancel_ratio_for_raise": 0.2,
+    "max_return_rate_for_raise": 15.0,
+    # T-14: strong signals → bolder RAISE
+    "strong_rating": 4.5,
+    "strong_buyout_conv": 60.0,
+    "strong_return_rate": 5.0,
+    "strong_margin_pct": 30.0,
+    "raise_boost_pct": 25.0,
 }
 
 
@@ -437,6 +448,8 @@ def recommendations(
             "storage_per_one": _num(dl.get("storage_per_one")),
             "detail_sells": int(dl.get("detail_sells", 0)),
             "detail_returns_qty": int(dl.get("detail_returns_qty", 0)),
+            "detail_known": bool(dl),
+            "funnel_known": bool(fl),
             "net_cost": prod["net_cost"],
             "comm_rate": None, "logistics_unit": 0.0, "storage_unit": 0.0,
             "other_unit": 0.0, "floor_price": None,
@@ -551,6 +564,45 @@ def _base_row(f: dict) -> dict:
     }
 
 
+def _raise_quality_gate(f: dict, s: dict) -> Optional[str]:
+    """Блокировка RAISE, если сигналы качества запрещают повышение.
+
+    Возвращает текст причины или None (повышать можно).
+    Сигналы с нулевым значением трактуются как «нет данных» и не блокируют.
+    """
+    rating = f.get("product_rating", 0)
+    if rating > 0 and rating < _num(s["min_rating_for_raise"]):
+        return f"рейтинг {rating:.1f} — качество не позволяет поднимать цену"
+    buyout = f.get("conv_buyout_percent", 0)
+    if buyout > 0 and buyout < _num(s["min_conv_buyout_for_raise"]):
+        return f"конверсия выкупа {buyout:.1f}% — низкая выкупаемость"
+    orders = f.get("orders", 0)
+    if orders > 0:
+        cancel_ratio = f.get("cancelled", 0) / orders
+        if cancel_ratio > _num(s["max_cancel_ratio_for_raise"]):
+            return f"отмены {cancel_ratio:.0%} от заказов — спрос мыльный"
+    if f.get("detail_known") and f.get("return_rate", 0) > _num(s["max_return_rate_for_raise"]):
+        return f"возвраты {f['return_rate']:.1f}% — брак/неликвид"
+    return None
+
+
+def _raise_boost(f: dict, s: dict) -> float:
+    """Множитель uplift при сильных сигналах качества (≥2 из 4).
+
+    Возвращает 1.0 при недостатке данных или слабых сигналах.
+    """
+    strong = 0
+    if f.get("product_rating", 0) >= _num(s["strong_rating"]):
+        strong += 1
+    if f.get("conv_buyout_percent", 0) >= _num(s["strong_buyout_conv"]):
+        strong += 1
+    if f.get("detail_known") and f.get("return_rate", 0) <= _num(s["strong_return_rate"]):
+        strong += 1
+    if f.get("detail_known") and f.get("margin_pct", 0) >= _num(s["strong_margin_pct"]):
+        strong += 1
+    return (1 + _num(s["raise_boost_pct"]) / 100) if strong >= 2 else 1.0
+
+
 def _decide(f: dict, s: dict) -> dict:
     price = f["price"]
     cur_disc = f["current_discount"]
@@ -621,13 +673,19 @@ def _decide(f: dict, s: dict) -> dict:
 
     if doc < _num(s["doc_low"]):
         if hot_demand:
-            raise_pct = _num(s["raise_pct_replenishable"]) if f["replenishable"] else _num(s["max_raise_pct"])
+            gate = _raise_quality_gate(f, s)
+            if gate:
+                base.update(action="SKIP", status="skipped_quality", reason=gate)
+                return base
+            boost = _raise_boost(f, s)
+            raise_pct = _num(s["raise_pct_replenishable"]) * boost if f["replenishable"] else _num(s["max_raise_pct"]) * boost
             target_vis = min(price, cur_vis * (1 + raise_pct / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
             if cur_disc - new_disc >= _num(s["min_delta_pp"]):
                 base.update(action="RAISE", status="suggested",
                             reason=f"дефицит (DOC={doc:.0f} дн.) и горячий спрос "
-                                   f"(conv={conv:.1f}% / в корзинах {backlog})",
+                                   f"(conv={conv:.1f}% / в корзинах {backlog})"
+                                   + (" · сильные сигналы" if boost > 1 else ""),
                             target_discount=round(_clamp(new_disc, 0, 100), 1),
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))
@@ -635,11 +693,17 @@ def _decide(f: dict, s: dict) -> dict:
                 base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
             return base
         if not f["replenishable"]:
-            target_vis = min(price, cur_vis * (1 + _num(s["max_raise_pct"]) / 100))
+            gate = _raise_quality_gate(f, s)
+            if gate:
+                base.update(action="SKIP", status="skipped_quality", reason=gate)
+                return base
+            boost = _raise_boost(f, s)
+            target_vis = min(price, cur_vis * (1 + _num(s["max_raise_pct"]) * boost / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
             if cur_disc - new_disc >= _num(s["min_delta_pp"]):
                 base.update(action="RAISE", status="suggested",
-                            reason=f"дефицит (DOC={doc:.0f} дн.), товар не докупается — последние единицы",
+                            reason=f"дефицит (DOC={doc:.0f} дн.), товар не докупается — последние единицы"
+                                   + (" · сильные сигналы" if boost > 1 else ""),
                             target_discount=round(_clamp(new_disc, 0, 100), 1),
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))

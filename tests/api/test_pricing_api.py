@@ -39,6 +39,9 @@ def test_defaults(api_client):
     assert r.status_code == 200
     assert r.json()["defaults"]["window_days"] == PRICING_DEFAULTS["window_days"]
     assert r.json()["defaults"]["cooldown_days"] == 3
+    # T-14: новые (пороговые) параметры присутствуют в дефолтах
+    assert r.json()["defaults"]["min_rating_for_raise"] == 4.2
+    assert r.json()["defaults"]["raise_boost_pct"] == 25.0
 
 
 def test_recommendations_read_only(db, api_client):

@@ -278,6 +278,96 @@ def test_row_skip_has_enriched_defaults(db):
     assert row["product_rating"] is None
 
 
+# ------------------------------------------------ T-14: блокировки качества и uplift
+
+
+def test_t14_low_rating_blocks_raise(db):
+    _seed(db, "Q1", "PQ1", stock=5, replenishable=True,
+          sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
+          funnel_extra={"product_rating": 3.5})
+    rec = recommendations(db, prices_df=_prices(("PQ1", 1000, 20)), today=TODAY)
+    row = _row(rec, "Q1")
+    assert row["action"] == "SKIP"
+    assert row["status"] == "skipped_quality"
+    assert "рейтинг" in row["reason"]
+
+
+def test_t14_low_buyout_conv_blocks_raise(db):
+    _seed(db, "Q2", "PQ2", stock=5, replenishable=True,
+          sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
+          funnel_extra={"product_rating": 4.8, "conv_buyout_percent": 20.0})
+    rec = recommendations(db, prices_df=_prices(("PQ2", 1000, 20)), today=TODAY)
+    row = _row(rec, "Q2")
+    assert row["status"] == "skipped_quality"
+    assert "выкупа" in row["reason"]
+
+
+def test_t14_high_cancel_ratio_blocks_raise(db):
+    _seed(db, "Q3", "PQ3", stock=5, replenishable=True,
+          sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 3, 900),
+          funnel_extra={"product_rating": 4.8})
+    rec = recommendations(db, prices_df=_prices(("PQ3", 1000, 20)), today=TODAY)
+    row = _row(rec, "Q3")
+    assert row["status"] == "skipped_quality"
+    assert "отмены" in row["reason"]
+
+
+def test_t14_detail_return_rate_blocks_raise(db):
+    _seed(db, "Q4", "PQ4", stock=5, replenishable=True,
+          sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
+          funnel_extra={"product_rating": 4.8, "conv_buyout_percent": 50.0})
+    db.add_all([
+        models.WbDetailRow(op_key="sr:sale-q4", source="excel", article="Q4",
+                           doc_type_name="Продажа", sale_dt=TODAY - timedelta(days=2),
+                           quantity=10, retail_amount=5000.0, for_pay=4000.0),
+        models.WbDetailRow(op_key="sr:ret-q4", source="excel", article="Q4",
+                           doc_type_name="Возврат", sale_dt=TODAY - timedelta(days=2),
+                           quantity=4, retail_amount=2000.0, for_pay=1600.0),
+    ])
+    db.commit()
+    rec = recommendations(db, prices_df=_prices(("PQ4", 1000, 20)), today=TODAY)
+    row = _row(rec, "Q4")
+    assert row["status"] == "skipped_quality"
+    assert "возвраты" in row["reason"]
+
+
+def test_t14_strong_signals_apply_uplift(db):
+    _seed(db, "B", "PB", stock=5, replenishable=True,
+          sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
+          funnel_extra={"product_rating": 4.9, "conv_buyout_percent": 85.0})
+    rec = recommendations(db, prices_df=_prices(("PB", 1000, 20)), today=TODAY)
+    row = _row(rec, "B")
+    assert row["action"] == "RAISE"
+    # +12.5% (10% × uplift 1.25): 800 → 900, скидка 20 → 10
+    assert row["target_discount"] == pytest.approx(10.0, abs=0.5)
+    assert "сильные сигналы" in row["reason"]
+
+
+def test_t14_no_uplift_without_strong_signals(db):
+    _seed(db, "B2", "PB1", stock=5, replenishable=True,
+          sales=[(2, 4, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900))
+    rec = recommendations(db, prices_df=_prices(("PB1", 1000, 20)), today=TODAY)
+    row = _row(rec, "B2")
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(12.0, abs=0.5)
+
+
+def test_t14_low_rating_does_not_block_lower(db):
+    _seed(db, "Q5", "PQ5", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
+          funnel_extra={"product_rating": 2.5})
+    rec = recommendations(db, prices_df=_prices(("PQ5", 2000, 10)), today=TODAY)
+    assert _row(rec, "Q5")["action"] == "LOWER"
+
+
+def test_t14_unknown_quality_does_not_block_raise(db):
+    """Нет данных о качестве (рейтинг/выкупы = 0) — RAISE не блокируется."""
+    _seed(db, "Q6", "PQ6", stock=5, replenishable=True,
+          sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900))
+    rec = recommendations(db, prices_df=_prices(("PQ6", 1000, 20)), today=TODAY)
+    assert _row(rec, "Q6")["action"] == "RAISE"
+
+
 # ------------------------------------------------------------------ применение
 
 
