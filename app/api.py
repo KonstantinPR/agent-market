@@ -889,6 +889,10 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "target_discount", "action", "status", "reason", "doc", "velocity", "trend",
         "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
         "max_discount_item", "margin_pct_at_target", "replenishable",
+        "product_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
+        "add_to_wishlist", "stock_wb", "return_rate", "margin_pct", "margin_per_one",
+        "revenue_per_one", "income_per_one", "commission_per_one",
+        "logistics_per_one", "storage_per_one", "detail_sells", "detail_returns_qty",
     ]
     df = df[[c for c in keep if c in df.columns]]
     df, ru = excel_io.project_export(df, {
@@ -901,6 +905,19 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "avg_price": "Ср. цена факт, руб", "eff": "База расчёта, руб",
         "floor_price": "Пол (break-even), руб", "max_discount_item": "Макс. скидка, %",
         "margin_pct_at_target": "Маржа при цели, %", "replenishable": "Докупаемый",
+        "product_rating": "Рейтинг товара", "buyouts": "Выкупы, шт",
+        "conv_buyout_percent": "Конверсия выкупа, %", "cancel_sum": "Отмены, руб",
+        "add_to_wishlist": "В избранное, шт", "stock_wb": "Остаток WB, шт",
+        "return_rate": "Возвраты, % от продаж",
+        "margin_pct": "Маржа факт, % от выручки",
+        "margin_per_one": "Маржа/шт факт, руб",
+        "revenue_per_one": "Ср. чек факт, руб",
+        "income_per_one": "К перечислению/шт, руб",
+        "commission_per_one": "Комиссия/шт, руб",
+        "logistics_per_one": "Логистика/шт, руб",
+        "storage_per_one": "Хранение/шт, руб",
+        "detail_sells": "Продано в детализации, шт",
+        "detail_returns_qty": "Возвращено в детализации, шт",
     }, cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Автопилот")

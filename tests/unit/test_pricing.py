@@ -13,10 +13,11 @@ TODAY = date.today()
 
 
 def _seed(db, art, nm, *, name="Товар", net_cost=300, replenishable=False,
-          stock=100, sales=(), funnel=(0, 0, 0, 0, 0)):
+          stock=100, sales=(), funnel=(0, 0, 0, 0, 0), funnel_extra=None):
     """Засевает товар: nm-карта, остаток, воронка, продажи.
 
     funnel=(views, adds, orders, cancelled, avg_price) для последнего среза воронки.
+    funnel_extra — дополнительные поля среза воронки (рейтинг, выкупы и т.п.).
     sales=список кортежей (offset_days, quantity, returns_qty).
     """
     wb = db.execute(select(models.Marketplace.id).where(models.Marketplace.code == "wb")).scalar_one()
@@ -31,6 +32,7 @@ def _seed(db, art, nm, *, name="Товар", net_cost=300, replenishable=False,
         date_from=TODAY - timedelta(days=7), date_to=TODAY - timedelta(days=1),
         nm_id=nm, article=art, views=views, adds=adds, orders=orders,
         cancelled=cancelled, avg_price=avg_price,
+        **(funnel_extra or {}),
     ))
     for offset, qty, ret in sales:
         d = TODAY - timedelta(days=offset)
@@ -212,6 +214,68 @@ def test_insufficient_history_returns_note(db):
     rec = recommendations(db, prices_df=_prices(("P1", 1000, 0)), today=TODAY)
     assert rec["rows"] == []
     assert "Мало истории" in rec["note"]
+
+
+# ------------------------------------------------------------------ T-13: окно из шапки + обогащение данных
+
+
+def test_merge_settings_passes_valid_dates():
+    s = merge_settings({"date_from": "2026-08-01T10:00", "date_to": "не дата"})
+    assert s["date_from"] == "2026-08-01"
+    assert "date_to" not in s
+
+
+def test_recommendations_honors_date_window(db):
+    _seed(db, "E2", "P2", stock=0, sales=[(2, 2, 0), *_fallback_sales()])
+    rec = recommendations(
+        db, prices_df=_prices(("P2", 1000, 0)), today=TODAY,
+        settings={"date_from": "2026-08-01", "date_to": "2026-08-14"},
+    )
+    assert rec["date_from"] == "2026-08-01"
+    assert rec["date_to"] == "2026-08-14"
+    assert rec["window_days"] == 14
+    assert rec["settings"]["date_from"] == "2026-08-01"
+
+
+def test_enriched_columns_from_funnel_and_detail(db):
+    """T-13: рейтинг/выкупы из воронки и фактические деньги из детализации попадают в строку."""
+    _seed(db, "E1", "P1", stock=None, sales=[(2, 4, 0), *_fallback_sales()],
+          funnel=(100, 1, 1, 0, 500),
+          funnel_extra={"product_rating": 4.7, "buyouts": 5,
+                        "conv_buyout_percent": 80.0, "stock_wb": 900})
+    db.add_all([
+        models.WbDetailRow(op_key="sr:sale-e1", source="excel", article="E1",
+                           doc_type_name="Продажа", sale_dt=TODAY - timedelta(days=2),
+                           quantity=4, retail_amount=4000.0, for_pay=3200.0),
+        models.WbDetailRow(op_key="sr:ret-e1", source="excel", article="E1",
+                           doc_type_name="Возврат", sale_dt=TODAY - timedelta(days=2),
+                           quantity=1, retail_amount=1000.0, for_pay=800.0),
+    ])
+    db.commit()
+    rec = recommendations(db, prices_df=_prices(("P1", 1000, 10)), today=TODAY)
+    row = _row(rec, "E1")
+    assert row["product_rating"] == pytest.approx(4.7)
+    assert row["buyouts"] == 5
+    assert row["conv_buyout_percent"] == pytest.approx(80.0)
+    assert row["stock_wb"] == 900
+    # Детализация: 4 продажи − 1 возврат (нетто 3), доход 3200-800, без расходов,
+    # себестоимость 300. return_rate = возвраты/(нетто-продажи+возвраты).
+    assert row["return_rate"] == pytest.approx(25.0, abs=0.1)
+    assert row["margin_pct"] == pytest.approx(50.0, abs=1.0)
+    assert row["margin_per_one"] == pytest.approx(500.0, abs=5.0)
+    assert row["revenue_per_one"] == pytest.approx(1000.0, abs=5.0)
+    assert row["detail_sells"] == 3
+    assert row["detail_returns_qty"] == 1
+
+
+def test_row_skip_has_enriched_defaults(db):
+    """SKIP-строка (нет карточки/цен) получает default-значения новых колонок."""
+    _seed(db, "E3", "P3", stock=5, sales=[(2, 1, 0), *_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("NOPE", 1000, 0)), today=TODAY)
+    row = _row(rec, "E3")
+    assert row["action"] == "SKIP"
+    assert row["return_rate"] == 0.0
+    assert row["product_rating"] is None
 
 
 # ------------------------------------------------------------------ применение

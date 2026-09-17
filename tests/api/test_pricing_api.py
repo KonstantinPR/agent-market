@@ -60,6 +60,18 @@ def test_recommendations_applies_settings(db, api_client):
     assert r.json()["settings"]["window_days"] == 7
 
 
+def test_recommendations_honors_dates(db, api_client):
+    """T-13: период берётся из дат запроса (шапки), а не из window_days."""
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    r = api_client.post("/api/pricing/recommendations",
+                        json={"date_from": "2026-08-01", "date_to": "2026-08-14"})
+    body = r.json()
+    assert body["date_from"] == "2026-08-01"
+    assert body["date_to"] == "2026-08-14"
+    assert body["window_days"] == 14
+
+
 def test_apply_pushes_and_writes_history(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))

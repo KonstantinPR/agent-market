@@ -43,9 +43,20 @@ PRICING_DEFAULTS = {
 
 
 def merge_settings(payload=None) -> dict:
-    """Склеивает параметры из запроса с дефолтами (только известные ключи)."""
+    """Склеивает параметры из запроса с дефолтами (только известные ключи).
+
+    date_from/date_to — строки ISO (период анализа из шапки), пропускаются
+    как есть; применяются в recommendations() поверх window_days.
+    """
     out = dict(PRICING_DEFAULTS)
     for key, value in (payload or {}).items():
+        if key in ("date_from", "date_to") and value:
+            try:
+                date.fromisoformat(str(value)[:10])
+            except (TypeError, ValueError):
+                continue
+            out[key] = str(value)[:10]
+            continue
         if key not in out:
             continue
         if key == "season_adj":
@@ -110,16 +121,27 @@ def _normalize_prices(prices_df: Optional[pd.DataFrame]) -> dict:
     return out
 
 
-def _funnel_latest(db: Session) -> dict:
-    """Последний глобальный срез воронки: article -> метрики."""
+def _funnel_slice(db: Session, date_from: date, date_to: date) -> dict:
+    """Последний срез воронки, пересекающий окно [date_from, date_to].
+
+    Воронка WB — снимок за период (не по дням), поэтому берём одну (максимально
+    свежую) запись среза и не суммируем срезы. Возвращает расширенный набор
+    метрик (рейтинги, выкупы, конверсии, остатки WB, WB Клуб, вишлисты).
+    Ключи — и как в БД, и в верхнем регистре (артикулы продуктов могут
+    отличаться регистром от воронки/детализации).
+    """
     snap = db.execute(
-        select(models.FunnelMetric.date_to)
+        select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
+        .where(
+            models.FunnelMetric.date_from <= date_to,
+            models.FunnelMetric.date_to >= date_from,
+        )
         .order_by(models.FunnelMetric.date_to.desc())
     ).first()
     out: dict = {}
     if snap is None:
         return out
-    date_to = snap.date_to
+    from_d, to_d = snap.date_from, snap.date_to
     q = (
         select(
             models.FunnelMetric.article,
@@ -128,18 +150,85 @@ def _funnel_latest(db: Session) -> dict:
             func.sum(models.FunnelMetric.orders).label("orders"),
             func.sum(models.FunnelMetric.cancelled).label("cancelled"),
             func.max(models.FunnelMetric.avg_price).label("avg_price"),
+            func.sum(models.FunnelMetric.buyouts).label("buyouts"),
+            func.max(models.FunnelMetric.product_rating).label("product_rating"),
+            func.max(models.FunnelMetric.feedback_rating).label("feedback_rating"),
+            func.max(models.FunnelMetric.conv_to_cart_percent).label("conv_to_cart_percent"),
+            func.max(models.FunnelMetric.conv_cart_to_order_percent).label("conv_cart_to_order_percent"),
+            func.max(models.FunnelMetric.conv_buyout_percent).label("conv_buyout_percent"),
+            func.max(models.FunnelMetric.add_to_wishlist).label("add_to_wishlist"),
+            func.max(models.FunnelMetric.share_order_percent).label("share_order_percent"),
+            func.max(models.FunnelMetric.avg_orders_per_day).label("avg_orders_per_day"),
+            func.max(models.FunnelMetric.stock_wb).label("stock_wb"),
+            func.max(models.FunnelMetric.cancel_sum).label("cancel_sum"),
+            func.max(models.FunnelMetric.wb_club_buyout_percent).label("wb_club_buyout_percent"),
+            func.max(models.FunnelMetric.subject_name).label("subject_name"),
+            func.max(models.FunnelMetric.brand_name).label("brand_name"),
         )
-        .where(models.FunnelMetric.date_to == date_to)
+        .where(models.FunnelMetric.date_from == from_d, models.FunnelMetric.date_to == to_d)
         .group_by(models.FunnelMetric.article)
     )
     for r in db.execute(q):
-        out[str(r.article)] = {
+        rec = {
             "views": int(r.views or 0),
             "adds": int(r.adds or 0),
             "orders": int(r.orders or 0),
             "cancelled": int(r.cancelled or 0),
             "avg_price": _num(r.avg_price),
+            "buyouts": int(r.buyouts or 0),
+            "product_rating": _num(r.product_rating),
+            "feedback_rating": _num(r.feedback_rating),
+            "conv_buyout_percent": _num(r.conv_buyout_percent),
+            "conv_to_cart_percent": _num(r.conv_to_cart_percent),
+            "conv_cart_to_order_percent": _num(r.conv_cart_to_order_percent),
+            "add_to_wishlist": int(r.add_to_wishlist or 0),
+            "share_order_percent": _num(r.share_order_percent),
+            "avg_orders_per_day": _num(r.avg_orders_per_day),
+            "stock_wb": int(r.stock_wb or 0),
+            "cancel_sum": _num(r.cancel_sum),
+            "wb_club_buyout_percent": _num(r.wb_club_buyout_percent),
+            "subject_name": str(r.subject_name or ""),
+            "brand_name": str(r.brand_name or ""),
         }
+        art = str(r.article).strip()
+        out[art] = rec
+        out[art.upper()] = rec
+    return out
+
+
+def _detail_metrics(db: Session, date_from: date, date_to: date) -> dict:
+    """Фактические деньги из детализации продаж WB за окно (по артикулам).
+
+    Использует margin_detail_dataframe: возвраты, маржа/шт, комиссия, логистика,
+    хранение, средний чек, выручка/шт. При отсутствии детализации возвращает {}.
+    """
+    from app.services.margin import margin_detail_dataframe
+
+    try:
+        dframe = margin_detail_dataframe(db, date_from=date_from, date_to=date_to)
+    except Exception:  # noqa: BLE001
+        return {}
+    if dframe is None or dframe.empty:
+        return {}
+    out: dict = {}
+    for row in dframe.to_dict("records"):
+        art = str(row.get("article", "")).strip()
+        if not art:
+            continue
+        rec = {
+            "return_rate": _num(row.get("return_rate")),
+            "margin_pct": _num(row.get("margin_pct")),
+            "margin_per_one": _num(row.get("margin_per_one")),
+            "income_per_one": _num(row.get("income_per_one")),
+            "revenue_per_one": _num(row.get("revenue_per_one")),
+            "commission_per_one": _num(row.get("commission_per_one")),
+            "logistics_per_one": _num(row.get("logistics_per_one")),
+            "storage_per_one": _num(row.get("storage_per_one")),
+            "detail_sells": int(row.get("sells") or 0),
+            "detail_returns_qty": int(row.get("returns_qty") or 0),
+        }
+        out[art] = rec
+        out[art.upper()] = rec
     return out
 
 
@@ -191,13 +280,32 @@ def recommendations(
     W = int(s["window_days"])
     fallback_days = int(s["fallback_window_days"])
 
+    # Период анализа: явные date_from/date_to из шапки (или дефолт window_days).
+    req_from = req_to = None
+    for key in ("date_from", "date_to"):
+        raw = s.get(key)
+        if isinstance(raw, str) and raw:
+            try:
+                parsed = date.fromisoformat(raw[:10])
+            except ValueError:
+                continue
+            if key == "date_from":
+                req_from = parsed
+            else:
+                req_to = min(parsed, today)
+    if req_from is None or req_to is None:
+        req_from = req_from if req_from is not None else today - timedelta(days=W - 1)
+        req_to = req_to if req_to is not None else today
+    if req_to < req_from:
+        req_to = req_from
+
     min_date = db.scalar(
         select(func.min(models.Sale.date)).where(models.Sale.marketplace_id == wb_mp)
     )
     if min_date is None:
         return {"rows": [], "settings": s, "note": "Нет данных о продажах WB."}
     span = (today - min_date).days + 1
-    cover = min(W, span)
+    cover = min((req_to - req_from).days + 1, span)
     if cover < int(s["min_days_with_sales"]):
         return {
             "rows": [], "settings": s,
@@ -205,9 +313,11 @@ def recommendations(
                     f"Нужно ≥ {int(s['min_days_with_sales'])} дн. — сначала тяните данные (Обновить WB).",
         }
 
-    now_from = today - timedelta(days=W - 1)
-    prev_from = today - timedelta(days=2 * W - 1)
+    # Окно анализа якорим на самые свежие данные запрошенного периода.
+    now_to = req_to
+    now_from = now_to - timedelta(days=cover - 1)
     prev_to = now_from - timedelta(days=1)
+    prev_from = now_to - timedelta(days=2 * cover - 1)
 
     sales_range_from = today - timedelta(days=fallback_days - 1)
     q = (
@@ -246,7 +356,8 @@ def recommendations(
     )
     last_sale_ago = {str(art): (today - d).days for art, d in last_sale}
 
-    funnel = _funnel_latest(db)
+    funnel = _funnel_slice(db, now_from, now_to)
+    detail = _detail_metrics(db, now_from, now_to)
     stock = _latest_stock(db, wb_mp)
     nm_map = {
         str(r.nm_id).strip(): str(r.article).strip()
@@ -291,17 +402,41 @@ def recommendations(
         v_proj = project_velocity(v_now, v_prev, bool(s["season_adj"]), _num(s["season_damp"]))
 
         ue = _unit_economics(art_fb)
+        fl = funnel.get(art, {})
+        dl = detail.get(art, {})
         f = {
             "article": art, "name": prod["name"], "replenishable": prod["replenishable"],
             "nm_id": nm_id, "price": price, "current_discount": cur_disc,
             "current_vis": cur_vis, "stock": stock.get(art),
             "velocity": v_now, "v_proj": v_proj, "trend": (v_now / v_prev) if v_prev > 0 else 1.0,
             "last_sale_days_ago": last_sale_ago.get(art, 9999),
-            "avg_price": _num(funnel.get(art, {}).get("avg_price")),
-            "adds": int(funnel.get(art, {}).get("adds", 0)),
-            "orders": int(funnel.get(art, {}).get("orders", 0)),
-            "cancelled": int(funnel.get(art, {}).get("cancelled", 0)),
-            "views": int(funnel.get(art, {}).get("views", 0)),
+            "avg_price": _num(fl.get("avg_price")),
+            "adds": int(fl.get("adds", 0)),
+            "orders": int(fl.get("orders", 0)),
+            "cancelled": int(fl.get("cancelled", 0)),
+            "views": int(fl.get("views", 0)),
+            "buyouts": int(fl.get("buyouts", 0)),
+            "product_rating": _num(fl.get("product_rating")),
+            "feedback_rating": _num(fl.get("feedback_rating")),
+            "conv_buyout_percent": _num(fl.get("conv_buyout_percent")),
+            "conv_to_cart_percent": _num(fl.get("conv_to_cart_percent")),
+            "conv_cart_to_order_percent": _num(fl.get("conv_cart_to_order_percent")),
+            "add_to_wishlist": int(fl.get("add_to_wishlist", 0)),
+            "share_order_percent": _num(fl.get("share_order_percent")),
+            "avg_orders_per_day": _num(fl.get("avg_orders_per_day")),
+            "stock_wb": int(fl.get("stock_wb", 0)),
+            "cancel_sum": _num(fl.get("cancel_sum")),
+            "wb_club_buyout_percent": _num(fl.get("wb_club_buyout_percent")),
+            "return_rate": _num(dl.get("return_rate")),
+            "margin_pct": _num(dl.get("margin_pct")),
+            "margin_per_one": _num(dl.get("margin_per_one")),
+            "income_per_one": _num(dl.get("income_per_one")),
+            "revenue_per_one": _num(dl.get("revenue_per_one")),
+            "commission_per_one": _num(dl.get("commission_per_one")),
+            "logistics_per_one": _num(dl.get("logistics_per_one")),
+            "storage_per_one": _num(dl.get("storage_per_one")),
+            "detail_sells": int(dl.get("detail_sells", 0)),
+            "detail_returns_qty": int(dl.get("detail_returns_qty", 0)),
             "net_cost": prod["net_cost"],
             "comm_rate": None, "logistics_unit": 0.0, "storage_unit": 0.0,
             "other_unit": 0.0, "floor_price": None,
@@ -331,7 +466,20 @@ def recommendations(
         "total": len(out_rows),
         "actionable": sum(1 for r in out_rows if r["action"] in ("RAISE", "LOWER")),
         "as_of": str(today),
+        "date_from": str(now_from),
+        "date_to": str(now_to),
+        "window_days": cover,
     }
+
+
+ENRICHED_KEYS = {
+    "buyouts", "product_rating", "feedback_rating", "conv_buyout_percent",
+    "conv_to_cart_percent", "conv_cart_to_order_percent", "add_to_wishlist",
+    "share_order_percent", "avg_orders_per_day", "stock_wb", "cancel_sum",
+    "wb_club_buyout_percent", "return_rate", "margin_pct", "margin_per_one",
+    "income_per_one", "revenue_per_one", "commission_per_one",
+    "logistics_per_one", "storage_per_one", "detail_sells", "detail_returns_qty",
+}
 
 
 def _row_skip(art, prod, nm_id, reason):
@@ -345,6 +493,46 @@ def _row_skip(art, prod, nm_id, reason):
         "max_discount_item": None, "action": "SKIP", "status": "skipped_no_data",
         "reason": reason, "target_discount": None, "target_vis": None,
         "margin_pct_at_target": None,
+        **_enriched({}),
+    }
+
+
+def _opt(value) -> Optional[float]:
+    """float-значение или None (для Nullable-метрик вроде рейтинга)."""
+    try:
+        f_val = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(f_val):
+        return None
+    return f_val
+
+
+def _enriched(f: dict) -> dict:
+    """Новые колонки T-13: из воронки (funnel) и детализации (margin_detail)."""
+    return {
+        "buyouts": int(f.get("buyouts") or 0),
+        "product_rating": _opt(f.get("product_rating", float("nan"))),
+        "feedback_rating": _opt(f.get("feedback_rating", float("nan"))),
+        "conv_buyout_percent": _num(f.get("conv_buyout_percent")),
+        "conv_to_cart_percent": _num(f.get("conv_to_cart_percent")),
+        "conv_cart_to_order_percent": _num(f.get("conv_cart_to_order_percent")),
+        "add_to_wishlist": int(f.get("add_to_wishlist") or 0),
+        "share_order_percent": _num(f.get("share_order_percent")),
+        "avg_orders_per_day": _num(f.get("avg_orders_per_day")),
+        "stock_wb": int(f.get("stock_wb") or 0),
+        "cancel_sum": _num(f.get("cancel_sum")),
+        "wb_club_buyout_percent": _num(f.get("wb_club_buyout_percent")),
+        "return_rate": _num(f.get("return_rate")),
+        "margin_pct": _num(f.get("margin_pct")),
+        "margin_per_one": _num(f.get("margin_per_one")),
+        "income_per_one": _num(f.get("income_per_one")),
+        "revenue_per_one": _num(f.get("revenue_per_one")),
+        "commission_per_one": _num(f.get("commission_per_one")),
+        "logistics_per_one": _num(f.get("logistics_per_one")),
+        "storage_per_one": _num(f.get("storage_per_one")),
+        "detail_sells": int(f.get("detail_sells") or 0),
+        "detail_returns_qty": int(f.get("detail_returns_qty") or 0),
     }
 
 
@@ -359,6 +547,7 @@ def _base_row(f: dict) -> dict:
         "max_discount_item": None, "trend": round(f["trend"], 2),
         "action": "HOLD", "status": "hold", "reason": "",
         "target_discount": None, "target_vis": None, "margin_pct_at_target": None,
+        **_enriched(f),
     }
 
 

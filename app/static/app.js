@@ -2284,6 +2284,20 @@ const pricingHeaders = [
   { k: "backlog", label: "В корзине", num: true, render: cellFmts.int },
   { k: "current_discount", label: "Скидка сейчас, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
   { k: "avg_price", label: "Ср. цена факт", num: true, render: cellFmts.money },
+  { k: "product_rating", label: "Рейтинг", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) },
+  { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int },
+  { k: "conv_buyout_percent", label: "Конв. выкупа, %", num: true, render: cellFmts.pct },
+  { k: "cancel_sum", label: "Отмены, руб", num: true, render: cellFmts.money },
+  { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int },
+  { k: "stock_wb", label: "Остаток WB", num: true, render: cellFmts.int },
+  { k: "return_rate", label: "Возвраты, %", num: true, render: cellFmts.pct },
+  { k: "margin_pct", label: "Маржа факт, %", num: true, render: cellFmts.pct },
+  { k: "margin_per_one", label: "Маржа/шт, руб", num: true, render: cellFmts.money },
+  { k: "revenue_per_one", label: "Ср. чек, руб", num: true, render: cellFmts.money },
+  { k: "income_per_one", label: "К переч./шт, руб", num: true, render: cellFmts.money },
+  { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money },
+  { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money },
+  { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money },
   { k: "action", label: "Решение", render: actionCell },
   { k: "target_discount", label: "Целевая скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
   { k: "target_vis", label: "Целевая цена", num: true, render: cellFmts.money },
@@ -2344,6 +2358,20 @@ const PRICING_OPTIONAL = [
   { k: "current_discount", label: "Скидка сейчас, %", def: true },
   { k: "avg_price", label: "Ср. цена факт", def: true },
   { k: "margin_pct_at_target", label: "Маржа при цели, %", def: true },
+  { k: "product_rating", label: "Рейтинг", def: true },
+  { k: "return_rate", label: "Возвраты, %", def: true },
+  { k: "margin_pct", label: "Маржа факт, %", def: true },
+  { k: "revenue_per_one", label: "Ср. чек, руб", def: false },
+  { k: "margin_per_one", label: "Маржа/шт, руб", def: false },
+  { k: "income_per_one", label: "К переч./шт, руб", def: false },
+  { k: "commission_per_one", label: "Комиссия/шт, руб", def: false },
+  { k: "logistics_per_one", label: "Логистика/шт, руб", def: false },
+  { k: "storage_per_one", label: "Хранение/шт, руб", def: false },
+  { k: "buyouts", label: "Выкупы, шт", def: false },
+  { k: "conv_buyout_percent", label: "Конв. выкупа, %", def: false },
+  { k: "cancel_sum", label: "Отмены, руб", def: false },
+  { k: "add_to_wishlist", label: "В избранное", def: false },
+  { k: "stock_wb", label: "Остаток WB", def: false },
 ];
 registerColView("pricing", { storageKey: "pricingCols", headers: pricingHeaders, optional: PRICING_OPTIONAL });
 
@@ -2449,9 +2477,16 @@ async function renderPricingHistory() {
   box.innerHTML = table(headers, data.rows);
 }
 
+function pricingWithDates(s) {
+  const f = filters();
+  if (f.date_from) s.date_from = f.date_from;
+  if (f.date_to) s.date_to = f.date_to;
+  return s;
+}
+
 async function renderPricing(apply) {
   await buildPricingSettings();
-  const s = collectPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
   const msg = $("#pricingMsg");
   const likeEl = $("#pricingLike") || { value: "" };
   const q = likeEl.value.trim().toLowerCase();
@@ -2480,7 +2515,7 @@ async function renderPricing(apply) {
 
 async function exportPricing() {
   await buildPricingSettings();
-  const s = collectPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
   const msg = $("#pricingMsg");
@@ -2582,7 +2617,7 @@ async function uploadMarginDetailToDisk() {
 
 async function uploadPricingToDisk() {
   await buildPricingSettings();
-  const s = collectPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
   const msg = $("#pricingMsg");
