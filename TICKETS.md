@@ -5,7 +5,7 @@
 номер выдаётся один раз и не переиспользуется, даже если тикет закрыли,
 не начав, или закрыли как неактуальный.
 
-Счётчик: следующая свободная метка — `T-7`.
+Счётчик: следующая свободная метка — `T-17`.
 
 ## Правила
 
@@ -49,10 +49,83 @@
   > к моменту расчёта, надо добавить и возвращённое количество (в оригинале:
   > «подумаем потом»). Нужно обсудить формулу и точку учета возвратов
   > (returns_qty из свода vs возвраты из детализации).
+- [T-7] (high) Ozon: провайдер — детализация реализаций по постингам + выкупы
+  > Тело: Исследование Ozon Seller API сделано (OpenAPI-спека, зеркало
+  > MissiaL/ozon-api, 2026-09): для детализации (аналог wb_detail_rows) берём
+  > GET POST /v1/finance/realization/posting (строки: item {offer_id, name,
+  > sku, barcode}, posting_number, qty, seller_price_per_instance,
+  > delivery_commission {amount, bonus, commission, compensation,
+  > standard_fee, coinvestment, total}, return_commission). При 400 «The
+  > requested report is too large» → фолбэк на асинхронный отчёт
+  > /v1/report/realization/posting/create + poll /v1/report/info (как в
+  > get_cards). Выкупы: /v1/finance/products/buyout (buyout_price, % выкупа,
+  > удержания, vat_percent, posting_number, offer_id, quantity). v3
+  > finance/transaction/list на аккаунте «обsolete» — НЕ использовать.
+  > Добавить методы в app/providers/ozon.py (+ моки для testing) и проверить
+  > на живых ключах Client-Id 164497. Страховка: если оба детальных метода
+  > недоступны — строить детализацию из строк /v2/finance/realization
+  > (уже проверен).
+- [T-8] (high) Ozon: таблицы OzonDetailRow/OzonBuyout + синк + API-эндпоинты
+  > Тело: модели в app/models.py: OzonDetailRow (op_key = date+posting+sku;
+  > posting_number, delivery_schema, offer_id, name, sku, barcode, quantity,
+  > seller_price, amount, commission_ratio, commission, standard_fee, income,
+  > return_qty, return_total, source, imported_at) и OzonBuyout (op_key =
+  > date+posting+sku; buyout_price, buyout_percent, deduction_percent,
+  > vat_percent, quantity, seller_price). Сервисы app/services/sync.py:
+  > normalize_ozon_detail, normalize_ozon_buyout, upsert_ozon_detail_rows,
+  > upsert_ozon_buyouts, oz_detail_summary_dataframe (свод по артикулам
+  > = продажи WB-детализации + выкупы). app/services/refresh.py:
+  > pull_oz_detail, pull_oz_buyout, record_api_pull('ozon', 'detail'/'buyout').
+  > API app/api.py: POST /api/ozon/detail (окно from..to, месяц по умолчанию),
+  > GET /api/ozon/detail-rows (фильтры/пагинация), GET /api/ozon/detail-summary,
+  > /api/export/ozon/detail-rows, /api/export/ozon/detail-summary
+  > (по образцу /api/export/wb/detail-*). Продажи source='ozon' НЕ трогаем —
+  > детализация аддитивна (решение утверждено).
+- [T-9] (high) UI — «Детализация продаж Ozon» по образцу WB
+  > Тело: вкладка oz-detail 1-в-1 как tab-wb-detail (app/static/index.html,
+  > app.js: registerColView('oz-detail', {rows, summary}), renderOzDetail,
+  > downloadOzDetailExcel, uploadOzDetailToDisk, поиск, пагинация, «Выгрузить
+  > в Excel» по видимым колонкам, «Загрузить на диск»; кнопка «Обновить базу»
+  > в шапке маршрутизирует период для detail как в wbPullByTab).
+- [T-10] (medium) UI — гармонизировать oz-cards/oz-stock/oz-prices/oz-realization под эталон
+  > Тело: убрать дублирующие формы-тулбары «Скачать Excel + в БД» из oz-вкладок,
+  > единая кнопка «Обновить базу» в шапке (ozPullByTab как wbPullByTab);
+  > реальные таблицы просмотра из БД для cards/stock/prices/realization
+  > (поиск, колонки, пагинация, экспорт по видимым колонкам, диск).
+  > Починить renderCards для oz-cards (ссылается на несуществующий
+  > #ozCardsTable, app.js:1305). cashflow остаётся export-only под кнопкой шапки.
+- [T-11] (medium) «Магия → Обновить Ozon»: детализация + выкупы разом
+  > Тело: app/services/refresh.py _PLAN['ozon'] + шаги detail/buyout
+  > (include_detail для ozon, период = из шапки, по умолчанию предыдущий
+  > месяц; для realization — месяцы, покрывающие окно). Всё в одном фоне
+  > (start_refresh уже сериализует).
 
 ## В работе
 
-_(пусто)_
+- [T-7] (high) Ozon: провайдер — детализация реализаций по постингам + выкупы
+- [T-12] (high) Автопилот цен WB: UI по эталону «Детализация Продаж WB»
+  > Тело: тулбар msg/tip/поиск/«Пересчитать»/pager/«Вид таблицы»/«Экспорт
+  > в Excel»/«Загрузить на диск»; кнопка «Применить в WB» (disabled-заглушка
+  > до T-16); colView base+optional как в margin-detail; подсказка-тип.
+- [T-13] (high) Автопилот цен WB: обогащение данных (воронка + детализация)
+  > Тело: recommendations() принимает date_from/date_to (шапка) + фолбэк
+  > window_days; джойн полного среза funnel_metric (рейтинги, выкупы,
+  > отмены ₽, конверсии, вишлисты, share/avg_orders_per_day, stock_wb/mp) и
+  > фактических денег из wb_detail_rows через margin_service (return_rate,
+  > margin_pct, commission/logistics/storage_per_one, income/revenue_per_one);
+  > новые колонки + экспорт + totals.
+- [T-14] (medium) Автопилот цен WB: модель решений — модуляторы R1–R10
+  > Тело: rating_min, buyout_min_pct, cancel_ratio_max, отд. возвраты из
+  > детализации; cap/блок RAISE при низком рейтинге/выкупе/высокой доле
+  > отмен; смелее RAISE при высоких выкупах+рейтинге+марже; новые настройки
+  > в PRICING_DEFAULTS + labels/hints; юнит-тесты.
+- [T-15] (medium) Автопилот цен WB: минимальная цена WB
+  > Тело: провайдер get_recommended_prices() (GET /public/v1/info/price,
+  > live-проба схемы), clamp target_vis ≥ max(floor_price, min_price),
+  > колонка min_price; при отсутствии мин. цен — apply заблокирован.
+- [T-16] (medium) Автопилот цен WB: кнопка «Применить скидки в WB»
+  > Тело: confirm-диалог + POST /api/pricing/apply (даты+настройки), результат
+  > в pricingMsg, журнал/cooldown; обновить подсказку «изменения НЕ вносятся».
 
 ## Заблокированные
 

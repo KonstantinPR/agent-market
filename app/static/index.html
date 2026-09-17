@@ -157,20 +157,21 @@
   </section>
 
   <section id="tab-pricing" class="pane">
-    <div class="toolbar">
-      <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает) и не опускает витринную цену ниже порога убытка (unit-экономика из продаж). Рост цены — только при реальных продажах; докупаемые товары поднимаются умеренно. Сейчас изменения в Wildberries через API НЕ вносятся — рекомендации сохраняются в Excel (применение включим после добавления токена WB).</span>
-    </div>
+    <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает), опирается на данные воронки и фактическую маржу из детализации и не опускает витринную цену ниже порога убытка. Сейчас изменения в Wildberries через API не вносятся — рекомендации сохраняются в Excel (применение станет доступно после расчёта минимальной цены WB).</span>
     <div class="toolbar">
       <button id="pricingRecalc" class="btn">Пересчитать</button>
-      <button id="pricingExport" class="btn btn-primary">Экспорт в Excel</button>
-      <button id="pricingUpload" class="btn">Загрузить на диск</button>
+      <button id="pricingApply" class="btn" disabled title="Применение скидок через WB API станет доступно после расчёта минимальной цены">Применить в WB</button>
       <span class="msg" id="pricingMsg"></span>
+      <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» внесёт новые скидки через API, когда появится расчёт минимальной цены.</span></span>
+      <input id="pricingLike" type="search" placeholder="Артикул или название содержит…">
       <span class="toolbar-right">
         <span id="pricingTablePager"></span>
         <div class="view-menu" id="pricingViewMenu">
           <button type="button" class="btn" id="btnpricingView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="pricingViewPanel"></div>
         </div>
+        <button id="pricingExport" class="btn">Экспорт в Excel</button>
+        <button id="pricingUpload" class="btn">Загрузить на диск</button>
       </span>
     </div>
     <div id="pricingSettings" class="pricing-settings"></div>

@@ -2335,7 +2335,17 @@ registerColView("margin-detail", {
   headers: marginHeaders,
   optional: MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: _OLD_OPTIONAL.has(c.k) })),
 });
-registerColView("pricing", { storageKey: "pricingCols", headers: pricingHeaders, optional: mkOpt(pricingHeaders) });
+// Необязательные колонки автопилота (базовые — article/name/stock/doc/action/target_discount/target_vis/reason — видны всегда).
+const PRICING_OPTIONAL = [
+  { k: "velocity", label: "v, шт/дн", def: true },
+  { k: "trend", label: "Тренд", def: true },
+  { k: "conv_pct", label: "Конверсия, %", def: true },
+  { k: "backlog", label: "В корзине", def: true },
+  { k: "current_discount", label: "Скидка сейчас, %", def: true },
+  { k: "avg_price", label: "Ср. цена факт", def: true },
+  { k: "margin_pct_at_target", label: "Маржа при цели, %", def: true },
+];
+registerColView("pricing", { storageKey: "pricingCols", headers: pricingHeaders, optional: PRICING_OPTIONAL });
 
 function loadPricingSettings() {
   try {
@@ -2423,7 +2433,7 @@ async function renderPricingHistory() {
     return;
   }
   if (!data.rows.length) {
-    box.innerHTML = '<div class="empty">Журнал пуст — решения записываются здесь при применении через WB API (сейчас выключено)</div>';
+    box.innerHTML = '<div class="empty">Журнал пуст — решения записываются здесь при применении скидок через WB API</div>';
     return;
   }
   const headers = [
@@ -2443,13 +2453,20 @@ async function renderPricing(apply) {
   await buildPricingSettings();
   const s = collectPricingSettings();
   const msg = $("#pricingMsg");
+  const likeEl = $("#pricingLike") || { value: "" };
+  const q = likeEl.value.trim().toLowerCase();
   msg.textContent = "Считаю рекомендации…";
   try {
     const data = await apiPost("/pricing/recommendations", s);
-    const rows = data.rows || [];
+    const allRows = data.rows || [];
+    const rows = allRows.filter((r) =>
+      !q || (String(r.article || "") + " " + (r.name || "")).toLowerCase().includes(q)
+    );
     const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
     const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
-    let summary = "Товаров: " + fmt(rows.length) + ", решений: " + fmt(actionable);
+    let summary = "Товаров: " + fmt(rows.length);
+    if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
+    summary += ", решений: " + fmt(actionable);
     if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
     if (data.as_of) summary += " · на " + data.as_of;
     $("#pricingSummary").textContent = summary;
@@ -2802,6 +2819,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const pricingExport = $("#pricingExport");
   if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));
   if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
+  const pricingLike = $("#pricingLike");
+  if (pricingLike) {
+    let pricingLikeTimer;
+    pricingLike.addEventListener("input", () => {
+      clearTimeout(pricingLikeTimer);
+      pricingLikeTimer = setTimeout(() => { if (currentTab === "pricing") renderPricing(false); }, 350);
+    });
+  }
   syncHeaderForTab(currentTab);
   for (const t of Object.keys(_COLVIEWS)) initColViewMenu(t);
   const btnExportMarginDetail = $("#exportMarginDetail");
