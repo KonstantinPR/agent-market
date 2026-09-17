@@ -2171,8 +2171,9 @@ function updateCrumb(name) {
 function syncHeaderForTab(name) {
   const mp = document.getElementById("fMarketplaceWrap");
   const upd = document.getElementById("btnUpdateWbDetail");
-  const wantUpd = name === "wb-detail" || name === "wb-funnel";
-  if (mp) mp.classList.toggle("hidden", name === "wb-detail" || name === "wb-funnel");
+  const isWb = !!name && name.startsWith("wb-");
+  const wantUpd = isWb;
+  if (mp) mp.classList.toggle("hidden", isWb);
   if (upd) upd.classList.toggle("hidden", !wantUpd);
   const tip = document.getElementById("hintTip");
   const tipText = document.getElementById("hintTipText");
@@ -2667,10 +2668,20 @@ document.addEventListener("DOMContentLoaded", () => {
     if (ds) ds.addEventListener("click", () => busyRun(() => { currentTab = tab; return uploadViewToDisk(); }));
   });
 
+  const wbPullByTab = {
+    "wb-cards": ["cards", "#wbMsg-cards-table"],
+    "wb-stock": ["stock", "#wbMsg-stock-table"],
+    "wb-funnel": ["funnel", "#wbMsg-funnel-table"],
+    "wb-sales": ["sales", "#wbMsg-sales-table"],
+    "wb-prices": ["prices", "#wbMsg-prices-table"],
+    "wb-storage": ["storage", "#wbMsg-storage-table"],
+    "wb-detail": ["detail", "#wbMsg-detail-table"],
+  };
   const btnUpdateWbDetail = document.getElementById("btnUpdateWbDetail");
   if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => {
-    if (currentTab === "wb-funnel") return apiDownload("wb", "funnel", "#wbMsg-funnel-table", true);
-    return apiDownload("wb", "detail", "#wbMsg-detail-table", true);
+    const spec = wbPullByTab[currentTab];
+    if (!spec) return Promise.resolve();
+    return apiDownload("wb", spec[0], spec[1], true);
   }));
   const funnelExp = document.getElementById("wbFunnelExpanded");
   if (funnelExp) funnelExp.addEventListener("change", () => loadTab("wb-funnel"));

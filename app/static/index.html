@@ -293,12 +293,7 @@
 
   <section id="tab-wb-cards" class="pane">
     <div class="wb-form">
-      <p class="hint">Полная загрузка карточек товаров Wildberries и запись в базу (товары).</p>
-      <div class="toolbar">
-        <button class="btn wb-dl" data-kind="cards">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="cards" checked> в БД</label>
-        <span class="msg" id="wbMsg-cards"></span>
-      </div>
+      <p class="hint">Полная загрузка карточек товаров Wildberries и запись в базу (товары). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие карточки из WB API.</p>
       <input type="file" id="wbCardsFile" class="hidden" accept=".xlsx,.xlsm,.zip" multiple>
       <div class="dropzone" id="wbCardsDrop">
         <span class="dz-label">Перетащите сюда Excel-файлы или zip-архив с карточками Wildberries</span>
@@ -308,7 +303,7 @@
     <div class="toolbar">
       <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд…">
       <span class="msg" id="wbMsg-cards-table"></span>
-      <span class="tip hidden" id="wbCardsTip" tabindex="0" role="tooltip">?<span class="tip-text">Одна строка = размер/SKU товара из базы. Обновите «Скачать Excel → обновить базу» или загрузите файл, чтобы получить свежие карточки.</span></span>
+      <span class="tip hidden" id="wbCardsTip" tabindex="0" role="tooltip">?<span class="tip-text">Одна строка = размер/SKU товара из базы. Обновите через «Обновить базу» в шапке или загрузите файл, чтобы получить свежие карточки.</span></span>
       <span class="toolbar-right">
         <span id="wbCardsTablePager"></span>
         <div class="view-menu" id="wbCardsViewMenu">
@@ -324,19 +319,13 @@
 
   <section id="tab-wb-stock" class="pane">
     <div class="wb-form">
-      <p class="hint">Остатки на складах Wildberries с записью в базу (остатки за сегодня, по размерам).</p>
-      <div class="toolbar">
-        <button class="btn wb-dl" data-kind="stock">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="by-size" checked> по размерам</label>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="stock" checked> в БД</label>
-        <span class="msg" id="wbMsg-stock"></span>
-      </div>
+      <p class="hint">Остатки на складах Wildberries с записью в базу (остатки за сегодня, по размерам). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие остатки из WB API.</p>
     </div>
     <div class="toolbar">
       <input id="wbStockLike" placeholder="Поиск: артикул, название, размер…">
       <label class="chk"><input type="checkbox" id="wbStockAgg"> свернуть по размерам</label>
       <span class="msg" id="wbMsg-stock-table"></span>
-      <span class="tip hidden" id="wbStockTip" tabindex="0" role="tooltip">?<span class="tip-text">Последний срез остатков по артикулам и складам. «Свернуть по размерам» группирует суммы по артикулу+склад.</span></span>
+      <span class="tip hidden" id="wbStockTip" tabindex="0" role="tooltip">?<span class="tip-text">Последний срез остатков по артикулам и складам из базы. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» группирует суммы по артикулу+склад.</span></span>
       <span class="toolbar-right">
         <span id="wbStockTablePager"></span>
         <div class="view-menu" id="wbStockViewMenu">
@@ -375,19 +364,12 @@
 
   <section id="tab-wb-sales" class="pane">
     <div class="wb-form">
-      <p class="hint">Отчёт о реализации Wildberries на указанные даты (записывается в продажи).</p>
-      <div class="toolbar">
-        <label>С <input type="date" data-date="from"></label>
-        <label>По <input type="date" data-date="to"></label>
-        <button class="btn wb-dl" data-kind="sales">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="sales" checked> в БД</label>
-        <span class="msg" id="wbMsg-sales"></span>
-      </div>
+      <p class="hint">Отчёт о реализации Wildberries (записывается в продажи). Период задаётся фильтром в шапке; «Обновить базу» вытягивает данные периода из WB API.</p>
     </div>
     <div class="toolbar">
       <input id="wbSalesLike" placeholder="Поиск: артикул, название…">
       <span class="msg" id="wbMsg-sales-table"></span>
-      <span class="tip hidden" id="wbSalesTip" tabindex="0" role="tooltip">?<span class="tip-text">Отчёт о реализации из базы за выбранный период (строки без «Детализации»). Обновите через «Скачать Excel → обновить базу» в форме выше.</span></span>
+      <span class="tip hidden" id="wbSalesTip" tabindex="0" role="tooltip">?<span class="tip-text">Отчёт о реализации из базы за выбранный период (строки без «Детализации»). Обновите через «Обновить базу» в шапке.</span></span>
       <span class="toolbar-right">
         <span id="wbSalesTablePager"></span>
         <div class="view-menu" id="wbSalesViewMenu">
@@ -430,18 +412,13 @@
 
   <section id="tab-wb-prices" class="pane">
     <div class="wb-form">
-      <p class="hint">Текущие цены и скидки Wildberries по карточкам (записываются в базу).</p>
-      <div class="toolbar">
-        <button class="btn wb-dl" data-kind="prices">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="prices" checked> в БД</label>
-        <span class="msg" id="wbMsg-prices"></span>
-      </div>
+      <p class="hint">Текущие цены и скидки Wildberries по карточкам (записываются в базу). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие цены из WB API.</p>
     </div>
     <div class="toolbar">
       <input id="wbPricesLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="wbPriceAgg"> свернуть по размерам</label>
       <span class="msg" id="wbMsg-prices-table"></span>
-      <span class="tip hidden" id="wbPricesTip" tabindex="0" role="tooltip">?<span class="tip-text">Текущие цены и скидки из последнего снимка в базе. «Свернуть по размерам» показывает одну строку на артикул.</span></span>
+      <span class="tip hidden" id="wbPricesTip" tabindex="0" role="tooltip">?<span class="tip-text">Текущие цены и скидки из последнего снимка в базе. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» показывает одну строку на артикул.</span></span>
       <span class="toolbar-right">
         <span id="wbPricesTablePager"></span>
         <div class="view-menu" id="wbPricesViewMenu">
@@ -457,18 +434,12 @@
 
   <section id="tab-wb-storage" class="pane">
     <div class="wb-form">
-      <p class="hint">Стоимость хранения на складах Wildberries за последние дни (записывается в базу).</p>
-      <div class="toolbar">
-        <label>Дней <input type="number" data-days value="7" min="1" max="90"></label>
-        <button class="btn wb-dl" data-kind="storage">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="storage" checked> в БД</label>
-        <span class="msg" id="wbMsg-storage"></span>
-      </div>
+      <p class="hint">Стоимость хранения на складах Wildberries за последние 7 дней (записывается в базу). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие данные из WB API.</p>
     </div>
     <div class="toolbar">
       <input id="wbStorageLike" placeholder="Поиск: артикул, название…">
       <span class="msg" id="wbMsg-storage-table"></span>
-      <span class="tip hidden" id="wbStorageTip" tabindex="0" role="tooltip">?<span class="tip-text">Стоимость хранения на складах WB за последние N дней из базы (метрики «Склад WB»). Обновите «Скачать Excel → обновить базу» в форме выше.</span></span>
+      <span class="tip hidden" id="wbStorageTip" tabindex="0" role="tooltip">?<span class="tip-text">Стоимость хранения на складах WB за последние 7 дней из базы (метрики «Склад WB»). Обновите через «Обновить базу» в шапке.</span></span>
       <span class="toolbar-right">
         <span id="wbStorageTablePager"></span>
         <div class="view-menu" id="wbStorageViewMenu">
