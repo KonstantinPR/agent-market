@@ -72,6 +72,24 @@ setWriteDbStorage("wb", "cards", true);
 assert.strictEqual(writeDbStorage("wb", "cards"), true, "write-db back on");
 assert.strictEqual(writeDbStorage("ozon", "realization"), true, "write-db default separate kind");
 
+// «Вид таблицы»: id кнопки/меню/панели, выводимые из tab, должны существовать в index.html.
+const HTML_PATH = process.argv[3];
+const htmlSrc = fs.readFileSync(HTML_PATH, "utf8");
+const jsSrc = fs.readFileSync(APP_PATH, "utf8");
+const ccTab2 = (tab) => {
+  const [head, ...rest] = tab.split("-");
+  return head + rest.map((s) => s[0].toUpperCase() + s.slice(1)).join("");
+};
+const colTabs = [...jsSrc.matchAll(/registerColView\("([^"]+)"/g)].map((m) => m[1]);
+assert.ok(colTabs.length >= 10, "registered col-view tabs: " + colTabs.length);
+for (const t of colTabs) {
+  const base = ccTab2(t);
+  for (const id of ["btn" + base + "View", base + "ViewMenu", base + "ViewPanel"]) {
+    assert.ok(htmlSrc.includes('id="' + id + '"'),
+              "в index.html нет id для «Вид таблицы» таба " + t + ": " + id);
+  }
+}
+
 console.log("JS_TESTS_OK");
 """
 
@@ -93,9 +111,11 @@ def test_js_helpers(node_bin, tmp_path):
     if not node_bin:
         pytest.skip("node недоступен")
     assert APP_JS.exists(), str(APP_JS)
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "index.html"
+    assert html_path.exists(), str(html_path)
     harness = tmp_path / "harness.js"
     harness.write_text(HARNESS, encoding="utf-8")
-    res = subprocess.run([node_bin, str(harness), str(APP_JS)],
+    res = subprocess.run([node_bin, str(harness), str(APP_JS), str(html_path)],
                          capture_output=True, text=True)
     assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
     assert "JS_TESTS_OK" in res.stdout

@@ -1,4 +1,5 @@
 from datetime import date as date_type, datetime
+from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -121,6 +122,33 @@ class FunnelMetric(Base):
     avg_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     revenue: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     buyout_sum: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+
+    subject_name: Mapped[str] = mapped_column(String(80), default="")
+    brand_name: Mapped[str] = mapped_column(String(120), default="")
+    product_rating: Mapped[float] = mapped_column(Numeric(4, 1), default=0)
+    feedback_rating: Mapped[float] = mapped_column(Numeric(4, 2), default=0)
+    stock_wb: Mapped[int] = mapped_column(Integer, default=0)
+    stock_mp: Mapped[int] = mapped_column(Integer, default=0)
+    stock_balance_sum: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    cancel_sum: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    avg_orders_per_day: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
+    share_order_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
+    add_to_wishlist: Mapped[int] = mapped_column(Integer, default=0)
+    time_to_ready_min: Mapped[int] = mapped_column(Integer, default=0)
+    localization_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
+    conv_to_cart_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
+    conv_cart_to_order_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
+    conv_buyout_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
+    wb_club_order_count: Mapped[int] = mapped_column(Integer, default=0)
+    wb_club_order_sum: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    wb_club_buyout_count: Mapped[int] = mapped_column(Integer, default=0)
+    wb_club_buyout_sum: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    wb_club_cancel_count: Mapped[int] = mapped_column(Integer, default=0)
+    wb_club_cancel_sum: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    wb_club_avg_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    wb_club_buyout_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
+    wb_club_avg_orders_per_day: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
+    raw_json: Mapped[Optional[str]] = mapped_column(Text, default="")
 
 
 class MarketplaceCard(Base):

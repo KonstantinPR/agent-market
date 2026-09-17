@@ -1111,23 +1111,51 @@ def upsert_funnel(db, df: pd.DataFrame) -> int:
     df = df[df["article"] != ""]
     if df.empty:
         return 0
-    for c in ["views", "opens", "adds", "orders", "cancelled", "buyouts"]:
+    for c in ["views", "opens", "adds", "orders", "cancelled", "buyouts",
+              "stock_wb", "stock_mp", "add_to_wishlist", "time_to_ready_min",
+              "wb_club_order_count", "wb_club_buyout_count", "wb_club_cancel_count"]:
         df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
-    for c in ["avg_price", "revenue", "buyout_sum"]:
+    for c in ["avg_price", "revenue", "buyout_sum", "cancel_sum",
+              "stock_balance_sum", "avg_orders_per_day", "share_order_percent",
+              "localization_percent", "conv_to_cart_percent",
+              "conv_cart_to_order_percent", "conv_buyout_percent",
+              "product_rating", "feedback_rating",
+              "wb_club_order_sum", "wb_club_buyout_sum", "wb_club_cancel_sum",
+              "wb_club_avg_price", "wb_club_buyout_percent",
+              "wb_club_avg_orders_per_day"]:
         df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0)
     df["nm_id"] = df.get("nm_id", "").astype(str)
-    df = df.groupby(["date_from", "date_to", "article"], as_index=False).agg({
-        "nm_id": "first", "views": "sum", "opens": "sum", "adds": "sum",
-        "orders": "sum", "cancelled": "sum", "buyouts": "sum",
-        "avg_price": "first", "revenue": "sum", "buyout_sum": "sum",
-    })
+    df["subject_name"] = df.get("subject_name", "").astype(str)
+    df["brand_name"] = df.get("brand_name", "").astype(str)
+    df["raw_json"] = df.get("raw_json", "").astype(str)
+    new_cols = ["subject_name", "brand_name", "stock_wb", "stock_mp",
+                "stock_balance_sum", "cancel_sum", "avg_orders_per_day",
+                "share_order_percent", "add_to_wishlist", "time_to_ready_min",
+                "localization_percent", "conv_to_cart_percent",
+                "conv_cart_to_order_percent", "conv_buyout_percent",
+                "product_rating", "feedback_rating", "wb_club_order_count",
+                "wb_club_order_sum", "wb_club_buyout_count", "wb_club_buyout_sum",
+                "wb_club_cancel_count", "wb_club_cancel_sum", "wb_club_avg_price",
+                "wb_club_buyout_percent", "wb_club_avg_orders_per_day", "raw_json"]
+    agg = {"nm_id": "first", "views": "sum", "opens": "sum", "adds": "sum",
+           "orders": "sum", "cancelled": "sum", "buyouts": "sum",
+           "avg_price": "first", "revenue": "sum", "buyout_sum": "sum"}
+    for c in new_cols:
+        agg[c] = "sum" if c in {"stock_wb", "stock_mp", "add_to_wishlist",
+                                "time_to_ready_min", "wb_club_order_count",
+                                "wb_club_buyout_count", "wb_club_cancel_count",
+                                "cancel_sum", "stock_balance_sum",
+                                "wb_club_order_sum", "wb_club_buyout_sum",
+                                "wb_club_cancel_sum"} else "first"
+    df = df.groupby(["date_from", "date_to", "article"], as_index=False).agg(agg)
     values = [dict(r) for r in df.to_dict("records")]
     ins = insert(models.FunnelMetric)
     stmt = ins.on_conflict_do_update(
         index_elements=["date_from", "date_to", "article"],
         set_={c: ins.excluded[c] for c in ["nm_id", "views", "opens", "adds",
-                                            "orders", "cancelled", "buyouts",
-                                            "avg_price", "revenue", "buyout_sum"]},
+                                           "orders", "cancelled", "buyouts",
+                                           "avg_price", "revenue", "buyout_sum"]
+                                   + new_cols},
     )
     db.execute(stmt, values)
     db.commit()

@@ -1,6 +1,7 @@
 import re
 import zipfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from io import BytesIO
 from typing import List, Optional
 
@@ -48,7 +49,12 @@ def _df_totals(df: pd.DataFrame) -> dict:
             "commission_per_one", "logistics_per_one", "logistics_out_per_one",
             "logistics_in_per_one", "storage_per_one", "income_per_one",
             "revenue_per_one", "margin_gross_per_one", "return_rate",
-            "avg_price"}
+            "avg_price", "product_rating", "feedback_rating",
+            "avg_orders_per_day", "share_order_percent", "time_to_ready_min",
+            "localization_percent", "conv_to_cart_percent",
+            "conv_cart_to_order_percent", "conv_buyout_percent",
+            "wb_club_avg_price", "wb_club_buyout_percent",
+            "wb_club_avg_orders_per_day"}
     out: dict = {}
     for c in df.columns:
         if c in skip:
@@ -221,20 +227,23 @@ def api_funnel(
     """Строки воронки продаж WB из funnel_metric.
 
     Без дат — окно последней загрузки (max(date_to)); иначе заданное окно.
+    Ищется срез с точным совпадением периода (date_from..date_to); если такого
+    нет, показывается последний срез в базе (сниппет snapshot_from/snapshot_to,
+    чтобы UI сообщил о несовпадении с запрошенным окном).
     """
     snapshot = db.execute(
         select(func.max(models.FunnelMetric.date_to))
     ).scalar()
+    latest_win = db.execute(
+        select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
+        .order_by(models.FunnelMetric.date_to.desc(), models.FunnelMetric.date_from.desc())
+        .limit(1)
+    ).first()
     if date_from is None or date_to is None:
-        win = db.execute(
-            select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
-            .order_by(models.FunnelMetric.date_to.desc(), models.FunnelMetric.date_from.desc())
-            .limit(1)
-        ).first()
-        if win is None:
+        if latest_win is None:
             return {"rows": [], "count": 0, "date_from": "", "date_to": "",
                     "snapshot_from": "", "snapshot_to": ""}
-        from_, to_ = win[0], win[1]
+        from_, to_ = latest_win[0], latest_win[1]
     else:
         from_, to_ = _parse_window400(date_from, date_to)
 
@@ -244,51 +253,98 @@ def api_funnel(
         .limit(1)
         .scalar_subquery()
     )
-    q = (
-        select(
-            models.FunnelMetric.date_from,
-            models.FunnelMetric.date_to,
-            models.FunnelMetric.nm_id,
-            models.FunnelMetric.article,
-            name_subq.label("name"),
-            models.FunnelMetric.views,
-            models.FunnelMetric.opens,
-            models.FunnelMetric.adds,
-            models.FunnelMetric.orders,
-            models.FunnelMetric.cancelled,
-            models.FunnelMetric.buyouts,
-            models.FunnelMetric.avg_price,
-            models.FunnelMetric.revenue,
-            models.FunnelMetric.buyout_sum,
-        )
-        .where(models.FunnelMetric.date_from == from_,
-               models.FunnelMetric.date_to == to_)
-        .order_by(models.FunnelMetric.revenue.desc(), models.FunnelMetric.article)
-    )
-    if article_like:
-        q = q.where(models.FunnelMetric.article.ilike(f"%{article_like}%"))
 
-    rows = [
-        {
-            "date_from": str(r.date_from), "date_to": str(r.date_to),
-            "nm_id": str(r.nm_id or ""), "article": str(r.article),
-            "name": str(r.name or ""),
-            "views": int(r.views or 0), "opens": int(r.opens or 0),
-            "adds": int(r.adds or 0), "orders": int(r.orders or 0),
-            "cancelled": int(r.cancelled or 0), "buyouts": int(r.buyouts or 0),
-            "avg_price": float(r.avg_price or 0), "revenue": float(r.revenue or 0),
-            "buyout_sum": float(r.buyout_sum or 0),
-        }
-        for r in db.execute(q)
-    ]
+    def snapshot_rows(sf: date, st: date) -> list:
+        q = (
+            select(
+                models.FunnelMetric.date_from,
+                models.FunnelMetric.date_to,
+                models.FunnelMetric.nm_id,
+                models.FunnelMetric.article,
+                name_subq.label("name"),
+                models.FunnelMetric.views,
+                models.FunnelMetric.opens,
+                models.FunnelMetric.adds,
+                models.FunnelMetric.orders,
+                models.FunnelMetric.cancelled,
+                models.FunnelMetric.buyouts,
+                models.FunnelMetric.avg_price,
+                models.FunnelMetric.revenue,
+                models.FunnelMetric.buyout_sum,
+                models.FunnelMetric.subject_name,
+                models.FunnelMetric.brand_name,
+                models.FunnelMetric.product_rating,
+                models.FunnelMetric.feedback_rating,
+                models.FunnelMetric.stock_wb,
+                models.FunnelMetric.stock_mp,
+                models.FunnelMetric.stock_balance_sum,
+                models.FunnelMetric.cancel_sum,
+                models.FunnelMetric.avg_orders_per_day,
+                models.FunnelMetric.share_order_percent,
+                models.FunnelMetric.add_to_wishlist,
+                models.FunnelMetric.time_to_ready_min,
+                models.FunnelMetric.localization_percent,
+                models.FunnelMetric.conv_to_cart_percent,
+                models.FunnelMetric.conv_cart_to_order_percent,
+                models.FunnelMetric.conv_buyout_percent,
+                models.FunnelMetric.wb_club_order_count,
+                models.FunnelMetric.wb_club_order_sum,
+                models.FunnelMetric.wb_club_buyout_count,
+                models.FunnelMetric.wb_club_buyout_sum,
+                models.FunnelMetric.wb_club_cancel_count,
+                models.FunnelMetric.wb_club_cancel_sum,
+                models.FunnelMetric.wb_club_avg_price,
+                models.FunnelMetric.wb_club_buyout_percent,
+                models.FunnelMetric.wb_club_avg_orders_per_day,
+            )
+            .where(models.FunnelMetric.date_from == sf,
+                   models.FunnelMetric.date_to == st)
+            .order_by(models.FunnelMetric.revenue.desc(), models.FunnelMetric.article)
+        )
+        if article_like:
+            q = q.where(models.FunnelMetric.article.ilike(f"%{article_like}%"))
+        out_cols = [
+            "date_from", "date_to", "nm_id", "article", "name",
+            "views", "opens", "adds", "orders", "cancelled", "buyouts",
+            "avg_price", "revenue", "buyout_sum", "subject_name", "brand_name",
+            "product_rating", "feedback_rating", "stock_wb", "stock_mp",
+            "stock_balance_sum", "cancel_sum", "avg_orders_per_day",
+            "share_order_percent", "add_to_wishlist", "time_to_ready_min",
+            "localization_percent", "conv_to_cart_percent",
+            "conv_cart_to_order_percent", "conv_buyout_percent",
+            "wb_club_order_count", "wb_club_order_sum", "wb_club_buyout_count",
+            "wb_club_buyout_sum", "wb_club_cancel_count", "wb_club_cancel_sum",
+            "wb_club_avg_price", "wb_club_buyout_percent",
+            "wb_club_avg_orders_per_day",
+        ]
+
+        def _row(r):
+            d = {}
+            for c in out_cols:
+                v = getattr(r, c)
+                if isinstance(v, (date, datetime)):
+                    d[c] = str(v)
+                elif isinstance(v, Decimal):
+                    f = float(v)
+                    d[c] = int(f) if f.is_integer() else f
+                elif isinstance(v, float):
+                    d[c] = float(v)
+                elif isinstance(v, int):
+                    d[c] = int(v)
+                else:
+                    d[c] = str(v or "")
+            return d
+
+        return [_row(r) for r in db.execute(q)]
+
+    rows = snapshot_rows(from_, to_)
+    if not rows and latest_win is not None and (from_, to_) != (latest_win[0], latest_win[1]):
+        rows = snapshot_rows(latest_win[0], latest_win[1])
     return {"rows": rows, "count": len(rows),
             "date_from": str(from_), "date_to": str(to_),
             "snapshot_to": str(snapshot or ""),
-            "totals": _df_totals(pd.DataFrame(rows, columns=[
-                "date_from", "date_to", "nm_id", "article", "name", "views",
-                "opens", "adds", "orders", "cancelled", "buyouts",
-                "avg_price", "revenue", "buyout_sum",
-            ])) if rows else {}}
+            "snapshot_from": str(latest_win[0]) if latest_win else "",
+            "totals": _df_totals(pd.DataFrame(rows)) if rows else {}}
 
 
 @router.get("/pulls")
@@ -1948,16 +2004,26 @@ def export_wb_funnel(
 ):
     """Экспорт воронки продаж WB (funnel_metric) в Excel."""
     payload = api_funnel(date_from=date_from, date_to=date_to, article_like=article_like, db=db)
-    df = pd.DataFrame(payload["rows"], columns=[
-        "date_from", "date_to", "nm_id", "article", "name", "views", "opens", "adds",
-        "orders", "cancelled", "buyouts", "avg_price", "revenue", "buyout_sum",
-    ])
+    df = pd.DataFrame(payload["rows"])
     df, ru = excel_io.project_export(df, {
         "date_from": "С", "date_to": "По", "nm_id": "Артикул WB", "article": "Артикул",
-        "name": "Наименование", "views": "Просмотры", "opens": "Открытия",
-        "adds": "В корзину", "orders": "Заказы", "cancelled": "Отмены",
+        "name": "Наименование", "subject_name": "Предмет", "brand_name": "Бренд",
+        "product_rating": "Рейтинг карточки", "feedback_rating": "Рейтинг по отзывам",
+        "views": "Просмотры", "opens": "Открытия", "adds": "В корзину",
+        "orders": "Заказы", "cancelled": "Отмены", "cancel_sum": "Сумма отмен",
         "buyouts": "Выкупы", "avg_price": "Ср. цена", "revenue": "Выручка",
-        "buyout_sum": "Сумма выкупа",
+        "buyout_sum": "Сумма выкупа", "avg_orders_per_day": "Ср. заказов в день",
+        "share_order_percent": "Доля в выручке, %", "add_to_wishlist": "В отложенные",
+        "time_to_ready_min": "Время доставки, мин", "localization_percent": "Локальные заказы, %",
+        "conv_to_cart_percent": "В корзину, %", "conv_cart_to_order_percent": "К заказу, %",
+        "conv_buyout_percent": "К выкупу, %",
+        "wb_club_order_count": "WB Клуб: заказы", "wb_club_order_sum": "WB Клуб: заказы, ₽",
+        "wb_club_buyout_count": "WB Клуб: выкупы", "wb_club_buyout_sum": "WB Клуб: выкупы, ₽",
+        "wb_club_cancel_count": "WB Клуб: отмены", "wb_club_cancel_sum": "WB Клуб: отмены, ₽",
+        "wb_club_avg_price": "WB Клуб: ср. цена", "wb_club_buyout_percent": "WB Клуб: % выкупа",
+        "wb_club_avg_orders_per_day": "WB Клуб: заказов/день",
+        "stock_wb": "Остатки WB", "stock_mp": "Остатки свой склад",
+        "stock_balance_sum": "Сумма остатков",
     }, cols)
     df = df.rename(columns=ru)
     return _xlsx_response(df, f"wb_funnel_{payload['date_from']}_{payload['date_to']}.xlsx",

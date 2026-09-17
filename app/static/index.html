@@ -108,7 +108,7 @@
       <span class="toolbar-right">
         <span id="marginTablePager"></span>
         <div class="view-menu" id="marginViewMenu">
-          <button type="button" class="btn" id="btnMarginView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnmarginView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="marginViewPanel"></div>
         </div>
         <a id="exportMargin" class="btn" href="#" target="_blank">Экспорт в Excel</a>
@@ -126,7 +126,7 @@
       <span class="toolbar-right">
         <span id="marginFunnelTablePager"></span>
         <div class="view-menu" id="marginFunnelViewMenu">
-          <button type="button" class="btn" id="btnMarginFunnelView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnmarginFunnelView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="marginFunnelViewPanel"></div>
         </div>
         <a id="exportMarginFunnel" class="btn" href="#" target="_blank">Экспорт в Excel</a>
@@ -146,7 +146,7 @@
       <span class="toolbar-right">
         <span id="marginDetailTablePager"></span>
         <div class="view-menu" id="marginDetailViewMenu">
-          <button type="button" class="btn" id="btnMarginDetailView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnmarginDetailView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="marginDetailViewPanel"></div>
         </div>
         <button type="button" class="btn" id="exportMarginDetail">Экспорт в Excel</button>
@@ -168,7 +168,7 @@
       <span class="toolbar-right">
         <span id="pricingTablePager"></span>
         <div class="view-menu" id="pricingViewMenu">
-          <button type="button" class="btn" id="btnPricingView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnpricingView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="pricingViewPanel"></div>
         </div>
       </span>
@@ -312,7 +312,7 @@
       <span class="toolbar-right">
         <span id="wbCardsTablePager"></span>
         <div class="view-menu" id="wbCardsViewMenu">
-          <button type="button" class="btn" id="btnWbCardsView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnwbCardsView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="wbCardsViewPanel"></div>
         </div>
         <button id="btnExportWbCards" class="btn">Выгрузить в Excel</button>
@@ -340,7 +340,7 @@
       <span class="toolbar-right">
         <span id="wbStockTablePager"></span>
         <div class="view-menu" id="wbStockViewMenu">
-          <button type="button" class="btn" id="btnWbStockView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnwbStockView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="wbStockViewPanel"></div>
         </div>
         <button id="btnExportWbStock" class="btn">Выгрузить в Excel</button>
@@ -352,24 +352,17 @@
 
   <section id="tab-wb-funnel" class="pane">
     <div class="wb-form">
-      <p class="hint">Воронка продаж: просмотры, добавления в корзину, заказы по товарам.</p>
-      <div class="toolbar">
-        <label>С <input type="date" data-date="from"></label>
-        <label>По <input type="date" data-date="to"></label>
-        <button class="btn wb-dl" data-kind="funnel">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="wb" data-kind="funnel" checked> в БД</label>
-        <span class="msg" id="wbMsg-funnel"></span>
-      </div>
+      <p class="hint">Воронка продаж: просмотры, добавления в корзину, заказы по товарам. Период задаётся фильтром в шапке. «Применить» перечитывает таблицу из базы; «Обновить базу» в шапке вытягивает данные периода из WB API (Успешное скачивание записывает в базу автоматически).</p>
     </div>
     <div class="toolbar">
       <input id="wbFunnelLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="wbFunnelExpanded"> Расширенный вид</label>
       <span class="msg" id="wbMsg-funnel-table"></span>
-      <span class="tip hidden" id="wbFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Срез воронки из базы за выбранный период. «Расширенный вид» добавляет конверсии и выкупы (если доступны).</span></span>
+      <span class="tip hidden" id="wbFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Срез воронки из базы за выбранный период. «Расширенный вид» включает все поля отчёта WB: предмет, бренд, рейтинги, остатки, конверсии, WB Клуб, время доставки.<span class="tip-note hidden" id="wbFunnelTipNote"></span></span></span>
       <span class="toolbar-right">
         <span id="wbFunnelTablePager"></span>
         <div class="view-menu" id="wbFunnelViewMenu">
-          <button type="button" class="btn" id="btnWbFunnelView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnwbFunnelView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="wbFunnelViewPanel"></div>
         </div>
         <button id="btnExportWbFunnel" class="btn">Выгрузить в Excel</button>
@@ -398,7 +391,7 @@
       <span class="toolbar-right">
         <span id="wbSalesTablePager"></span>
         <div class="view-menu" id="wbSalesViewMenu">
-          <button type="button" class="btn" id="btnWbSalesView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnwbSalesView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="wbSalesViewPanel"></div>
         </div>
         <button id="btnExportWbSales" class="btn">Выгрузить в Excel</button>
@@ -425,7 +418,7 @@
       <span class="toolbar-right">
         <span id="wbDetailTablePager"></span>
         <div class="view-menu" id="wbDetailViewMenu">
-          <button type="button" class="btn" id="btnWbDetailView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnwbDetailView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="wbDetailViewPanel"></div>
         </div>
         <button id="btnExportWbDetail" class="btn">Выгрузить в Excel</button>
@@ -452,7 +445,7 @@
       <span class="toolbar-right">
         <span id="wbPricesTablePager"></span>
         <div class="view-menu" id="wbPricesViewMenu">
-          <button type="button" class="btn" id="btnWbPricesView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnwbPricesView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="wbPricesViewPanel"></div>
         </div>
         <button id="btnExportWbPrices" class="btn">Выгрузить в Excel</button>
@@ -479,7 +472,7 @@
       <span class="toolbar-right">
         <span id="wbStorageTablePager"></span>
         <div class="view-menu" id="wbStorageViewMenu">
-          <button type="button" class="btn" id="btnWbStorageView">Вид таблицы &#9662;</button>
+          <button type="button" class="btn" id="btnwbStorageView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="wbStorageViewPanel"></div>
         </div>
         <button id="btnExportWbStorage" class="btn">Выгрузить в Excel</button>

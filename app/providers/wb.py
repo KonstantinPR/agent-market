@@ -299,25 +299,53 @@ class WbProvider(BaseProvider):
             for d in days:
                 for i, a in enumerate(arts):
                     views = int(rng.integers(20, 300))
+                    adds = int(views * rng.uniform(0.05, 0.2))
+                    orders = int(views * rng.uniform(0.01, 0.06))
+                    buyouts = int(orders * rng.uniform(0.5, 0.9))
+                    price = round(rng.uniform(1000, 3000), 2)
                     rows.append({
-                        "nmID": 530000 + i,
-                        "date": str(d),
-                        "brandName": f"Бренд {chr(65 + i % 3)}",
-                        "title": f"Товар {a}",
-                        "openCardCount": int(views * rng.uniform(0.2, 0.5)),
-                        "addToCartCount": int(views * rng.uniform(0.05, 0.2)),
-                        "orderCount": int(views * rng.uniform(0.01, 0.06)),
-                        "ordersCountAvg": round(rng.uniform(1, 3), 2),
-                        "cancelCount": 0,
-                        "viewsCount": views,
-                        "avgPrice": round(rng.uniform(1000, 3000), 2),
-                        "revenue": 0,
+                        "product.nmID": 530000 + i,
+                        "product.vendorCode": a,
+                        "product.brandName": f"Бренд {chr(65 + i % 3)}",
+                        "product.title": f"Товар {a}",
+                        "product.subjectName": "Куртки",
+                        "product.productRating": round(rng.uniform(6, 10), 1),
+                        "product.feedbackRating": round(rng.uniform(3.5, 5.0), 2),
+                        "product.stocks.wb": int(rng.integers(0, 15)),
+                        "product.stocks.mp": int(rng.integers(0, 8)),
+                        "product.stocks.balanceSum": round(rng.uniform(0, 40000), 2),
+                        "statistic.selected.period.start": str(date_from),
+                        "statistic.selected.period.end": str(date_to),
+                        "statistic.selected.openCount": views,
+                        "statistic.selected.cartCount": adds,
+                        "statistic.selected.orderCount": orders,
+                        "statistic.selected.orderSum": round(orders * price, 2),
+                        "statistic.selected.cancelCount": 0,
+                        "statistic.selected.cancelSum": 0,
+                        "statistic.selected.buyoutCount": buyouts,
+                        "statistic.selected.buyoutSum": round(buyouts * price, 2),
+                        "statistic.selected.avgPrice": price,
+                        "statistic.selected.avgOrdersCountPerDay": round(rng.uniform(0.1, 2), 2),
+                        "statistic.selected.shareOrderPercent": round(rng.uniform(0, 20), 2),
+                        "statistic.selected.addToWishlist": int(views * rng.uniform(0.01, 0.05)),
+                        "statistic.selected.timeToReady.days": 1,
+                        "statistic.selected.timeToReady.hours": int(rng.integers(2, 12)),
+                        "statistic.selected.timeToReady.mins": int(rng.integers(0, 59)),
+                        "statistic.selected.localizationPercent": 100,
+                        "statistic.selected.conversions.addToCartPercent":
+                            round(100 * adds / views, 2) if views else 0,
+                        "statistic.selected.conversions.cartToOrderPercent":
+                            round(100 * orders / adds, 2) if adds else 0,
+                        "statistic.selected.conversions.buyoutPercent":
+                            round(100 * buyouts / orders, 2) if orders else 0,
                     })
-            return pd.DataFrame(rows)
+            df = pd.DataFrame(rows)
+            df["_raw"] = rows
+            return df
 
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         key = self._pick_funnel_key(url)
-        chunk, offset, frames = 1000, 0, []
+        chunk, offset, frames, raw_rows = 1000, 0, [], []
         while True:
             payload = {
                 "selectedPeriod": {"start": str(date_from), "end": str(date_to)},
@@ -331,13 +359,16 @@ class WbProvider(BaseProvider):
             if not products:
                 break
             frames.append(pd.json_normalize(products, errors="ignore"))
+            raw_rows.extend(products)
             offset += chunk
             if len(products) < chunk:
                 break
             time.sleep(20)
         if not frames:
             return pd.DataFrame()
-        return pd.concat(frames, ignore_index=True)
+        df = pd.concat(frames, ignore_index=True)
+        df["_raw"] = raw_rows
+        return df
 
     def _pick_funnel_key(self, url: str) -> str:
         """Первый непустой WB-токен с доступом к отчёту воронки (не 403).

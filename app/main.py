@@ -1,4 +1,5 @@
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -12,7 +13,16 @@ from app.config import BASE_DIR
 
 STATIC_DIR = BASE_DIR / "app" / "static"
 
-app = FastAPI(title="Agent Market")
+
+@asynccontextmanager
+async def lifespan(_app):
+    from app.database import ensure_schema
+
+    ensure_schema(seed=False)
+    yield
+
+
+app = FastAPI(title="Agent Market", lifespan=lifespan)
 app.include_router(router)
 
 if STATIC_DIR.exists():

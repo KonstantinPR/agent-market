@@ -131,8 +131,12 @@ function table(headers, rows, sort, footers) {
         h += "<th class=\"totals\"></th>";
       } else if (c.render === cellFmts.money) {
         h += '<th class="num totals"><b>' + fmtMoney(v) + "</b></th>";
+      } else if (c.render === cellFmts.moneyZero) {
+        h += '<th class="num totals"><b>' + (v ? fmtMoney(v) : "—") + "</b></th>";
       } else if (c.render === cellFmts.int) {
         h += '<th class="num totals"><b>' + fmt(Math.round(v)) + "</b></th>";
+      } else if (c.render === cellFmts.intZero) {
+        h += '<th class="num totals"><b>' + (v ? fmt(Math.round(v)) : "—") + "</b></th>";
       } else if (c.render === cellFmts.pct) {
         h += '<th class="num totals"><b>' + fmtPct(v) + "</b></th>";
       } else {
@@ -1360,6 +1364,21 @@ async function renderCards(name) {
   await st.fetching();
 }
 
+function numDec(d) {
+  return (v) => v == null || v === "" || !Number(v) ? "—" : Number(v).toFixed(d).replace(".", ",");
+}
+
+function fmtMinutes(v) {
+  const n = Number(v || 0);
+  if (!n) return "—";
+  const d = Math.floor(n / 1440);
+  const h = Math.floor((n % 1440) / 60);
+  const m = n % 60;
+  let s = d ? d + " дн " : "";
+  s += h ? h + " ч " : "";
+  return s + m + " мин";
+}
+
 const wbFunnelCompact = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name", label: "Название", render: cellFmts.text },
@@ -1368,31 +1387,46 @@ const wbFunnelCompact = [
   { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money },
 ];
 
-function funnelConv(nk, dk) {
-  return (v, r) => {
-    const n = Number(r[nk] || 0);
-    const d = Number(r[dk] || 0);
-    return d ? fmtPct((n / d) * 100) : "—";
-  };
-}
-
 const wbFunnelHeaders = [
   { k: "date_from", label: "С", render: cellFmts.text },
   { k: "date_to", label: "По", render: cellFmts.text },
   { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
   { k: "name", label: "Название", render: cellFmts.text },
+  { k: "subject_name", label: "Предмет", render: cellFmts.text },
+  { k: "brand_name", label: "Бренд", render: cellFmts.text },
+  { k: "product_rating", label: "Рейтинг карточки", num: true, render: numDec(1) },
+  { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: numDec(2) },
+  { k: "stock_wb", label: "Остатки WB", num: true, render: cellFmts.intZero },
+  { k: "stock_mp", label: "Остатки свой склад", num: true, render: cellFmts.intZero },
+  { k: "stock_balance_sum", label: "Сумма остатков", num: true, render: cellFmts.moneyZero },
   { k: "views", label: "Просмотры", num: true, render: cellFmts.int },
-  { k: "opens", label: "Открытия", num: true, render: cellFmts.int },
+  { k: "opens", label: "Открытия", num: true, render: cellFmts.intZero },
   { k: "adds", label: "В корзину", num: true, render: cellFmts.int },
   { k: "orders", label: "Заказы", num: true, render: cellFmts.int },
   { k: "buyouts", label: "Выкупы", num: true, render: cellFmts.intZero },
   { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int },
-  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money },
+  { k: "cancel_sum", label: "Сумма отмен", num: true, render: cellFmts.moneyZero },
+  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.moneyZero },
   { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
   { k: "buyout_sum", label: "Сумма выкупа", num: true, render: cellFmts.moneyZero },
-  { k: "conv_view", label: "Просмотр→В корзину", num: true, render: funnelConv("adds", "views") },
-  { k: "conv_add", label: "В корзину→Заказ", num: true, render: funnelConv("orders", "adds") },
-  { k: "conv_buy", label: "Заказ→Выкуп", num: true, render: funnelConv("buyouts", "orders") },
+  { k: "avg_orders_per_day", label: "Заказов в день", num: true, render: numDec(2) },
+  { k: "share_order_percent", label: "Доля в выручке, %", num: true, render: cellFmts.pct },
+  { k: "add_to_wishlist", label: "В отложенные", num: true, render: cellFmts.intZero },
+  { k: "time_to_ready_min", label: "Доставка, средн.", num: true, render: fmtMinutes },
+  { k: "localization_percent", label: "Локальные, %", num: true, render: cellFmts.pct },
+  { k: "conv_to_cart_percent", label: "Просмотр→Корзина, %", num: true, render: cellFmts.pct },
+  { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct },
+  { k: "conv_buyout_percent", label: "Заказ→Выкуп, %", num: true, render: cellFmts.pct },
+  { k: "wb_club_order_count", label: "WB Клуб: заказы", num: true, render: cellFmts.intZero },
+  { k: "wb_club_order_sum", label: "WB Клуб: заказы, ₽", num: true, render: cellFmts.moneyZero },
+  { k: "wb_club_buyout_count", label: "WB Клуб: выкупы", num: true, render: cellFmts.intZero },
+  { k: "wb_club_buyout_sum", label: "WB Клуб: выкупы, ₽", num: true, render: cellFmts.moneyZero },
+  { k: "wb_club_cancel_count", label: "WB Клуб: отмены", num: true, render: cellFmts.intZero },
+  { k: "wb_club_cancel_sum", label: "WB Клуб: отмены, ₽", num: true, render: cellFmts.moneyZero },
+  { k: "wb_club_avg_price", label: "WB Клуб: ср. цена", num: true, render: cellFmts.moneyZero },
+  { k: "wb_club_buyout_percent", label: "WB Клуб: % выкупа", num: true, render: cellFmts.pct },
+  { k: "wb_club_avg_orders_per_day", label: "WB Клуб: заказов/день", num: true, render: numDec(2) },
 ];
 
 function paneDates() {
@@ -1408,7 +1442,8 @@ async function renderWbFunnel() {
   const box = document.getElementById("wbFunnelTable");
   const likeEl = document.getElementById("wbFunnelLike");
   const expandedEl = document.getElementById("wbFunnelExpanded");
-  const p = paneDates();
+  const f = filters();
+  const p = { date_from: f.date_from, date_to: f.date_to };
   const like = likeEl ? likeEl.value.trim() : "";
   let data;
   try {
@@ -1430,6 +1465,15 @@ async function renderWbFunnel() {
   }
   const tipEl = document.getElementById("wbFunnelTip");
   if (tipEl) tipEl.classList.toggle("hidden", !(data.rows && data.rows.length));
+  const tipNote = document.getElementById("wbFunnelTipNote");
+  if (tipNote) {
+    const wantFull = p.date_from && p.date_to && data.snapshot_from;
+    const partial = wantFull && (data.snapshot_from !== p.date_from || data.snapshot_to !== p.date_to);
+    tipNote.textContent = partial
+      ? "В базе срез только за " + data.snapshot_from + " — " + data.snapshot_to + ". Полный период загрузите через «Обновить базу» в шапке."
+      : "";
+    tipNote.classList.toggle("hidden", !partial);
+  }
   const headers = colViewHeaders("wb-funnel", expandedEl && expandedEl.checked ? wbFunnelHeaders : wbFunnelCompact);
   pagedTable(box, headers, data.rows || [], data.totals || null, "#wbFunnelTablePager");
 }
@@ -1763,8 +1807,8 @@ function wbViewExportUrl() {
     }
     case "wb-funnel": {
       const q = qs({
-        date_from: p.date_from || undefined,
-        date_to: p.date_to || undefined,
+        date_from: f.date_from || undefined,
+        date_to: f.date_to || undefined,
         article_like: wbLikeVal("wbFunnelLike") || undefined,
       });
       const cp = colViewParam("wb-funnel");
@@ -2127,8 +2171,9 @@ function updateCrumb(name) {
 function syncHeaderForTab(name) {
   const mp = document.getElementById("fMarketplaceWrap");
   const upd = document.getElementById("btnUpdateWbDetail");
-  if (mp) mp.classList.toggle("hidden", name === "wb-detail");
-  if (upd) upd.classList.toggle("hidden", name !== "wb-detail");
+  const wantUpd = name === "wb-detail" || name === "wb-funnel";
+  if (mp) mp.classList.toggle("hidden", name === "wb-detail" || name === "wb-funnel");
+  if (upd) upd.classList.toggle("hidden", !wantUpd);
   const tip = document.getElementById("hintTip");
   const tipText = document.getElementById("hintTipText");
   if (tip && tipText) {
@@ -2623,7 +2668,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const btnUpdateWbDetail = document.getElementById("btnUpdateWbDetail");
-  if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => apiDownload("wb", "detail", "#wbMsg-detail-table", true)));
+  if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => {
+    if (currentTab === "wb-funnel") return apiDownload("wb", "funnel", "#wbMsg-funnel-table", true);
+    return apiDownload("wb", "detail", "#wbMsg-detail-table", true);
+  }));
   const funnelExp = document.getElementById("wbFunnelExpanded");
   if (funnelExp) funnelExp.addEventListener("change", () => loadTab("wb-funnel"));
   $("#btnApply").addEventListener("click", () => loadTab(currentTab));

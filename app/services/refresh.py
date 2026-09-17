@@ -120,6 +120,50 @@ FUNNEL_COL_MAP = {
     "buyout_sum": ["statistic.selected.buyoutSum", "buyoutSum", "boughtSum", "buyout_sum"],
 }
 
+# Все остальные поля, которые отдаёт analytics/v3/sales-funnel/products
+# (проверено на живом ответе 2026-09-17): карточка, остатки и блок selected.
+FUNNEL_EXTRA_COL_MAP = {
+    "subject_name": ["product.subjectName", "subjectName"],
+    "brand_name": ["product.brandName", "brandName"],
+    "product_rating": ["product.productRating", "productRating"],
+    "feedback_rating": ["product.feedbackRating", "feedbackRating"],
+    "stock_wb": ["product.stocks.wb", "stocks.wb"],
+    "stock_mp": ["product.stocks.mp", "stocks.mp"],
+    "stock_balance_sum": ["product.stocks.balanceSum", "stocks.balanceSum"],
+    "cancel_sum": ["statistic.selected.cancelSum", "cancelSum"],
+    "avg_orders_per_day": ["statistic.selected.avgOrdersCountPerDay",
+                          "avgOrdersCountPerDay"],
+    "share_order_percent": ["statistic.selected.shareOrderPercent", "shareOrderPercent"],
+    "add_to_wishlist": ["statistic.selected.addToWishlist", "addToWishlist"],
+    "localization_percent": ["statistic.selected.localizationPercent", "localizationPercent"],
+    "conv_to_cart_percent": ["statistic.selected.conversions.addToCartPercent"],
+    "conv_cart_to_order_percent": ["statistic.selected.conversions.cartToOrderPercent"],
+    "conv_buyout_percent": ["statistic.selected.conversions.buyoutPercent"],
+    "wb_club_order_count": ["statistic.selected.wbClub.orderCount"],
+    "wb_club_order_sum": ["statistic.selected.wbClub.orderSum"],
+    "wb_club_buyout_count": ["statistic.selected.wbClub.buyoutCount"],
+    "wb_club_buyout_sum": ["statistic.selected.wbClub.buyoutSum"],
+    "wb_club_cancel_count": ["statistic.selected.wbClub.cancelCount"],
+    "wb_club_cancel_sum": ["statistic.selected.wbClub.cancelSum"],
+    "wb_club_avg_price": ["statistic.selected.wbClub.avgPrice"],
+    "wb_club_buyout_percent": ["statistic.selected.wbClub.buyoutPercent"],
+    "wb_club_avg_orders_per_day": ["statistic.selected.wbClub.avgOrderCountPerDay"],
+}
+
+FUNNEL_TIME_TO_READY = {
+    "days": ["statistic.selected.timeToReady.days", "timeToReady.days"],
+    "hours": ["statistic.selected.timeToReady.hours", "timeToReady.hours"],
+    "mins": ["statistic.selected.timeToReady.mins", "timeToReady.mins"],
+}
+
+
+def _col_str(df: pd.DataFrame, names) -> pd.Series:
+    """Строковая колонка из df по списку имён (иначе пустой столбец)."""
+    col = _pick_col(df, names)
+    if col is None:
+        return pd.Series("", index=df.index)
+    return col.astype(str).str.strip().replace("nan", "")
+
 
 def _funnel_to_db(df: pd.DataFrame, from_, to_) -> pd.DataFrame:
     """Воронка WB -> схема funnel_metric.
@@ -160,7 +204,35 @@ def _funnel_to_db(df: pd.DataFrame, from_, to_) -> pd.DataFrame:
            "nm_id": nm_id_series.astype(str), "article": article}
     for key, cands in FUNNEL_COL_MAP.items():
         out[key] = _col_num(df, cands)
+    for key, cands in FUNNEL_EXTRA_COL_MAP.items():
+        out[key] = _col_num(df, cands)
+    t_days = _col_num(df, FUNNEL_TIME_TO_READY["days"])
+    t_hours = _col_num(df, FUNNEL_TIME_TO_READY["hours"])
+    t_mins = _col_num(df, FUNNEL_TIME_TO_READY["mins"])
+    out["time_to_ready_min"] = (t_days * 1440 + t_hours * 60 + t_mins).fillna(0)
+    for key in ("subject_name", "brand_name"):
+        out[key] = _col_str(df, FUNNEL_EXTRA_COL_MAP[key])
+    out["raw_json"] = _raw_json(df)
     return pd.DataFrame(out)
+
+
+def _raw_json(df: pd.DataFrame) -> pd.Series:
+    """Полный исходный объект товара (product + statistic, включая past/comparison).
+
+    get_sales_funnel дополнительно кладёт неуплощённый словарь в колонку _raw;
+    для моков/тестов — сериализуем плоскую строку (значения те же).
+    """
+    result_row = None
+    if "_raw" in df.columns:
+        result_row = df["_raw"]
+    if result_row is None:
+        result_row = pd.Series([dict(r) for r in df.to_dict("records")], index=df.index)
+    def _dump(o):
+        try:
+            return json.dumps(o, ensure_ascii=False, default=str)
+        except Exception:  # noqa: BLE001
+            return ""
+    return result_row.apply(_dump)
 
 
 # ----------------------------------------------------------- привязка провайдеров

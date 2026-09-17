@@ -248,6 +248,40 @@ def test_funnel_accepts_alternate_nmid_casing(api_client, stub_wb):
     assert r.headers["X-Count"] == "2"
 
 
+def test_funnel_view_returns_extended_fields(api_client, db):
+    from datetime import date as _date
+
+    from app import models
+
+    db.add_all([
+        models.FunnelMetric(
+            date_from=_date(2026, 9, 1), date_to=_date(2026, 9, 10),
+            nm_id="1001", article="TST-1", views=100, orders=4, revenue=12000,
+            subject_name="Куртки", brand_name="Бренд A", product_rating=8.2,
+            feedback_rating=4.6, stock_wb=12, stock_mp=3,
+            stock_balance_sum=36000, cancel_sum=500, add_to_wishlist=8,
+            time_to_ready_min=1710, conv_to_cart_percent=15.0,
+            conv_buyout_percent=75.0, wb_club_order_count=1, wb_club_order_sum=3000,
+        ),
+    ])
+    db.commit()
+
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert view["count"] == 1
+    row = view["rows"][0]
+    assert row["subject_name"] == "Куртки"
+    assert row["brand_name"] == "Бренд A"
+    assert row["product_rating"] == 8.2
+    assert row["feedback_rating"] == 4.6
+    assert row["stock_wb"] == 12
+    assert row["time_to_ready_min"] == 1710
+    assert row["wb_club_order_count"] == 1
+    assert row["wb_club_order_sum"] == 3000.0
+    assert view["totals"]["stock_wb"] == 12
+    assert "share_order_percent" not in view["totals"]
+
+
 def test_wb_detail_fills_margin_detail_view(api_client):
     api_client.post("/api/wb/cards")  # nm_articles/products для join
     r = api_client.post("/api/wb/detail",
@@ -297,6 +331,28 @@ def test_funnel_view_defaults_to_latest_snapshot(api_client):
     assert view["date_from"] == "2026-09-01"
     assert view["date_to"] == "2026-09-10"
     assert view["count"] == 2
+
+
+def test_funnel_view_falls_back_to_latest_snapshot_for_wider_window(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-08-20", "date_to": "2026-09-17"}).json()
+    assert view["count"] == 2
+    assert view["date_from"] == "2026-08-20"
+    assert view["date_to"] == "2026-09-17"
+    # среза с точным периодом нет — показывается последний, с пометкой о периоде
+    assert view["snapshot_from"] == "2026-09-01"
+    assert view["snapshot_to"] == "2026-09-10"
+    assert {row["article"] for row in view["rows"]} == {"TST-1", "TST-2"}
+    assert all(row["date_from"] == "2026-09-01" for row in view["rows"])
+
+
+def test_funnel_view_empty_without_any_snapshot(api_client):
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-08-01", "date_to": "2026-08-30"}).json()
+    assert view["count"] == 0
+    assert view["totals"] == {}
 
 
 # ---------------------------------------------------------------------- импорт

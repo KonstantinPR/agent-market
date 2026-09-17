@@ -164,6 +164,7 @@ main { padding: 20px; }
 body.busy .btn { pointer-events: none; opacity: .6; }
 .msg { font-size: 12px; color: #417505; }
 .msg.error { color: #c0392b; }
+.msg-warn { font-size: 12px; color: #8a6d1a; background: #fdf6e3; border: 1px solid #eadb9f; border-radius: 3px; padding: 2px 8px; }
 .spinner {
   width: 14px;
   height: 14px;
@@ -401,6 +402,7 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
   border-top-color: #2d3748;
 }
 .tip:hover .tip-text, .tip:focus .tip-text { display: block; }
+.tip .tip-note { display: block; margin-top: 6px; color: #ffd88a; }
 .p-st input {
   border: 1px solid #ccc;
   border-radius: 3px;
