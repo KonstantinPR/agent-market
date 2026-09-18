@@ -507,6 +507,41 @@ def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = 
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": ""}
 
 
+def pull_catalog(db, overwrite: bool = False, write_db: bool = True,
+                 provider_wb: Optional[WbProvider] = None,
+                 provider_oz: Optional[OzonProvider] = None) -> dict:
+    """Обновляет общий каталог «Наш склад → Товары» из карточек WB и Ozon.
+
+    Тянет get_cards() у обоих провайдеров, пишет marketplace_cards/nm_articles
+    (существующая инфраструктура: размеры остатков, карта nmID→артикул) и
+    сливает карточки в общий каталог (products + product_sizes +
+    product_aliases) через sync_catalog_from_cards.
+    """
+    prov_wb = provider_wb or _wb_provider()
+    prov_oz = provider_oz or _oz_provider()
+    wb_df = prov_wb.get_cards()
+    oz_df = prov_oz.get_cards()
+    wb_rows = 0 if wb_df is None else int(len(wb_df))
+    oz_rows = 0 if oz_df is None else int(len(oz_df))
+    report = None
+    if write_db:
+        if wb_rows:
+            sync_service.upsert_nm_articles(db, wb_df)
+            mdf = sync_service.normalize_marketplace_cards(wb_df)
+            if mdf is not None:
+                sync_service.upsert_marketplace_cards(db, mdf, "wb")
+            _wb_nm_cache_reset()
+        wc = sync_service.normalize_catalog_card(wb_df, "wb")
+        oc = sync_service.normalize_catalog_card(oz_df, "ozon")
+        frames = [f for f in (wc, oc) if f is not None and not f.empty]
+        cards_df = pd.concat(frames, ignore_index=True) if frames else None
+        report = sync_service.sync_catalog_from_cards(db, cards_df, overwrite)
+        sync_service.record_api_pull(db, "catalog", "cards", wb_rows + oz_rows,
+                                     int(report["rows"]), "сегодня")
+    return {"rows": wb_rows + oz_rows, "wb_rows": wb_rows, "oz_rows": oz_rows,
+            "db_rows": int(report["rows"]) if report else 0, "report": report}
+
+
 def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_stock()

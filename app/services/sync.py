@@ -977,6 +977,268 @@ def upsert_marketplace_cards(db, df: pd.DataFrame, code: str) -> int:
     return len(values)
 
 
+# Общая схема карточки каталога «Наш склад → Товары»
+CATALOG_FIELDS = ["article", "name", "brand", "subject", "size", "barcode",
+                  "volume_l", "composition", "source"]
+_CATALOG_TEXT_FIELDS = ["name", "brand", "subject", "composition"]
+
+
+def _first_barcode(v) -> str:
+    """Берёт первый штрихкод из значения (список, строка через запятую)."""
+    if isinstance(v, (list, tuple)):
+        return str(v[0]).strip() if v else ""
+    s = str(v or "")
+    if "," in s:
+        return s.split(",")[0].strip()
+    return s.strip()
+
+
+def _wb_card_volume(v) -> float:
+    """Объём из dimensions WB (Д×Ш×В, мм → литры: мм³/1e6)."""
+    if not isinstance(v, dict):
+        return 0.0
+    try:
+        l = float(v.get("length") or 0)
+        w = float(v.get("width") or 0)
+        h = float(v.get("height") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(l * w * h / 1_000_000, 3)
+
+
+def _catalog_subject(v) -> str:
+    if isinstance(v, dict):
+        return str(v.get("name") or "")
+    return str(v or "")
+
+
+def normalize_catalog_card(df: pd.DataFrame, source: str = "wb") -> Optional[pd.DataFrame]:
+    """Приводит карточки WB или Ozon к общей схеме каталога CATALOG_FIELDS.
+
+    WB (реальный ответ content/v2/get/cards/list): vendorCode→article,
+    title→name, subject→subject (dict.name), techSize→size, skus→barcode
+    (первый штрихкод размера), объём из dimensions Д×Ш×В мм/1e6.
+    Ozon (отчёт /v1/report/products): Offer ID→article, Name→name,
+    SKU/Штрихкод→barcode, Category/Бренд→subject/brand.
+    Строки без артикула отбрасываются, дубликаты (source, article, size, barcode)
+    снимаются.
+    """
+    if df is None or df.empty:
+        return None
+    df = df.copy()
+    lo = {str(c).strip().lower(): c for c in df.columns if c is not None}
+
+    def col(*names):
+        for n in names:
+            hit = lo.get(n.strip().lower())
+            if hit:
+                return df[hit]
+        return None
+
+    def txt(series) -> pd.Series:
+        return (series if series is not None else pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
+
+    empty_s = pd.Series("", index=df.index)
+    zero_s = pd.Series(0.0, index=df.index)
+    if source == "wb":
+        raw_article = col("vendorCode", "vendor_code", "артикул")
+        if raw_article is None:
+            return None
+        dims = col("dimensions")
+        subject_src = col("subject", "предмет")
+        barcode_src = col("skus", "barcodes", "barcode", "sku", "баркод", "штрихкод")
+        out = {
+            "article": txt(raw_article),
+            "name": txt(col("title", "name", "название товара", "наименование")),
+            "brand": txt(col("brand", "бренд")),
+            "subject": txt((subject_src if subject_src is not None else empty_s).map(_catalog_subject)),
+            "size": txt(col("techSize", "tech_size", "размер", "wbSize")),
+            "barcode": (barcode_src if barcode_src is not None else empty_s).map(_first_barcode),
+            "volume_l": (dims if dims is not None else pd.Series(None, index=df.index)).map(_wb_card_volume),
+            "composition": txt(col("composition", "состав")),
+        }
+    else:
+        raw_article = col("Offer ID", "артикул", "артикул продавца")
+        if raw_article is None:
+            return None
+        brand = col("бренд", "Brand", "brand")
+        cat = col("Category", "category", "категория")
+        brand_src = brand if brand is not None else cat
+        subject_src = cat if cat is not None else brand
+        barcode_src = col("SKU", "sku", "штрихкод", "barcode", "Штрихкод (Серийный номер / EAN)")
+        out = {
+            "article": txt(raw_article),
+            "name": txt(col("Name", "название товара", "название", "наименование")),
+            "brand": txt(brand_src),
+            "subject": txt(subject_src),
+            "size": empty_s.copy(),
+            "barcode": (barcode_src if barcode_src is not None else empty_s).map(_first_barcode),
+            "volume_l": zero_s.copy(),
+            "composition": empty_s.copy(),
+        }
+    out["source"] = source
+    ndf = pd.DataFrame(out)[CATALOG_FIELDS]
+    ndf["volume_l"] = pd.to_numeric(ndf["volume_l"], errors="coerce").fillna(0.0)
+    ndf = ndf[ndf["article"] != ""]
+    if ndf.empty:
+        return None
+    ndf = ndf.drop_duplicates(subset=["source", "article", "size", "barcode"], keep="first")
+    return ndf
+
+
+def sync_catalog_from_cards(db, cards_df: Optional[pd.DataFrame],
+                            overwrite: bool = False) -> dict:
+    """Сливает карточки WB+Ozon в общий каталог products + product_sizes + product_aliases.
+
+    Идентификация строки (в порядке приоритета):
+    1) баркод: product_sizes.barcode, затем products.barcode;
+    2) (article,size) в product_sizes;
+    3) article в products / product_aliases (алиас разрешается в канонический товар);
+    4) иначе — новый товар по article.
+
+    Если баркод строки совпал с товаром, отличным от артикула строки, чужой
+    артикул записывается в product_aliases (товары объединяются, дальнейшие
+    строки со старым артикулом разрешаются через алиас).
+
+    Правила записи полей товара (name/brand/subject/volume_l/composition):
+    overwrite=False (по умолчанию) — заполняются только пустые поля;
+    overwrite=True — перезапись значениями карточки. net_cost и replenishable
+    НЕ трогаются никогда. Размеры (product_sizes) синхронизируются всегда:
+    новая строка добавляется, изменившийся баркод перезаписывается.
+
+    Отчёт: {created_products, updated_products, sizes_added, sizes_updated,
+    aliases, unmapped_fields, rows, errors}.
+    """
+    report = {"created_products": 0, "updated_products": 0, "sizes_added": 0,
+              "sizes_updated": 0, "aliases": 0, "unmapped_fields": [],
+              "rows": 0, "errors": []}
+    if cards_df is None or cards_df.empty:
+        return report
+
+    known = set(CATALOG_FIELDS)
+    report["unmapped_fields"] = [
+        str(c) for c in cards_df.columns if str(c) not in known
+    ]
+
+    afi = cards_df.rename(str).copy()
+    for c in CATALOG_FIELDS:
+        if c not in afi.columns:
+            afi[c] = "" if c != "volume_l" else 0.0
+    for c in _CATALOG_TEXT_FIELDS + ["article", "size", "barcode", "source"]:
+        afi[c] = afi[c].fillna("").astype(str).str.strip()
+    afi["volume_l"] = pd.to_numeric(afi["volume_l"], errors="coerce").fillna(0.0)
+    afi = afi[afi["article"] != ""]
+    report["rows"] = int(len(afi))
+
+    # Текущее состояние каталога
+    products: dict = {p.article: p for p in db.execute(select(models.Product)).scalars()}
+    aliases: dict = {
+        a: c for a, c in db.execute(
+            select(models.ProductAlias.alias_article, models.ProductAlias.article)
+        )
+    }
+    sizes: dict = {}
+    size_by_barcode: dict = {}
+    for s in db.execute(select(models.ProductSize)).scalars():
+        sizes[(s.article, s.size)] = s
+        if s.barcode:
+            size_by_barcode.setdefault(s.barcode.lower(), s.article)
+    product_by_barcode: dict = {}
+    for art, bar in db.execute(
+        select(models.Product.article, models.Product.barcode)
+    ):
+        if bar:
+            product_by_barcode.setdefault(bar.lower(), art)
+
+    seen = set()
+    created_here: set = set()
+    for row in afi.to_dict("records"):
+        art = str(row.get("article") or "")
+        size = str(row.get("size") or "")
+        bar = str(row.get("barcode") or "")
+        key = (art, size, bar)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            # --- идентификация (канонический артикул) ---
+            canonical = None
+            bl = bar.lower()
+            if bl:
+                canonical = size_by_barcode.get(bl) or product_by_barcode.get(bl)
+            if not canonical:
+                ac = aliases.get(art, art)
+                if (ac, size) in sizes and ac in products:
+                    canonical = ac
+            if not canonical:
+                if art in products:
+                    canonical = art
+                elif art in aliases:
+                    canonical = aliases[art]
+            if not canonical:
+                if not art:
+                    report["errors"].append("строка без артикула")
+                    continue
+                prod = models.Product(article=art, name="", brand="", subject="",
+                                      composition="", barcode=bar,
+                                      volume_l=float(row.get("volume_l") or 0))
+                db.add(prod)
+                products[art] = prod
+                created_here.add(art)
+                canonical = art
+                if bl:
+                    product_by_barcode.setdefault(bl, art)
+                report["created_products"] += 1
+
+            # --- алиас: чужой артикул → канонический товар ---
+            if art and art != canonical and aliases.get(art) != canonical:
+                db.merge(models.ProductAlias(alias_article=art, article=canonical))
+                aliases[art] = canonical
+                report["aliases"] += 1
+
+            # --- поля товара (overwrite / только пустые), net_cost и replenishable не трогаем ---
+            cur = products[canonical]
+            dirty = False
+            for field in _CATALOG_TEXT_FIELDS:
+                val = str(row.get(field) or "")
+                if not val:
+                    continue
+                cur_val = str(getattr(cur, field) or "")
+                if overwrite and cur_val != val:
+                    setattr(cur, field, val)
+                    dirty = True
+                elif not overwrite and not cur_val:
+                    setattr(cur, field, val)
+                    dirty = True
+            vol = float(row.get("volume_l") or 0)
+            cur_vol = float(getattr(cur, "volume_l") or 0)
+            if (overwrite and cur_vol != vol) or (not overwrite and not cur_vol and vol):
+                setattr(cur, "volume_l", vol)
+                dirty = True
+            if dirty and canonical not in created_here:
+                report["updated_products"] += 1
+
+            # --- размеры: всегда синхронизируем ---
+            skey = (canonical, size)
+            srow = sizes.get(skey)
+            if srow is None:
+                srow = models.ProductSize(article=canonical, size=size, barcode=bar)
+                db.add(srow)
+                sizes[skey] = srow
+                if bar:
+                    size_by_barcode.setdefault(bar.lower(), canonical)
+                report["sizes_added"] += 1
+            elif bar and srow.barcode != bar:
+                srow.barcode = bar
+                if bar.lower() not in size_by_barcode:
+                    size_by_barcode[bar.lower()] = canonical
+                report["sizes_updated"] += 1
+        except Exception as e:  # noqa: BLE001
+            report["errors"].append(f"{art}: {e}")
+    db.commit()
+    return report
+
+
 def refresh_products_from_cards(db, code: str) -> tuple:
     """Обновляет общий каталог (products + nm_articles) из marketplace_cards."""
     mp = marketplace_id(db, code)
