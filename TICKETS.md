@@ -161,12 +161,12 @@ _(пусто)_
 - [T-19] (closed) Каталог: API-эндпоинты (/api/products, refresh, preview, price-settings, export) — commit `b5ce906`
 - [T-18] (closed) Каталог: синк карточек WB+Ozon в общий каталог (идентификация, алиасы, overwrite) — commit `e5d6a37`
 - [T-20] (closed) Каталог: модуль рекомендуемой (базовой) цены base_price — commit `3d46241`
-- [T-17] (closed) Каталог «Наш склад → Товары»: схема БД + миграция — commit `bc5c756`
-- [T-7] (closed) Ozon: провайдер — детализация реализаций по постингам + выкупы (get_sales_detail/get_buyout, фолбэк на /v1/report/*, live-проверка на Client-Id 164497) — не закоммичено
-- [T-8] (closed) Ozon: таблицы OzonDetailRow/OzonBuyout + синк + API-эндпоинты — не закоммичено
-- [T-9] (closed) UI — вкладка «Детализация продаж Ozon» (oz-detail) по образцу WB (rows/summary, экспорт, диск, поиск) — не закоммичено
-- [T-10] (closed) UI — oz-cards/oz-stock/oz-prices/oz-realization: полные таблицы из БД (поиск, свёртка, «Вид таблицы», экспорт по видимым колонкам, диск); pull_oz_cards пишет marketplace_cards, /api/prices и экспорт учитывают marketplace — не закоммичено
-- [T-11] (closed) «Магия → Обновить Ozon»: детализация реализаций + выкупы через include_detail (plan steps detail/buyout, чекбокс в модалке для ozon) — не закоммичено
+- [T-17] (closed) Каталог «Наш склад → Товары»: схема БД + миграция — commit `bc5c756`, миграция `c0b6c3a`
+- [T-7] (closed) Ozon: провайдер — детализация реализаций по постингам + выкупы (get_sales_detail/get_buyout, фолбэк на /v1/report/*, live-проверка на Client-Id 164497) — commit `44b29ae`
+- [T-8] (closed) Ozon: таблицы OzonDetailRow/OzonBuyout + синк + API-эндпоинты — commit `44b29ae`
+- [T-9] (closed) UI — вкладка «Детализация продаж Ozon» (oz-detail) по образцу WB (rows/summary, экспорт, диск, поиск) — commit `44b29ae`
+- [T-10] (closed) UI — oz-cards/oz-stock/oz-prices/oz-realization: полные таблицы из БД (поиск, свёртка, «Вид таблицы», экспорт по видимым колонкам, диск); pull_oz_cards пишет marketplace_cards, /api/prices и экспорт учитывают marketplace — commit `44b29ae`
+- [T-11] (closed) «Магия → Обновить Ozon»: детализация реализаций + выкупы через include_detail (plan steps detail/buyout, чекбокс в модалке для ozon) — commit `44b29ae`
 - [T-5] (closed) WB API → Воронка продаж: все поля отчёта (карточка, остатки, конверсии, WB Клуб, время доставки, raw JSON) в базу и UI — commit `2a34949`
 - [T-6] (closed) UI — единый тулбар во всех разделах WB API (дубли кнопок убраны, «Обновить базу» в шапке для всех wb-вкладок) — commit `d1c974b`
 - [T-4] (closed) WB API → Воронка продаж: автоподбор ключа для отчёта + унификация UI с «Детализация продаж» — commit `a1ce2db`
