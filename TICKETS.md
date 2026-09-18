@@ -101,24 +101,6 @@
   > (include_detail для ozon, период = из шапки, по умолчанию предыдущий
   > месяц; для realization — месяцы, покрывающие окно). Всё в одном фоне
   > (start_refresh уже сериализует).
-- [T-18] (high) Каталог: синк карточек WB+Ozon в общий каталог
-  > Тело: app/services/sync.py: normalize_catalog_card(df) и
-  > sync_catalog_from_cards(db, cards_df, overwrite) — общая схема карточки
-  > {article, name, brand, subject, size, barcode, volume_l, composition, source}.
-  > Идентификация строки: 1) barcode (product_sizes.barcode, затем products.barcode),
-  > 2) (article,size) в product_sizes, 3) article в products. Баркод-совпадение
-  > с чужим артикулом → запись в product_aliases (объединение: дальнейшие строки
-  > со старым артикулом разрешаются через алиасы). Правила записи: overwrite=False
-  > (по умолчанию) — только пустые поля; overwrite=True — перезапись полей карточки;
-  > net_cost и replenishable НЕ трогаются никогда. product-level поля собираются
-  > с первой записанной строки (last-write при overwrite). Отчёт {created_products,
-  > updated_products, sizes_added, sizes_updated, aliases, unmapped_fields, rows}.
-  > app/services/refresh.py: pull_catalog(db, overwrite=False) — get_cards() WB и Ozon
-  > → нормализация в общую схему (WB: vendorCode→article, title→name,
-  > subject.name→subject, techSize→size, skus→barcode, объём из dimensions
-  > Д×Ш×В мм/1e6; Ozon: Offer ID→article, Name→name, SKU/Штрихкод→barcode,
-  > Category/Бренд→subject) → sync_catalog_from_cards → record_api_pull('catalog','cards').
-  > Юнит-тесты идентификации/перезаписи (fakes).
 - [T-19] (high) Каталог: API-эндпоинты
   > Тело: GET /api/products?like=&sizes=1&stocks=1 → {rows, count, price_settings};
   > без размеров — агрегация размеров (кол-во размеров, первый баркод, теги WB/Ozon),
@@ -188,6 +170,7 @@ _(пусто)_
 
 ## Закрытые
 
+- [T-18] (closed) Каталог: синк карточек WB+Ozon в общий каталог (идентификация, алиасы, overwrite) — commit `e5d6a37`
 - [T-20] (closed) Каталог: модуль рекомендуемой (базовой) цены base_price — commit `3d46241`
 - [T-17] (closed) Каталог «Наш склад → Товары»: схема БД + миграция — commit `bc5c756`
 - [T-7] (closed) Ozon: провайдер — детализация реализаций по постингам + выкупы (get_sales_detail/get_buyout, фолбэк на /v1/report/*, live-проверка на Client-Id 164497) — не закоммичено
