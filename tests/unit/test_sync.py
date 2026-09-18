@@ -3,17 +3,23 @@ from datetime import date
 from sqlalchemy import select
 
 from app.services.sync import (
+    detail_summary_dataframe,
+    normalize_ozon_buyout,
+    normalize_ozon_detail,
     normalize_ozon_realization,
+    normalize_oz_cards,
     normalize_wb_detail,
     normalize_wb_sales,
+    oz_detail_summary_dataframe,
     rebuild_sales_from_detail,
     record_api_pull,
+    upsert_ozon_buyouts,
+    upsert_ozon_detail_rows,
     upsert_price_snapshots,
     upsert_products,
     upsert_ozon_price_snapshots,
     upsert_sales,
     upsert_wb_detail_rows,
-    detail_summary_dataframe,
 )
 from app import models
 
@@ -129,6 +135,43 @@ def test_upsert_ozon_price_snapshots_skips_non_positive():
         "price_price": 0, "price_old_price": 0, "price_min_price": 0,
     }])
     assert upsert_ozon_price_snapshots(None, df) == 0
+
+
+def test_normalize_oz_cards_english_columns():
+    df = pd.DataFrame({
+        "Ozon Product ID": ["111", "222"], "SKU": ["88", "99"],
+        "Offer ID": ["OZ-1", "OZ-2"], "Name": ["Товар 1", "Товар 2"],
+        "Barcode": ["4-а", "4-б"], "Category": ["Обувь", "Одежда"],
+    })
+    out = normalize_oz_cards(df)
+    assert out is not None and len(out) == 2
+    rec = out.iloc[0].to_dict()
+    assert rec["chrt_id"] == "111" and rec["nm_id"] == "111"
+    assert rec["vendor_code"] == "OZ-1"
+    assert rec["barcode"] == "88"
+    assert rec["name"] == "Товар 1"
+    assert rec["brand"] == "Обувь"
+    assert rec["size"] == "" and rec["subject"] == "" and rec["volume_l"] == 0.0
+
+
+def test_normalize_oz_cards_russian_columns_and_dedupe():
+    df = pd.DataFrame({
+        "Ozon Product ID": ["95000001", "95000001"],
+        "Артикул": ["OZ-1", "OZ-1"], "Штрихкод": ["5-с", "5-с"],
+        "Название товара": ["Товар", "Товар"], "Категория": ["Товары для дома", "Товары для дома"],
+    })
+    out = normalize_oz_cards(df)
+    assert out is not None and len(out) == 1
+    rec = out.iloc[0].to_dict()
+    assert rec["chrt_id"] == "95000001"
+    assert rec["vendor_code"] == "OZ-1"
+    assert rec["barcode"] == "5-с"
+    assert rec["brand"] == "Товары для дома"
+
+
+def test_normalize_oz_cards_empty_returns_none():
+    assert normalize_oz_cards(None) is None
+    assert normalize_oz_cards(pd.DataFrame({"x": [1]})) is None
 
 
 def test_wb_price_snapshots_tagged_marketplace(db):
@@ -482,3 +525,122 @@ def test_detail_summary_redistributes_articleless_logistics(db):
     assert a2["pvz_compensation"] == 16.0
     assert a1["services"] == 1.0
     assert a2["services"] == 4.0
+
+
+def _oz_detail_rows():
+    return pd.DataFrame([
+        {
+            "date": "2026-09-01", "posting_number": "PZ-1", "offer_id": "OZ-1",
+            "name": "Ozon 1", "sku": "3001", "barcode": "3001", "quantity": 2,
+            "seller_price": 1300.0, "amount": 2560.0, "commission_ratio": 0.11,
+            "commission": -281.6, "standard_fee": -38.4, "income": 2280.0,
+            "return_qty": 0, "return_total": 0.0,
+        },
+        {
+            "date": "2026-09-01", "posting_number": "PZ-2", "offer_id": "OZ-2",
+            "name": "Ozon 2", "sku": "3002", "barcode": "3002", "quantity": 1,
+            "seller_price": 900.0, "amount": 800.0, "commission_ratio": 0.10,
+            "commission": -80.0, "standard_fee": -20.0, "income": 700.0,
+            "return_qty": 1, "return_total": 700.0,
+        },
+    ])
+
+
+def test_normalize_ozon_detail_maps_columns_and_op_key():
+    out = normalize_ozon_detail(_oz_detail_rows())
+    assert out is not None
+    assert list(out["op_key"]) == ["2026-09-01|PZ-1|3001", "2026-09-01|PZ-2|3002"]
+    row = out.iloc[0]
+    assert str(row["date"]) == "2026-09-01"
+    assert row["offer_id"] == "OZ-1"
+    assert row["quantity"] == 2
+    assert row["income"] == 2280.0
+    assert row["commission"] == -281.6
+
+
+def test_normalize_ozon_detail_drops_rows_without_date_or_article():
+    df = _oz_detail_rows()
+    df = pd.concat([df, pd.DataFrame([{
+        "date": None, "posting_number": "PZ-3", "offer_id": "OZ-1",
+        "sku": "3003", "quantity": 1,
+    }])], ignore_index=True)
+    out = normalize_ozon_detail(df)
+    assert out is not None
+    assert len(out) == 2
+
+
+def test_normalize_ozon_detail_missing_required_returns_none():
+    assert normalize_ozon_detail(pd.DataFrame({"x": [1]})) is None
+    assert normalize_ozon_detail(pd.DataFrame()) is None
+    assert normalize_ozon_detail(None) is None
+
+
+def test_upsert_ozon_detail_rows_idempotent_by_op_key(db):
+    n1 = upsert_ozon_detail_rows(db, normalize_ozon_detail(_oz_detail_rows()))
+    assert n1 == 2
+    df2 = _oz_detail_rows()
+    df2.iloc[0, df2.columns.get_loc("income")] = 9999.0
+    n2 = upsert_ozon_detail_rows(db, normalize_ozon_detail(df2))
+    assert n2 == 2
+    rows = db.execute(select(models.OzonDetailRow)).scalars().all()
+    assert len(rows) == 2
+    by_key = {r.op_key: r for r in rows}
+    assert by_key["2026-09-01|PZ-1|3001"].income == 9999.0
+    assert by_key["2026-09-01|PZ-1|3001"].seller_price == 1300.0
+
+
+def _oz_buyout_rows():
+    return pd.DataFrame([
+        {
+            "posting_number": "PZ-1", "offer_id": "OZ-1", "name": "Ozon 1",
+            "sku": "3001", "quantity": 2, "seller_price": 1300.0,
+            "buyout_price": 1250.0, "amount": 2500.0,
+            "deduction_by_category_percent": 12.5, "vat_percent": 20,
+        },
+        {
+            "posting_number": "PZ-2", "offer_id": "OZ-2", "name": "Ozon 2",
+            "sku": "3002", "quantity": 1, "seller_price": 900.0,
+            "buyout_price": 880.0, "amount": 880.0,
+            "deduction_by_category_percent": 0.0, "vat_percent": 20,
+        },
+    ])
+
+
+def test_normalize_ozon_buyout_maps_columns():
+    out = normalize_ozon_buyout(_oz_buyout_rows())
+    assert out is not None
+    assert list(out["op_key"]) == ["PZ-1|3001", "PZ-2|3002"]
+    row = out.iloc[0]
+    assert row["offer_id"] == "OZ-1"
+    assert row["buyout_price"] == 1250.0
+    assert row["amount"] == 2500.0
+
+
+def test_upsert_ozon_buyouts_idempotent_by_op_key(db):
+    n1 = upsert_ozon_buyouts(db, normalize_ozon_buyout(_oz_buyout_rows()))
+    assert n1 == 2
+    df2 = _oz_buyout_rows()
+    df2.iloc[0, df2.columns.get_loc("amount")] = 1111.0
+    n2 = upsert_ozon_buyouts(db, normalize_ozon_buyout(df2))
+    assert n2 == 2
+    rows = db.execute(select(models.OzonBuyout)).scalars().all()
+    assert len(rows) == 2
+
+
+def test_oz_detail_summary_dataframe_aggregates_and_buyout(db):
+    day = pd.Timestamp("2026-09-01")
+    upsert_ozon_detail_rows(db, normalize_ozon_detail(_oz_detail_rows()))
+    upsert_ozon_buyouts(db, normalize_ozon_buyout(_oz_buyout_rows()))
+    out = oz_detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-30")
+    o1 = out[out["article"] == "OZ-1"].iloc[0]
+    o2 = out[out["article"] == "OZ-2"].iloc[0]
+    assert o1["sells"] == 2 and o1["returns_qty"] == 0
+    assert o2["sells"] == 1 and o2["returns_qty"] == 1
+    assert o1["seller_total"] == 2600.0
+    assert o1["amount"] == 2560.0
+    assert o1["commission"] == -281.6
+    assert o1["income"] == 2280.0
+    # выкупы: OZ-1 — 2500/2600 = 96.15%, OZ-2 — 880/900 = 97.78%
+    assert o1["buyout_sum"] == 2500.0
+    assert abs(o1["buyout_percent"] - 96.15) < 0.01
+    assert abs(o2["buyout_percent"] - 97.78) < 0.01

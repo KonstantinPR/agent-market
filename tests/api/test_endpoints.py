@@ -188,6 +188,110 @@ def test_write_db_off_prices_storage_does_not_write(api_client):
     assert api_client.get("/api/storage-cost").json()["count"] == 0
 
 
+def test_ozon_cards_fill_marketplace_cards(api_client):
+    r = api_client.post("/api/ozon/cards")
+    assert r.status_code == 200
+    view = api_client.get("/api/cards", params={"marketplace": "ozon"}).json()
+    assert view["total"] > 0
+    assert all(str(c["vendor_code"]).startswith("OZ-") for c in view["rows"])
+    assert all(c["chrt_id"] for c in view["rows"])
+
+
+def test_ozon_prices_view_and_export_marketplace_filter(api_client):
+    api_client.post("/api/ozon/cards")
+    r = api_client.post("/api/ozon/prices")
+    assert r.status_code == 200
+    view = api_client.get("/api/prices", params={"marketplace": "ozon"}).json()
+    assert view["count"] >= 1
+    assert all(str(p["article"]).startswith("OZ-") for p in view["rows"])
+    wb_view = api_client.get("/api/prices").json()
+    assert {p["article"] for p in wb_view["rows"]}.isdisjoint(
+        {p["article"] for p in view["rows"]})
+    r = api_client.get("/api/export/wb/prices", params={"marketplace": "ozon"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == str(view["count"])
+    df = _read_xlsx(r)
+    assert set(df["Артикул"]) == {p["article"] for p in view["rows"]}
+
+
+def test_ozon_endpoints_excel_zero_only_update_db(api_client):
+    """jsonMode «Обновить базу»: файл не скачивается, данные пишутся в БД."""
+    for kind, url in [("cards", "/api/ozon/cards"),
+                      ("stock", "/api/ozon/stock"),
+                      ("prices", "/api/ozon/prices")]:
+        r = api_client.post(url, params={"excel": 0})
+        assert r.status_code == 200
+        assert "Content-Disposition" not in r.headers
+        data = r.json()
+        assert data["ok"] is True
+        assert data["count"] >= 1, kind
+
+
+def test_ozon_realization_by_window_json_mode(api_client):
+    """Реализация тянется за месяцы окна из шапки (excel=0 → json)."""
+    api_client.post("/api/ozon/cards")
+    r = api_client.post("/api/ozon/realization", params={
+        "date_from": "2026-08-01", "date_to": "2026-09-30", "excel": 0,
+    })
+    assert r.status_code == 200
+    assert "Content-Disposition" not in r.headers
+    data = r.json()
+    assert data["ok"] is True
+    assert data["count"] >= 1
+
+    sales = api_client.get("/api/sales", params={
+        "marketplace": "ozon", "date_from": "2026-07-01", "date_to": "2026-10-31",
+    }).json()
+    assert sales["count"] >= 2  # месяцы 2026-08 и 2026-09 по 2 строки
+
+    pulls = api_client.get("/api/pulls").json()
+    p = next(p for p in pulls if p["api"] == "ozon" and p["kind"] == "realization")
+    assert p["window"] == "2026-08-01..2026-09-30"
+
+
+def test_stocks_marketplace_uses_own_latest_date(api_client, db):
+    """Остатки по маркетплейсу берут свой максимум даты, а не глобальный."""
+    from app.services import sync as sync_service
+    sync_service.upsert_stocks(db, pd.DataFrame({
+        "date": ["2026-09-02"], "article": ["WB-L"], "warehouse": ["Склад 1"],
+        "quantity": [1], "quantity_full": [1], "in_way": [0],
+    }), "wb")
+    sync_service.upsert_stocks(db, pd.DataFrame({
+        "date": ["2026-09-01"], "article": ["OZ-L"], "warehouse": ["FBO"],
+        "quantity": [2], "quantity_full": [2], "in_way": [0],
+    }), "ozon")
+
+    global_view = api_client.get("/api/stocks").json()
+    assert global_view["date"] == "2026-09-02"
+
+    oz = api_client.get("/api/stocks", params={"marketplace": "ozon"}).json()
+    assert oz["date"] == "2026-09-01"
+    assert oz["count"] == 1
+    assert oz["rows"][0]["article"] == "OZ-L"
+
+    wb = api_client.get("/api/stocks", params={"marketplace": "wb"}).json()
+    assert wb["date"] == "2026-09-02"
+    assert {r["article"] for r in wb["rows"]} == {"WB-L"}
+
+
+def test_stocks_marketplace_latest_export(api_client, db):
+    """Экспорт остатков тоже показывает свой последний срез маркетплейса."""
+    from app.services import sync as sync_service
+    sync_service.upsert_stocks(db, pd.DataFrame({
+        "date": ["2026-09-02"], "article": ["WB-L"], "warehouse": ["Склад 1"],
+        "quantity": [1], "quantity_full": [1], "in_way": [0],
+    }), "wb")
+    sync_service.upsert_stocks(db, pd.DataFrame({
+        "date": ["2026-09-01"], "article": ["OZ-L"], "warehouse": ["FBO"],
+        "quantity": [2], "quantity_full": [2], "in_way": [0],
+    }), "ozon")
+    r = api_client.get("/api/export/wb/stock", params={"marketplace": "ozon"})
+    assert r.status_code == 200
+    df = _read_xlsx(r)
+    assert set(df["Артикул"]) == {"OZ-L"}
+    assert str(df["Дата"].iloc[0]) == "2026-09-01"
+
+
 def test_write_db_on_by_default_writes(api_client):
     r = api_client.post("/api/wb/cards")
     assert r.status_code == 200
@@ -562,3 +666,71 @@ def test_export_sales_article_like(api_client):
     df = _read_xlsx(r)
     assert df["Артикул"].tolist() == ["TST-2"]
     assert df["Продано, шт"].tolist() == [3]
+
+
+# ------------------------------------------------------------------ Ozon: детализация + выкупы
+def test_ozon_detail_fills_rows_and_summary(api_client):
+    api_client.post("/api/ozon/cards")
+    r = api_client.post("/api/ozon/detail",
+                        params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    assert XLSX in r.headers["content-type"]
+
+    rows = api_client.get("/api/ozon/detail-rows",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert rows["total"] == 2
+
+    summ = api_client.get("/api/ozon/detail-summary",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert summ["count"] == 2
+    o1 = next(rr for rr in summ["rows"] if rr["article"] == "OZ-1")
+    assert o1["sells"] == 2
+    assert o1["income"] == 2280.0
+
+    pulls = api_client.get("/api/pulls").json()
+    assert any(p["api"] == "ozon" and p["kind"] == "detail" for p in pulls)
+
+
+def test_ozon_buyout_fills_rows(api_client):
+    r = api_client.post("/api/ozon/buyout",
+                        params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "2"
+    assert XLSX in r.headers["content-type"]
+
+    rows = api_client.get("/api/ozon/buyout-rows").json()
+    assert rows["total"] == 2
+
+    pulls = api_client.get("/api/pulls").json()
+    assert any(p["api"] == "ozon" and p["kind"] == "buyout" for p in pulls)
+
+
+def test_ozon_detail_excel_zero_only_updates_db(api_client):
+    r = api_client.post("/api/ozon/detail",
+                        params={"date_from": "2026-09-01", "date_to": "2026-09-10",
+                                "excel": 0})
+    assert r.status_code == 200
+    assert "Content-Disposition" not in r.headers
+    data = r.json()
+    assert data["ok"] is True
+    assert data["rows"] == 2
+    assert api_client.get("/api/ozon/detail-summary").json()["count"] == 2
+
+
+def test_export_ozon_detail_summary_and_rows(api_client):
+    api_client.post("/api/ozon/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    r = api_client.get("/api/export/ozon/detail-summary",
+                       params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    df = _read_xlsx(r)
+    assert set(df["Артикул"]) == {"OZ-1", "OZ-2"}
+    assert "К перечислению, руб" in df.columns
+
+    r = api_client.get("/api/export/ozon/detail-rows",
+                       params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    df2 = _read_xlsx(r)
+    assert len(df2) == 2
+    assert df2["Постинг"].tolist() == ["PZ-1", "PZ-2"]

@@ -45,7 +45,9 @@ def test_refresh_wb_with_detail_has_seven_steps(api_client):
 
 
 def test_refresh_ozon_success(api_client):
-    r = api_client.post("/api/refresh", params={"api": "ozon"})
+    # Реализация Ozon тянутся помесячно за месяцы окна: берём один месяц — 2 строки.
+    r = api_client.post("/api/refresh", params={"api": "ozon",
+                                                "date_from": "2026-08-01", "date_to": "2026-08-31"})
     body = r.json()
     st = _wait_done(api_client, body["job_id"])
     assert st["status"] == "done"

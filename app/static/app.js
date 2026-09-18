@@ -307,6 +307,10 @@ async function loadTabInner(name, f) {
     else if (name === "wb-storage") await renderWbStorage();
     else if (name === "wb-sales") await renderWbSales();
     else if (name === "wb-detail") await renderWbDetail();
+    else if (name === "oz-stock") await renderOzStocks();
+    else if (name === "oz-prices") await renderOzPrices();
+    else if (name === "oz-realization") await renderOzSales();
+    else if (name === "oz-detail") await renderOzDetail();
     else if (name === "yandex") await renderYandexFiles();
     else if (name === "tickets") await renderTickets();
   } catch (err) {
@@ -604,6 +608,39 @@ const wbDetailSummaryHeaders = [
   { k: "services", label: "Услуги/штрафы", num: true, render: cellFmts.money },
   { k: "ops_count", label: "Операций", num: true, render: cellFmts.int },
   { k: "sources", label: "Источник", render: cellFmts.tag },
+];
+
+const ozDetailRowHeaders = [
+  { k: "date", label: "Дата", num: true, render: cellFmts.text },
+  { k: "posting_number", label: "Постинг", render: cellFmts.text },
+  { k: "offer_id", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "sku", label: "SKU", render: cellFmts.text },
+  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
+  { k: "seller_price", label: "Цена", num: true, render: cellFmts.money },
+  { k: "amount", label: "Сумма", num: true, render: cellFmts.money },
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
+  { k: "standard_fee", label: "Услуги", num: true, render: cellFmts.moneyCls },
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "return_qty", label: "Возврат, шт", num: true, render: cellFmts.int },
+  { k: "return_total", label: "Возврат, руб", num: true, render: cellFmts.money },
+  { k: "source", label: "Источник", render: cellFmts.tag },
+];
+
+const ozDetailSummaryHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
+  { k: "postings", label: "Постингов", num: true, render: cellFmts.int },
+  { k: "seller_total", label: "Продажи (цена×кол-во)", num: true, render: cellFmts.money },
+  { k: "amount", label: "Реализовано", num: true, render: cellFmts.money },
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
+  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "ops_count", label: "Операций", num: true, render: cellFmts.int },
+  { k: "buyout_sum", label: "Сумма выкупов", num: true, render: cellFmts.money },
+  { k: "buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct },
 ];
 
 const funnelHeaders = [
@@ -1094,7 +1131,8 @@ async function updateLastPull(name) {
     el.className = "last-pull";
     form.insertBefore(el, form.firstChild);
   }
-  const [apiName, kind] = name.split("-");
+  const [shortApi, kind] = name.split("-");
+  const apiName = shortApi === "oz" ? "ozon" : "wb";
   let p = pullsCache.find((x) => x.api === apiName && x.kind === kind);
   if (kind === "cards") {
     const cand = pullsCache
@@ -1334,7 +1372,7 @@ async function renderCards(name) {
     }
     box.appendChild(bar);
     const wrap = document.createElement("div");
-    wrap.innerHTML = table(name === "wb-cards" ? colViewHeaders("wb-cards", cardsHeaders) : cardsHeaders, st.rows);
+    wrap.innerHTML = table(colViewHeaders(name, cardsHeaders), st.rows);
     box.appendChild(wrap);
   };
 
@@ -1612,6 +1650,80 @@ async function renderWbPrices() {
   pagedTable(box, colViewHeaders("wb-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows);
 }
 
+async function renderOzStocks() {
+  const box = document.getElementById("ozStockTable");
+  const likeEl = document.getElementById("ozStockLike");
+  const agg = document.getElementById("ozStockAgg");
+  const q = likeEl ? likeEl.value.trim() : "";
+  let data;
+  try {
+    data = await api("/stocks" + qs({ marketplace: "ozon" }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить остатки: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  let rows = data.rows || [];
+  if (agg && agg.checked) {
+    rows = aggregateStocks(rows);
+  }
+  if (q) {
+    const needle = q.toLowerCase();
+    rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
+  }
+  const headers = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
+  const msg = document.querySelector("#ozMsg-stock-table");
+  if (msg) msg.textContent = data.date && rows.length ? "Остатки на " + data.date + " · показ: " + fmt(rows.length) : "Нет данных";
+  pagedTable(box, headers, rows);
+}
+
+async function renderOzPrices() {
+  const box = document.getElementById("ozPricesTable");
+  const likeEl = document.getElementById("ozPricesLike");
+  const aggEl = document.getElementById("ozPriceAgg");
+  const q = likeEl ? likeEl.value.trim() : "";
+  let data;
+  try {
+    data = await api("/prices" + qs({ marketplace: "ozon", article_like: q || undefined }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить цены: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  let rows = data.rows || [];
+  const agg = aggEl ? aggEl.checked : false;
+  if (agg) rows = aggregatePrices(rows);
+  const msg = document.querySelector("#ozMsg-prices-table");
+  if (msg) {
+    const when = data.updated_at ? " · срез: " + data.updated_at : "";
+    msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
+  }
+  pagedTable(box, colViewHeaders("oz-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows);
+}
+
+async function renderOzSales() {
+  const box = document.getElementById("ozRealTable");
+  const likeEl = document.getElementById("ozRealLike");
+  const p = paneDates();
+  let data;
+  try {
+    data = await api("/sales" + qs({
+      marketplace: "ozon",
+      date_from: p.date_from || undefined,
+      date_to: p.date_to || undefined,
+    }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить реализацию: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  let rows = data.rows || [];
+  if (likeEl) {
+    const q = likeEl.value.trim().toLowerCase();
+    if (q) rows = rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q));
+  }
+  const msg = document.querySelector("#ozMsg-realization-table");
+  if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
+  pagedTable(box, colViewHeaders("oz-realization", salesHeaders), rows);
+}
+
 const wbStorageHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
@@ -1785,7 +1897,113 @@ const WB_VIEW_MSG = {
   "wb-prices": "#wbMsg-prices-table",
   "wb-storage": "#wbMsg-storage-table",
   "wb-detail": "#wbMsg-detail-table",
+  "oz-detail": "#ozMsg-detail-table",
+  "oz-cards": "#ozMsg-cards-table",
+  "oz-stock": "#ozMsg-stock-table",
+  "oz-prices": "#ozMsg-prices-table",
+  "oz-realization": "#ozMsg-realization-table",
 };
+
+async function renderOzDetail() {
+  const box = document.getElementById("ozDetailTable");
+  const likeEl = document.getElementById("ozDetailLike");
+  const rawEl = document.getElementById("ozDetailRaw");
+  const f = filters();
+  const q = likeEl ? likeEl.value.trim() : "";
+  const raw = rawEl ? rawEl.checked : false;
+  const msg = document.querySelector("#ozMsg-detail-table");
+  const tipEl = document.getElementById("ozDetailTip");
+  try {
+    if (raw) {
+      const data = await api("/ozon/detail-rows" + qs({
+        date_from: f.date_from || undefined,
+        date_to: f.date_to || undefined,
+        article_like: q || undefined,
+        limit: 500,
+      }));
+      const rows = data.rows || [];
+      tipEl.classList.add("hidden");
+      if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
+        (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
+      pagedTable(box, colViewHeaders("oz-detail", ozDetailRowHeaders), rows, null, "#ozDetailTablePager");
+    } else {
+      const data = await api("/ozon/detail-summary" + qs({
+        date_from: f.date_from || undefined,
+        date_to: f.date_to || undefined,
+        article_like: q || undefined,
+      }));
+      const rows = data.rows || [];
+      tipEl.classList.remove("hidden");
+      if (msg) msg.textContent = "По артикулам: " + fmt(data.count || 0);
+      pagedTable(box, colViewHeaders("oz-detail", ozDetailSummaryHeaders), rows, data.totals, "#ozDetailTablePager");
+    }
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить детализацию Ozon: ' + escapeHtml(err.message) + "</div>";
+  }
+}
+
+function ozDetailExportUrl() {
+  const rawEl = document.getElementById("ozDetailRaw");
+  const likeEl = document.getElementById("ozDetailLike");
+  const f = filters();
+  const raw = rawEl ? rawEl.checked : false;
+  const q = likeEl ? likeEl.value.trim() : "";
+  const path = raw ? "/api/export/ozon/detail-rows" : "/api/export/ozon/detail-summary";
+  const p = qs({
+    date_from: f.date_from || undefined,
+    date_to: f.date_to || undefined,
+    article_like: q || undefined,
+  });
+  const cp = colViewParam("oz-detail");
+  return path + p + (cp ? (p ? "&" : "?") + cp : "");
+}
+
+async function downloadOzDetailExcel() {
+  const msg = document.querySelector("#ozMsg-detail-table");
+  msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch(ozDetailExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition"));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Excel выгружен" + (count != null ? " · строк: " + fmt(count) : "");
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadOzDetailToDisk() {
+  const msg = document.querySelector("#ozMsg-detail-table");
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(ozDetailExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
+    const f = filters();
+    const rawEl = document.getElementById("ozDetailRaw");
+    const kind = rawEl && rawEl.checked ? "rows" : "summary";
+    const name = "oz_detail_" + kind + "_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + stamp + ".xlsx";
+    const fd = new FormData();
+    fd.append("file", blob, name);
+    msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
+    const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
+    const j = await up.json();
+    if (!up.ok) throw new Error(j.detail || up.status);
+    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
 
 function wbLikeVal(id) {
   const el = document.getElementById(id);
@@ -1836,6 +2054,30 @@ function wbViewExportUrl() {
     }
     case "wb-detail":
       return wbDetailExportUrl();
+    case "oz-cards":
+      return "/api/export/wb/cards" + qs({ marketplace: "ozon", like: wbLikeVal("ozCardsLike") || undefined })
+        + (colViewParam("oz-cards") ? "&" + colViewParam("oz-cards") : "");
+    case "oz-stock": {
+      const agg = document.getElementById("ozStockAgg");
+      const q = qs({ marketplace: "ozon", by_size: agg && agg.checked ? 0 : 1 });
+      const cp = colViewParam("oz-stock");
+      return "/api/export/wb/stock" + q + (cp ? "&" + cp : "");
+    }
+    case "oz-prices": {
+      const q = qs({ marketplace: "ozon", article_like: wbLikeVal("ozPricesLike") || undefined });
+      const cp = colViewParam("oz-prices", null, "base");
+      return "/api/export/wb/prices" + q + (cp ? "&" + cp : "");
+    }
+    case "oz-realization": {
+      const q = qs({
+        marketplace: "ozon",
+        date_from: p.date_from || undefined,
+        date_to: p.date_to || undefined,
+        article_like: wbLikeVal("ozRealLike") || undefined,
+      });
+      const cp = colViewParam("oz-realization");
+      return "/api/export/sales" + q + (cp ? "&" + cp : "");
+    }
     default:
       return "";
   }
@@ -1878,8 +2120,9 @@ async function uploadViewToDisk() {
     const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
     const f = filters();
     const p = paneDates();
-    const kind = currentTab.replace("wb-", "");
-    const name = "wb_" + kind + "_" + (p.date_from || f.date_from || "na") + "_" + (p.date_to || f.date_to || "na") + "_" + stamp + ".xlsx";
+    const mp = currentTab.startsWith("oz-") ? "oz" : "wb";
+    const kind = currentTab.replace(/^(wb|oz)-/, "");
+    const name = mp + "_" + kind + "_" + (p.date_from || f.date_from || "na") + "_" + (p.date_to || f.date_to || "na") + "_" + stamp + ".xlsx";
     const fd = new FormData();
     fd.append("file", blob, name);
     msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
@@ -2081,7 +2324,8 @@ async function openRefresh(apis) {
   const detail = $("#refreshDetail");
   detail.checked = false;
   detail.disabled = false;
-  detail.parentElement.style.display = refreshApis.includes("wb") ? "" : "none";
+  detail.parentElement.style.display =
+    (refreshApis.includes("wb") || refreshApis.includes("ozon")) ? "" : "none";
   $("#refreshStart").disabled = false;
   $("#refreshSummary").textContent = "";
   $("#refreshList").innerHTML = "";
@@ -2098,7 +2342,7 @@ async function startRefreshJob() {
   const started = [];
   for (const api of apis) {
     const params = { api };
-    if (api === "wb" && detail.checked) params.detail = 1;
+    if (detail.checked) params.detail = 1;
     if ($("#fFrom").value) params.date_from = $("#fFrom").value;
     if ($("#fTo").value) params.date_to = $("#fTo").value;
     try {
@@ -2171,10 +2415,9 @@ function updateCrumb(name) {
 function syncHeaderForTab(name) {
   const mp = document.getElementById("fMarketplaceWrap");
   const upd = document.getElementById("btnUpdateWbDetail");
-  const isWb = !!name && name.startsWith("wb-");
-  const wantUpd = isWb;
-  if (mp) mp.classList.toggle("hidden", isWb);
-  if (upd) upd.classList.toggle("hidden", !wantUpd);
+  const isApi = !!name && (name.startsWith("wb-") || name.startsWith("oz-"));
+  if (mp) mp.classList.toggle("hidden", isApi);
+  if (upd) upd.classList.toggle("hidden", !isApi);
   const tip = document.getElementById("hintTip");
   const tipText = document.getElementById("hintTipText");
   if (tip && tipText) {
@@ -2334,6 +2577,14 @@ registerColView("wb-detail", {
     summary: { headers: wbDetailSummaryHeaders, optional: mkOpt(wbDetailSummaryHeaders) },
   },
 });
+registerColView("oz-detail", {
+  storageKey: "ozDetailCols",
+  mode: () => { const rawEl = document.getElementById("ozDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
+  sets: {
+    rows: { headers: ozDetailRowHeaders, optional: mkOpt(ozDetailRowHeaders) },
+    summary: { headers: ozDetailSummaryHeaders, optional: mkOpt(ozDetailSummaryHeaders) },
+  },
+});
 registerColView("wb-cards", { storageKey: "wbCardsCols", headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
 registerColView("wb-stock", {
   storageKey: "wbStockCols",
@@ -2361,6 +2612,24 @@ registerColView("wb-prices", {
   },
 });
 registerColView("wb-storage", { storageKey: "wbStorageCols", headers: wbStorageHeaders, optional: mkOpt(wbStorageHeaders) });
+registerColView("oz-cards", { storageKey: "ozCardsCols", headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
+registerColView("oz-stock", {
+  storageKey: "ozStockCols",
+  mode: () => { const agg = document.getElementById("ozStockAgg"); return agg && agg.checked ? "agg" : "base"; },
+  sets: {
+    base: { headers: wbStockHeaders, optional: mkOpt(wbStockHeaders) },
+    agg: { headers: wbStockAggHeaders, optional: mkOpt(wbStockAggHeaders) },
+  },
+});
+registerColView("oz-prices", {
+  storageKey: "ozPricesCols",
+  mode: () => { const agg = document.getElementById("ozPriceAgg"); return agg && agg.checked ? "agg" : "base"; },
+  sets: {
+    base: { headers: wbPricesHeaders, optional: mkOpt(wbPricesHeaders) },
+    agg: { headers: wbPricesAggHeaders, optional: mkOpt(wbPricesAggHeaders) },
+  },
+});
+registerColView("oz-realization", { storageKey: "ozRealCols", headers: salesHeaders, optional: mkOpt(salesHeaders) });
 registerColView("margin", { storageKey: "marginCols", headers: marginTableHeaders, optional: mkOpt(marginTableHeaders) });
 registerColView("margin-funnel", { storageKey: "marginFunnelCols", headers: funnelHeaders, optional: mkOpt(funnelHeaders) });
 registerColView("margin-detail", {
@@ -2780,27 +3049,45 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnExportWbDetail) btnExportWbDetail.addEventListener("click", () => busyRun(downloadWbDetailExcel));
   const btnDiskWbDetail = document.getElementById("btnDiskWbDetail");
   if (btnDiskWbDetail) btnDiskWbDetail.addEventListener("click", () => busyRun(uploadWbDetailToDisk));
+  const btnExportOzDetail = document.getElementById("btnExportOzDetail");
+  if (btnExportOzDetail) btnExportOzDetail.addEventListener("click", () => busyRun(downloadOzDetailExcel));
+  const btnDiskOzDetail = document.getElementById("btnDiskOzDetail");
+  if (btnDiskOzDetail) btnDiskOzDetail.addEventListener("click", () => busyRun(uploadOzDetailToDisk));
+  const ozDetailRawEl = document.getElementById("ozDetailRaw");
+  if (ozDetailRawEl) ozDetailRawEl.addEventListener("change", () => loadTab("oz-detail"));
   [["wb-cards", "Cards"], ["wb-stock", "Stock"], ["wb-funnel", "Funnel"], ["wb-sales", "Sales"], ["wb-prices", "Prices"], ["wb-storage", "Storage"]].forEach(([tab, pfx]) => {
     const ex = document.getElementById("btnExportWb" + pfx);
     if (ex) ex.addEventListener("click", () => busyRun(() => { currentTab = tab; return downloadViewExcel(); }));
     const ds = document.getElementById("btnDiskWb" + pfx);
     if (ds) ds.addEventListener("click", () => busyRun(() => { currentTab = tab; return uploadViewToDisk(); }));
   });
+  [["oz-cards", "OzCards"], ["oz-stock", "OzStock"], ["oz-prices", "OzPrices"], ["oz-realization", "OzReal"]].forEach(([tab, pfx]) => {
+    const ex = document.getElementById("btnExport" + pfx);
+    if (ex) ex.addEventListener("click", () => busyRun(() => { currentTab = tab; return downloadViewExcel(); }));
+    const ds = document.getElementById("btnDisk" + pfx);
+    if (ds) ds.addEventListener("click", () => busyRun(() => { currentTab = tab; return uploadViewToDisk(); }));
+  });
 
-  const wbPullByTab = {
-    "wb-cards": ["cards", "#wbMsg-cards-table"],
-    "wb-stock": ["stock", "#wbMsg-stock-table"],
-    "wb-funnel": ["funnel", "#wbMsg-funnel-table"],
-    "wb-sales": ["sales", "#wbMsg-sales-table"],
-    "wb-prices": ["prices", "#wbMsg-prices-table"],
-    "wb-storage": ["storage", "#wbMsg-storage-table"],
-    "wb-detail": ["detail", "#wbMsg-detail-table"],
+  const apiPullByTab = {
+    "wb-cards": ["wb", "cards", "#wbMsg-cards-table"],
+    "wb-stock": ["wb", "stock", "#wbMsg-stock-table"],
+    "wb-funnel": ["wb", "funnel", "#wbMsg-funnel-table"],
+    "wb-sales": ["wb", "sales", "#wbMsg-sales-table"],
+    "wb-prices": ["wb", "prices", "#wbMsg-prices-table"],
+    "wb-storage": ["wb", "storage", "#wbMsg-storage-table"],
+    "wb-detail": ["wb", "detail", "#wbMsg-detail-table"],
+    "oz-cards": ["ozon", "cards", "#ozMsg-cards-table"],
+    "oz-stock": ["ozon", "stock", "#ozMsg-stock-table"],
+    "oz-prices": ["ozon", "prices", "#ozMsg-prices-table"],
+    "oz-realization": ["ozon", "realization", "#ozMsg-realization-table"],
+    "oz-detail": ["ozon", "detail", "#ozMsg-detail-table"],
+    "oz-cashflow": ["ozon", "cashflow", "#ozMsg-cashflow"],
   };
   const btnUpdateWbDetail = document.getElementById("btnUpdateWbDetail");
   if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => {
-    const spec = wbPullByTab[currentTab];
+    const spec = apiPullByTab[currentTab];
     if (!spec) return Promise.resolve();
-    return apiDownload("wb", spec[0], spec[1], true);
+    return apiDownload(spec[0], spec[1], spec[2], true);
   }));
   const funnelExp = document.getElementById("wbFunnelExpanded");
   if (funnelExp) funnelExp.addEventListener("change", () => loadTab("wb-funnel"));
@@ -2878,6 +3165,27 @@ document.addEventListener("DOMContentLoaded", () => {
       timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
     });
   });
+  const ozDetailLike = $("#ozDetailLike");
+  if (ozDetailLike) {
+    let timer;
+    ozDetailLike.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === "oz-detail") loadTab(currentTab); }, 400);
+    });
+  }
+  [["ozStockLike", "oz-stock"], ["ozPricesLike", "oz-prices"], ["ozRealLike", "oz-realization"]].forEach(([id, tab]) => {
+    const el = $("#" + id);
+    if (!el) return;
+    let timer;
+    el.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
+    });
+  });
+  const ozStockAgg = $("#ozStockAgg");
+  if (ozStockAgg) ozStockAgg.addEventListener("change", () => { if (currentTab === "oz-stock") loadTab(currentTab); });
+  const ozPriceAgg = $("#ozPriceAgg");
+  if (ozPriceAgg) ozPriceAgg.addEventListener("change", () => { if (currentTab === "oz-prices") loadTab(currentTab); });
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
   $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
   $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
@@ -2917,9 +3225,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   initCardsUpload();
   initDetailUpload();
-  const pricingRecalc = $("#pricingRecalc");
   const pricingExport = $("#pricingExport");
-  if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));
   if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
   const pricingApply = $("#pricingApply");
   if (pricingApply) pricingApply.addEventListener("click", () => applyPricing());

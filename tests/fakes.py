@@ -157,6 +157,7 @@ class FakeOz:
         if self.cards_error:
             raise self.cards_error
         return pd.DataFrame({
+            "Ozon Product ID": ["95000001", "95000002"],
             "Offer ID": ["OZ-1", "OZ-2"],
             "Name": ["Ozon 1", "Ozon 2"],
             "Barcode": ["3001", "3002"],
@@ -201,6 +202,46 @@ class FakeOz:
         if self.cashflow_error:
             raise self.cashflow_error
         return pd.DataFrame({"date": [str(D1)], "amount": [5000.0]})
+
+    detail_error = None
+    buyout_error = None
+
+    def get_sales_detail(self, date_from, date_to):
+        if self.detail_error:
+            raise self.detail_error
+        return pd.DataFrame({
+            "date": [str(D1), str(D1)],
+            "posting_number": ["PZ-1", "PZ-2"],
+            "offer_id": ["OZ-1", "OZ-2"],
+            "name": ["Ozon 1", "Ozon 2"],
+            "sku": ["3001", "3002"],
+            "barcode": ["3001", "3002"],
+            "quantity": [2, 1],
+            "seller_price": [1300, 900],
+            "amount": [2560.0, 800.0],
+            "commission_ratio": [0.11, 0.10],
+            "commission": [-281.6, -80.0],
+            "standard_fee": [-38.4, -20.0],
+            "income": [2280.0, 700.0],
+            "return_qty": [0, 0],
+            "return_total": [0.0, 0.0],
+        })
+
+    def get_buyout(self, date_from, date_to):
+        if self.buyout_error:
+            raise self.buyout_error
+        return pd.DataFrame({
+            "posting_number": ["PZ-1", "PZ-2"],
+            "offer_id": ["OZ-1", "OZ-2"],
+            "name": ["Ozon 1", "Ozon 2"],
+            "sku": ["3001", "3002"],
+            "quantity": [2, 1],
+            "seller_price": [1300, 900],
+            "buyout_price": [1250, 880],
+            "amount": [2500.0, 880.0],
+            "deduction_by_category_percent": [12.5, 0.0],
+            "vat_percent": [20, 20],
+        })
 
 
 class FakeWbPricesFail(FakeWb):

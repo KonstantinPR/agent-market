@@ -90,6 +90,27 @@ for (const t of colTabs) {
   }
 }
 
+// «Обновить базу»: кнопка есть в шапке, для каждой вкладки API — маршрут в app.js.
+assert.ok(htmlSrc.includes('id="btnUpdateWbDetail"'), "в шапке нет кнопки «Обновить базу»");
+for (const tab of ["wb-cards", "wb-stock", "wb-prices", "oz-cards", "oz-stock",
+                   "oz-prices", "oz-realization", "oz-detail", "oz-cashflow"]) {
+  assert.ok(jsSrc.includes('"' + tab + '":'),
+            "в apiPullByTab нет маршрута для " + tab);
+}
+
+// Раздел OZON: кнопки «Скачать Excel» (wb-dl) допустимы только в export-only oz-cashflow.
+// Остальные oz-панели — правило эталона: подсказка + тулбар таблицы (без дублей).
+const ozPanes = [...htmlSrc.matchAll(/<section id="(tab-oz-[^"]+)" class="pane">([\s\S]*?)<\/section>/g)];
+assert.ok(ozPanes.length >= 6, "раздел Ozon должен содержать 6 панелей, найдено: " + ozPanes.length);
+for (const [, id, body] of ozPanes) {
+  const hasDl = body.includes("wb-dl");
+  if (id === "tab-oz-cashflow") {
+    assert.ok(hasDl, "oz-cashflow остаётся export-only с кнопкой wb-dl");
+  } else {
+    assert.ok(!hasDl, "в " + id + " не должно быть wb-dl-кнопок (эталон: без дублей тулбара)");
+  }
+}
+
 console.log("JS_TESTS_OK");
 """
 

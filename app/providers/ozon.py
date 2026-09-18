@@ -6,6 +6,9 @@
 - цены:     /v5/product/info/prices (visibility=VISIBLE)
 - продажи:  /v2/finance/realization (помесячно; v3 finance/transaction/list на этом
             аккаунте возвращает "obsolete method cannot be used")
+- детализация продаж по постингам: /v1/finance/realization/posting (при 400 «отчёт
+            слишком большой» — асинхронный /v1/report/realization/posting/create + poll)
+- выкупы:   /v1/finance/products/buyout
 - движение средств: /v1/finance/cash-flow-statement/list
 """
 import io
@@ -230,8 +233,26 @@ class OzonProvider(BaseProvider):
                 })
             return pd.DataFrame(rows)
 
-        resp = self._post(f"{OZON_API}/v2/finance/realization", {"month": month, "year": year})
-        data = resp.json().get("result", {})
+        try:
+            resp = self._post(f"{OZON_API}/v2/finance/realization", {"month": month, "year": year})
+        except (OzonApiError, requests.HTTPError) as e:
+            # GET /v2/finance/realization перехватываем здесь, а не в _post, потому
+            # что _post кидает именно requests.HTTPError (с .response).
+            code = getattr(e, "status_code", None)
+            if code is None:
+                code = getattr(getattr(e, "response", None), "status_code", None)
+            if code == 404 and "Report was not found" in str(e):
+                # Отчёт реализации за этот месяц ещё не сформирован (обычно для
+                # текущего месяца) — пропускаем месяц, а не падаем с ошибкой.
+                data = resp = None
+                self.__last_month_skipped = (month, year)
+            else:
+                raise
+        else:
+            self.__last_month_skipped = None
+            data = resp.json().get("result", {})
+        if data is None:
+            return pd.DataFrame()
         stop = pd.Timestamp(data.get("header", {}).get("stop_date")).date()
         return self._parse_realization_rows(data, stop)
 
@@ -304,7 +325,285 @@ class OzonProvider(BaseProvider):
                 "delivery_total": (d.get("delivery") or {}).get("total"),
                 "return_total": (d.get("return") or {}).get("total"),
                 "services_total": services.get("total"),
-                "others_total": others.get("total"),
-                "end_balance": d.get("end_balance_amount"),
-            })
+"others_total": others.get("total"),
+                    "end_balance": d.get("end_balance_amount"),
+                })
         return pd.DataFrame(rows)
+
+    # ---------------------------------------------- детализация по постингам
+    def _parse_realization_posting_rows(self, data, day: date) -> pd.DataFrame:
+        """Строки /v1/finance/realization/posting -> плоский датафрейм.
+
+        Схема строки: item {offer_id, name, sku, barcode}, order {posting_number,
+        created_date}, delivery_commission/return_commission {quantity, amount,
+        bonus, commission, compensation, standard_fee, total},
+        seller_price_per_instance, commission_ratio.
+        """
+        rows = (data or {}).get("rows") or []
+        if not rows:
+            return pd.DataFrame()
+        out = []
+        for r in rows:
+            item = r.get("item") or {}
+            dc = r.get("delivery_commission") or {}
+            rc = r.get("return_commission") or {}
+            order = r.get("order") or {}
+            qty = int(dc.get("quantity") or rc.get("quantity") or 0)
+            price_per = float(r.get("seller_price_per_instance")
+                              or dc.get("price_per_instance") or 0)
+            seller_price = price_per * qty
+            standard_fee = float(dc.get("standard_fee") or 0)
+            amount = float(dc.get("amount") or 0)
+            dc_total = float(dc.get("total") or 0)
+            if not dc_total and (amount or standard_fee):
+                dc_total = amount + float(dc.get("bonus") or 0) - standard_fee
+            income = dc_total
+            returns_qty = int(rc.get("quantity") or 0)
+            return_total = float(rc.get("total") or 0)
+            income += return_total
+            ratio = float(r.get("commission_ratio") or 0)
+            # Комиссию отражаем со знаком минус (как в реализации).
+            commission = -(standard_fee if standard_fee else income * ratio)
+            d = day
+            created = str(order.get("created_date") or "")
+            if created:
+                try:
+                    d = pd.Timestamp(created).date()
+                except (ValueError, TypeError):
+                    pass
+            out.append({
+                "date": d, "posting_number": str(order.get("posting_number") or "").strip(),
+                "offer_id": str(item.get("offer_id") or "").strip(),
+                "name": item.get("name") or "",
+                "sku": item.get("sku") or "", "barcode": item.get("barcode") or "",
+                "quantity": qty, "seller_price": seller_price, "amount": amount,
+                "commission_ratio": ratio, "commission": commission,
+                "standard_fee": standard_fee, "income": income,
+                "return_qty": returns_qty, "return_total": return_total,
+            })
+        return pd.DataFrame(out)
+
+    def _realization_posting_report(self, month: int, year: int) -> pd.DataFrame:
+        """Фолбэк на асинхронный отчёт по постингам (слишком большой ответ)."""
+        resp = self._post(f"{OZON_API}/v1/report/realization/posting/create",
+                          {"month": month, "year": year})
+        code = resp.json()["code"]
+        for attempt in range(25):
+            time.sleep(20)
+            info = self._post(f"{OZON_API}/v1/report/info", {"code": code})
+            result = info.json().get("result") or {}
+            status = result.get("status")
+            if status == "success":
+                content = requests.get(result["file"], timeout=300).content
+                return self._parse_realization_report_file(content, month, year)
+            if status not in ("processing", "waiting"):
+                raise RuntimeError(f"Ozon: отчёт по постингам завершился статусом {status}")
+        raise RuntimeError("Ozon: отчёт по постингам не сформировался за отведённое время")
+
+    def _parse_realization_report_file(self, content, month: int, year: int) -> pd.DataFrame:
+        """Файл отчёта по постингам (csv/xlsx) -> датафрейм как из API.
+
+        Реальный файл (live 2026-09): CSV с ',' и flattened-колонками
+        (order_posting_number, item_offer_id, delivery_commission_*,
+        return_commission_*, seller_price_per_instance, commission_ratio).
+        """
+        data = None
+        try:
+            data = pd.read_excel(io.BytesIO(content), engine="openpyxl")
+        except Exception:
+            pass
+        if data is None:
+            for sep in (",", ";"):
+                try:
+                    data = pd.read_csv(io.BytesIO(content), sep=sep, dtype=str)
+                    if data.shape[1] > 1:
+                        break
+                except Exception:
+                    continue
+        if data is None or data.empty:
+            return pd.DataFrame()
+        data = data.where(data.notna(), None)
+        cols = {str(c).strip().lower(): c for c in data.columns}
+
+        def pick(keys):
+            for k in keys:
+                k = k.lower()
+                if k in cols:
+                    return cols[k]
+                for name, col in cols.items():
+                    if name.endswith("_" + k) or name == k:
+                        return col
+            return None
+
+        flat = {"posting_number": ["order_posting_number", "posting_number",
+                                    "номер отправления", "отправление"],
+                "name": ["item_name", "наименование", "название", "название товара"],
+                "offer_id": ["item_offer_id", "артикул продавца", "артикул", "offer id"],
+                "sku": ["item_sku", "sku", "id товара"],
+                "barcode": ["item_barcode", "штрихкод", "баркод"],
+                "quantity": ["delivery_commission_quantity", "количество", "кол-во"],
+                "amount": ["delivery_commission_amount", "сумма продажи", "сумма"],
+                "standard_fee": ["delivery_commission_standard_fee"],
+                "income": ["delivery_commission_total", "к перечислению", "итог",
+                           "сумма к перечислению"],
+                "return_qty": ["return_commission_quantity", "кол-во возвратов",
+                               "возвраты кол-во"],
+                "return_total": ["return_commission_total", "сумма возврата",
+                                 "возврат сумма"]}
+        mapping = {}
+        for out, keys in flat.items():
+            c = pick(keys)
+            if c is not None:
+                mapping[c] = out
+        price_col = pick(["seller_price_per_instance", "цена продажи", "цена",
+                          "цена за единицу"])
+        ratio_col = pick(["commission_ratio", "доля комиссии"])
+        bonus_col = pick(["delivery_commission_bonus"])
+        sale_date_col = pick(["legal_entity_document_sale_date", "order_created_date",
+                              "дата продажи", "дата"])
+        if "offer_id" not in mapping.values():
+            return pd.DataFrame()
+        data = data.rename(columns=mapping)
+        price = pd.to_numeric(data.pop(price_col), errors="coerce").fillna(0) \
+            if price_col else pd.Series(0.0, index=data.index)
+        ratio = pd.to_numeric(data.pop(ratio_col), errors="coerce").fillna(0) \
+            if ratio_col else pd.Series(0.0, index=data.index)
+        bonus = pd.to_numeric(data.pop(bonus_col), errors="coerce").fillna(0) \
+            if bonus_col else pd.Series(0.0, index=data.index)
+        sale_dates = None
+        if sale_date_col is not None:
+            sale_dates = pd.to_datetime(data.pop(sale_date_col), errors="coerce")
+        keep = [c for c in data.columns if c in mapping.values()]
+        data = data[keep]
+        for c in ("quantity", "return_qty"):
+            s = data[c] if c in data.columns else pd.Series(0, index=data.index)
+            data[c] = pd.to_numeric(s, errors="coerce").fillna(0).astype(int)
+        for c in ("amount", "standard_fee", "income", "return_total"):
+            s = data[c] if c in data.columns else pd.Series(0.0, index=data.index)
+            data[c] = pd.to_numeric(s, errors="coerce").fillna(0).astype(float)
+        if "income" not in data.columns:
+            data["income"] = data["amount"] + bonus - data["standard_fee"]
+        income = data["income"]
+        standard_fee = data["standard_fee"]
+        commissions = -pd.Series(np.where(standard_fee.to_numpy() != 0,
+                                          standard_fee.to_numpy(),
+                                          (income * ratio).to_numpy()),
+                                 index=data.index)
+        data["income"] = income + data["return_total"]
+        data["seller_price"] = price * data["quantity"]
+        data["commission_ratio"] = ratio
+        data["commission"] = commissions
+        day = pd.Timestamp(year, month, 28).date()
+        if sale_dates is not None:
+            data["date"] = sale_dates.dt.date.fillna(day)
+        else:
+            data["date"] = day
+        data["offer_id"] = data["offer_id"].astype(str).str.strip()
+        data["posting_number"] = data["posting_number"].astype(str).str.strip()
+        return data
+
+    def get_realization_posting(self, month: int, year: int) -> pd.DataFrame:
+        """Детализация реализаций по постингам за месяц (постинговый отчёт)."""
+        if self.testing:
+            rng = np.random.default_rng(21)
+            arts = self._mock_articles()
+            rows = []
+            for a in arts:
+                for _ in range(int(rng.integers(0, 3))):
+                    price = float(rng.uniform(900, 4000))
+                    qty = int(rng.integers(1, 3))
+                    fee = price * float(rng.uniform(0.1, 0.45))
+                    post = f"{int(rng.integers(10000000, 99999999))}-{int(rng.integers(1000, 9999))}-{int(rng.integers(1, 3))}"
+                    rows.append({
+                        "date": date(year, month, int(rng.integers(1, 28))),
+                        "posting_number": post, "offer_id": a, "name": f"Товар {a}",
+                        "sku": f"1{f'{int(a[4:]):010d}'}", "barcode": f"4{f'{int(a[4:]):010d}'}",
+                        "quantity": qty, "seller_price": round(price * qty, 2),
+                        "amount": round(price * qty, 2),
+                        "commission_ratio": round(fee / price, 4),
+                        "commission": -round(fee * qty, 2),
+                        "standard_fee": round(fee * qty, 2),
+                        "income": round(price * qty - fee * qty, 2),
+                        "return_qty": 0, "return_total": 0,
+                    })
+            return pd.DataFrame(rows)
+
+        resp = self._post(f"{OZON_API}/v1/finance/realization/posting",
+                          {"month": month, "year": year})
+        data = resp.json()
+        stop = pd.Timestamp((data.get("header") or {}).get("stop_date")).date() \
+            if (data.get("header") or {}).get("stop_date") else date(year, month, 28)
+        df = self._parse_realization_posting_rows(data, stop)
+        if df.empty or df["posting_number"].astype(str).str.strip().eq("").all():
+            # Отчёт может быть слишком большим / постинги пусты -> асинхронный отчёт.
+            try:
+                return self._realization_posting_report(month, year)
+            except RuntimeError:
+                return df
+        return df
+
+    def get_sales_detail(self, date_from, date_to) -> pd.DataFrame:
+        """Детализация реализаций по постингам за период (помесячно)."""
+        if self.testing:
+            return self.get_realization_posting(8, 2026)
+        start_d = pd.Timestamp(date_from).date()
+        end_d = pd.Timestamp(date_to).date()
+        frames = []
+        month = date(start_d.year, start_d.month, 1)
+        while month <= end_d:
+            df = self.get_realization_posting(month.month, month.year)
+            if not df.empty:
+                frames.append(df)
+            if month.month == 12:
+                month = date(month.year + 1, 1, 1)
+            else:
+                month = date(month.year, month.month + 1, 1)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    # ---------------------------------------------------------------- выкупы
+    def get_buyout(self, date_from, date_to) -> pd.DataFrame:
+        """Выкупы товаров: /v1/finance/products/buyout."""
+        if self.testing:
+            arts = self._mock_articles()
+            rng = np.random.default_rng(23)
+            rows = []
+            for a in arts:
+                for _ in range(int(rng.integers(0, 3))):
+                    price = float(rng.uniform(900, 4000))
+                    qty = int(rng.integers(1, 3))
+                    rows.append({
+                        "posting_number": f"{int(rng.integers(10000000, 99999999))}-{int(rng.integers(1000, 9999))}-{int(rng.integers(1, 3))}",
+                        "offer_id": a, "name": f"Товар {a}",
+                        "sku": f"1{f'{int(a[4:]):010d}'}",
+                        "quantity": qty, "seller_price": round(price * qty, 2),
+                        "buyout_price": round(price * 0.7, 2),
+                        "amount": round(price * qty * 0.7, 2),
+                        "deduction_by_category_percent": 0.0, "vat_percent": 20,
+                    })
+            return pd.DataFrame(rows)
+
+        resp = self._post(f"{OZON_API}/v1/finance/products/buyout", {
+            "date_from": pd.Timestamp(date_from).date().isoformat(),
+            "date_to": pd.Timestamp(date_to).date().isoformat(),
+        })
+        products = (resp.json().get("result") or {}).get("products") or []
+        if not products:
+            return pd.DataFrame()
+        out = []
+        for p in products:
+            qty = int(p.get("quantity") or 0)
+            out.append({
+                "posting_number": str(p.get("posting_number") or "").strip(),
+                "offer_id": str(p.get("offer_id") or "").strip(),
+                "name": p.get("name") or "",
+                "sku": p.get("sku") or "",
+                "quantity": qty,
+                "seller_price": float(p.get("seller_price_per_instance") or 0) * qty,
+                "buyout_price": float(p.get("buyout_price") or 0),
+                "amount": float(p.get("amount") or 0),
+                "deduction_by_category_percent": float(p.get("deduction_by_category_percent") or 0),
+                "vat_percent": int(p.get("vat_percent") or 0),
+            })
+        return pd.DataFrame(out)

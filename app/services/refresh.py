@@ -495,16 +495,22 @@ def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = 
     prov = provider or _oz_provider()
     df = prov.get_cards()
     n = 0
+    n_sk = 0
     if write_db and not df.empty:
         pdf = df.rename(columns={
             "Артикул": "article", "Offer ID": "article",
             "Название товара": "name", "Name": "name",
             "Бренд": "brand", "Category": "brand",
             "Штрихкод (Серийный номер / EAN)": "barcode", "Barcode": "barcode",
+            "SKU": "barcode",
         })
         n = sync_service.upsert_products(db, pdf)
-    sync_service.record_api_pull(db, "ozon", "cards", len(df), n, "")
-    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": ""}
+        mdf = sync_service.normalize_oz_cards(df)
+        n_sk = sync_service.upsert_marketplace_cards(db, mdf, "ozon") if mdf is not None else 0
+    total_db = n + n_sk
+    sync_service.record_api_pull(db, "ozon", "cards", len(df), total_db, "")
+    return {"df": df, "count": total_db if write_db else len(df), "db_rows": total_db,
+            "rows": len(df), "window": ""}
 
 
 def _oz_marketplace_cards(df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -626,6 +632,41 @@ def pull_oz_realization(db, month: int, year: int, provider: Optional[OzonProvid
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
 
 
+def _month_range(from_, to_):
+    """Список (year, month) месяцев, покрывающих интервал [from_, to_]."""
+    months = []
+    y, m = from_.year, from_.month
+    while (y, m) <= (to_.year, to_.month):
+        months.append((y, m))
+        m += 1
+        if m == 13:
+            m, y = 1, y + 1
+    return months
+
+
+def pull_oz_realizations(db, from_, to_, provider: Optional[OzonProvider] = None,
+                         write_db: bool = True) -> dict:
+    """Реализация за месяцы интервала [from_, to_] (Ozon API отдаёт помесячно).
+
+    Отчёт реализации датирован концом месяца, поэтому строки не фильтруются
+    по дням окна — окно выбирает набор месяцев.
+    """
+    prov = provider or _oz_provider()
+    frames = []
+    for yy, mm in _month_range(from_, to_):
+        df = prov.get_realization(mm, yy)
+        if df is not None and not df.empty:
+            frames.append(df)
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    n = 0
+    if write_db and not df.empty:
+        sdf = sync_service.normalize_ozon_realization(df)
+        n = sync_service.upsert_sales(db, sdf, "ozon", source="ozon") if sdf is not None else 0
+    window = f"{from_.isoformat()}..{to_.isoformat()}"
+    sync_service.record_api_pull(db, "ozon", "realization", len(df), n, window)
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
+
+
 def pull_oz_cashflow(db, from_, to_, provider: Optional[OzonProvider] = None,
                      write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
@@ -633,6 +674,36 @@ def pull_oz_cashflow(db, from_, to_, provider: Optional[OzonProvider] = None,
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "ozon", "cashflow", len(df), 0, window)
     return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": window}
+
+
+def pull_oz_detail(db, from_, to_, provider: Optional[OzonProvider] = None,
+                   write_db: bool = True) -> dict:
+    prov = provider or _oz_provider()
+    df = prov.get_sales_detail(from_, to_)
+    n = 0
+    if write_db and not df.empty:
+        rdf = sync_service.normalize_ozon_detail(df, source="api")
+        if rdf is not None and not rdf.empty:
+            n = sync_service.upsert_ozon_detail_rows(db, rdf, source="api")
+    window = f"{from_.isoformat()} — {to_.isoformat()}"
+    sync_service.record_api_pull(db, "ozon", "detail", len(df), n, window)
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": window}
+
+
+def pull_oz_buyout(db, from_, to_, provider: Optional[OzonProvider] = None,
+                   write_db: bool = True) -> dict:
+    prov = provider or _oz_provider()
+    df = prov.get_buyout(from_, to_)
+    n = 0
+    if write_db and not df.empty:
+        rdf = sync_service.normalize_ozon_buyout(df)
+        if rdf is not None and not rdf.empty:
+            n = sync_service.upsert_ozon_buyouts(db, rdf)
+    window = f"{from_.isoformat()} — {to_.isoformat()}"
+    sync_service.record_api_pull(db, "ozon", "buyout", len(df), n, window)
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": window}
 
 
 # ------------------------------------------------------------------ планы обновления
@@ -666,17 +737,21 @@ def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None):
                 fn = (lambda k: lambda db: _BULK_PULLS["wb"][k](db, provider=_BULK_PROV["wb"]))(kind)
         else:
             if kind == "realization":
-                today = date.today().replace(day=1) - timedelta(days=1)
-                yy, mm = today.year, today.month
-                fn = lambda db: pull_oz_realization(db, mm, yy, provider=_BULK_PROV["ozon"])  # noqa: E731
+                fn = lambda db: pull_oz_realizations(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
             elif kind == "cashflow":
                 fn = lambda db: pull_oz_cashflow(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
             else:
                 fn = (lambda k: lambda db: _BULK_PULLS["ozon"][k](db, provider=_BULK_PROV["ozon"]))(kind)
         steps.append((kind, label, fn))
-    if api == "wb" and include_detail:
-        steps.append(("detail", "Детализация (finance)",
-                      lambda db: pull_wb_detail(db, from_, to_, provider=_BULK_PROV["wb"])))
+    if include_detail:
+        if api == "wb":
+            steps.append(("detail", "Детализация (finance)",
+                          lambda db: pull_wb_detail(db, from_, to_, provider=_BULK_PROV["wb"])))
+        else:
+            steps.append(("detail", "Детализация продаж",
+                          lambda db: pull_oz_detail(db, from_, to_, provider=_BULK_PROV["ozon"])))
+            steps.append(("buyout", "Выкупы",
+                          lambda db: pull_oz_buyout(db, from_, to_, provider=_BULK_PROV["ozon"])))
     return steps
 
 

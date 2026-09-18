@@ -51,6 +51,7 @@
         <a class="nav-link" data-tab="oz-stock" href="#">Остатки</a>
         <a class="nav-link" data-tab="oz-prices" href="#">Цены</a>
         <a class="nav-link" data-tab="oz-realization" href="#">Реализация</a>
+        <a class="nav-link" data-tab="oz-detail" href="#">Детализация продаж</a>
         <a class="nav-link" data-tab="oz-cashflow" href="#">Движение средств</a>
       </div>
     </div>
@@ -157,13 +158,12 @@
   </section>
 
   <section id="tab-pricing" class="pane">
-    <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает), опирается на данные воронки и фактическую маржу из детализации и не опускает витринную цену ниже порога убытка. Сейчас изменения в Wildberries через API не вносятся — рекомендации сохраняются в Excel (применение станет доступно после расчёта минимальной цены WB).</span>
+    <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает), опирается на данные воронки и фактическую маржу из детализации и не опускает витринную цену ниже порога убытка и минимальной цены WB. «Применить» в шапке пересчитывает рекомендации, «Применить в WB» вносит новые скидки через API (доступно, когда для всех снижений известна минимальная цена WB).</span>
     <div class="toolbar">
-      <button id="pricingRecalc" class="btn">Пересчитать</button>
       <button id="pricingApply" class="btn" disabled title="Применение скидок через WB API станет доступно после расчёта минимальной цены">Применить в WB</button>
       <span class="msg" id="pricingMsg"></span>
-      <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» внесёт новые скидки через API, когда появится расчёт минимальной цены.</span></span>
-      <input id="pricingLike" type="search" placeholder="Артикул или название содержит…">
+      <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» вносит новые скидки через API; она активна, когда публичный Price API вернул минимальные цены для всех рекомендаций на снижение.</span></span>
+      <input id="pricingLike" placeholder="Артикул или название содержит…">
       <span class="toolbar-right">
         <span id="pricingTablePager"></span>
         <div class="view-menu" id="pricingViewMenu">
@@ -456,48 +456,110 @@
 
   <section id="tab-oz-cards" class="pane">
     <div class="wb-form">
-      <p class="hint">Полная загрузка карточек товаров Ozon (отчёт) и запись в базу (товары).</p>
-      <div class="toolbar">
-        <button class="btn wb-dl" data-api="ozon" data-kind="cards">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="cards" checked> в БД</label>
-        <span class="msg" id="ozMsg-cards"></span>
-      </div>
+      <p class="hint">Карточки товаров Ozon (отчёт) с записью в базу (товары). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие карточки из Ozon API, затем «Применить» — перечитает таблицу из базы.</p>
     </div>
+    <div class="toolbar">
+      <input id="ozCardsLike" placeholder="Поиск: артикул, баркод, бренд…">
+      <span class="msg" id="ozMsg-cards-table"></span>
+      <span class="tip hidden" id="ozCardsTip" tabindex="0" role="tooltip">?<span class="tip-text">Одна строка = SKU/карточка из базы. Обновите через «Обновить базу» в шапке, чтобы получить свежие карточки Ozon.</span></span>
+      <span class="toolbar-right">
+        <span id="ozCardsTablePager"></span>
+        <div class="view-menu" id="ozCardsViewMenu">
+          <button type="button" class="btn" id="btnozCardsView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="ozCardsViewPanel"></div>
+        </div>
+        <button id="btnExportOzCards" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskOzCards" class="btn">Загрузить на диск</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="ozCardsTable"></div>
   </section>
 
   <section id="tab-oz-stock" class="pane">
     <div class="wb-form">
-      <p class="hint">Остатки Ozon на складах FBO/FBS с записью в базу (остатки за сегодня).</p>
-      <div class="toolbar">
-        <button class="btn wb-dl" data-api="ozon" data-kind="stock">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="stock" checked> в БД</label>
-        <span class="msg" id="ozMsg-stock"></span>
-      </div>
+      <p class="hint">Остатки Ozon на складах FBO/FBS с записью в базу (остатки за сегодня). Нажмите «Обновить базу» в шапке, затем «Применить» — перечитает таблицу из базы.</p>
     </div>
+    <div class="toolbar">
+      <input id="ozStockLike" placeholder="Поиск: артикул, название…">
+      <label class="chk"><input type="checkbox" id="ozStockAgg"> свернуть по размерам</label>
+      <span class="msg" id="ozMsg-stock-table"></span>
+      <span class="tip hidden" id="ozStockTip" tabindex="0" role="tooltip">?<span class="tip-text">Последний срез остатков Ozon по артикулам и складам из базы. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» группирует суммы по артикулу+склад.</span></span>
+      <span class="toolbar-right">
+        <span id="ozStockTablePager"></span>
+        <div class="view-menu" id="ozStockViewMenu">
+          <button type="button" class="btn" id="btnozStockView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="ozStockViewPanel"></div>
+        </div>
+        <button id="btnExportOzStock" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskOzStock" class="btn">Загрузить на диск</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="ozStockTable"></div>
   </section>
 
   <section id="tab-oz-prices" class="pane">
     <div class="wb-form">
-      <p class="hint">Текущие цены и скидки Ozon по карточкам (снимок сохраняется в базу).</p>
-      <div class="toolbar">
-        <button class="btn wb-dl" data-api="ozon" data-kind="prices">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="prices" checked> в БД</label>
-        <span class="msg" id="ozMsg-prices"></span>
-      </div>
+      <p class="hint">Снимок текущих цен и скидок Ozon (сохраняется в базу). Нажмите «Обновить базу» в шапке, затем «Применить» — перечитает таблицу из базы.</p>
     </div>
+    <div class="toolbar">
+      <input id="ozPricesLike" placeholder="Поиск: артикул, название…">
+      <label class="chk"><input type="checkbox" id="ozPriceAgg"> свернуть по размерам</label>
+      <span class="msg" id="ozMsg-prices-table"></span>
+      <span class="tip hidden" id="ozPricesTip" tabindex="0" role="tooltip">?<span class="tip-text">Текущие цены и скидки Ozon из последнего снимка в базе. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» показывает одну строку на артикул.</span></span>
+      <span class="toolbar-right">
+        <span id="ozPricesTablePager"></span>
+        <div class="view-menu" id="ozPricesViewMenu">
+          <button type="button" class="btn" id="btnozPricesView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="ozPricesViewPanel"></div>
+        </div>
+        <button id="btnExportOzPrices" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskOzPrices" class="btn">Загрузить на диск</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="ozPricesTable"></div>
   </section>
 
   <section id="tab-oz-realization" class="pane">
     <div class="wb-form">
-      <p class="hint">Отчёт о реализации Ozon за месяц (пусто — предыдущий месяц), записывается в продажи.</p>
-      <div class="toolbar">
-        <label>Месяц <input type="number" data-month placeholder="1-12" min="1" max="12"></label>
-        <label>Год <input type="number" data-year placeholder="2026"></label>
-        <button class="btn wb-dl" data-api="ozon" data-kind="realization">Скачать Excel</button>
-        <label class="chk"><input type="checkbox" class="write-db" data-api="ozon" data-kind="realization" checked> в БД</label>
-        <span class="msg" id="ozMsg-realization"></span>
-      </div>
+      <p class="hint">Реализация Ozon за месяцы периода из шапки (если период пуст — прошлый месяц); строки отчёта записываются в продажи. «Обновить базу» тянет помесячно, «Применить» — перечитает таблицу из базы.</p>
     </div>
+    <div class="toolbar">
+      <input id="ozRealLike" placeholder="Поиск: артикул, название…">
+      <span class="msg" id="ozMsg-realization-table"></span>
+      <span class="tip hidden" id="ozRealTip" tabindex="0" role="tooltip">?<span class="tip-text">Продажи Ozon из базы за выбранный период (по дням и артикулам). Период задаётся фильтром дат в шапке; «Обновить базу» тянет реализацию помесячно за месяцы периода.</span></span>
+      <span class="toolbar-right">
+        <span id="ozRealTablePager"></span>
+        <div class="view-menu" id="ozRealizationViewMenu">
+          <button type="button" class="btn" id="btnozRealizationView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="ozRealizationViewPanel"></div>
+        </div>
+        <button id="btnExportOzReal" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskOzReal" class="btn">Загрузить на диск</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="ozRealTable"></div>
+  </section>
+
+  <section id="tab-oz-detail" class="pane">
+    <div class="wb-form">
+      <p class="hint">Детализация реализаций Ozon по постингам: продажи, комиссия, услуги («стандартные»), сумма к перечислению и возвраты; отдельно — выкупы по артикулам (сумма и % выкупа в своде). Нажмите «Обновить базу» в шапке, чтобы вытянуть данные из Ozon API (/v1/finance/realization/posting; при большом объёме — через отчёт), затем «Применить» — перечитает таблицу из базы.</p>
+    </div>
+    <div class="toolbar">
+      <input id="ozDetailLike" placeholder="Поиск: артикул, название…">
+      <label class="chk"><input type="checkbox" id="ozDetailRaw"> Строками</label>
+      <span class="msg" id="ozMsg-detail-table"></span>
+      <span class="tip hidden" id="ozDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Сырые деньги операций по постингам Ozon: комиссия и услуги отрицательные, «К перечислению» — итог по строке (с учётом возврата). Свод по артикулам добавляет сумму и % выкупа.</span></span>
+      <span class="toolbar-right">
+        <span id="ozDetailTablePager"></span>
+        <div class="view-menu" id="ozDetailViewMenu">
+          <button type="button" class="btn" id="btnozDetailView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="ozDetailViewPanel"></div>
+        </div>
+        <button id="btnExportOzDetail" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskOzDetail" class="btn">Загрузить на диск</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="ozDetailTable"></div>
   </section>
 
   <section id="tab-oz-cashflow" class="pane">
@@ -540,7 +602,7 @@
       <div class="refresh-summary" id="refreshSummary"></div>
       <div class="refresh-list" id="refreshList"></div>
       <label class="refresh-detail">
-        <input type="checkbox" id="refreshDetail"> вкл. Детализацию WB (finance, лимит 1 запрос / 12 ч)
+        <input type="checkbox" id="refreshDetail"> вкл. Детализацию продаж (WB: finance, лимит 1 запрос / 12 ч; Ozon: детализация реализаций + выкупы)
       </label>
       <div class="modal-actions">
         <button id="refreshStart" class="btn btn-primary">Запустить</button>

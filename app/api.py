@@ -55,7 +55,9 @@ def _df_totals(df: pd.DataFrame) -> dict:
             "localization_percent", "conv_to_cart_percent",
             "conv_cart_to_order_percent", "conv_buyout_percent",
             "wb_club_avg_price", "wb_club_buyout_percent",
-            "wb_club_avg_orders_per_day"}
+            "wb_club_avg_orders_per_day",
+            "buyout_percent", "commission_ratio", "deduction_by_category_percent",
+            "vat_percent"}
     out: dict = {}
     for c in df.columns:
         if c in skip:
@@ -650,7 +652,16 @@ def api_stocks(
     marketplace: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    latest = db.scalar(select(func.max(models.Stock.date)))
+    latest_q = select(func.max(models.Stock.date))
+    if marketplace:
+        latest = db.scalar(
+            latest_q.where(
+                models.Stock.marketplace_id ==
+                select(models.Marketplace.id).where(models.Marketplace.code == marketplace).scalar_subquery()
+            )
+        )
+    else:
+        latest = db.scalar(latest_q)
     query = (
         select(
             models.Marketplace.code.label("marketplace"),
@@ -693,10 +704,11 @@ def api_stocks(
 
 @router.get("/prices")
 def api_prices(
+    marketplace: str = "wb",
     article_like: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Срез текущих цен/скидок WB из price_snapshots (последняя загрузка)."""
+    """Срез текущих цен/скидок из price_snapshots (последняя загрузка)."""
     name_subq = (
         select(models.Product.name)
         .where(models.Product.article == models.PriceSnapshot.article)
@@ -714,7 +726,7 @@ def api_prices(
             models.PriceSnapshot.discount,
             models.PriceSnapshot.updated_at,
         )
-        .where(models.PriceSnapshot.marketplace == "wb")
+        .where(models.PriceSnapshot.marketplace == marketplace)
         .order_by(models.PriceSnapshot.article, models.PriceSnapshot.size)
     )
     if article_like:
@@ -2153,10 +2165,10 @@ def export_wb_stock(
 
 
 @router.get("/export/wb/prices")
-def export_wb_prices(article_like: Optional[str] = None, cols: Optional[str] = None,
-                     db: Session = Depends(get_db)):
-    """Экспорт текущих цен/скидок WB (price_snapshots) в Excel."""
-    payload = api_prices(article_like=article_like, db=db)
+def export_wb_prices(marketplace: str = "wb", article_like: Optional[str] = None,
+                     cols: Optional[str] = None, db: Session = Depends(get_db)):
+    """Экспорт текущих цен/скидок (price_snapshots) в Excel."""
+    payload = api_prices(marketplace=marketplace, article_like=article_like, db=db)
     df = pd.DataFrame(payload["rows"], columns=[
         "article", "nm_id", "size", "name", "price", "discounted_price", "discount",
     ])
@@ -2166,7 +2178,8 @@ def export_wb_prices(article_like: Optional[str] = None, cols: Optional[str] = N
         "discounted_price": "Цена со скидкой", "discount": "Скидка, %",
     }, cols)
     df = df.rename(columns=ru)
-    return _xlsx_response(df, "wb_prices.xlsx", payload["count"])
+    fname = f"{marketplace}_prices.xlsx"
+    return _xlsx_response(df, fname, payload["count"])
 
 
 @router.get("/export/wb/storage")
@@ -2224,45 +2237,64 @@ def export_wb_funnel(
 
 
 @router.post("/ozon/cards")
-def ozon_cards(write_db: int = 1, db: Session = Depends(get_db)):
+def ozon_cards(write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_oz_cards(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(res["df"], "ozon_cards.xlsx", res["count"])
 
 
 @router.post("/ozon/stock")
-def ozon_stock(write_db: int = 1, db: Session = Depends(get_db)):
+def ozon_stock(write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_oz_stock(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(res["df"], "ozon_stock.xlsx", res["count"])
 
 
 @router.post("/ozon/prices")
-def ozon_prices(write_db: int = 1, db: Session = Depends(get_db)):
+def ozon_prices(write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
     try:
         res = refresh_service.pull_oz_prices(db, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(res["df"], "ozon_prices.xlsx", res["count"])
 
 
 @router.post("/ozon/realization")
-def ozon_realization(month: Optional[int] = None, year: Optional[int] = None,
-                     write_db: int = 1, db: Session = Depends(get_db)):
-    if month is None or year is None:
-        today = date.today().replace(day=1) - timedelta(days=1)
-        year, month = today.year, today.month
-    try:
+def ozon_realization(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                     month: Optional[int] = None, year: Optional[int] = None,
+                     write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
+    """Реализация за месяцы, покрывающие окно из шапки (или точный месяц).
+
+    Приоритет: явные month/year → месяцы интервала date_from..date_to →
+    прошлый месяц по умолчанию.
+    """
+    if month is not None and year is not None:
         res = refresh_service.pull_oz_realization(db, month, year, write_db=bool(write_db))
-    except Exception as e:  # noqa: BLE001
-        refresh_service.oz_error(e)
+        label = f"{year:04d}-{month:02d}"
+    elif date_from and date_to:
+        from_, to_ = _parse_window400(date_from, date_to)
+        res = refresh_service.pull_oz_realizations(db, from_, to_, write_db=bool(write_db))
+        label = f"{from_}_{to_}"
+    else:
+        today = date.today().replace(day=1) - timedelta(days=1)
+        res = refresh_service.pull_oz_realization(db, today.month, today.year,
+                                                  write_db=bool(write_db))
+        label = f"{today.year:04d}-{today.month:02d}"
+    if not int(excel):
+        return _pull_json(res)
     df = res["df"]
     export = df.rename(columns=OZON_RU_COLUMNS) if not df.empty else df
-    return _xlsx_response(export, f"ozon_realization_{year:04d}-{month:02d}.xlsx", res["count"])
+    return _xlsx_response(export, f"ozon_realization_{label}.xlsx", res["count"])
 
 
 @router.post("/ozon/cashflow")
@@ -2274,6 +2306,256 @@ def ozon_cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
     return _xlsx_response(res["df"], f"ozon_cashflow_{from_}_{to_}.xlsx", res["count"])
+
+
+OZON_DETAIL_RU_COLUMNS = {
+    "date": "Дата", "posting_number": "Постинг", "offer_id": "Артикул",
+    "name": "Наименование", "sku": "SKU", "barcode": "Штрихкод",
+    "quantity": "Кол-во", "seller_price": "Цена, руб", "amount": "Сумма, руб",
+    "commission_ratio": "Доля комиссии", "commission": "Комиссия, руб",
+    "standard_fee": "Услуги, руб", "income": "К перечислению, руб",
+    "return_qty": "Возврат, шт", "return_total": "Возврат, руб",
+}
+
+OZON_DETAIL_SUMMARY_RU_COLUMNS = {
+    "article": "Артикул", "name": "Наименование", "sells": "Продано, шт",
+    "returns_qty": "Возвращено, шт", "postings": "Постингов",
+    "seller_total": "Продажи (цена×кол-во), руб", "amount": "Реализовано, руб",
+    "commission": "Комиссия, руб", "services": "Услуги, руб",
+    "income": "К перечислению, руб", "ops_count": "Операций",
+    "buyout_sum": "Сумма выкупов, руб", "buyout_percent": "Выкуп, %",
+}
+
+OZON_BUYOUT_RU_COLUMNS = {
+    "posting_number": "Постинг", "offer_id": "Артикул", "name": "Наименование",
+    "sku": "SKU", "quantity": "Кол-во", "seller_price": "Цена, руб",
+    "buyout_price": "Цена выкупа, руб", "amount": "Сумма выкупа, руб",
+    "deduction_by_category_percent": "Дед., %", "vat_percent": "НДС, %",
+}
+
+
+@router.post("/ozon/detail")
+def ozon_detail(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
+    from_, to_ = _parse_window400(date_from, date_to)
+    try:
+        res = refresh_service.pull_oz_detail(db, from_, to_, write_db=bool(write_db))
+    except Exception as e:  # noqa: BLE001
+        refresh_service.oz_error(e)
+    if not int(excel):
+        return _pull_json(res)
+    df = res["df"]
+    export = df.rename(columns=OZON_DETAIL_RU_COLUMNS) if not df.empty else df
+    return _xlsx_response(export, f"ozon_detail_{from_}_{to_}.xlsx", res["count"])
+
+
+@router.post("/ozon/buyout")
+def ozon_buyout(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
+    from_, to_ = _parse_window400(date_from, date_to)
+    try:
+        res = refresh_service.pull_oz_buyout(db, from_, to_, write_db=bool(write_db))
+    except Exception as e:  # noqa: BLE001
+        refresh_service.oz_error(e)
+    if not int(excel):
+        return _pull_json(res)
+    df = res["df"]
+    export = df.rename(columns=OZON_BUYOUT_RU_COLUMNS) if not df.empty else df
+    return _xlsx_response(export, f"ozon_buyout_{from_}_{to_}.xlsx", res["count"])
+
+
+@router.get("/ozon/detail-rows")
+def api_ozon_detail_rows(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Сырые строки «Детализации реализаций» Ozon (ozon_detail_rows) с фильтрами."""
+    from_, to_ = _parse_window400(date_from, date_to)
+    q = select(models.OzonDetailRow).where(models.OzonDetailRow.date.isnot(None))
+    if from_:
+        q = q.where(models.OzonDetailRow.date >= from_)
+    if to_:
+        q = q.where(models.OzonDetailRow.date <= to_)
+    if article_like:
+        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%"))
+    total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
+    rows = db.execute(
+        q.order_by(models.OzonDetailRow.date.desc(), models.OzonDetailRow.id.desc())
+        .offset(offset).limit(limit)
+    ).scalars().all()
+    out = [{
+        "date": r.date.isoformat() if r.date else "",
+        "posting_number": r.posting_number,
+        "offer_id": r.offer_id,
+        "name": r.name,
+        "sku": r.sku,
+        "barcode": r.barcode,
+        "quantity": r.quantity,
+        "seller_price": float(r.seller_price or 0),
+        "amount": float(r.amount or 0),
+        "commission_ratio": float(r.commission_ratio or 0),
+        "commission": float(r.commission or 0),
+        "standard_fee": float(r.standard_fee or 0),
+        "income": float(r.income or 0),
+        "return_qty": r.return_qty,
+        "return_total": float(r.return_total or 0),
+        "source": r.source,
+    } for r in rows]
+    return {"rows": out, "total": int(total)}
+
+
+@router.get("/ozon/detail-summary")
+def api_ozon_detail_summary(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Свод «Детализации реализаций» Ozon по артикулам (+ выкупы)."""
+    from_, to_ = _parse_window400(date_from, date_to)
+    df = sync_service.oz_detail_summary_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like
+    )
+    return {
+        "rows": df.replace({None: ""}).to_dict("records"),
+        "count": len(df),
+        "totals": _df_totals(df),
+    }
+
+
+@router.get("/ozon/buyout-rows")
+def api_ozon_buyout_rows(
+    article_like: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Сырые строки «Выкупов» Ozon (ozon_buyouts) с фильтром по артикулу."""
+    q = select(models.OzonBuyout)
+    if article_like:
+        q = q.where(models.OzonBuyout.offer_id.ilike(f"%{article_like}%"))
+    total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
+    rows = db.execute(q.order_by(models.OzonBuyout.id.desc())
+                      .offset(offset).limit(limit)).scalars().all()
+    out = [{
+        "posting_number": r.posting_number,
+        "offer_id": r.offer_id,
+        "name": r.name,
+        "sku": r.sku,
+        "quantity": r.quantity,
+        "seller_price": float(r.seller_price or 0),
+        "buyout_price": float(r.buyout_price or 0),
+        "amount": float(r.amount or 0),
+        "deduction_by_category_percent": float(r.deduction_by_category_percent or 0),
+        "vat_percent": r.vat_percent,
+    } for r in rows]
+    return {"rows": out, "total": int(total)}
+
+
+@router.get("/export/ozon/detail-summary")
+def export_ozon_detail_summary(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    cols: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from_, to_ = _parse_window400(date_from, date_to)
+    df = sync_service.oz_detail_summary_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like
+    )
+    df, ru = excel_io.project_export(df, OZON_DETAIL_SUMMARY_RU_COLUMNS, cols)
+    df = df.rename(columns=ru)
+    buf = excel_io.df_to_excel_stream(df, sheet_name="Детализация по артикулам")
+    fname = f"ozon_detail_summary_{from_}_{to_}.xlsx"
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/export/ozon/detail-rows")
+def export_ozon_detail_rows(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    limit: int = 5000,
+    cols: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Экспорт сырых строк «Детализации реализаций» Ozon в Excel."""
+    from_, to_ = _parse_window400(date_from, date_to)
+    q = (
+        select(models.OzonDetailRow)
+        .where(models.OzonDetailRow.date.isnot(None))
+        .order_by(models.OzonDetailRow.date, models.OzonDetailRow.id)
+        .limit(limit)
+    )
+    if from_:
+        q = q.where(models.OzonDetailRow.date >= from_)
+    if to_:
+        q = q.where(models.OzonDetailRow.date <= to_)
+    if article_like:
+        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%"))
+    rows = db.execute(q).scalars().all()
+    recs = [{
+        "date": r.date.isoformat() if r.date else "",
+        "posting_number": r.posting_number, "offer_id": r.offer_id,
+        "name": r.name, "sku": r.sku, "barcode": r.barcode,
+        "quantity": r.quantity, "seller_price": float(r.seller_price or 0),
+        "amount": float(r.amount or 0),
+        "commission_ratio": float(r.commission_ratio or 0),
+        "commission": float(r.commission or 0),
+        "standard_fee": float(r.standard_fee or 0),
+        "income": float(r.income or 0),
+        "return_qty": r.return_qty, "return_total": float(r.return_total or 0),
+        "source": r.source,
+    } for r in rows]
+    df = pd.DataFrame(recs, columns=list(OZON_DETAIL_RU_COLUMNS.keys()))
+    df, ru = excel_io.project_export(df, OZON_DETAIL_RU_COLUMNS, cols)
+    df = df.rename(columns=ru)
+    buf = excel_io.df_to_excel_stream(df, sheet_name="Строки детализации")
+    fname = f"ozon_detail_rows_{from_}_{to_}.xlsx"
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/export/ozon/buyout-rows")
+def export_ozon_buyout_rows(
+    article_like: Optional[str] = None,
+    limit: int = 5000,
+    cols: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Экспорт сырых строк «Выкупов» Ozon в Excel."""
+    q = select(models.OzonBuyout).order_by(models.OzonBuyout.id).limit(limit)
+    if article_like:
+        q = q.where(models.OzonBuyout.offer_id.ilike(f"%{article_like}%"))
+    rows = db.execute(q).scalars().all()
+    recs = [{
+        "posting_number": r.posting_number, "offer_id": r.offer_id,
+        "name": r.name, "sku": r.sku, "quantity": r.quantity,
+        "seller_price": float(r.seller_price or 0),
+        "buyout_price": float(r.buyout_price or 0),
+        "amount": float(r.amount or 0),
+        "deduction_by_category_percent": float(r.deduction_by_category_percent or 0),
+        "vat_percent": r.vat_percent,
+    } for r in rows]
+    df = pd.DataFrame(recs, columns=list(OZON_BUYOUT_RU_COLUMNS.keys()))
+    df, ru = excel_io.project_export(df, OZON_BUYOUT_RU_COLUMNS, cols)
+    df = df.rename(columns=ru)
+    buf = excel_io.df_to_excel_stream(df, sheet_name="Выкупы")
+    fname = "ozon_buyout_rows.xlsx"
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 # ------------------------------------------------------- массовое обновление (кнопка)
