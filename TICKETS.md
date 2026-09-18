@@ -101,15 +101,6 @@
   > (include_detail для ozon, период = из шапки, по умолчанию предыдущий
   > месяц; для realization — месяцы, покрывающие окно). Всё в одном фоне
   > (start_refresh уже сериализует).
-- [T-20] (medium) Каталог: модуль рекомендуемой (базовой) цены base_price
-  > Тело: app/services/base_price.py: PRICE_DEFAULTS {cost_anchors: [[100,10],
-  > [2000,3]], vol_anchors: [[1,1],[10,2]], round_nice: True}.
-  > recommended_price(cost, vol_l, settings): лог-линейная интерполяция наценки по
-  > себестоимости и объёму; за пределами диапазона — clamp к крайней наценке;
-  > объём < 1 л не повышает наценку; цена никогда ниже себестоимости. Округление
-  > «вверх до …9» (ceil до кратного 10 → −1), выкл. настройкой round_nice.
-  > merge_price_settings (как merge_settings в pricing.py). Юнит-тесты:
-  > интерполяция, clamp, округление.
 - [T-18] (high) Каталог: синк карточек WB+Ozon в общий каталог
   > Тело: app/services/sync.py: normalize_catalog_card(df) и
   > sync_catalog_from_cards(db, cards_df, overwrite) — общая схема карточки
@@ -167,6 +158,15 @@
 
 ## В работе
 
+- [T-20] (medium) Каталог: модуль рекомендуемой (базовой) цены base_price
+  > Тело: app/services/base_price.py: PRICE_DEFAULTS {cost_anchors: [[100,10],
+  > [2000,3]], vol_anchors: [[1,1],[10,2]], round_nice: True}.
+  > recommended_price(cost, vol_l, settings): лог-линейная интерполяция наценки по
+  > себестоимости и объёму; за пределами диапазона — clamp к крайней наценке;
+  > объём < 1 л не повышает наценку; цена никогда ниже себестоимости. Округление
+  > «вверх до …9» (ceil до кратного 10 → −1), выкл. настройкой round_nice.
+  > merge_price_settings (как merge_settings в pricing.py). Юнит-тесты:
+  > интерполяция, clamp, округление.
 - [T-12] (high) Автопилот цен WB: UI по эталону «Детализация Продаж WB»
   > Тело: тулбар msg/tip/поиск/«Пересчитать»/pager/«Вид таблицы»/«Экспорт
   > в Excel»/«Загрузить на диск»; кнопка «Применить в WB» (disabled-заглушка
