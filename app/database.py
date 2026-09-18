@@ -34,6 +34,10 @@ def ensure_schema(seed: bool = True) -> None:
             ("wb_detail_rows", "return_delivery_count INTEGER NOT NULL DEFAULT 0"),
             ("wb_detail_rows", "pvz_compensation NUMERIC(14, 2) NOT NULL DEFAULT 0"),
             ("wb_detail_rows", "payment_services NUMERIC(14, 2) NOT NULL DEFAULT 0"),
+            # T-17: новые поля каталога товаров (create_all их к существующей таблице не добавляет)
+            ("products", "subject VARCHAR(200) NOT NULL DEFAULT ''"),
+            ("products", "volume_l NUMERIC(10, 3) NOT NULL DEFAULT 0"),
+            ("products", "composition TEXT NOT NULL DEFAULT ''"),
         ]:
             conn.execute(text(
                 f"ALTER TABLE {col} ADD COLUMN IF NOT EXISTS {ddl}"
