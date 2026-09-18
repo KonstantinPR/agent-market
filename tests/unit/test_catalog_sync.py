@@ -248,9 +248,11 @@ def test_pull_catalog_writes_marketplace_cards_and_catalog(db, patch_factory):
     assert res["oz_rows"] == 2
     assert rep["created_products"] == 4
     assert rep["sizes_added"] == 4
-    # marketplace_cards/nm_articles для WB пишутся как раньше (Ozon — в pull_oz_cards)
+    # marketplace_cards/nm_articles пишутся для WB и Ozon
     mp_wb = db.query(models.Marketplace).filter_by(code="wb").one()
+    mp_oz = db.query(models.Marketplace).filter_by(code="ozon").one()
     assert db.query(models.MarketplaceCard).filter_by(marketplace_id=mp_wb.id).count() == 2
+    assert db.query(models.MarketplaceCard).filter_by(marketplace_id=mp_oz.id).count() == 2
     assert db.query(models.NmArticle).count() == 2
     assert db.get(models.Product, "TST-1").name == "Товар 1"
     assert db.get(models.Product, "OZ-1").name == "Ozon 1"
