@@ -243,6 +243,9 @@ def _detail_metrics(db: Session, date_from: date, date_to: date) -> dict:
     try:
         dframe = margin_detail_dataframe(db, date_from=date_from, date_to=date_to)
     except Exception:  # noqa: BLE001
+        # необязательный источник: откат обязателен, иначе оборванная транзакция
+        # уронит все последующие запросы расчёта (InFailedSqlTransaction)
+        db.rollback()
         return {}
     if dframe is None or dframe.empty:
         return {}
