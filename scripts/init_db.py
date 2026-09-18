@@ -37,6 +37,10 @@ def create_tables():
     # Миграции для существующих таблиц (create_all не добавляет колонки)
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS replenishable boolean DEFAULT false"))
+        # Фаза C: каталог «Наш склад → Товары» — поля из карточек WB/Ozon
+        conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS subject varchar(200) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS volume_l numeric(10,3) DEFAULT 0"))
+        conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS composition text DEFAULT ''"))
         # Фаза B: остатки по размерам
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS chrt_id varchar(40) DEFAULT ''"))
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS size varchar(50) DEFAULT ''"))

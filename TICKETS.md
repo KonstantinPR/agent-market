@@ -5,7 +5,7 @@
 номер выдаётся один раз и не переиспользуется, даже если тикет закрыли,
 не начав, или закрыли как неактуальный.
 
-Счётчик: следующая свободная метка — `T-17`.
+Счётчик: следующая свободная метка — `T-24`.
 
 ## Правила
 
@@ -39,7 +39,9 @@
   в «Заблокированные» с описанием ожидания.
 - Веб-интерфейс (вкладка «Тикеты» в приложении) работает с тем же файлом:
   добавление, смена статуса, закрытие с хешем коммита. Ручные правки файла
-  и правки из интерфейса не конфликтуют.
+  и правки из интерфейса не конфликтуют. Избегать двусмысленностей. Подробное и длинное
+- описание приемлемо, если оно будет давать точные и облегчающие интерпретацию 
+- другим агентам объяснения.
 
 ## Открытые
 
@@ -99,10 +101,82 @@
   > (include_detail для ozon, период = из шапки, по умолчанию предыдущий
   > месяц; для realization — месяцы, покрывающие окно). Всё в одном фоне
   > (start_refresh уже сериализует).
+- [T-20] (medium) Каталог: модуль рекомендуемой (базовой) цены base_price
+  > Тело: app/services/base_price.py: PRICE_DEFAULTS {cost_anchors: [[100,10],
+  > [2000,3]], vol_anchors: [[1,1],[10,2]], round_nice: True}.
+  > recommended_price(cost, vol_l, settings): лог-линейная интерполяция наценки по
+  > себестоимости и объёму; за пределами диапазона — clamp к крайней наценке;
+  > объём < 1 л не повышает наценку; цена никогда ниже себестоимости. Округление
+  > «вверх до …9» (ceil до кратного 10 → −1), выкл. настройкой round_nice.
+  > merge_price_settings (как merge_settings в pricing.py). Юнит-тесты:
+  > интерполяция, clamp, округление.
+- [T-18] (high) Каталог: синк карточек WB+Ozon в общий каталог
+  > Тело: app/services/sync.py: normalize_catalog_card(df) и
+  > sync_catalog_from_cards(db, cards_df, overwrite) — общая схема карточки
+  > {article, name, brand, subject, size, barcode, volume_l, composition, source}.
+  > Идентификация строки: 1) barcode (product_sizes.barcode, затем products.barcode),
+  > 2) (article,size) в product_sizes, 3) article в products. Баркод-совпадение
+  > с чужим артикулом → запись в product_aliases (объединение: дальнейшие строки
+  > со старым артикулом разрешаются через алиасы). Правила записи: overwrite=False
+  > (по умолчанию) — только пустые поля; overwrite=True — перезапись полей карточки;
+  > net_cost и replenishable НЕ трогаются никогда. product-level поля собираются
+  > с первой записанной строки (last-write при overwrite). Отчёт {created_products,
+  > updated_products, sizes_added, sizes_updated, aliases, unmapped_fields, rows}.
+  > app/services/refresh.py: pull_catalog(db, overwrite=False) — get_cards() WB и Ozon
+  > → нормализация в общую схему (WB: vendorCode→article, title→name,
+  > subject.name→subject, techSize→size, skus→barcode, объём из dimensions
+  > Д×Ш×В мм/1e6; Ozon: Offer ID→article, Name→name, SKU/Штрихкод→barcode,
+  > Category/Бренд→subject) → sync_catalog_from_cards → record_api_pull('catalog','cards').
+  > Юнит-тесты идентификации/перезаписи (fakes).
+- [T-19] (high) Каталог: API-эндпоинты
+  > Тело: GET /api/products?like=&sizes=1&stocks=1 → {rows, count, price_settings};
+  > без размеров — агрегация размеров (кол-во размеров, первый баркод, теги WB/Ozon),
+  > со складами: own_stock (warehouse stock_view balance) + mp_stock (последний срез
+  > WB и Ozon stocks, сумма), рекомендуемая цена и наценка (base_price, дефолты);
+  > с размерами — по product_sizes (article, size, barcode) + WB остаток по размеру.
+  > POST /api/products/refresh?overwrite= → pull_catalog, вернуть отчёт.
+  > POST /api/products/preview (like, sizes, stocks, price_settings) — пересчёт
+  > рек.цены с пользовательскими коэффициентами без записи.
+  > GET /api/products/price-settings → PRICE_DEFAULTS.
+  > GET /api/export/products (cols, like, sizes, stocks) — xlsx по видимым колонкам
+  > (образец /api/export/wb/cards). API-тесты (TestClient + fakes + тестовая БД).
+- [T-21] (medium) Каталог: UI «Наш склад → Товары» по эталону «Детализация Продаж WB»
+  > Тело: app/static/index.html + app.js + style.css. Тулбар: msg (productsMsg), tip,
+  > поиск «Артикул содержит…» (productsLike), чекбоксы «С размерами» (productsSizes),
+  > «Показывать остатки» (productsStocks), «Перезапись» (productsOverwrite),
+  > toolbar-right: pager, «Вид таблицы»
+  > (registerColView('products', {storageKey:'productsCols', headers, optional})),
+  > «Выгрузить в Excel», «Загрузить на диск». Кнопка «Обновить» в шапке
+  > (#btnUpdateCatalog) рядом с «Применить», видима только на вкладке products
+  > (syncHeaderForTab) → POST /api/products/refresh → отчёт в msg.
+  > Раскрывающееся меню «Установить цены» (тоггл панели: якоря себестоимости/объёма
+  > + округление, localStorage products_price_settings, рекалькуляция таблицы).
+  > Обрезка длинных полей до 50 символов + «…» (наименование, состав).
+  > Экспорт по видимым колонкам. Сохранить загрузчики товаров/себестоимости.
+  > node --check app/static/app.js.
+- [T-22] (low) Будущее (в обсуждение): «Карточка товара» по клику на строку в «Товары»
+  > Тело: клик по строке каталога → отдельный экран/модал «Карточка товара»: полная
+  > информация (наименование, бренд, предмет, состав, объём, фото), движения
+  > (приход/отгрузка, продажи WB+Ozon), прибыль, остатки (склад + МП), себестоимость,
+  > рекомендуемая цена, история цен (price_changes), размеры/баркоды. После базового
+  > каталога. Пока НЕ реализуем.
+- [T-23] (low) Будущее (в обсуждение): рекомендуемая цена раздельно по маркетплейсам
+  > Тело: сейчас базовая цена общая (base_price = f(себестоимость, объём)). В будущем
+  > — свои коэффициенты/формула для WB, Ozon и др. + связка со скидками «Автопилота
+  > цен WB» (Прибыльность). Обсудить структуру настроек и экспорт. Пока НЕ реализуем.
 
 ## В работе
 
-- [T-7] (high) Ozon: провайдер — детализация реализаций по постингам + выкупы
+- [T-17] (high) Каталог «Наш склад → Товары»: схема БД + миграция
+  > Тело: products: ADD COLUMN subject varchar(200) DEFAULT '', volume_l
+  > numeric(10,3) DEFAULT 0, composition text DEFAULT ''. Новые таблицы:
+  > product_sizes (id PK, article varchar(100) NOT NULL REFERENCES products(article)
+  > ON DELETE CASCADE, size varchar(50) NOT NULL DEFAULT '', barcode varchar(200)
+  > DEFAULT '', UNIQUE(article,size), index barcode) и product_aliases
+  > (alias_article varchar(100) PK, article varchar(100) NOT NULL REFERENCES
+  > products(article) ON DELETE CASCADE, updated_at). Идемпотентно в
+  > scripts/init_db.py (паттерн как для replenishable) + app/models.py.
+  > Тест: миграция создаёт таблицы/колонки.
 - [T-12] (high) Автопилот цен WB: UI по эталону «Детализация Продаж WB»
   > Тело: тулбар msg/tip/поиск/«Пересчитать»/pager/«Вид таблицы»/«Экспорт
   > в Excel»/«Загрузить на диск»; кнопка «Применить в WB» (disabled-заглушка
@@ -133,6 +207,11 @@ _(пусто)_
 
 ## Закрытые
 
+- [T-7] (closed) Ozon: провайдер — детализация реализаций по постингам + выкупы (get_sales_detail/get_buyout, фолбэк на /v1/report/*, live-проверка на Client-Id 164497) — не закоммичено
+- [T-8] (closed) Ozon: таблицы OzonDetailRow/OzonBuyout + синк + API-эндпоинты — не закоммичено
+- [T-9] (closed) UI — вкладка «Детализация продаж Ozon» (oz-detail) по образцу WB (rows/summary, экспорт, диск, поиск) — не закоммичено
+- [T-10] (closed) UI — oz-cards/oz-stock/oz-prices/oz-realization: полные таблицы из БД (поиск, свёртка, «Вид таблицы», экспорт по видимым колонкам, диск); pull_oz_cards пишет marketplace_cards, /api/prices и экспорт учитывают marketplace — не закоммичено
+- [T-11] (closed) «Магия → Обновить Ozon»: детализация реализаций + выкупы через include_detail (plan steps detail/buyout, чекбокс в модалке для ozon) — не закоммичено
 - [T-5] (closed) WB API → Воронка продаж: все поля отчёта (карточка, остатки, конверсии, WB Клуб, время доставки, raw JSON) в базу и UI — commit `2a34949`
 - [T-6] (closed) UI — единый тулбар во всех разделах WB API (дубли кнопок убраны, «Обновить базу» в шапке для всех wb-вкладок) — commit `d1c974b`
 - [T-4] (closed) WB API → Воронка продаж: автоподбор ключа для отчёта + унификация UI с «Детализация продаж» — commit `a1ce2db`

@@ -37,8 +37,57 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(500), default="")
     barcode: Mapped[str] = mapped_column(String(100), default="")
     brand: Mapped[str] = mapped_column(String(200), default="")
+    subject: Mapped[str] = mapped_column(String(200), default="")
+    volume_l: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
+    composition: Mapped[str] = mapped_column(Text, default="")
     net_cost: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     replenishable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    sizes: Mapped[list["ProductSize"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan", order_by="ProductSize.size"
+    )
+
+
+class ProductSize(Base):
+    """Размеры товара общего каталога «Наш склад → Товары».
+
+    Одна строка — размер товара (объединяется из карточек WB и Ozon: у одного
+    товара на маркетплейсах могут быть свои размеры/баркоды). Себестоимость
+    общая на товар (products.net_cost), здесь хранятся только размер и баркод.
+    """
+
+    __tablename__ = "product_sizes"
+    __table_args__ = (
+        UniqueConstraint("article", "size", name="uq_product_sizes_article_size"),
+        Index("ix_product_sizes_barcode", "barcode"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article: Mapped[str] = mapped_column(
+        ForeignKey("products.article", ondelete="CASCADE"), nullable=False, index=True
+    )
+    size: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    barcode: Mapped[str] = mapped_column(String(200), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    product: Mapped[Product] = relationship(back_populates="sizes")
+
+
+class ProductAlias(Base):
+    """Карта «чужой» артикул → канонический товар каталога.
+
+    Когда один физический товар встречается на WB и Ozon под разными артикулами
+    и совпал по баркоду, старый артикул запоминается как алиас, чтобы последующие
+    строки карточек разрешались в тот же товар каталога.
+    """
+
+    __tablename__ = "product_aliases"
+
+    alias_article: Mapped[str] = mapped_column(String(100), primary_key=True)
+    article: Mapped[str] = mapped_column(
+        ForeignKey("products.article", ondelete="CASCADE"), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
 class Sale(Base):
@@ -397,6 +446,79 @@ class WbDetailRow(Base):
     rebill_logistic_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     srid: Mapped[str] = mapped_column(String(120), default="")
     order_uid: Mapped[str] = mapped_column(String(120), default="")
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class OzonDetailRow(Base):
+    """Строки детализации реализаций Ozon (постинги + выкупы) по артикулам.
+
+    Ключ op_key — дата|постинг|sku. Идемпотентно перезаписывается при повторных
+    загрузках (прямой метод /v1/finance/realization/posting и фолбэк-отчёт
+    /v1/report/realization/posting пишут в один и тот же ключ и не конфликтуют).
+    income — сумма к перечислению (с продажи по этой строке), включая возвраты;
+    commission — отрицательное значение (комиссия в минус).
+    Базовые деньги продажи (amount) берутся из «комиссия + к перечислению».
+    """
+
+    __tablename__ = "ozon_detail_rows"
+    __table_args__ = (
+        UniqueConstraint("op_key", name="uq_ozon_detail_op_key"),
+        Index("ix_ozon_detail_dates", "date"),
+        Index("ix_ozon_detail_offer_id", "offer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    op_key: Mapped[str] = mapped_column(String(220), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # api | report
+    date: Mapped[date_type] = mapped_column(Date, nullable=True)
+    posting_number: Mapped[str] = mapped_column(String(40), default="")
+    offer_id: Mapped[str] = mapped_column(String(100), default="")
+    name: Mapped[str] = mapped_column(String(500), default="")
+    sku: Mapped[str] = mapped_column(String(40), default="")
+    barcode: Mapped[str] = mapped_column(String(100), default="")
+    quantity: Mapped[int] = mapped_column(Integer, default=0)  # продано по строке
+    seller_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # цена продавца за шт
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # сумма продажи
+    commission_ratio: Mapped[float] = mapped_column(Numeric(6, 4), default=0)
+    commission: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # отрицательное
+    standard_fee: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # услуги (в минус)
+    income: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # к перечислению
+    return_qty: Mapped[int] = mapped_column(Integer, default=0)
+    return_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class OzonBuyout(Base):
+    """Выкупы Ozon (/v1/finance/products/buyout) по артикулам.
+
+    Каждая строка отчёта — товар с количеством выкупов и ценой выкупа
+    (buyout_price за единицу товара). Ключ op_key — постинг|sku.
+    Даты выкупленных заказов API не отдаёт, поэтому уникальность держится
+    только на постинге и SKU.
+    """
+
+    __tablename__ = "ozon_buyouts"
+    __table_args__ = (
+        UniqueConstraint("op_key", name="uq_ozon_buyout_op_key"),
+        Index("ix_ozon_buyout_offer_id", "offer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    op_key: Mapped[str] = mapped_column(String(220), nullable=False)
+    posting_number: Mapped[str] = mapped_column(String(40), default="")
+    offer_id: Mapped[str] = mapped_column(String(100), default="")
+    name: Mapped[str] = mapped_column(String(500), default="")
+    sku: Mapped[str] = mapped_column(String(40), default="")
+    quantity: Mapped[int] = mapped_column(Integer, default=0)  # кол-во выкупов
+    seller_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # цена продавца за шт
+    buyout_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # цена выкупа за шт
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # сумма выкупа
+    deduction_by_category_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
+    vat_percent: Mapped[int] = mapped_column(Integer, default=0)
     imported_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
     )
