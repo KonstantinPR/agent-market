@@ -76,6 +76,16 @@ class FakeWb:
             raise self.prices_error
         return pd.DataFrame({"nmID": ["1001", "1002"], "price": [1100, 990]})
 
+    prices_min_prices = None
+    min_prices_error = None
+
+    def get_min_prices(self, nm_ids):
+        if self.min_prices_error:
+            raise self.min_prices_error
+        if self.prices_min_prices is not None:
+            return self.prices_min_prices
+        return {str(nm): 500.0 for nm in nm_ids}
+
     update_prices_error = None
     applied_prices = None
 

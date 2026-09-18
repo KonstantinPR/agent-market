@@ -837,9 +837,14 @@ def apply_recommendations(
     prices_df: Optional[pd.DataFrame] = None,
     provider=None,
     min_prices: Optional[dict] = None,
+    require_min_prices: bool = False,
     today: Optional[date] = None,
 ) -> dict:
-    """Расчёт + применение скидок через WbProvider.update_prices + журнал PriceChange."""
+    """Расчёт + применение скидок через WbProvider.update_prices + журнал PriceChange.
+
+    require_min_prices=True: если среди рекомендаций есть LOWER без известной
+    мин. цены WB, применение блокируется (ValueError) — снижать вслепую нельзя.
+    """
     s = merge_settings(settings)
     rec = recommendations(db, s, prices_df=prices_df, provider=provider,
                           min_prices=min_prices, today=today)
@@ -857,6 +862,20 @@ def apply_recommendations(
     items = _pushed_items(rows, s, applied_past)
     now = datetime.now()
     prov = provider or provider_factory.get_wb_provider()
+
+    if require_min_prices:
+        lower_no_min = [
+            r["article"] for r in rows
+            if r["action"] == "LOWER" and r["status"] == "suggested"
+            and not (r.get("min_price") or 0) > 0
+        ]
+        if lower_no_min:
+            _record(db, rows, applied_at=now,
+                    error="нет данных о минимальных ценах WB — применение заблокировано")
+            raise ValueError(
+                "Нет данных о минимальных ценах WB (публичный Price API недоступен) — "
+                "применение скидок заблокировано до появления расчёта минимальной цены."
+            )
 
     if not items:
         _record(db, rows, applied_at=now)

@@ -842,7 +842,10 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
         return pricing_service.apply_recommendations(
             db, settings=payload, prices_df=prices_df, provider=prov,
             min_prices=pricing_service.fetch_min_prices(prov, prices_df),
+            require_min_prices=True,
         )
+    except ValueError as e:  # guard: нет мин. цен WB — снижать вслепую нельзя
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"WB API не принял изменение цен: {e}")
 

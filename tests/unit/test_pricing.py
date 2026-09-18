@@ -447,6 +447,7 @@ def test_apply_records_applied_and_returns_items(db):
     fake = _FakeProvider()
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("P8", 2000, 10)), provider=fake, today=TODAY,
+        min_prices={"P8": 1000},
     )
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
@@ -468,6 +469,7 @@ def test_apply_error_records_error_and_raises(db):
     with pytest.raises(RuntimeError):
         pricing_service.apply_recommendations(
             db, prices_df=_prices(("P8", 2000, 10)), provider=fake, today=TODAY,
+            min_prices={"P8": 1000},
         )
     logs = db.execute(select(models.PriceChange)).scalars().all()
     assert any(log.status == "error" and "boom" in log.reason for log in logs)
@@ -478,6 +480,7 @@ def test_apply_cooldown_blocks_reapply(db):
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     pricing_service.apply_recommendations(
         db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        min_prices={"P8": 1000},
     )
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
@@ -485,6 +488,30 @@ def test_apply_cooldown_blocks_reapply(db):
     assert res["pushed"] == 0
     assert all(r["status"] == "skipped_cooldown"
                for r in res["rows"] if r["action"] in ("RAISE", "LOWER"))
+
+
+def test_apply_requires_min_price_for_lower(db):
+    """T-16: LOWER без известной мин. цены WB блокирует применение (require_min_prices)."""
+    _seed(db, "R8", "P8", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    with pytest.raises(ValueError, match="минимальных ценах WB"):
+        pricing_service.apply_recommendations(
+            db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(),
+            today=TODAY, require_min_prices=True,
+        )
+    logs = db.execute(select(models.PriceChange)).scalars().all()
+    assert any(log.status == "error" and "заблокировано" in log.reason for log in logs)
+
+
+def test_apply_guard_passes_when_min_price_known(db):
+    """T-16: при известной мин. цене (климп выполнен) применение не блокируется."""
+    _seed(db, "R8", "P8", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    res = pricing_service.apply_recommendations(
+        db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        min_prices={"P8": 1000}, require_min_prices=True,
+    )
+    assert res["pushed"] == 1
 
 
 class _FakeProvider:

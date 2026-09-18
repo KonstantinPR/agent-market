@@ -2504,6 +2504,20 @@ function pricingWithDates(s) {
   return s;
 }
 
+let _pricingRows = [];
+
+function refreshApplyButton() {
+  const btn = $("#pricingApply");
+  if (!btn) return;
+  const lowers = _pricingRows.filter((r) => r.action === "LOWER");
+  const noMin = lowers.filter((r) => !(Number(r.min_price) > 0));
+  const canApply = lowers.length > 0 && noMin.length === 0;
+  btn.disabled = !canApply;
+  btn.title = canApply
+    ? "Применить рекомендованные скидки через WB API (мин. цена WB учтена)"
+    : "Нужен расчёт минимальной цены WB для всех рекомендаций на снижение — публичный Price API не вернул данных";
+}
+
 async function renderPricing(apply) {
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
@@ -2517,17 +2531,50 @@ async function renderPricing(apply) {
     const rows = allRows.filter((r) =>
       !q || (String(r.article || "") + " " + (r.name || "")).toLowerCase().includes(q)
     );
+    _pricingRows = rows;
     const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
     const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
     let summary = "Товаров: " + fmt(rows.length);
     if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
     summary += ", решений: " + fmt(actionable);
     if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
+    if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
     if (data.as_of) summary += " · на " + data.as_of;
     $("#pricingSummary").textContent = summary;
     msg.textContent = data.note || "";
-    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows);
+    const footers = {
+      stock: rows.reduce((a, r) => a + (Number(r.stock) || 0), 0),
+      target_vis: rows.reduce((a, r) => a + (Number(r.target_vis) || 0), 0),
+    };
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows, footers);
     await renderPricingHistory();
+    refreshApplyButton();
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function applyPricing() {
+  const msg = $("#pricingMsg");
+  await buildPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
+  const lowers = _pricingRows.filter((r) => r.action === "LOWER");
+  if (lowers.length) {
+    const list = lowers.slice(0, 5).map((r) => r.article).join(", ")
+      + (lowers.length > 5 ? "…" : "");
+    if (!confirm("Снизить цену у " + lowers.length + " артикулов (" + list + ")?\nМинимальная цена WB учтена в целевых ценах.")) return;
+  } else if (!confirm("Рекомендаций на снижение нет — применить изменения всё равно?")) return;
+  msg.textContent = "Применяю через WB API…";
+  try {
+    const resp = await fetch("/api/pricing/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(s),
+    });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error((j.detail || resp.status) || "WB API не принял изменения");
+    msg.textContent = j.note || "Применено: " + (j.applied || []).length + " артикулов";
+    await renderPricing(false);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -2874,6 +2921,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const pricingExport = $("#pricingExport");
   if (pricingRecalc) pricingRecalc.addEventListener("click", () => renderPricing(false));
   if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
+  const pricingApply = $("#pricingApply");
+  if (pricingApply) pricingApply.addEventListener("click", () => applyPricing());
   const pricingLike = $("#pricingLike");
   if (pricingLike) {
     let pricingLikeTimer;
