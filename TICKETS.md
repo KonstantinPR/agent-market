@@ -167,16 +167,6 @@
 
 ## В работе
 
-- [T-17] (high) Каталог «Наш склад → Товары»: схема БД + миграция
-  > Тело: products: ADD COLUMN subject varchar(200) DEFAULT '', volume_l
-  > numeric(10,3) DEFAULT 0, composition text DEFAULT ''. Новые таблицы:
-  > product_sizes (id PK, article varchar(100) NOT NULL REFERENCES products(article)
-  > ON DELETE CASCADE, size varchar(50) NOT NULL DEFAULT '', barcode varchar(200)
-  > DEFAULT '', UNIQUE(article,size), index barcode) и product_aliases
-  > (alias_article varchar(100) PK, article varchar(100) NOT NULL REFERENCES
-  > products(article) ON DELETE CASCADE, updated_at). Идемпотентно в
-  > scripts/init_db.py (паттерн как для replenishable) + app/models.py.
-  > Тест: миграция создаёт таблицы/колонки.
 - [T-12] (high) Автопилот цен WB: UI по эталону «Детализация Продаж WB»
   > Тело: тулбар msg/tip/поиск/«Пересчитать»/pager/«Вид таблицы»/«Экспорт
   > в Excel»/«Загрузить на диск»; кнопка «Применить в WB» (disabled-заглушка
@@ -207,6 +197,7 @@ _(пусто)_
 
 ## Закрытые
 
+- [T-17] (closed) Каталог «Наш склад → Товары»: схема БД + миграция — commit `bc5c756`
 - [T-7] (closed) Ozon: провайдер — детализация реализаций по постингам + выкупы (get_sales_detail/get_buyout, фолбэк на /v1/report/*, live-проверка на Client-Id 164497) — не закоммичено
 - [T-8] (closed) Ozon: таблицы OzonDetailRow/OzonBuyout + синк + API-эндпоинты — не закоммичено
 - [T-9] (closed) UI — вкладка «Детализация продаж Ozon» (oz-detail) по образцу WB (rows/summary, экспорт, диск, поиск) — не закоммичено
