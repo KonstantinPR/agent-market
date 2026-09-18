@@ -507,6 +507,35 @@ def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = 
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": ""}
 
 
+def _oz_marketplace_cards(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Ozon-карточки → схема marketplace_cards (для тегов каталога и экспорта)."""
+    if df is None or df.empty:
+        return None
+    cols = {str(c).strip().lower(): c for c in df.columns if isinstance(c, str)}
+
+    def series(*names) -> pd.Series:
+        for n in names:
+            if n.lower() in cols:
+                return df[cols[n.lower()]]
+        return pd.Series("", index=df.index)
+
+    pid = series("Ozon Product ID", "Product ID", "product_id").fillna("").astype(str).str.strip()
+    out = pd.DataFrame({
+        "chrt_id": pid,
+        "nm_id": pid,
+        "vendor_code": series("Offer ID", "Артикул", "Артикул продавца").fillna("").astype(str).str.strip(),
+        "brand": series("Бренд", "Category").fillna("").astype(str).str.strip(),
+        "subject": series("Category", "Бренд").fillna("").astype(str).str.strip(),
+        "size": "",
+        "barcode": series("SKU", "Штрихкод", "Barcode").map(sync_service._first_barcode),
+        "volume_l": 0.0,
+        "composition": "",
+        "name": series("Name", "Название товара").fillna("").astype(str).str.strip(),
+    })
+    out = out[out["chrt_id"] != ""]
+    return out if not out.empty else None
+
+
 def pull_catalog(db, overwrite: bool = False, write_db: bool = True,
                  provider_wb: Optional[WbProvider] = None,
                  provider_oz: Optional[OzonProvider] = None) -> dict:
@@ -531,6 +560,10 @@ def pull_catalog(db, overwrite: bool = False, write_db: bool = True,
             if mdf is not None:
                 sync_service.upsert_marketplace_cards(db, mdf, "wb")
             _wb_nm_cache_reset()
+        if oz_rows:
+            mdf = _oz_marketplace_cards(oz_df)
+            if mdf is not None:
+                sync_service.upsert_marketplace_cards(db, mdf, "ozon")
         wc = sync_service.normalize_catalog_card(wb_df, "wb")
         oc = sync_service.normalize_catalog_card(oz_df, "ozon")
         frames = [f for f in (wc, oc) if f is not None and not f.empty]

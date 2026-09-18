@@ -18,6 +18,7 @@ from app.providers import factory as provider_factory
 from app.providers.ozon import OZON_RU_COLUMNS
 from app.providers.wb import DETAIL_RU_COLUMNS, DETAIL_UPLOAD_RENAME, SALES_RU_COLUMNS, V5_RU_COLUMNS
 from app.services import (
+    base_price as base_price_service,
     common as common_service,
     excel_io,
     margin as margin_service,
@@ -775,29 +776,191 @@ def api_storage_cost(
     return {"rows": rows, "count": len(rows), "updated_at": str(updated or "")}
 
 
+def _catalog_size_map(db: Session) -> dict:
+    """{article: [{size, barcode}, ...]} из product_sizes (сортировка по размеру)."""
+    out: dict = {}
+    for s in db.execute(select(models.ProductSize).order_by(models.ProductSize.size)).scalars():
+        out.setdefault(s.article, []).append({"size": s.size, "barcode": s.barcode})
+    return out
+
+
+def _catalog_tags(db: Session) -> dict:
+    """{article: [коды маркетплейсов]} по карточкам (артикул разрешается через алиасы)."""
+    alias = {a: c for a, c in db.execute(
+        select(models.ProductAlias.alias_article, models.ProductAlias.article))}
+    tags: dict = {}
+    q = (
+        select(models.Marketplace.code, models.MarketplaceCard.vendor_code)
+        .join(models.Marketplace, models.MarketplaceCard.marketplace_id == models.Marketplace.id)
+    )
+    for code, vendor in db.execute(q):
+        art = alias.get(vendor, vendor)
+        if art:
+            tags.setdefault(art, set()).add(code)
+    return {a: sorted(v) for a, v in tags.items()}
+
+
+def _catalog_stock_maps(db: Session):
+    """mp_stock: {(мрп, артикул): кол-во} по последнему срезу; own: {артикул: баланс склада}."""
+    mp_stock: dict = {}
+    for code in ("wb", "ozon"):
+        mp_id = select(models.Marketplace.id).where(models.Marketplace.code == code).scalar_subquery()
+        latest = db.scalar(select(func.max(models.Stock.date)).where(models.Stock.marketplace_id == mp_id))
+        if latest is None:
+            continue
+        for art, qty in db.execute(
+            select(models.Stock.article, func.sum(models.Stock.quantity))
+            .where(models.Stock.marketplace_id == mp_id, models.Stock.date == latest)
+            .group_by(models.Stock.article)
+        ):
+            mp_stock[(code, art)] = int(qty or 0)
+    own = {r["article"]: float(r["balance"]) for r in warehouse_service.stock_view(db)}
+    return mp_stock, own
+
+
+def _catalog_price_fields(prod, settings) -> dict:
+    comp = base_price_service.price_components(prod.net_cost, prod.volume_l, settings)
+    return {
+        "recommended_price": base_price_service.recommended_price(prod.net_cost, prod.volume_l, settings),
+        "markup": comp["markup"],
+        "f_cost": comp["f_cost"],
+        "f_vol": comp["f_vol"],
+    }
+
+
 @router.get("/products")
-def api_products(db: Session = Depends(get_db)):
-    rows = [
-        {
-            "article": r.article,
-            "name": r.name,
-            "brand": r.brand,
-            "barcode": r.barcode,
-            "net_cost": float(r.net_cost or 0),
-            "replenishable": bool(r.replenishable),
-        }
-        for r in db.execute(
-            select(
-                models.Product.article,
-                models.Product.name,
-                models.Product.brand,
-                models.Product.barcode,
-                models.Product.net_cost,
-                models.Product.replenishable,
-            ).order_by(models.Product.article)
-        )
-    ]
-    return {"rows": rows, "count": len(rows)}
+def api_products(
+    like: Optional[str] = None,
+    sizes: int = 0,
+    stocks: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Каталог «Наш склад → Товары».
+
+    sizes=0 — агрегат по товару (кол-во размеров, первый баркод, теги WB/Ozon);
+    sizes=1 — строки по размерам (product_sizes);
+    stocks=1 — добавляет own_stock (баланс склада) и mp_stock (последний срез WB+Ozon),
+    а также рекомендуемую цену/наценку (base_price).
+    """
+    prods = list(db.execute(
+        select(models.Product).order_by(models.Product.article)
+    ).scalars())
+    if like and like.strip():
+        pat = like.strip().lower()
+        prods = [p for p in prods if pat in (p.article or "").lower()
+                 or pat in (p.name or "").lower() or pat in (p.brand or "").lower()
+                 or pat in (p.barcode or "").lower() or pat in (p.subject or "").lower()]
+    size_map = _catalog_size_map(db)
+    tags = _catalog_tags(db)
+    mp_stock: dict = {}
+    own: dict = {}
+    with_stock = bool(int(stocks))
+    if with_stock:
+        mp_stock, own = _catalog_stock_maps(db)
+    settings = base_price_service.PRICE_DEFAULTS
+
+    def mp_total(article: str) -> int:
+        return mp_stock.get(("wb", article), 0) + mp_stock.get(("ozon", article), 0)
+
+    rows = []
+    if int(sizes):
+        for p in prods:
+            for s in size_map.get(p.article, [{"size": "", "barcode": p.barcode}]):
+                row = {
+                    "article": p.article, "name": p.name, "brand": p.brand,
+                    "subject": p.subject, "size": s["size"], "barcode": s["barcode"],
+                    "volume_l": float(p.volume_l or 0), "composition": p.composition,
+                    "net_cost": float(p.net_cost or 0), "replenishable": bool(p.replenishable),
+                    "tags": tags.get(p.article, []),
+                }
+                if with_stock:
+                    row["own_stock"] = own.get(p.article, 0.0)
+                    row["mp_stock"] = mp_total(p.article)
+                row.update(_catalog_price_fields(p, settings))
+                rows.append(row)
+    else:
+        for p in prods:
+            sizes_lst = size_map.get(p.article, [])
+            row = {
+                "article": p.article, "name": p.name, "brand": p.brand,
+                "subject": p.subject, "sizes_count": len(sizes_lst),
+                "barcode": (sizes_lst[0]["barcode"] if sizes_lst else p.barcode),
+                "volume_l": float(p.volume_l or 0), "composition": p.composition,
+                "net_cost": float(p.net_cost or 0), "replenishable": bool(p.replenishable),
+                "tags": tags.get(p.article, []),
+            }
+            if with_stock:
+                row["own_stock"] = own.get(p.article, 0.0)
+                row["mp_stock"] = mp_total(p.article)
+            row.update(_catalog_price_fields(p, settings))
+            rows.append(row)
+    return {"rows": rows, "count": len(rows), "price_settings": settings}
+
+
+@router.post("/products/refresh")
+def products_refresh(overwrite: int = 0, db: Session = Depends(get_db)):
+    """Обновляет общий каталог из карточек WB+Ozon (pull_catalog)."""
+    try:
+        res = refresh_service.pull_catalog(db, overwrite=bool(overwrite))
+    except Exception as e:  # noqa: BLE001
+        refresh_service.wb_error(e)
+    return {"ok": True, **res}
+
+
+@router.post("/products/preview")
+def products_preview(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Пересчёт рекомендуемой цены с пользовательскими коэффициентами (без записи)."""
+    settings = base_price_service.merge_price_settings(payload.get("price_settings"))
+    like = str(payload.get("like") or "").strip().lower()
+    rows = []
+    for p in db.execute(select(models.Product).order_by(models.Product.article)).scalars():
+        if like and like not in (p.article or "").lower() and like not in (p.name or "").lower():
+            continue
+        row = {"article": p.article, "name": p.name,
+               "net_cost": float(p.net_cost or 0), "volume_l": float(p.volume_l or 0)}
+        row.update(_catalog_price_fields(p, settings))
+        rows.append(row)
+    return {"rows": rows, "count": len(rows), "price_settings": settings}
+
+
+@router.get("/products/price-settings")
+def products_price_settings():
+    return {
+        "defaults": base_price_service.PRICE_DEFAULTS,
+        "labels": base_price_service.PRICE_LABELS,
+        "hints": base_price_service.PRICE_HINTS,
+    }
+
+
+@router.get("/export/products")
+def export_products(
+    like: Optional[str] = None,
+    sizes: int = 0,
+    stocks: int = 0,
+    cols: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Экспорт каталога «Наш склад → Товары» в Excel по видимым колонкам."""
+    payload = api_products(like=like, sizes=sizes, stocks=stocks, db=db)
+    df = pd.DataFrame(payload["rows"])
+    if "tags" in df.columns:
+        df["tags"] = df["tags"].map(lambda v: ", ".join(v) if isinstance(v, list) else v)
+    order = [c for c in ["article", "name", "brand", "subject", "size", "sizes_count",
+                         "barcode", "volume_l", "composition", "net_cost", "replenishable",
+                         "tags", "own_stock", "mp_stock", "recommended_price", "markup"]
+             if c in df.columns]
+    if order:
+        df = df[order]
+    df, ru = excel_io.project_export(df, {
+        "article": "Артикул", "name": "Наименование", "brand": "Бренд",
+        "subject": "Предмет", "size": "Размер", "sizes_count": "Размеров",
+        "barcode": "Баркод", "volume_l": "Объём, л", "composition": "Состав",
+        "net_cost": "Себестоимость", "replenishable": "Докупаемый",
+        "tags": "Маркетплейсы", "own_stock": "Свой склад", "mp_stock": "Остаток МП",
+        "recommended_price": "Рекоменд. цена", "markup": "Наценка",
+    }, cols)
+    df = df.rename(columns=ru)
+    return _xlsx_response(df, "products.xlsx", payload["count"])
 
 
 @router.post("/products/replenishable")
