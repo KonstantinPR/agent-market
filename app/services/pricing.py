@@ -132,6 +132,31 @@ def _normalize_prices(prices_df: Optional[pd.DataFrame]) -> dict:
     return out
 
 
+def fetch_min_prices(prov, prices_df: Optional[pd.DataFrame]) -> dict:
+    """Минимальные витринные цены WB для nmID из прайса ({str nmID: руб}).
+
+    Тихо возвращает {} при отсутствии метода у провайдера, пустом прайсе или
+    сбое запроса — в этом случае рекомендации идут без клампинга по мин. цене,
+    а кнопка «Применить в WB» блокируется на стороне клиента.
+    """
+    if prov is None or prices_df is None or prices_df.empty:
+        return {}
+    if not hasattr(prov, "get_min_prices"):
+        return {}
+    nm_col = next((c for c in ("nmID", "nm_id") if c in prices_df.columns), None)
+    if nm_col is None:
+        return {}
+    ids = [str(v) for v in prices_df[nm_col].tolist()
+           if str(v).strip() and str(v).strip().lower() not in ("nan", "none")]
+    if not ids:
+        return {}
+    try:
+        raw = prov.get_min_prices(ids)
+    except Exception:  # noqa: BLE001
+        return {}
+    return {str(k): _num(v) for k, v in (raw or {}).items() if v}
+
+
 def _funnel_slice(db: Session, date_from: date, date_to: date) -> dict:
     """Последний срез воронки, пересекающий окно [date_from, date_to].
 
@@ -281,6 +306,7 @@ def recommendations(
     db: Session,
     settings=None,
     prices_df: Optional[pd.DataFrame] = None,
+    min_prices: Optional[dict] = None,
     provider=None,
     today: Optional[date] = None,
 ) -> dict:
@@ -375,6 +401,7 @@ def recommendations(
         for r in db.execute(select(models.NmArticle.nm_id, models.NmArticle.article))
     }
     prices = _normalize_prices(prices_df)
+    min_px = {str(k): _num(v) for k, v in (min_prices or {}).items()}
 
     products = {}
     for r in db.execute(select(
@@ -453,6 +480,7 @@ def recommendations(
             "net_cost": prod["net_cost"],
             "comm_rate": None, "logistics_unit": 0.0, "storage_unit": 0.0,
             "other_unit": 0.0, "floor_price": None,
+            "min_price": min_px.get(str(nm_id), 0.0),
         }
         qty_sold = int(art_now["qty_sold"].sum()) if not art_now.empty else 0
         ret_now = int(art_now["ret"].sum()) if not art_now.empty else 0
@@ -506,6 +534,7 @@ def _row_skip(art, prod, nm_id, reason):
         "max_discount_item": None, "action": "SKIP", "status": "skipped_no_data",
         "reason": reason, "target_discount": None, "target_vis": None,
         "margin_pct_at_target": None,
+        "min_price": None,
         **_enriched({}),
     }
 
@@ -560,6 +589,7 @@ def _base_row(f: dict) -> dict:
         "max_discount_item": None, "trend": round(f["trend"], 2),
         "action": "HOLD", "status": "hold", "reason": "",
         "target_discount": None, "target_vis": None, "margin_pct_at_target": None,
+        "min_price": f["min_price"] if f["min_price"] else None,
         **_enriched(f),
     }
 
@@ -655,7 +685,8 @@ def _decide(f: dict, s: dict) -> dict:
     # R4: мёртвый запас
     if v_proj <= 0:
         if f["last_sale_days_ago"] >= int(s["dead_stock_days"]):
-            target_vis = max(floor, eff * (1 - _num(s["max_drop_pct"]) / 100))
+            min_price = f.get("min_price") or 0.0
+            target_vis = max(floor, eff * (1 - _num(s["max_drop_pct"]) / 100), min_price)
             target_vis = min(target_vis, cur_vis)
             target_vis = max(target_vis, price * (1 - max_disc_item / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
@@ -666,7 +697,11 @@ def _decide(f: dict, s: dict) -> dict:
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))
             else:
-                base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
+                if min_price > 0 and target_vis >= cur_vis:
+                    base.update(action="HOLD", status="hold",
+                                reason=f"минимальная цена WB ({min_price:.0f} ₽) не позволяет опустить цену")
+                else:
+                    base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
             return base
         base.update(action="HOLD", status="hold", reason="продаж нет (менее порога) — не трогаем")
         return base
@@ -724,7 +759,8 @@ def _decide(f: dict, s: dict) -> dict:
             k *= 1.2
         k = _clamp(k, 0.2, 1.2)
         factor = max(1 - _num(s["max_drop_pct"]) / 100, (_num(s["target_doc"]) / doc) ** k)
-        target_vis = max(floor, eff * factor, price * (1 - max_disc_item / 100))
+        min_price = f.get("min_price") or 0.0
+        target_vis = max(floor, eff * factor, price * (1 - max_disc_item / 100), min_price)
         target_vis = min(target_vis, cur_vis)
         new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
         if new_disc - cur_disc >= _num(s["min_delta_pp"]):
@@ -737,7 +773,11 @@ def _decide(f: dict, s: dict) -> dict:
                         target_vis=round(target_vis, 2),
                         margin_pct_at_target=_margin_pct(target_vis, f))
         else:
-            base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
+            if min_price > 0 and target_vis >= cur_vis:
+                base.update(action="HOLD", status="hold",
+                            reason=f"минимальная цена WB ({min_price:.0f} ₽) не позволяет опустить цену")
+            else:
+                base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
         return base
 
     base.update(action="HOLD", status="hold", reason=f"нормальные остатки (DOC={doc:.0f} дн.)")
@@ -796,11 +836,13 @@ def apply_recommendations(
     settings=None,
     prices_df: Optional[pd.DataFrame] = None,
     provider=None,
+    min_prices: Optional[dict] = None,
     today: Optional[date] = None,
 ) -> dict:
     """Расчёт + применение скидок через WbProvider.update_prices + журнал PriceChange."""
     s = merge_settings(settings)
-    rec = recommendations(db, s, prices_df=prices_df, provider=provider, today=today)
+    rec = recommendations(db, s, prices_df=prices_df, provider=provider,
+                          min_prices=min_prices, today=today)
     rows = rec["rows"]
     today = today or date.today()
     cooldown_from = today - timedelta(days=int(s["cooldown_days"]))

@@ -478,6 +478,50 @@ class WbProvider(BaseProvider):
                 task_id = data.get("uploadId")
         return {"body": body, "task_id": task_id}
 
+    def get_min_prices(self, nm_ids) -> dict:
+        """Минимальные витринные цены WB (публичный API v1/info/price).
+
+        Возвращает {nmID: минимальная цена в руб}. Публичный эндпоинт — без
+        ключа; на недоступность/частичный ответ тихо возвращает то, что есть.
+        """
+        ids = [str(n) for n in nm_ids if n is not None and str(n).strip()]
+        if not ids:
+            return {}
+        if self.testing:
+            rng = np.random.default_rng(77)
+            return {nm: round(float(rng.uniform(500, 1200)), 2) for nm in ids}
+        out: dict = {}
+        url = "https://public-dc0.wildberries.ru/api/v1/info/price"
+        for i in range(0, len(ids), 1000):
+            chunk = ids[i:i + 1000]
+            for attempt in range(4):
+                try:
+                    resp = requests.get(
+                        url, params={"quantity": 1, "nm": ",".join(chunk)}, timeout=30
+                    )
+                except requests.RequestException as exc:
+                    if attempt == 3:
+                        return out
+                    time.sleep(2)
+                    continue
+                if resp.status_code == 429:
+                    self._wait_rate_limit(resp)
+                    continue
+                if resp.status_code >= 400:
+                    break
+                try:
+                    for item in resp.json():
+                        nm = str(item.get("nmID", ""))
+                        if not nm:
+                            continue
+                        lim = (item.get("priceLimits") or {}).get("minPrice")
+                        if lim:
+                            out[nm] = round(max(int(lim), 0) / 100, 2)
+                except (ValueError, TypeError):
+                    break
+                break
+        return out
+
     # ---------------------------------------------------------------- хранение
     def get_storage_cost(self, number_last_days: int = 7, is_mean: bool = True) -> pd.DataFrame:
         """Стоимость хранения (seller-analytics-api/v1/paid_storage, асинхронный отчёт)."""

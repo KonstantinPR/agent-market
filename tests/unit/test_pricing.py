@@ -368,6 +368,76 @@ def test_t14_unknown_quality_does_not_block_raise(db):
     assert _row(rec, "Q6")["action"] == "RAISE"
 
 
+# ------------------------------------------------ T-15: минимальная цена WB (priceLimits)
+
+
+def test_t15_min_price_clamps_overstock_lower(db):
+    """min_price поднимает target_vis в LOWER до минимальной витринной цены WB."""
+    _seed(db, "M1", "PM1", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PM1", 2000, 10)), today=TODAY,
+                          min_prices={"PM1": 1600})
+    row = _row(rec, "M1")
+    assert row["action"] == "LOWER"
+    assert row["min_price"] == pytest.approx(1600)
+    assert row["target_vis"] == pytest.approx(1600.0, abs=1)
+    assert row["target_discount"] == pytest.approx((1 - 1600 / 2000) * 100, abs=0.5)
+
+
+def test_t15_min_price_above_current_blocks_lower(db):
+    """Мин. цена выше текущей витринной -> снижать уже некуда -> HOLD с причиной."""
+    _seed(db, "M2", "PM2", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PM2", 2000, 10)), today=TODAY,
+                          min_prices={"PM2": 1900})
+    row = _row(rec, "M2")
+    assert row["action"] == "HOLD"
+    assert "минимальная цена" in row["reason"]
+
+
+def test_t15_min_price_clamps_dead_stock_lower(db):
+    _seed(db, "M3", "PM3", stock=100, sales=[*_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PM3", 1000, 0)), today=TODAY,
+                          min_prices={"PM3": 900})
+    row = _row(rec, "M3")
+    assert row["action"] == "LOWER"
+    assert row["target_vis"] == pytest.approx(900.0, abs=1)
+
+
+def test_t15_no_min_prices_leaves_row_unanchored(db):
+    """Без min_prices расчёт LOWER не меняется, колонка min_price пустая (None)."""
+    _seed(db, "M4", "PM4", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PM4", 2000, 10)), today=TODAY)
+    row = _row(rec, "M4")
+    assert row["action"] == "LOWER"
+    assert row["min_price"] is None
+    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
+
+
+def test_t15_fetch_min_prices_collects_ids():
+    df = _prices(("1001", 2000, 10), ("1002", 500, 5))
+
+    class _Prov:
+        def get_min_prices(self, ids):
+            assert ids == ["1001", "1002"]
+            return {1001: 1500.0, "1002": 420.0}
+
+    assert pricing_service.fetch_min_prices(_Prov(), df) == {"1001": 1500.0, "1002": 420.0}
+
+
+def test_t15_fetch_min_prices_falls_back_quietly():
+    df = _prices(("1001", 2000, 10))
+    assert pricing_service.fetch_min_prices(object(), df) == {}
+
+    class _Prov:
+        def get_min_prices(self, ids):
+            raise RuntimeError("нет интернета")
+
+    assert pricing_service.fetch_min_prices(_Prov(), df) == {}
+    assert pricing_service.fetch_min_prices(_Prov(), None) == {}
+
+
 # ------------------------------------------------------------------ применение
 
 

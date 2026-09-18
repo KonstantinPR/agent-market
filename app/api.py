@@ -825,8 +825,12 @@ def pricing_defaults():
 @router.post("/pricing/recommendations")
 def pricing_recommendations(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов)."""
-    prices_df = provider_factory.get_wb_provider().get_prices()
-    return pricing_service.recommendations(db, settings=payload, prices_df=prices_df)
+    prov = provider_factory.get_wb_provider()
+    prices_df = prov.get_prices()
+    return pricing_service.recommendations(
+        db, settings=payload, prices_df=prices_df,
+        min_prices=pricing_service.fetch_min_prices(prov, prices_df),
+    )
 
 
 @router.post("/pricing/apply")
@@ -837,6 +841,7 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
     try:
         return pricing_service.apply_recommendations(
             db, settings=payload, prices_df=prices_df, provider=prov,
+            min_prices=pricing_service.fetch_min_prices(prov, prices_df),
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"WB API не принял изменение цен: {e}")
@@ -878,8 +883,12 @@ PRICING_ACTION_RU = {
 def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся."""
     cols = payload.get("cols")
-    prices_df = provider_factory.get_wb_provider().get_prices()
-    rec = pricing_service.recommendations(db, settings=payload, prices_df=prices_df)
+    prov = provider_factory.get_wb_provider()
+    prices_df = prov.get_prices()
+    rec = pricing_service.recommendations(
+        db, settings=payload, prices_df=prices_df,
+        min_prices=pricing_service.fetch_min_prices(prov, prices_df),
+    )
     df = pd.DataFrame(rec["rows"])
     if not df.empty:
         df["action"] = df["action"].map(PRICING_ACTION_RU)
@@ -888,7 +897,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "article", "name", "price", "current_vis", "current_discount", "target_vis",
         "target_discount", "action", "status", "reason", "doc", "velocity", "trend",
         "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
-        "max_discount_item", "margin_pct_at_target", "replenishable",
+        "min_price", "max_discount_item", "margin_pct_at_target", "replenishable",
         "product_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
         "add_to_wishlist", "stock_wb", "return_rate", "margin_pct", "margin_per_one",
         "revenue_per_one", "income_per_one", "commission_per_one",
@@ -904,6 +913,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "conv_pct": "Конверсия, %", "backlog": "В корзине", "stock": "Остаток",
         "avg_price": "Ср. цена факт, руб", "eff": "База расчёта, руб",
         "floor_price": "Пол (break-even), руб", "max_discount_item": "Макс. скидка, %",
+        "min_price": "Мин. цена WB, руб",
         "margin_pct_at_target": "Маржа при цели, %", "replenishable": "Докупаемый",
         "product_rating": "Рейтинг товара", "buyouts": "Выкупы, шт",
         "conv_buyout_percent": "Конверсия выкупа, %", "cancel_sum": "Отмены, руб",

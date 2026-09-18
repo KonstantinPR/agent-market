@@ -2316,6 +2316,7 @@ const pricingHeaders = [
   { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money },
   { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money },
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money },
+  { k: "min_price", label: "Мин. цена WB, руб", num: true, render: cellFmts.money },
   { k: "action", label: "Решение", render: actionCell },
   { k: "target_discount", label: "Целевая скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
   { k: "target_vis", label: "Целевая цена", num: true, render: cellFmts.money },
@@ -2390,6 +2391,7 @@ const PRICING_OPTIONAL = [
   { k: "cancel_sum", label: "Отмены, руб", def: false },
   { k: "add_to_wishlist", label: "В избранное", def: false },
   { k: "stock_wb", label: "Остаток WB", def: false },
+  { k: "min_price", label: "Мин. цена WB, руб", def: true },
 ];
 registerColView("pricing", { storageKey: "pricingCols", headers: pricingHeaders, optional: PRICING_OPTIONAL });
 
