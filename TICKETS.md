@@ -101,18 +101,6 @@
   > (include_detail для ozon, период = из шапки, по умолчанию предыдущий
   > месяц; для realization — месяцы, покрывающие окно). Всё в одном фоне
   > (start_refresh уже сериализует).
-- [T-19] (high) Каталог: API-эндпоинты
-  > Тело: GET /api/products?like=&sizes=1&stocks=1 → {rows, count, price_settings};
-  > без размеров — агрегация размеров (кол-во размеров, первый баркод, теги WB/Ozon),
-  > со складами: own_stock (warehouse stock_view balance) + mp_stock (последний срез
-  > WB и Ozon stocks, сумма), рекомендуемая цена и наценка (base_price, дефолты);
-  > с размерами — по product_sizes (article, size, barcode) + WB остаток по размеру.
-  > POST /api/products/refresh?overwrite= → pull_catalog, вернуть отчёт.
-  > POST /api/products/preview (like, sizes, stocks, price_settings) — пересчёт
-  > рек.цены с пользовательскими коэффициентами без записи.
-  > GET /api/products/price-settings → PRICE_DEFAULTS.
-  > GET /api/export/products (cols, like, sizes, stocks) — xlsx по видимым колонкам
-  > (образец /api/export/wb/cards). API-тесты (TestClient + fakes + тестовая БД).
 - [T-21] (medium) Каталог: UI «Наш склад → Товары» по эталону «Детализация Продаж WB»
   > Тело: app/static/index.html + app.js + style.css. Тулбар: msg (productsMsg), tip,
   > поиск «Артикул содержит…» (productsLike), чекбоксы «С размерами» (productsSizes),
@@ -170,6 +158,7 @@ _(пусто)_
 
 ## Закрытые
 
+- [T-19] (closed) Каталог: API-эндпоинты (/api/products, refresh, preview, price-settings, export) — commit `b5ce906`
 - [T-18] (closed) Каталог: синк карточек WB+Ozon в общий каталог (идентификация, алиасы, overwrite) — commit `e5d6a37`
 - [T-20] (closed) Каталог: модуль рекомендуемой (базовой) цены base_price — commit `3d46241`
 - [T-17] (closed) Каталог «Наш склад → Товары»: схема БД + миграция — commit `bc5c756`
