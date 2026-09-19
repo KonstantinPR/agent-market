@@ -101,7 +101,9 @@
   > (include_detail для ozon, период = из шапки, по умолчанию предыдущий
   > месяц; для realization — месяцы, покрывающие окно). Всё в одном фоне
   > (start_refresh уже сериализует).
-- [T-21] (medium) Каталог: UI «Наш склад → Товары» по эталону «Детализация Продаж WB»
+- [T-13] (medium) Автопилот цен WB: рекомендации() принимает date_from/date_to
+  > Тело: recommendations() принимает date_from/date_to (шапка) + фолбэк
+  > window_days; джойн полного среза funnel_metric (рейтинги, выкупы,
   > Тело: app/static/index.html + app.js + style.css. Тулбар: msg (productsMsg), tip,
   > поиск «Артикул содержит…» (productsLike), чекбоксы «С размерами» (productsSizes),
   > «Показывать остатки» (productsStocks), «Перезапись» (productsOverwrite),
@@ -158,6 +160,7 @@ _(пусто)_
 
 ## Закрытые
 
+- [T-21] (closed) Каталог: UI «Наш склад → Товары» по эталону «Детализация Продаж WB» — commit d13822f
 - [T-19] (closed) Каталог: API-эндпоинты (/api/products, refresh, preview, price-settings, export) — commit `b5ce906`
 - [T-18] (closed) Каталог: синк карточек WB+Ozon в общий каталог (идентификация, алиасы, overwrite) — commit `e5d6a37`
 - [T-20] (closed) Каталог: модуль рекомендуемой (базовой) цены base_price — commit `3d46241`
