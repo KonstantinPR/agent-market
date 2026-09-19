@@ -76,6 +76,7 @@ assert.strictEqual(writeDbStorage("ozon", "realization"), true, "write-db defaul
 const HTML_PATH = process.argv[3];
 const htmlSrc = fs.readFileSync(HTML_PATH, "utf8");
 const jsSrc = fs.readFileSync(APP_PATH, "utf8");
+const apiSrc = fs.readFileSync(process.argv[4], "utf8");
 const ccTab2 = (tab) => {
   const [head, ...rest] = tab.split("-");
   return head + rest.map((s) => s[0].toUpperCase() + s.slice(1)).join("");
@@ -111,6 +112,21 @@ for (const [, id, body] of ozPanes) {
   }
 }
 
+// Раздел «Наш склад → Товары» (T-21): каталог, фильтры, «Вид таблицы», экспорт и цены.
+assert.ok(jsSrc.includes("async function renderProducts"), "нет renderProducts");
+assert.ok(jsSrc.includes('registerColView("products"'), "нет registerColView(\"products\")");
+for (const id of ["productsLike", "productsSizes", "productsStocks", "productsOverwrite"]) {
+  assert.ok(htmlSrc.includes('id="' + id + '"'), "в index.html нет id=" + id);
+}
+assert.ok(/renderProducts[\s\S]{0,600}api\("\/products"/.test(jsSrc),
+          "renderProducts не вызывает GET /api/products");
+assert.ok(jsSrc.includes('apiPost("/products/preview"'), "нет POST /api/products/preview");
+assert.ok(jsSrc.includes('api("/products/price-settings"'), "нет GET /api/products/price-settings");
+assert.ok(jsSrc.includes('"/api/export/products"'), "нет /api/export/products в app.js");
+assert.ok(jsSrc.includes('"products": ["products", "refresh", "#productsMsg"]'),
+          "нет маршрута POST /api/products/refresh в apiPullByTab");
+assert.ok(apiSrc.includes('@router.post("/products/refresh")'), "в app/api.py нет POST /products/refresh");
+
 console.log("JS_TESTS_OK");
 """
 
@@ -134,9 +150,11 @@ def test_js_helpers(node_bin, tmp_path):
     assert APP_JS.exists(), str(APP_JS)
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "index.html"
     assert html_path.exists(), str(html_path)
+    api_path = Path(__file__).resolve().parents[2] / "app" / "api.py"
+    assert api_path.exists(), str(api_path)
     harness = tmp_path / "harness.js"
     harness.write_text(HARNESS, encoding="utf-8")
-    res = subprocess.run([node_bin, str(harness), str(APP_JS), str(html_path)],
+    res = subprocess.run([node_bin, str(harness), str(APP_JS), str(html_path), str(api_path)],
                          capture_output=True, text=True)
     assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
     assert "JS_TESTS_OK" in res.stdout

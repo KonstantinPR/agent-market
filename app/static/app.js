@@ -855,17 +855,71 @@ async function renderWhTurnover() {
   pagedTable(box, whTurnoverHeaders, data.rows || []);
 }
 
+const productsBaseHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "brand", label: "Бренд", render: cellFmts.text },
+  { k: "barcode", label: "Баркод", render: cellFmts.text },
+  { k: "sizes_count", label: "Размеров", num: true, render: cellFmts.int },
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
+  { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money },
+  { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) },
+  { k: "replenishable", label: "Докупаемый", render: replenishableCell },
+];
+const productsSizeHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "size", label: "Размер", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "brand", label: "Бренд", render: cellFmts.text },
+  { k: "barcode", label: "Баркод", render: cellFmts.text },
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
+  { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money },
+  { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) },
+  { k: "replenishable", label: "Докупаемый", render: replenishableCell },
+];
+const productsStockHeaders = [
+  { k: "own_stock", label: "Остаток свой", num: true, render: (v) => v == null ? "—" : (Number.isInteger(Number(v)) ? fmt(v) : fmtFloat(Number(v), 1)) },
+  { k: "mp_stock", label: "Остаток МП", num: true, render: cellFmts.int },
+];
+
+function productsQs() {
+  const likeEl = document.getElementById("productsLike");
+  const sizesEl = document.getElementById("productsSizes");
+  const stocksEl = document.getElementById("productsStocks");
+  return qs({
+    like: (likeEl && likeEl.value.trim()) || undefined,
+    sizes: sizesEl && sizesEl.checked ? 1 : undefined,
+    stocks: stocksEl && stocksEl.checked ? 1 : undefined,
+  });
+}
+
+function productsVisibleHeaders() {
+  const sizesEl = document.getElementById("productsSizes");
+  const stocksEl = document.getElementById("productsStocks");
+  const sizes = sizesEl ? sizesEl.checked : false;
+  const stocks = stocksEl ? stocksEl.checked : false;
+  let headers = sizes ? productsSizeHeaders : productsBaseHeaders;
+  if (stocks) headers = headers.concat(productsStockHeaders);
+  return headers;
+}
+
 async function renderProducts() {
-  const data = await api("/products");
-  const headers = [
-    { k: "article", label: "Артикул", render: cellFmts.text },
-    { k: "name", label: "Наименование", render: cellFmts.text },
-    { k: "brand", label: "Бренд", render: cellFmts.text },
-    { k: "barcode", label: "Баркод", render: cellFmts.text },
-    { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-    { k: "replenishable", label: "Докупаемый", render: replenishableCell },
-  ];
-  pagedTable($("#productsTable"), headers, data.rows || []);
+  const box = $("#productsTable");
+  const msg = document.getElementById("productsMsg");
+  let data;
+  try {
+    data = await api("/products" + productsQs());
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить каталог: ' + escapeHtml(err.message) + "</div>";
+    if (msg) msg.textContent = "";
+    return;
+  }
+  if (msg) {
+    msg.textContent = data.count
+      ? "Товаров: " + fmt(data.count)
+      : "Каталог пуст — загрузите товары ниже или нажмите «Обновить базу» в шапке";
+  }
+  pagedTable(box, colViewHeaders("products", productsVisibleHeaders()), data.rows || [], null, "#productsTablePager");
   initReplenishToggle();
 }
 
@@ -893,6 +947,190 @@ function initReplenishToggle() {
       $("#productsMsg").textContent = "Ошибка: " + err.message;
     }
   });
+}
+
+function productsExportUrl() {
+  const p = productsQs();
+  const extra = [];
+  const stocksEl = document.getElementById("productsStocks");
+  if (stocksEl && stocksEl.checked) extra.push("own_stock", "mp_stock");
+  const cp = colViewParam("products", extra);
+  return "/api/export/products" + p + (cp ? (p ? "&" : "?") + cp : "");
+}
+
+async function downloadProductsExcel() {
+  const msg = document.getElementById("productsMsg");
+  if (!msg) return;
+  msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch(productsExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition"));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Excel выгружен" + (count != null ? " · строк: " + fmt(count) : "");
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadProductsToDisk() {
+  const msg = document.getElementById("productsMsg");
+  if (!msg) return;
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(productsExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const fd = new FormData();
+    const name = "products_" + yandexStamp() + ".xlsx";
+    fd.append("file", blob, name);
+    msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
+    const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
+    const j = await up.json();
+    if (!up.ok) throw new Error(j.detail || up.status);
+    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+let productsPriceMeta = null;
+
+function loadProductsPriceSettings() {
+  try {
+    return JSON.parse(localStorage.getItem("products_price_settings") || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveProductsPriceSettings(s) {
+  localStorage.setItem("products_price_settings", JSON.stringify(s));
+}
+
+function productsAnchorVal(el) {
+  const out = [];
+  const txt = (el.value || "").replace(/\r/g, "").split("\n");
+  for (const line of txt) {
+    const m = /([\d.,]+)\s*[×xх*]\s*([\d.,]+)/.exec(line.trim());
+    if (m) {
+      const a = parseFloat(m[1].replace(",", "."));
+      const b = parseFloat(m[2].replace(",", "."));
+      if (!isNaN(a) && !isNaN(b)) out.push([a, b]);
+    }
+  }
+  return out;
+}
+
+function collectProductsPriceSettings() {
+  const s = loadProductsPriceSettings();
+  const box = document.getElementById("productsPriceFields");
+  if (!box) return s;
+  box.querySelectorAll("textarea[data-key]").forEach((el) => {
+    const anchors = productsAnchorVal(el);
+    if (anchors.length >= 2) s[el.dataset.key] = anchors;
+  });
+  const chk = box.querySelector('input[data-key="round_nice"]');
+  if (chk) s.round_nice = chk.checked;
+  saveProductsPriceSettings(s);
+  return s;
+}
+
+async function buildProductsPricePanel() {
+  if (!productsPriceMeta) {
+    try {
+      productsPriceMeta = await api("/products/price-settings");
+    } catch (err) {
+      const msgEl = document.getElementById("productsPriceMsg");
+      if (msgEl) msgEl.textContent = "Ошибка загрузки настроек цены: " + err.message;
+      return;
+    }
+  }
+  const labels = productsPriceMeta.labels || {};
+  const hints = productsPriceMeta.hints || {};
+  const defaults = productsPriceMeta.defaults || {};
+  const saved = loadProductsPriceSettings();
+  const box = document.getElementById("productsPriceFields");
+  box.innerHTML = "";
+  for (const key of ["cost_anchors", "vol_anchors", "round_nice"]) {
+    if (!(key in defaults)) continue;
+    const cur = saved[key] !== undefined ? saved[key] : defaults[key];
+    const field = document.createElement("div");
+    field.className = "p-st";
+    const head = document.createElement("span");
+    head.className = "p-st-head";
+    head.appendChild(document.createTextNode(labels[key] || key));
+    const hint = hints[key];
+    if (hint) {
+      const tip = document.createElement("span");
+      tip.className = "tip";
+      tip.tabIndex = 0;
+      tip.setAttribute("role", "tooltip");
+      tip.appendChild(document.createTextNode("?"));
+      const tipText = document.createElement("span");
+      tipText.className = "tip-text";
+      tipText.textContent = hint;
+      tip.appendChild(tipText);
+      head.appendChild(tip);
+    }
+    field.appendChild(head);
+    if (key === "round_nice") {
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.dataset.key = key;
+      chk.checked = !!cur;
+      field.appendChild(chk);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.dataset.key = key;
+      ta.rows = 3;
+      ta.value = (cur || []).map((a) => String(Number(a[0])) + " \u00D7" + String(Number(a[1]))).join("\n");
+      field.appendChild(ta);
+    }
+    box.appendChild(field);
+  }
+}
+
+async function previewProductsPrices() {
+  const msgEl = document.getElementById("productsPriceMsg");
+  if (!msgEl) return;
+  const likeEl = document.getElementById("productsLike");
+  const sizesEl = document.getElementById("productsSizes");
+  const stocksEl = document.getElementById("productsStocks");
+  const q = likeEl ? likeEl.value.trim() : "";
+  msgEl.textContent = "Пересчитываю рекомендуемую цену…";
+  try {
+    const settings = collectProductsPriceSettings();
+    const data = await apiPost("/products/preview", {
+      like: q || undefined,
+      sizes: sizesEl && sizesEl.checked ? 1 : 0,
+      stocks: stocksEl && stocksEl.checked ? 1 : 0,
+      price_settings: settings,
+    });
+    const rows = data.rows || [];
+    const msg = document.getElementById("productsMsg");
+    if (msg) {
+      msg.textContent = "Предпросмотр цены (без записи): " + fmt(rows.length) +
+        " — нажмите «Обновить базу» в шапке, чтобы применить на карточках";
+    }
+    pagedTable(
+      $("#productsTable"),
+      colViewHeaders("products", productsVisibleHeaders()),
+      rows,
+      null,
+      "#productsTablePager"
+    );
+    msgEl.textContent = "Готово — пересчитано по вашим коэффициентам";
+  } catch (err) {
+    msgEl.textContent = "Ошибка: " + err.message;
+  }
 }
 
 async function uploadFile(url, input, msgSel, tab) {
@@ -951,6 +1189,8 @@ async function apiDownload(api, kind, msgSel, jsonMode) {
   if (year) params.year = year.value;
   if (writeDb) params.write_db = writeDb.checked ? 1 : 0;
   if (bySize) params.by_size = bySize.checked ? 1 : 0;
+  const overwriteEl = pane.querySelector("#productsOverwrite");
+  if (overwriteEl) params.overwrite = overwriteEl.checked ? 1 : 0;
   if (jsonMode) params.excel = 0;
   const msg = document.querySelector(msgSel);
   msg.textContent = "Обновляю…";
@@ -959,13 +1199,23 @@ async function apiDownload(api, kind, msgSel, jsonMode) {
     if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
     if (jsonMode) {
       const j = await resp.json();
-      let m = "База обновлена: строк " + fmt(j.count || 0);
-      if (j.window) m += " · период: " + j.window;
+      let m;
+      if (j.count != null) {
+        m = "База обновлена: строк " + fmt(j.count);
+        if (j.window) m += " · период: " + j.window;
+      } else if (j.report) {
+        m = "Каталог обновлён: карточек " + fmt(j.rows || 0) +
+          ", создано товаров " + fmt(j.report.created_products || 0) +
+          ", обновлено " + fmt(j.report.updated_products || 0);
+        if (j.report.sizes_added) m += ", размеров добавлено " + fmt(j.report.sizes_added);
+      } else {
+        m = "Обновлено";
+      }
       if (writeDb && !writeDb.checked) m += " (без записи в базу)";
       msg.textContent = m;
       pullsCache = null;
       updateLastPull(currentTab);
-      if (currentTab.startsWith("wb-") || currentTab.startsWith("oz-")) loadTab(currentTab);
+      if (currentTab === "products" || currentTab.startsWith("wb-") || currentTab.startsWith("oz-")) loadTab(currentTab);
       return;
     }
     const blob = await resp.blob();
@@ -2415,7 +2665,7 @@ function updateCrumb(name) {
 function syncHeaderForTab(name) {
   const mp = document.getElementById("fMarketplaceWrap");
   const upd = document.getElementById("btnUpdateWbDetail");
-  const isApi = !!name && (name.startsWith("wb-") || name.startsWith("oz-"));
+  const isApi = !!name && (name.startsWith("wb-") || name.startsWith("oz-") || name === "products");
   if (mp) mp.classList.toggle("hidden", isApi);
   if (upd) upd.classList.toggle("hidden", !isApi);
   const tip = document.getElementById("hintTip");
@@ -2488,6 +2738,9 @@ const PRICING_LABELS = {
   strong_return_rate: "Сильные возвраты ≤, %",
   strong_margin_pct: "Сильная факт. маржа ≥, %",
   raise_boost_pct: "Uplift при сильных сигналах, %",
+  dead_min_discount: "Мёртвые: мин. скидка, %",
+  prefer_raise: "Противовес: поднимать охотнее",
+  prefer_raise_bias: "Противовес: сдвиг порогов",
 };
 
 const PRICING_HINTS = {
@@ -2520,11 +2773,15 @@ const PRICING_HINTS = {
   strong_return_rate: "Сигнал «качества»: возвраты из детализации ≤ этого значения, %.",
   strong_margin_pct: "Сигнал «качества»: фактическая маржа из детализации ≥ этого значения, %.",
   raise_boost_pct: "Если ≥2 сильных сигналов одновременно — рост цены за шаг увеличивается на эту долю, %. Умеренный uplift, потолок цен не ломает.",
+  dead_min_discount: "Порог остановки деления скидки пополам у мёртвых товаров (по умолчанию 1%): скидка 50→25→12→6→3→1 дольше не делится. Цена потихоньку «выздоравливает» и возвращается к базовой.",
+  prefer_raise: "Противостояние автоскидкам WB: при прочих равных поднимать цену, а не опускать. Расширяет зону «дефицит→рост» и ужесточает зону «перезапас→снижение». Включено по умолчанию.",
+  prefer_raise_bias: "Насколько сдвинуть границы DOC (доля от порогов): 0 = симметричные правила, 0.15 = дефицит ≤ 16 вместо 14, перезапас ≥ 69 вместо 60, шаг снижения ~ ×0.85.",
 };
 
 const PRICING_ACTION = {
   RAISE: { txt: "поднять цену", cls: "p-raise" },
   LOWER: { txt: "снизить цену", cls: "p-lower" },
+  HALVE: { txt: "скидка ÷2", cls: "p-halve" },
   HOLD: { txt: "держать", cls: "p-hold" },
   SKIP: { txt: "пропустить", cls: "p-skip" },
 };
@@ -2630,6 +2887,14 @@ registerColView("oz-prices", {
   },
 });
 registerColView("oz-realization", { storageKey: "ozRealCols", headers: salesHeaders, optional: mkOpt(salesHeaders) });
+registerColView("products", {
+  storageKey: "productsCols",
+  mode: () => { const s = document.getElementById("productsSizes"); return s && s.checked ? "sizes" : "agg"; },
+  sets: {
+    agg: { headers: productsBaseHeaders, optional: mkOpt(productsBaseHeaders) },
+    sizes: { headers: productsSizeHeaders, optional: mkOpt(productsSizeHeaders) },
+  },
+});
 registerColView("margin", { storageKey: "marginCols", headers: marginTableHeaders, optional: mkOpt(marginTableHeaders) });
 registerColView("margin-funnel", { storageKey: "marginFunnelCols", headers: funnelHeaders, optional: mkOpt(funnelHeaders) });
 registerColView("margin-detail", {
@@ -2705,6 +2970,7 @@ async function buildPricingSettings() {
   const box = $("#pricingSettings");
   box.innerHTML = "";
   for (const key of Object.keys(pricingDefaults)) {
+    if (key === "show_zero") continue; // чекбокс в шапке вкладки, не в панели
     const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
     const lbl = document.createElement("label");
     lbl.className = "p-st";
@@ -2727,12 +2993,12 @@ async function buildPricingSettings() {
     lbl.appendChild(head);
     const input = document.createElement("input");
     input.dataset.key = key;
-    if (key === "season_adj") {
+    if (typeof cur === "boolean") {
       input.type = "checkbox";
       input.checked = !!cur;
     } else {
       input.type = "number";
-      input.step = (key === "return_penalty" || key === "season_damp") ? "0.1" : "1";
+      input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias") ? "0.1" : "1";
       input.value = cur;
     }
     lbl.appendChild(input);
@@ -2774,38 +3040,48 @@ function pricingWithDates(s) {
 }
 
 let _pricingRows = [];
+let _pricingResp = null;
 
 function refreshApplyButton() {
   const btn = $("#pricingApply");
   if (!btn) return;
+  const actives = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
   const lowers = _pricingRows.filter((r) => r.action === "LOWER");
   const noMin = lowers.filter((r) => !(Number(r.min_price) > 0));
-  const canApply = lowers.length > 0 && noMin.length === 0;
+  const hiddenDead = _pricingResp && Number(_pricingResp.hidden_dead || 0) > 0;
+  const canApply = (actives.length > 0 || hiddenDead) && noMin.length === 0;
   btn.disabled = !canApply;
   btn.title = canApply
-    ? "Применить рекомендованные скидки через WB API (мин. цена WB учтена)"
-    : "Нужен расчёт минимальной цены WB для всех рекомендаций на снижение — публичный Price API не вернул данных";
+    ? "Применить рекомендованные скидки через WB API" + (hiddenDead ? " (включая деление скидки у скрытых мёртвых)" : " (мин. цена WB учтена)")
+    : noMin.length > 0
+      ? "Нужен расчёт минимальной цены WB для всех рекомендаций на снижение — публичный Price API не вернул данных"
+      : "Нет рекомендаций на изменение — включите «С нулевыми товарами», чтобы применить и деление скидки у мёртвых";
 }
 
 async function renderPricing(apply) {
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
   const msg = $("#pricingMsg");
   const likeEl = $("#pricingLike") || { value: "" };
   const q = likeEl.value.trim().toLowerCase();
   msg.textContent = "Считаю рекомендации…";
   try {
     const data = await apiPost("/pricing/recommendations", s);
+    _pricingResp = data;
     const allRows = data.rows || [];
     const rows = allRows.filter((r) =>
       !q || (String(r.article || "") + " " + (r.name || "")).toLowerCase().includes(q)
     );
     _pricingRows = rows;
-    const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
+    const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE").length;
     const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
     let summary = "Товаров: " + fmt(rows.length);
     if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
     summary += ", решений: " + fmt(actionable);
+    const hiddenDead = Number(data.hidden_dead || 0);
+    if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
     if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
     if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
     if (data.as_of) summary += " · на " + data.as_of;
@@ -2827,12 +3103,22 @@ async function applyPricing() {
   const msg = $("#pricingMsg");
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
   const lowers = _pricingRows.filter((r) => r.action === "LOWER");
+  const halve = _pricingRows.filter((r) => r.action === "HALVE");
+  const hiddenDead = _pricingResp ? Number(_pricingResp.hidden_dead || 0) : 0;
+  const parts = [];
   if (lowers.length) {
-    const list = lowers.slice(0, 5).map((r) => r.article).join(", ")
-      + (lowers.length > 5 ? "…" : "");
-    if (!confirm("Снизить цену у " + lowers.length + " артикулов (" + list + ")?\nМинимальная цена WB учтена в целевых ценах.")) return;
-  } else if (!confirm("Рекомендаций на снижение нет — применить изменения всё равно?")) return;
+    const list = lowers.slice(0, 5).map((r) => r.article).join(", ") + (lowers.length > 5 ? "…" : "");
+    parts.push("снизить цену у " + lowers.length + " артикулов (" + list + ")");
+  }
+  if (halve.length) parts.push("разделить скидку пополам у " + halve.length + " мёртвых");
+  if (hiddenDead > 0) parts.push("разделить скидку пополам у " + hiddenDead + " скрытых мёртвых (скидка ÷2)");
+  const confirmText = parts.length
+    ? "Применить?\n• " + parts.join("\n• ") + "\nМинимальная цена WB учтена для снижений."
+    : "Рекомендаций на изменение нет — применить всё равно?";
+  if (!confirm(confirmText)) return;
   msg.textContent = "Применяю через WB API…";
   try {
     const resp = await fetch("/api/pricing/apply", {
@@ -2852,6 +3138,8 @@ async function applyPricing() {
 async function exportPricing() {
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
   const msg = $("#pricingMsg");
@@ -2954,6 +3242,8 @@ async function uploadMarginDetailToDisk() {
 async function uploadPricingToDisk() {
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
   const msg = $("#pricingMsg");
@@ -3082,6 +3372,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "oz-realization": ["ozon", "realization", "#ozMsg-realization-table"],
     "oz-detail": ["ozon", "detail", "#ozMsg-detail-table"],
     "oz-cashflow": ["ozon", "cashflow", "#ozMsg-cashflow"],
+    "products": ["products", "refresh", "#productsMsg"],
   };
   const btnUpdateWbDetail = document.getElementById("btnUpdateWbDetail");
   if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => {
@@ -3189,6 +3480,51 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
   $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
   $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
+  const productsLikeEl = $("#productsLike");
+  if (productsLikeEl) {
+    let productsLikeTimer;
+    productsLikeEl.addEventListener("input", () => {
+      clearTimeout(productsLikeTimer);
+      productsLikeTimer = setTimeout(() => { if (currentTab === "products") loadTab(currentTab); }, 400);
+    });
+  }
+  const productsSizesEl = $("#productsSizes");
+  if (productsSizesEl) productsSizesEl.addEventListener("change", () => { if (currentTab === "products") loadTab(currentTab); });
+  const productsStocksEl = $("#productsStocks");
+  if (productsStocksEl) productsStocksEl.addEventListener("change", () => { if (currentTab === "products") loadTab(currentTab); });
+  const productsOverwriteEl = $("#productsOverwrite");
+  if (productsOverwriteEl) {
+    productsOverwriteEl.addEventListener("change", () => {
+      const msg = $("#productsMsg");
+      if (msg) msg.textContent = "Перезапись: " + (productsOverwriteEl.checked ? "включена" : "выключена");
+    });
+  }
+  const exportProductsBtn = $("#btnExportProducts");
+  if (exportProductsBtn) exportProductsBtn.addEventListener("click", () => busyRun(downloadProductsExcel));
+  const diskProductsBtn = $("#btnDiskProducts");
+  if (diskProductsBtn) diskProductsBtn.addEventListener("click", () => busyRun(uploadProductsToDisk));
+  const priceProductsBtn = $("#btnPriceProducts");
+  if (priceProductsBtn) {
+    priceProductsBtn.addEventListener("click", () => {
+      const panel = $("#productsPricePanel");
+      if (!panel) return;
+      if (panel.classList.contains("hidden")) {
+        busyRun(buildProductsPricePanel);
+        panel.classList.remove("hidden");
+      } else {
+        panel.classList.add("hidden");
+      }
+    });
+  }
+  const productsPreviewBtn = $("#productsPreview");
+  if (productsPreviewBtn) productsPreviewBtn.addEventListener("click", () => busyRun(previewProductsPrices));
+  const productsPriceClose = $("#productsPriceClose");
+  if (productsPriceClose) {
+    productsPriceClose.addEventListener("click", () => {
+      const panel = $("#productsPricePanel");
+      if (panel) panel.classList.add("hidden");
+    });
+  }
   // ── «Наш склад» — импорт/экспорт/диск ──
   $("#whCpImport").addEventListener("click", () => uploadFile("/warehouse/import/counterparties", $("#whCpFile"), "#whCpMsg", "wh-cp"));
   $("#whRImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=receipt", $("#whRFile"), "#whRMsg", "wh-receipt"));
@@ -3235,6 +3571,15 @@ document.addEventListener("DOMContentLoaded", () => {
     pricingLike.addEventListener("input", () => {
       clearTimeout(pricingLikeTimer);
       pricingLikeTimer = setTimeout(() => { if (currentTab === "pricing") renderPricing(false); }, 350);
+    });
+  }
+  const pricingShowZero = $("#pricingShowZero");
+  if (pricingShowZero) {
+    pricingShowZero.addEventListener("change", () => {
+      const ss = loadPricingSettings();
+      ss.show_zero = pricingShowZero.checked;
+      savePricingSettings(ss);
+      if (currentTab === "pricing") renderPricing(false);
     });
   }
   syncHeaderForTab(currentTab);

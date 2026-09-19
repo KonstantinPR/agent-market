@@ -164,6 +164,7 @@
       <span class="msg" id="pricingMsg"></span>
       <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» вносит новые скидки через API; она активна, когда публичный Price API вернул минимальные цены для всех рекомендаций на снижение.</span></span>
       <input id="pricingLike" placeholder="Артикул или название содержит…">
+      <label class="chk"><input type="checkbox" id="pricingShowZero"> С нулевыми товарами</label>
       <span class="toolbar-right">
         <span id="pricingTablePager"></span>
         <div class="view-menu" id="pricingViewMenu">
@@ -282,12 +283,36 @@
       <input type="file" id="productsFile" accept=".xlsx">
       <button id="productsImport" class="btn">Загрузить товары</button>
       <span id="productsMsg" class="msg"></span>
+      <input id="productsLike" placeholder="Артикул содержит…">
+      <label class="chk"><input type="checkbox" id="productsSizes"> С размерами</label>
+      <label class="chk"><input type="checkbox" id="productsStocks"> Показывать остатки</label>
+      <span class="hint">При обновлении из карточек WB/Ozon перезапись включена → поля товара и размеры перезапишутся, цена/себестоимость не трогаются</span>
+      <span class="tip" id="productsOverwriteTip" tabindex="0" role="tooltip">?<span class="tip-text">При обновлении из карточек WB/Ozon перезапись включена → поля товара и размеры перезапишутся, цена/себестоимость не трогаются</span></span>
+      <label class="chk"><input type="checkbox" id="productsOverwrite"> Перезапись</label>
+      <span class="toolbar-right">
+        <span id="productsTablePager"></span>
+        <div class="view-menu" id="productsViewMenu">
+          <button type="button" class="btn" id="btnproductsView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="productsViewPanel"></div>
+        </div>
+        <button id="btnPriceProducts" class="btn">Установить цены</button>
+        <button id="btnExportProducts" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskProducts" class="btn">Загрузить на диск</button>
+      </span>
     </div>
     <div class="toolbar">
       <input type="file" id="netCostFile" accept=".xlsx">
       <button id="netCostImport" class="btn">Загрузить себестоимость</button>
       <span id="netCostMsg" class="msg"></span>
-      <span class="toolbar-right"><span id="productsTablePager"></span></span>
+    </div>
+    <div class="price-panel hidden" id="productsPricePanel">
+      <div class="price-panel-title">Рекомендуемая цена = себестоимость × наценка от себестоимости × наценка за объём (пересчёт без записи в базу). Предпросмотр перезаписывает строки таблицы, «Обновить базу» в шапке применяет значения на карточках.</div>
+      <div class="price-panel-fields" id="productsPriceFields"></div>
+      <div class="price-panel-actions">
+        <button id="productsPreview" class="btn">Предпросмотр</button>
+        <button id="productsPriceClose" class="btn">Закрыть</button>
+        <span id="productsPriceMsg" class="msg"></span>
+      </div>
     </div>
     <div class="table-wrap" id="productsTable"></div>
   </section>
