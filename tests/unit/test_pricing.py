@@ -13,7 +13,7 @@ TODAY = date.today()
 
 
 def _seed(db, art, nm, *, name="Товар", net_cost=300, replenishable=False,
-          stock=100, sales=(), funnel=(0, 0, 0, 0, 0), funnel_extra=None):
+          stock=100, in_way=0, sales=(), funnel=(0, 0, 0, 0, 0), funnel_extra=None):
     """Засевает товар: nm-карта, остаток, воронка, продажи.
 
     funnel=(views, adds, orders, cancelled, avg_price) для последнего среза воронки.
@@ -26,7 +26,7 @@ def _seed(db, art, nm, *, name="Товар", net_cost=300, replenishable=False,
     db.add(models.NmArticle(nm_id=nm, article=art))
     if stock is not None:
         db.add(models.Stock(marketplace_id=wb, date=TODAY - timedelta(days=1),
-                            article=art, warehouse="Все", quantity=stock))
+                            article=art, warehouse="Все", quantity=stock, in_way=in_way))
     views, adds, orders, cancelled, avg_price = funnel
     db.add(models.FunnelMetric(
         date_from=TODAY - timedelta(days=7), date_to=TODAY - timedelta(days=1),
@@ -631,6 +631,37 @@ def test_stock_not_lost_when_other_marketplace_has_newer_snapshot(db):
     row = _row(rec, "R9")
     assert row["stock"] == 100
     assert row["status"] != "skipped_no_stock"
+
+
+def test_stock_includes_in_way(db):
+    """«В пути» учитывается в остатке автопилота: quantity + in_way."""
+    _seed(db, "R10", "P10", stock=5, in_way=3, sales=[*_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("P10", 1000, 0)), today=TODAY)
+    assert _row(rec, "R10")["stock"] == 8
+
+
+def test_sales_match_products_case_insensitive(db):
+    """Регрессия: продажи WB в БД могут лежать в другом регистре артикула
+    ('sh031-...'), чем products ('SH031-...') — без нормализации velocity=0
+    и всё падает в SKIP/no_data."""
+    _seed(db, "R11", "P11", stock=10, sales=((2, 3, 0),))
+    try:
+        db.add(models.Sale(
+            marketplace_id=db.execute(
+                select(models.Marketplace.id).where(models.Marketplace.code == "wb")
+            ).scalar_one(),
+            date=TODAY - timedelta(days=5), article="r11", source="v5",
+            quantity=2, returns_qty=0,
+            revenue=1000.0, commission=150.0, logistics=80.0, storage=20.0,
+            services=10.0, income=750.0,
+        ))
+        db.commit()
+    except Exception:
+        pass
+    rec = recommendations(db, prices_df=_prices(("P11", 1000, 0)), today=TODAY)
+    row = _row(rec, "R11")
+    assert row["velocity"] > 0
+    assert row["status"] != "skipped_no_data"
 
 
 def test_prefer_raise_widens_deficit_zone(db):

@@ -285,11 +285,19 @@ def _latest_stock(db: Session, wb_mp: int) -> dict:
     if latest is None:
         return {}
     q = (
-        select(models.Stock.article, func.sum(models.Stock.quantity).label("qty"))
+        select(
+            models.Stock.article,
+            func.sum(models.Stock.quantity + models.Stock.in_way).label("qty"),
+        )
         .where(models.Stock.date == latest, models.Stock.marketplace_id == wb_mp)
         .group_by(models.Stock.article)
     )
-    return {str(art): int(qty or 0) for art, qty in db.execute(q)}
+    out: dict = {}
+    for art, qty in db.execute(q):
+        val = int(qty or 0)
+        out[str(art)] = val
+        out[str(art).upper()] = val
+    return out
 
 
 def _unit_economics(rows: pd.DataFrame) -> Optional[dict]:
@@ -391,7 +399,8 @@ def recommendations(
         .group_by(models.Sale.date, models.Sale.article)
     )
     rows_df = pd.DataFrame([{
-        "date": r.date, "article": str(r.article), "qty": int(r.qty or 0),
+        "date": r.date, "article": str(r.article).strip().upper(),
+        "qty": int(r.qty or 0),
         "qty_sold": int(r.qty_sold or 0), "ret": int(r.ret or 0),
         "revenue": _num(r.revenue), "commission": _num(r.commission),
         "logistics": _num(r.logistics), "storage": _num(r.storage),
@@ -403,13 +412,13 @@ def recommendations(
         .where(models.Sale.marketplace_id == wb_mp)
         .group_by(models.Sale.article)
     )
-    last_sale_ago = {str(art): (today - d).days for art, d in last_sale}
+    last_sale_ago = {str(art).upper(): (today - d).days for art, d in last_sale}
 
     funnel = _funnel_slice(db, now_from, now_to)
     detail = _detail_metrics(db, now_from, now_to)
     stock = _latest_stock(db, wb_mp)
     nm_map = {
-        str(r.nm_id).strip(): str(r.article).strip()
+        str(r.nm_id).strip(): str(r.article).strip().upper()
         for r in db.execute(select(models.NmArticle.nm_id, models.NmArticle.article))
     }
     prices = _normalize_prices(prices_df)
@@ -420,7 +429,7 @@ def recommendations(
             models.Product.article, models.Product.name,
             models.Product.net_cost, models.Product.replenishable,
     ).order_by(models.Product.article)):
-        products[str(r.article)] = {
+        products[str(r.article).strip().upper()] = {
             "name": r.name or "",
             "net_cost": _num(r.net_cost),
             "replenishable": bool(r.replenishable),
