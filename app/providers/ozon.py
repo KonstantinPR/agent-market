@@ -241,7 +241,10 @@ class OzonProvider(BaseProvider):
             code = getattr(e, "status_code", None)
             if code is None:
                 code = getattr(getattr(e, "response", None), "status_code", None)
-            if code == 404 and "Report was not found" in str(e):
+            # "Report was not found" лежит в ТЕЛЕ ответа (e.response.text), а не в
+            # str(e) (= "404 Client Error: ..."), поэтому проверяем оба места.
+            detail = str(e) + " " + getattr(getattr(e, "response", None), "text", "")
+            if code == 404 and "Report was not found" in detail:
                 # Отчёт реализации за этот месяц ещё не сформирован (обычно для
                 # текущего месяца) — пропускаем месяц, а не падаем с ошибкой.
                 data = resp = None
