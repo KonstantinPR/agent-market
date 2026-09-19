@@ -8,6 +8,7 @@
 
 Цена никогда не опускается ниже floor_price (break-even по unit-экономике).
 """
+import math
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -50,6 +51,11 @@ PRICING_DEFAULTS = {
     "strong_return_rate": 5.0,
     "strong_margin_pct": 30.0,
     "raise_boost_pct": 25.0,
+    # T-21: нулевые/мёртвые товары + противовес автоскидкам WB
+    "show_zero": False,
+    "dead_min_discount": 1.0,
+    "prefer_raise": True,
+    "prefer_raise_bias": 0.15,
 }
 
 
@@ -70,7 +76,7 @@ def merge_settings(payload=None) -> dict:
             continue
         if key not in out:
             continue
-        if key == "season_adj":
+        if isinstance(out[key], bool):
             out[key] = value if isinstance(value, bool) else str(value).lower() in ("1", "true", "on", "yes")
         else:
             try:
@@ -421,8 +427,29 @@ def recommendations(
     prev_df = rows_df[(rows_df["date"] >= prev_from) & (rows_df["date"] <= prev_to)] if not rows_df.empty else rows_df
     fallback_df = rows_df
 
+    # Товары с хоть каким-то «сигналом жизни»: продажи в окне, остаток > 0,
+    # просмотры/заказы в воронке, продажи/возвраты в детализации.
+    # Всё остальное — «мёртвые»: скрываются по умолчанию (show_zero=False).
+    has_life: set = set()
+    if not now_df.empty:
+        has_life |= {str(a) for a in now_df[now_df["qty"] > 0]["article"]}
+    has_life |= {
+        a for a, v in funnel.items()
+        if int(v.get("views") or 0) > 0 or int(v.get("orders") or 0) > 0
+    }
+    has_life |= {
+        a for a, v in detail.items()
+        if int(v.get("detail_sells") or 0) > 0 or int(v.get("detail_returns_qty") or 0) > 0
+    }
+    has_life |= {a for a, v in stock.items() if _num(v) > 0}
+
+    show_zero = bool(s["show_zero"])
+    hidden_dead = 0
     out_rows = []
     for art, prod in products.items():
+        if art not in has_life and not show_zero:
+            hidden_dead += 1
+            continue
         nm_id = next((nm for nm, a in nm_map.items() if a == art), None)
         if nm_id is None or nm_id not in prices:
             out_rows.append(_row_skip(art, prod, None, "нет карточки/цен WB (нет nmID в списке цен)"))
@@ -501,14 +528,15 @@ def recommendations(
                          + ue["other_unit"] + f["net_cost"]) / denom
                 f["floor_price"] = max(0.0, floor)
 
-        out_rows.append(_decide(f, s))
+        out_rows.append(_decide_dead(f, s) if art not in has_life else _decide(f, s))
 
     return {
         "rows": out_rows,
         "settings": s,
         "note": "",
         "total": len(out_rows),
-        "actionable": sum(1 for r in out_rows if r["action"] in ("RAISE", "LOWER")),
+        "actionable": sum(1 for r in out_rows if r["action"] in ("RAISE", "LOWER", "HALVE")),
+        "hidden_dead": hidden_dead,
         "as_of": str(today),
         "date_from": str(now_from),
         "date_to": str(now_to),
@@ -636,6 +664,34 @@ def _raise_boost(f: dict, s: dict) -> float:
     return (1 + _num(s["raise_boost_pct"]) / 100) if strong >= 2 else 1.0
 
 
+def _decide_dead(f: dict, s: dict) -> dict:
+    """Мёртвый товар (нет ни одного сигнала) с живой карточкой WB: скидка пополам.
+
+    Каждый прогон «Применить» делит текущую скидку на 2 (50→25→12→6→3→1), пока
+    шаг не станет меньше min_delta_pp или не упрётся в dead_min_discount.
+    Это мягкий «противовес» автоскидкам WB: цена постепенно восстанавливается.
+    """
+    base = _base_row(f)
+    base["eff"] = min(f["current_vis"], f["avg_price"]) if f["avg_price"] > 0 else f["current_vis"]
+    cur = f["current_discount"]
+    price = f["price"]
+    floor_min = _num(s["dead_min_discount"])
+    half = math.floor(cur / 2) if cur > 0 else 0
+    target = max(min(half, cur), floor_min)
+    if target >= cur or cur - target < _num(s["min_delta_pp"]):
+        base.update(action="HOLD", status="hold",
+                    reason=f"мёртвый товар: скидка уже минимальна ({cur:.1f}%)")
+        return base
+    target_vis = price * (1 - target / 100) if price > 0 else 0.0
+    base.update(action="HALVE", status="suggested",
+                reason=f"мёртвый товар (нет продаж, остатков и активности): скидка ÷2 "
+                       f"{cur:.0f}%→{target:.0f}%, до мин. {floor_min:.0f}%",
+                target_discount=round(_clamp(target, 0, 100), 1),
+                target_vis=round(target_vis, 2),
+                margin_pct_at_target=_margin_pct(target_vis, f))
+    return base
+
+
 def _decide(f: dict, s: dict) -> dict:
     price = f["price"]
     cur_disc = f["current_discount"]
@@ -646,6 +702,14 @@ def _decide(f: dict, s: dict) -> dict:
     floor = f["floor_price"]
     base = _base_row(f)
     base["eff"] = eff
+
+    # Предпочтение «поднимать, а не опускать» (противовес автоскидкам WB):
+    # зона дефицита шире (док_ло выше), зона перезапаса уже (док_хай выше),
+    # шаг снижения мягче.
+    bias = _num(s["prefer_raise_bias"]) if s.get("prefer_raise") else 0.0
+    doc_low = _num(s["doc_low"]) * (1 + bias)
+    doc_high = _num(s["doc_high"]) * (1 + bias)
+    max_drop = _num(s["max_drop_pct"]) * (1 - bias)
 
     if stock is None:
         base.update(action="SKIP", status="skipped_no_stock",
@@ -689,7 +753,7 @@ def _decide(f: dict, s: dict) -> dict:
     if v_proj <= 0:
         if f["last_sale_days_ago"] >= int(s["dead_stock_days"]):
             min_price = f.get("min_price") or 0.0
-            target_vis = max(floor, eff * (1 - _num(s["max_drop_pct"]) / 100), min_price)
+            target_vis = max(floor, eff * (1 - max_drop / 100), min_price)
             target_vis = min(target_vis, cur_vis)
             target_vis = max(target_vis, price * (1 - max_disc_item / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
@@ -709,7 +773,7 @@ def _decide(f: dict, s: dict) -> dict:
         base.update(action="HOLD", status="hold", reason="продаж нет (менее порога) — не трогаем")
         return base
 
-    if doc < _num(s["doc_low"]):
+    if doc < doc_low:
         if hot_demand:
             gate = _raise_quality_gate(f, s)
             if gate:
@@ -752,7 +816,7 @@ def _decide(f: dict, s: dict) -> dict:
                     reason=f"дефицит, но товар докупаемый — темп важнее")
         return base
 
-    if doc >= _num(s["doc_high"]):
+    if doc >= doc_high:
         k = 0.5
         if conv < 1.0:
             k *= 0.8
@@ -761,7 +825,7 @@ def _decide(f: dict, s: dict) -> dict:
         elif f["trend"] > 1.0:
             k *= 1.2
         k = _clamp(k, 0.2, 1.2)
-        factor = max(1 - _num(s["max_drop_pct"]) / 100, (_num(s["target_doc"]) / doc) ** k)
+        factor = max(1 - max_drop / 100, (_num(s["target_doc"]) / doc) ** k)
         min_price = f.get("min_price") or 0.0
         target_vis = max(floor, eff * factor, price * (1 - max_disc_item / 100), min_price)
         target_vis = min(target_vis, cur_vis)
@@ -799,9 +863,11 @@ def _margin_pct(target_vis: float, f: dict) -> Optional[float]:
 def _pushed_items(rows: list, s: dict, applied_past: set) -> list:
     items = []
     for r in rows:
-        if r["action"] not in ("RAISE", "LOWER"):
+        if r["action"] not in ("RAISE", "LOWER", "HALVE"):
             continue
-        if r["article"] in applied_past:
+        # HALVE (мёртвые товары) не тонет в кулдауне: делим скидку на каждом
+        # прогоне «Применить», пока есть шаг.
+        if r["action"] != "HALVE" and r["article"] in applied_past:
             r["status"] = "skipped_cooldown"
             r["reason"] += f" — кулдаун {int(s['cooldown_days'])} дн. после предыдущего изменения"
             continue
@@ -819,7 +885,7 @@ def _pushed_items(rows: list, s: dict, applied_past: set) -> list:
 
 def _record(db: Session, rows: list, applied_at: Optional[datetime], error: Optional[str] = None):
     for r in rows:
-        is_applied = (r["action"] in ("RAISE", "LOWER")
+        is_applied = (r["action"] in ("RAISE", "LOWER", "HALVE")
                       and r.get("status") == "applied"
                       and error is None)
         db.add(models.PriceChange(
@@ -849,7 +915,11 @@ def apply_recommendations(
     мин. цены WB, применение блокируется (ValueError) — снижать вслепую нельзя.
     """
     s = merge_settings(settings)
-    rec = recommendations(db, s, prices_df=prices_df, provider=provider,
+    # Мёртвые товары скрыты от UI, но применение обязано их обработать
+    # (HALVE — шаг «скидка ÷2» идёт каждый прогон).
+    rec_settings = merge_settings(s)
+    rec_settings["show_zero"] = True
+    rec = recommendations(db, rec_settings, prices_df=prices_df, provider=provider,
                           min_prices=min_prices, today=today)
     rows = rec["rows"]
     today = today or date.today()
@@ -892,11 +962,16 @@ def apply_recommendations(
         raise
 
     for r in rows:
-        if r["action"] in ("RAISE", "LOWER") and r["status"] == "suggested":
+        if r["action"] in ("RAISE", "LOWER", "HALVE") and r["status"] == "suggested":
             r["status"] = "applied"
 
     _record(db, rows, applied_at=now)
     applied_ids = [r["article"] for r in rows if r["status"] == "applied"]
+    note = f"Применено изменений: {len(applied_ids)}."
+    n_halve = sum(1 for r in rows
+                  if r["action"] == "HALVE" and r["status"] == "applied")
+    if n_halve:
+        note += f" Из них деление скидки пополам у мёртвых: {n_halve}."
     return {"applied": applied_ids, "rows": rows, "pushed": len(items),
             "task_id": result.get("task_id") if isinstance(result, dict) else None,
-            "note": f"Применено изменений: {len(applied_ids)}."}
+            "note": note}

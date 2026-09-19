@@ -109,7 +109,8 @@ def test_merge_settings_ignores_garbage_value():
 
 
 def test_r1_no_stock_skips(db):
-    _seed(db, "R1", "P1", stock=None, sales=[(40, 0, 0)])
+    # «живой» товар (недавние продажи) без данных об остатках -> SKIP
+    _seed(db, "R1", "P1", stock=None, sales=[(3, 1, 0), *_fallback_sales()])
     rec = recommendations(db, prices_df=_prices(("P1", 1000, 0)), today=TODAY)
     assert _row(rec, "R1")["status"] == "skipped_no_stock"
 
@@ -130,7 +131,8 @@ def test_r3_high_returns_skips(db):
 
 def test_r4_dead_stock_lowers(db):
     _seed(db, "R4", "P4", stock=100, sales=[*_fallback_sales()])
-    rec = recommendations(db, prices_df=_prices(("P4", 1000, 0)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("P4", 1000, 0)), today=TODAY,
+                          settings={"prefer_raise": False})
     row = _row(rec, "R4")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx(15.0, abs=0.5)  # 1000 -> 850
@@ -165,7 +167,8 @@ def test_r7_replenishable_deficit_no_demand_holds(db):
 def test_r8_overstock_lowers(db):
     _seed(db, "R8", "P8", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("P8", 2000, 10)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("P8", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
     row = _row(rec, "R8")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
@@ -408,7 +411,8 @@ def test_t15_no_min_prices_leaves_row_unanchored(db):
     """Без min_prices расчёт LOWER не меняется, колонка min_price пустая (None)."""
     _seed(db, "M4", "PM4", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("PM4", 2000, 10)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PM4", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
     row = _row(rec, "M4")
     assert row["action"] == "LOWER"
     assert row["min_price"] is None
@@ -447,7 +451,7 @@ def test_apply_records_applied_and_returns_items(db):
     fake = _FakeProvider()
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("P8", 2000, 10)), provider=fake, today=TODAY,
-        min_prices={"P8": 1000},
+        min_prices={"P8": 1000}, settings={"prefer_raise": False},
     )
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
@@ -524,3 +528,114 @@ class _FakeProvider:
             raise RuntimeError("boom: WB недоступен")
         self.applied_prices = items
         return {"task_id": "task-1"}
+
+
+# ------------------------------------------------------------------ T-21: мёртвые/нулевые товары и противовес
+
+
+def _seed_dead(db, art, nm, price=1000, discount=50):
+    """Мёртвый товар: остаток 0, продажа только давно, воронка пустая."""
+    _seed(db, art, nm, stock=0, net_cost=300,
+          sales=[(60, 1, 0)], funnel=(0, 0, 0, 0, 0))
+    return _prices((nm, price, discount))
+
+
+def test_merge_settings_handles_new_bools():
+    s = merge_settings({"show_zero": "true", "prefer_raise": False,
+                        "prefer_raise_bias": 0.3, "dead_min_discount": 5})
+    assert s["show_zero"] is True
+    assert s["prefer_raise"] is False
+    assert s["prefer_raise_bias"] == pytest.approx(0.3)
+    assert s["dead_min_discount"] == 5
+
+
+def test_merge_settings_defaults_prefer_raise_on():
+    assert merge_settings()["prefer_raise"] is True
+    assert merge_settings()["show_zero"] is False
+
+
+def test_dead_product_hidden_by_default(db):
+    _seed_dead(db, "D1", "P1")
+    rec = recommendations(db, prices_df=_prices(("P1", 1000, 50)), today=TODAY)
+    assert all(r["article"] != "D1" for r in rec["rows"])
+    assert rec["hidden_dead"] == 1
+
+
+def test_show_zero_reveals_dead_and_halves(db):
+    _seed_dead(db, "D2", "P2")
+    rec = recommendations(db, prices_df=_prices(("P2", 1000, 50)), today=TODAY,
+                          settings={"show_zero": True})
+    row = _row(rec, "D2")
+    assert row["action"] == "HALVE"
+    assert row["target_discount"] == pytest.approx(25.0, abs=0.1)
+    assert row["target_vis"] == pytest.approx(750.0, abs=1)
+    assert row["status"] == "suggested"
+
+
+def test_halving_sequence_hits_floor(db):
+    """50→25→12→6→3→1, а 1% уже не делится (HOLD)."""
+    df_pairs = []
+    for d in (50, 25, 12, 6, 3, 1):
+        _seed(db, f"H{d}", f"PH{d}", stock=0, net_cost=300,
+              sales=[(60, 1, 0)], funnel=(0, 0, 0, 0, 0))
+        df_pairs.append((f"PH{d}", 1000, d))
+    rec = recommendations(db, prices_df=_prices(*df_pairs), today=TODAY,
+                          settings={"show_zero": True})
+    for disc, expect in ((50, 25), (25, 12), (12, 6), (6, 3), (3, 1)):
+        row = _row(rec, f"H{disc}")
+        assert row["action"] == "HALVE"
+        assert row["target_discount"] == pytest.approx(expect, abs=0.1)
+    row = _row(rec, "H1")
+    assert row["action"] == "HOLD"
+    assert "минимальна" in row["reason"]
+
+
+def test_apply_halves_dead_even_when_hidden(db):
+    """Применение обязано обрабатывать мёртвых даже при show_zero=False."""
+    _seed_dead(db, "D3", "P3")
+    fake = _FakeProvider()
+    res = pricing_service.apply_recommendations(
+        db, prices_df=_prices(("P3", 1000, 50)), provider=fake, today=TODAY)
+    assert res["pushed"] == 1
+    assert "D3" in res["applied"]
+    assert fake.applied_prices == [{
+        "nmID": "P3", "price": 1000.0, "discount": pytest.approx(25.0, abs=0.1),
+    }]
+
+
+def test_halve_bypasses_cooldown_within_budget(db):
+    """HALVE не тонет в кулдауне: второй прогон «Применить» делит скидку снова."""
+    _seed_dead(db, "D4", "P4")
+    fake = _FakeProvider()
+    pricing_service.apply_recommendations(
+        db, prices_df=_prices(("P4", 1000, 50)), provider=fake, today=TODAY)
+    res = pricing_service.apply_recommendations(
+        db, prices_df=_prices(("P4", 1000, 25)), provider=fake, today=TODAY)
+    assert res["pushed"] == 1
+    row = next(r for r in res["rows"] if r["article"] == "D4")
+    assert row["action"] == "HALVE"
+    assert row["status"] == "applied"
+    assert row["target_discount"] == pytest.approx(12.0, abs=0.1)
+
+
+def test_prefer_raise_widens_deficit_zone(db):
+    """DOC≈15.8: с противовесом — RAISE (зона дефицита шире), без — HOLD."""
+    _seed(db, "PR1", "PPR1", stock=8, replenishable=False,
+          sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 900))
+    rec_on = recommendations(db, prices_df=_prices(("PPR1", 1000, 10)), today=TODAY)
+    row_on = _row(rec_on, "PR1")
+    assert row_on["action"] == "RAISE"
+    rec_off = recommendations(db, prices_df=_prices(("PPR1", 1000, 10)), today=TODAY,
+                              settings={"prefer_raise": False})
+    assert _row(rec_off, "PR1")["action"] == "HOLD"
+
+
+def test_prefer_raise_softens_overstock_drop(db):
+    """Перезапас: с противовесом шаг снижения мягче (1570.5 вместо 1530)."""
+    _seed(db, "PR2", "PPR2", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PPR2", 2000, 10)), today=TODAY)
+    row = _row(rec, "PR2")
+    assert row["action"] == "LOWER"
+    assert row["target_vis"] == pytest.approx(1570.5, abs=1)
+    assert row["target_discount"] == pytest.approx((1 - 1570.5 / 2000) * 100, abs=0.5)
