@@ -1781,6 +1781,23 @@ function aggregateStocks(rows) {
   return Array.from(map.values());
 }
 
+function stockSummary(rows, date, label) {
+  if (!date || !rows.length) return "Нет данных";
+  let q = 0, qf = 0, iw = 0;
+  const arts = new Set();
+  for (const r of rows) {
+    q += Number(r.quantity || 0);
+    qf += Number(r.quantity_full || 0);
+    iw += Number(r.in_way || 0);
+    if (r.article) arts.add(String(r.article));
+  }
+  let s = label + " на " + date + " · всего: " + fmt(q) + " шт";
+  if (qf !== q) s += " · полн: " + fmt(qf) + " шт";
+  s += " · в пути: " + fmt(iw) + " шт · позиций: " + fmt(rows.length)
+     + " · артикулов: " + fmt(arts.size);
+  return s;
+}
+
 const wbStockHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
@@ -1822,10 +1839,10 @@ async function renderWbStocks() {
     const needle = q.toLowerCase();
     rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
   }
-  const headers = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
+  const head = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = document.querySelector("#wbMsg-stock-table");
-  if (msg) msg.textContent = data.date && rows.length ? "Остатки на " + data.date + " · показ: " + fmt(rows.length) : "Нет данных";
-  pagedTable(box, headers, rows);
+  if (msg) msg.textContent = stockSummary(rows, data.date, "Остатки");
+  pagedTable(box, head, rows);
 }
 
 function aggregatePrices(rows) {
@@ -1920,10 +1937,10 @@ async function renderOzStocks() {
     const needle = q.toLowerCase();
     rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
   }
-  const headers = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
+  const head = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = document.querySelector("#ozMsg-stock-table");
-  if (msg) msg.textContent = data.date && rows.length ? "Остатки на " + data.date + " · показ: " + fmt(rows.length) : "Нет данных";
-  pagedTable(box, headers, rows);
+  if (msg) msg.textContent = stockSummary(rows, data.date, "Остатки");
+  pagedTable(box, head, rows);
 }
 
 async function renderOzPrices() {
