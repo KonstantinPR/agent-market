@@ -618,6 +618,21 @@ def test_halve_bypasses_cooldown_within_budget(db):
     assert row["target_discount"] == pytest.approx(12.0, abs=0.1)
 
 
+def test_stock_not_lost_when_other_marketplace_has_newer_snapshot(db):
+    """Регрессия: _latest_stock брал глобальный max(date) — на свежую дату Ozon
+    WB-строк нет, и у живого WB-товара остаток превращался в 0/None."""
+    _seed(db, "R9", "P9", stock=100, sales=[*_fallback_sales()])
+    ozon = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "ozon")
+    ).scalar_one()
+    db.add(models.Stock(marketplace_id=ozon, date=TODAY, article="ozon-only", quantity=7))
+    db.commit()
+    rec = recommendations(db, prices_df=_prices(("P9", 1000, 0)), today=TODAY)
+    row = _row(rec, "R9")
+    assert row["stock"] == 100
+    assert row["status"] != "skipped_no_stock"
+
+
 def test_prefer_raise_widens_deficit_zone(db):
     """DOC≈15.8: с противовесом — RAISE (зона дефицита шире), без — HOLD."""
     _seed(db, "PR1", "PPR1", stock=8, replenishable=False,

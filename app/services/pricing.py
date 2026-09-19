@@ -278,7 +278,10 @@ def _detail_metrics(db: Session, date_from: date, date_to: date) -> dict:
 
 
 def _latest_stock(db: Session, wb_mp: int) -> dict:
-    latest = db.scalar(select(func.max(models.Stock.date)))
+    latest = db.scalar(
+        select(func.max(models.Stock.date))
+        .where(models.Stock.marketplace_id == wb_mp)
+    )
     if latest is None:
         return {}
     q = (
