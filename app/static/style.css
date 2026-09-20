@@ -333,12 +333,25 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 
 /* ------------------------------- автопилот цен WB ------------------------------- */
 .pricing-settings {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  flex-wrap: wrap;
   border: 1px solid #eee;
   border-radius: 6px;
   padding: 6px 12px;
   margin-bottom: 12px;
   background: #fafafa;
-  max-width: 760px;
+}
+.pricing-col {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+.pricing-col-factors {
+  flex: 1 1 320px;
+}
+.pricing-col-params {
+  flex: 3 1 420px;
 }
 .p-group {
   border-bottom: 1px solid #eee;

@@ -3092,6 +3092,13 @@ async function buildPricingSettings() {
   );
   const openSet = openSaved || defaultOpen;
   const detailsNodes = [];
+  // Факторы (чекбоксы) — слева, остальные параметры (числа) — справа:
+  // это две функционально разные вещи, их удобнее видеть раздельно.
+  const left = document.createElement("div");
+  left.className = "pricing-col pricing-col-factors";
+  const right = document.createElement("div");
+  right.className = "pricing-col pricing-col-params";
+  const FACTORS_TITLE = "Какие параметры влияют на цену";
   for (const grp of PRICING_GROUPS) {
     const det = document.createElement("details");
     det.className = "p-group";
@@ -3110,8 +3117,10 @@ async function buildPricingSettings() {
     }
     det.appendChild(body);
     detailsNodes.push(det);
-    box.appendChild(det);
+    (grp.title === FACTORS_TITLE ? left : right).appendChild(det);
   }
+  box.appendChild(left);
+  box.appendChild(right);
   detailsNodes.forEach((d) =>
     d.addEventListener("toggle", () => saveOpenPricingGroups(detailsNodes))
   );
