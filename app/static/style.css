@@ -333,39 +333,50 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 
 /* ------------------------------- автопилот цен WB ------------------------------- */
 .pricing-settings {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 8px 14px;
   border: 1px solid #eee;
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 6px 12px;
   margin-bottom: 12px;
   background: #fafafa;
+  max-width: 760px;
 }
-.p-influence {
-  grid-column: 1 / -1;
-  border-bottom: 1px dashed #d9d9d9;
-  padding-bottom: 8px;
-  margin-bottom: 2px;
+.p-group {
+  border-bottom: 1px solid #eee;
 }
-.p-influence-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #3574b2;
-  margin-bottom: 6px;
+.p-group:last-child {
+  border-bottom: none;
 }
-.p-influence-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-}
-.p-inf {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #333;
+.p-group > summary.p-group-sum {
   cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #24507f;
+  user-select: none;
+}
+.p-group > summary.p-group-sum::-webkit-details-marker {
+  display: none;
+}
+.p-group > summary.p-group-sum::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: #8aa6c4;
+  font-size: 11px;
+  width: 10px;
+}
+.p-group[open] > summary.p-group-sum::before {
+  transform: rotate(90deg);
+}
+.p-group > summary.p-group-sum:hover {
+  color: #3574b2;
+}
+.p-group-body {
+  padding: 2px 0 8px;
 }
 .p-st {
   display: inline-flex;
@@ -379,6 +390,28 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
   align-items: center;
   gap: 4px;
   line-height: 1.4;
+}
+.pricing-settings .p-st {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 2px;
+}
+.pricing-settings .p-st + .p-st {
+  border-top: 1px solid #f1f1f1;
+}
+.pricing-settings .p-st input[type="number"] {
+  width: 92px;
+  text-align: right;
+  padding: 2px 6px;
+  border: 1px solid #d5d5d5;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.pricing-settings .p-st input[type="checkbox"] {
+  margin: 0;
 }
 .tip {
   position: relative;

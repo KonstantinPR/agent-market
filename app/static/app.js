@@ -2991,6 +2991,88 @@ function collectPricingSettings() {
   return s;
 }
 
+// Порядок и группы настроек: каждый параметр в своей строке,
+// группы сворачиваются (состояние запоминается в localStorage).
+const PRICING_GROUPS = [
+  { title: "Какие параметры влияют на цену", keys: [
+      "use_inventory", "use_sales", "use_orders", "use_margin",
+      "use_replenishable", "use_season", "use_quality", "use_returns",
+      "use_min_price",
+  ] },
+  { title: "Окно и скорость", keys: [
+      "window_days", "season_adj", "season_damp", "min_days_with_sales",
+      "fallback_window_days",
+  ] },
+  { title: "DOC и запасы", keys: [
+      "target_doc", "doc_low", "doc_high", "dead_stock_days",
+  ] },
+  { title: "Цены и шаги", keys: [
+      "floor_margin_pct", "max_discount_pct", "max_raise_pct", "max_drop_pct",
+      "min_delta_pp", "raise_pct_replenishable", "dead_min_discount",
+  ] },
+  { title: "Спрос и воронка", keys: [
+      "hot_conv_pct", "hot_backlog_factor", "low_conv_pct", "return_penalty",
+  ] },
+  { title: "Качество и рост", keys: [
+      "min_rating_for_raise", "min_conv_buyout_for_raise",
+      "max_cancel_ratio_for_raise", "max_return_rate_for_raise",
+      "strong_rating", "strong_buyout_conv", "strong_return_rate",
+      "strong_margin_pct", "raise_boost_pct",
+  ] },
+  { title: "Применение и противовес", keys: [
+      "cooldown_days", "prefer_raise", "prefer_raise_bias",
+  ] },
+];
+const PRICING_GROUPS_CLOSED_BY_DEFAULT = new Set(["Качество и рост"]);
+
+function loadOpenPricingGroups() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("pricing_open_groups") || "null");
+    if (Array.isArray(saved)) return new Set(saved);
+  } catch (e) { /* первый запуск */ }
+  return null;
+}
+
+function saveOpenPricingGroups(detailsNodes) {
+  const open = [];
+  detailsNodes.forEach((d) => { if (d.open) open.push(d.dataset.group); });
+  localStorage.setItem("pricing_open_groups", JSON.stringify(open));
+}
+
+function pricingParamRow(key, cur) {
+  const lbl = document.createElement("label");
+  lbl.className = "p-st";
+  const head = document.createElement("span");
+  head.className = "p-st-head";
+  head.appendChild(document.createTextNode(PRICING_LABELS[key] || key));
+  const hint = PRICING_HINTS[key];
+  if (hint) {
+    const tip = document.createElement("span");
+    tip.className = "tip";
+    tip.tabIndex = 0;
+    tip.setAttribute("role", "tooltip");
+    tip.appendChild(document.createTextNode("?"));
+    const tipText = document.createElement("span");
+    tipText.className = "tip-text";
+    tipText.textContent = hint;
+    tip.appendChild(tipText);
+    head.appendChild(tip);
+  }
+  lbl.appendChild(head);
+  const input = document.createElement("input");
+  input.dataset.key = key;
+  if (typeof cur === "boolean") {
+    input.type = "checkbox";
+    input.checked = !!cur;
+  } else {
+    input.type = "number";
+    input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias") ? "0.1" : "1";
+    input.value = cur;
+  }
+  lbl.appendChild(input);
+  return lbl;
+}
+
 async function buildPricingSettings() {
   if (!pricingDefaults) {
     try {
@@ -3004,86 +3086,35 @@ async function buildPricingSettings() {
   const saved = loadPricingSettings();
   const box = $("#pricingSettings");
   box.innerHTML = "";
-  const enumKeys = Object.keys(pricingDefaults);
-  // Панель «какие параметры влияют на цену» — в начале настроек;
-  // выключенный фактор не участвует в правилах.
-  const factorKeys = enumKeys.filter((k) => k.startsWith("use_"));
-  if (factorKeys.length) {
-    const panel = document.createElement("div");
-    panel.className = "p-influence";
-    const title = document.createElement("div");
-    title.className = "p-influence-title";
-    title.textContent = "Какие параметры влияют на цену:";
-    panel.appendChild(title);
-    const wrap = document.createElement("span");
-    wrap.className = "p-influence-wrap";
-    for (const key of factorKeys) {
+  const openSaved = loadOpenPricingGroups();
+  const defaultOpen = new Set(
+    PRICING_GROUPS.filter((g) => !PRICING_GROUPS_CLOSED_BY_DEFAULT.has(g.title)).map((g) => g.title)
+  );
+  const openSet = openSaved || defaultOpen;
+  const detailsNodes = [];
+  for (const grp of PRICING_GROUPS) {
+    const det = document.createElement("details");
+    det.className = "p-group";
+    det.dataset.group = grp.title;
+    if (openSet.has(grp.title)) det.open = true;
+    const sum = document.createElement("summary");
+    sum.className = "p-group-sum";
+    sum.appendChild(document.createTextNode(grp.title));
+    det.appendChild(sum);
+    const body = document.createElement("div");
+    body.className = "p-group-body";
+    for (const key of grp.keys) {
+      if (key === "show_zero") continue;
       const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
-      const lbl = document.createElement("label");
-      lbl.className = "p-inf";
-      const input = document.createElement("input");
-      input.dataset.key = key;
-      input.type = "checkbox";
-      input.checked = !!cur;
-      lbl.appendChild(input);
-      const head = document.createElement("span");
-      head.className = "p-st-head";
-      head.appendChild(document.createTextNode(PRICING_LABELS[key] || key));
-      const hint = PRICING_HINTS[key];
-      if (hint) {
-        const tip = document.createElement("span");
-        tip.className = "tip";
-        tip.tabIndex = 0;
-        tip.setAttribute("role", "tooltip");
-        tip.appendChild(document.createTextNode("?"));
-        const tipText = document.createElement("span");
-        tipText.className = "tip-text";
-        tipText.textContent = hint;
-        tip.appendChild(tipText);
-        head.appendChild(tip);
-      }
-      lbl.appendChild(head);
-      wrap.appendChild(lbl);
+      body.appendChild(pricingParamRow(key, cur));
     }
-    panel.appendChild(wrap);
-    box.appendChild(panel);
+    det.appendChild(body);
+    detailsNodes.push(det);
+    box.appendChild(det);
   }
-  for (const key of enumKeys) {
-    if (key === "show_zero") continue; // чекбокс в шапке вкладки, не в панели
-    if (key.startsWith("use_")) continue; // они — в панели факторов
-    const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
-    const lbl = document.createElement("label");
-    lbl.className = "p-st";
-    const head = document.createElement("span");
-    head.className = "p-st-head";
-    head.appendChild(document.createTextNode(PRICING_LABELS[key] || key));
-    const hint = PRICING_HINTS[key];
-    if (hint) {
-      const tip = document.createElement("span");
-      tip.className = "tip";
-      tip.tabIndex = 0;
-      tip.setAttribute("role", "tooltip");
-      tip.appendChild(document.createTextNode("?"));
-      const tipText = document.createElement("span");
-      tipText.className = "tip-text";
-      tipText.textContent = hint;
-      tip.appendChild(tipText);
-      head.appendChild(tip);
-    }
-    lbl.appendChild(head);
-    const input = document.createElement("input");
-    input.dataset.key = key;
-    if (typeof cur === "boolean") {
-      input.type = "checkbox";
-      input.checked = !!cur;
-    } else {
-      input.type = "number";
-      input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias") ? "0.1" : "1";
-      input.value = cur;
-    }
-    lbl.appendChild(input);
-    box.appendChild(lbl);
-  }
+  detailsNodes.forEach((d) =>
+    d.addEventListener("toggle", () => saveOpenPricingGroups(detailsNodes))
+  );
 }
 
 async function renderPricingHistory() {
