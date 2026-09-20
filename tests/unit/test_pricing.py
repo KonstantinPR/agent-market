@@ -879,3 +879,15 @@ def test_rating_reviews_does_not_limit_raise(db):
           funnel_extra={"feedback_rating": 4.9})
     rec = recommendations(db, prices_df=_prices(("PRR6", 1000, 20)), today=TODAY)
     assert _row(rec, "RR6")["action"] == "RAISE"
+
+
+def test_use_reviews_off_disables_rating_cap(db):
+    """use_reviews=False: рейтинг 5.0 больше не держит скидку — перезапас LOWER как обычно."""
+    _seed(db, "RR7", "PRR7", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
+          funnel_extra={"feedback_rating": 5.0})
+    rec = recommendations(db, prices_df=_prices(("PRR7", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False, "use_reviews": False})
+    row = _row(rec, "RR7")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)

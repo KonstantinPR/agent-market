@@ -68,6 +68,7 @@ PRICING_DEFAULTS = {
     "use_margin": True,
     "use_replenishable": True,
     "use_season": True,
+    "use_reviews": True,
     "use_quality": False,
     "use_returns": False,
     "use_min_price": False,
@@ -773,6 +774,7 @@ def _decide(f: dict, s: dict) -> dict:
     use_margin = bool(s.get("use_margin", True))
     use_repl = bool(s.get("use_replenishable", True))
     use_season = bool(s.get("use_season", True))
+    use_reviews = bool(s.get("use_reviews", True))
     use_quality = bool(s.get("use_quality", False))
     use_returns = bool(s.get("use_returns", False))
     use_minprice = bool(s.get("use_min_price", False))
@@ -785,7 +787,8 @@ def _decide(f: dict, s: dict) -> dict:
     doc_high = _num(s["doc_high"]) * (1 + bias)
     max_drop = _num(s["max_drop_pct"]) * (1 - bias)
     # Рейтинг по отзывам (ценный товар): ограничивает скидку при LOWER.
-    rating_scale = _rating_discount_scale(f.get("feedback_rating"), s.get("min_rating_reviews", 4.0))
+    rating_scale = (_rating_discount_scale(f.get("feedback_rating"), s.get("min_rating_reviews", 4.0))
+                    if use_reviews else 1.0)
 
     if use_inv and stock is None:
         base.update(action="SKIP", status="skipped_no_stock",
