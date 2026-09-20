@@ -342,6 +342,31 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
   margin-bottom: 12px;
   background: #fafafa;
 }
+.p-influence {
+  grid-column: 1 / -1;
+  border-bottom: 1px dashed #d9d9d9;
+  padding-bottom: 8px;
+  margin-bottom: 2px;
+}
+.p-influence-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3574b2;
+  margin-bottom: 6px;
+}
+.p-influence-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.p-inf {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #333;
+  cursor: pointer;
+}
 .p-st {
   display: inline-flex;
   flex-direction: column;

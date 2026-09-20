@@ -2758,6 +2758,15 @@ const PRICING_LABELS = {
   dead_min_discount: "Мёртвые: мин. скидка, %",
   prefer_raise: "Противовес: поднимать охотнее",
   prefer_raise_bias: "Противовес: сдвиг порогов",
+  use_inventory: "Остаток",
+  use_sales: "Продажи (кол-во)",
+  use_orders: "Заказы и конверсия",
+  use_margin: "Прибыль/убыток (маржа)",
+  use_replenishable: "Докупаемость",
+  use_season: "Сезонность/тренд",
+  use_quality: "Рейтинг и выкупы",
+  use_returns: "Возвраты/отмены",
+  use_min_price: "Мин. цена WB",
 };
 
 const PRICING_HINTS = {
@@ -2793,6 +2802,15 @@ const PRICING_HINTS = {
   dead_min_discount: "Порог остановки деления скидки пополам у мёртвых товаров (по умолчанию 1%): скидка 50→25→12→6→3→1 дольше не делится. Цена потихоньку «выздоравливает» и возвращается к базовой.",
   prefer_raise: "Противостояние автоскидкам WB: при прочих равных поднимать цену, а не опускать. Расширяет зону «дефицит→рост» и ужесточает зону «перезапас→снижение». Включено по умолчанию.",
   prefer_raise_bias: "Насколько сдвинуть границы DOC (доля от порогов): 0 = симметричные правила, 0.15 = дефицит ≤ 16 вместо 14, перезапас ≥ 69 вместо 60, шаг снижения ~ ×0.85.",
+  use_inventory: "Остаток и DOC: дефицит → повод поднять цену, перезапас → снизить. Выключено — остаток не влияет на решение.",
+  use_sales: "Скорость и динамика продаж: нет продаж → снижаем «мёртвый» запас. Выключено — продажи не влияют на решение.",
+  use_orders: "Воронка (заказы, просмотры, корзины): «горячий спрос» и низкая конверсия корзин. Выключено — воронка не влияет на решение.",
+  use_margin: "Выручка и маржа: порог безубыточности (пол цены). Выключено — нехватка данных о доходах не блокирует решение, но цена может уйти в убыток.",
+  use_replenishable: "Пополняемый ли товар: докупаемые поднимаем умеренно, последние единицы — смелее. Выключено — различие игнорируется.",
+  use_season: "Сезонность/тренд продаж: экстраполяция скорости и корректировка глубины снижения. Выключено — тренд не влияет.",
+  use_quality: "Рейтинг магазина, конверсия выкупа, отмены, возвраты из детализации. Выключено — повышение не блокируется качеством (по умолчанию выкл.).",
+  use_returns: "Защита от «мыльного» спроса: высокая доля возвратов/отмен → товар не трогаем. Выключено — защита не действует (по умолчанию выкл.).",
+  use_min_price: "Клампинг рекомендаций к минимальной витринной цене WB. Выключено — автопилот может предлагать цену ниже минимума, WB API её не пропустит (по умолчанию выкл.).",
 };
 
 const PRICING_ACTION = {
@@ -2986,8 +3004,53 @@ async function buildPricingSettings() {
   const saved = loadPricingSettings();
   const box = $("#pricingSettings");
   box.innerHTML = "";
-  for (const key of Object.keys(pricingDefaults)) {
+  const enumKeys = Object.keys(pricingDefaults);
+  // Панель «какие параметры влияют на цену» — в начале настроек;
+  // выключенный фактор не участвует в правилах.
+  const factorKeys = enumKeys.filter((k) => k.startsWith("use_"));
+  if (factorKeys.length) {
+    const panel = document.createElement("div");
+    panel.className = "p-influence";
+    const title = document.createElement("div");
+    title.className = "p-influence-title";
+    title.textContent = "Какие параметры влияют на цену:";
+    panel.appendChild(title);
+    const wrap = document.createElement("span");
+    wrap.className = "p-influence-wrap";
+    for (const key of factorKeys) {
+      const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
+      const lbl = document.createElement("label");
+      lbl.className = "p-inf";
+      const input = document.createElement("input");
+      input.dataset.key = key;
+      input.type = "checkbox";
+      input.checked = !!cur;
+      lbl.appendChild(input);
+      const head = document.createElement("span");
+      head.className = "p-st-head";
+      head.appendChild(document.createTextNode(PRICING_LABELS[key] || key));
+      const hint = PRICING_HINTS[key];
+      if (hint) {
+        const tip = document.createElement("span");
+        tip.className = "tip";
+        tip.tabIndex = 0;
+        tip.setAttribute("role", "tooltip");
+        tip.appendChild(document.createTextNode("?"));
+        const tipText = document.createElement("span");
+        tipText.className = "tip-text";
+        tipText.textContent = hint;
+        tip.appendChild(tipText);
+        head.appendChild(tip);
+      }
+      lbl.appendChild(head);
+      wrap.appendChild(lbl);
+    }
+    panel.appendChild(wrap);
+    box.appendChild(panel);
+  }
+  for (const key of enumKeys) {
     if (key === "show_zero") continue; // чекбокс в шапке вкладки, не в панели
+    if (key.startsWith("use_")) continue; // они — в панели факторов
     const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
     const lbl = document.createElement("label");
     lbl.className = "p-st";
@@ -3099,6 +3162,8 @@ async function renderPricing(apply) {
     summary += ", решений: " + fmt(actionable);
     const hiddenDead = Number(data.hidden_dead || 0);
     if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
+    const nonWb = Number(data.non_wb || 0);
+    if (nonWb > 0) summary += ", артикулов не из WB-карточек: " + fmt(nonWb) + " (исключены)";
     if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
     if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
     if (data.as_of) summary += " · на " + data.as_of;

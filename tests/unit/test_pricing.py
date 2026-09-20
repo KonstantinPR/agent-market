@@ -125,7 +125,8 @@ def test_r2_no_unit_economics_skips(db):
 def test_r3_high_returns_skips(db):
     _seed(db, "R3", "P3", stock=50,
           sales=[(3, 6, 2), *_fallback_sales()], funnel=(300, 5, 3, 2, 0))
-    rec = recommendations(db, prices_df=_prices(("P3", 1000, 0)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("P3", 1000, 0)), today=TODAY,
+                          settings={"use_returns": True})
     assert _row(rec, "R3")["status"] == "skipped_returns"
 
 
@@ -288,7 +289,8 @@ def test_t14_low_rating_blocks_raise(db):
     _seed(db, "Q1", "PQ1", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
           funnel_extra={"product_rating": 3.5})
-    rec = recommendations(db, prices_df=_prices(("PQ1", 1000, 20)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PQ1", 1000, 20)), today=TODAY,
+                          settings={"use_quality": True})
     row = _row(rec, "Q1")
     assert row["action"] == "SKIP"
     assert row["status"] == "skipped_quality"
@@ -299,7 +301,8 @@ def test_t14_low_buyout_conv_blocks_raise(db):
     _seed(db, "Q2", "PQ2", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
           funnel_extra={"product_rating": 4.8, "conv_buyout_percent": 20.0})
-    rec = recommendations(db, prices_df=_prices(("PQ2", 1000, 20)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PQ2", 1000, 20)), today=TODAY,
+                          settings={"use_quality": True})
     row = _row(rec, "Q2")
     assert row["status"] == "skipped_quality"
     assert "выкупа" in row["reason"]
@@ -309,7 +312,8 @@ def test_t14_high_cancel_ratio_blocks_raise(db):
     _seed(db, "Q3", "PQ3", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 3, 900),
           funnel_extra={"product_rating": 4.8})
-    rec = recommendations(db, prices_df=_prices(("PQ3", 1000, 20)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PQ3", 1000, 20)), today=TODAY,
+                          settings={"use_quality": True})
     row = _row(rec, "Q3")
     assert row["status"] == "skipped_quality"
     assert "отмены" in row["reason"]
@@ -328,7 +332,8 @@ def test_t14_detail_return_rate_blocks_raise(db):
                            quantity=4, retail_amount=2000.0, for_pay=1600.0),
     ])
     db.commit()
-    rec = recommendations(db, prices_df=_prices(("PQ4", 1000, 20)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PQ4", 1000, 20)), today=TODAY,
+                          settings={"use_quality": True})
     row = _row(rec, "Q4")
     assert row["status"] == "skipped_quality"
     assert "возвраты" in row["reason"]
@@ -338,7 +343,8 @@ def test_t14_strong_signals_apply_uplift(db):
     _seed(db, "B", "PB", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
           funnel_extra={"product_rating": 4.9, "conv_buyout_percent": 85.0})
-    rec = recommendations(db, prices_df=_prices(("PB", 1000, 20)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PB", 1000, 20)), today=TODAY,
+                          settings={"use_quality": True})
     row = _row(rec, "B")
     assert row["action"] == "RAISE"
     # +12.5% (10% × uplift 1.25): 800 → 900, скидка 20 → 10
@@ -349,7 +355,8 @@ def test_t14_strong_signals_apply_uplift(db):
 def test_t14_no_uplift_without_strong_signals(db):
     _seed(db, "B2", "PB1", stock=5, replenishable=True,
           sales=[(2, 4, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900))
-    rec = recommendations(db, prices_df=_prices(("PB1", 1000, 20)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PB1", 1000, 20)), today=TODAY,
+                          settings={"use_quality": True})
     row = _row(rec, "B2")
     assert row["action"] == "RAISE"
     assert row["target_discount"] == pytest.approx(12.0, abs=0.5)
@@ -359,7 +366,8 @@ def test_t14_low_rating_does_not_block_lower(db):
     _seed(db, "Q5", "PQ5", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
           funnel_extra={"product_rating": 2.5})
-    rec = recommendations(db, prices_df=_prices(("PQ5", 2000, 10)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PQ5", 2000, 10)), today=TODAY,
+                          settings={"use_quality": True})
     assert _row(rec, "Q5")["action"] == "LOWER"
 
 
@@ -367,7 +375,8 @@ def test_t14_unknown_quality_does_not_block_raise(db):
     """Нет данных о качестве (рейтинг/выкупы = 0) — RAISE не блокируется."""
     _seed(db, "Q6", "PQ6", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900))
-    rec = recommendations(db, prices_df=_prices(("PQ6", 1000, 20)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PQ6", 1000, 20)), today=TODAY,
+                          settings={"use_quality": True})
     assert _row(rec, "Q6")["action"] == "RAISE"
 
 
@@ -379,7 +388,7 @@ def test_t15_min_price_clamps_overstock_lower(db):
     _seed(db, "M1", "PM1", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("PM1", 2000, 10)), today=TODAY,
-                          min_prices={"PM1": 1600})
+                          min_prices={"PM1": 1600}, settings={"use_min_price": True})
     row = _row(rec, "M1")
     assert row["action"] == "LOWER"
     assert row["min_price"] == pytest.approx(1600)
@@ -392,7 +401,7 @@ def test_t15_min_price_above_current_blocks_lower(db):
     _seed(db, "M2", "PM2", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("PM2", 2000, 10)), today=TODAY,
-                          min_prices={"PM2": 1900})
+                          min_prices={"PM2": 1900}, settings={"use_min_price": True})
     row = _row(rec, "M2")
     assert row["action"] == "HOLD"
     assert "минимальная цена" in row["reason"]
@@ -401,7 +410,7 @@ def test_t15_min_price_above_current_blocks_lower(db):
 def test_t15_min_price_clamps_dead_stock_lower(db):
     _seed(db, "M3", "PM3", stock=100, sales=[*_fallback_sales()])
     rec = recommendations(db, prices_df=_prices(("PM3", 1000, 0)), today=TODAY,
-                          min_prices={"PM3": 900})
+                          min_prices={"PM3": 900}, settings={"use_min_price": True})
     row = _row(rec, "M3")
     assert row["action"] == "LOWER"
     assert row["target_vis"] == pytest.approx(900.0, abs=1)
@@ -685,3 +694,111 @@ def test_prefer_raise_softens_overstock_drop(db):
     assert row["action"] == "LOWER"
     assert row["target_vis"] == pytest.approx(1570.5, abs=1)
     assert row["target_discount"] == pytest.approx((1 - 1570.5 / 2000) * 100, abs=0.5)
+
+
+# ------------------------------------------------------ T-24: факторы решения + базис WB-карточек
+
+
+def test_wb_basis_excludes_non_wb_articles(db):
+    """Автопилот работает только с WB-карточками: продукт без nm-карты (Ozon/не-WB)
+    не попадает в строки, а считается в non_wb."""
+    _seed(db, "W1", "PW1", stock=10, sales=[(2, 1, 0), *_fallback_sales()])
+    wb = db.execute(select(models.Marketplace.id).where(models.Marketplace.code == "wb")).scalar_one()
+    db.add(models.Product(article="OZ-ONLY", name="Не из WB-карточек",
+                          net_cost=1, replenishable=False))
+    db.add(models.Sale(
+        marketplace_id=wb, date=TODAY - timedelta(days=2), article="OZ-ONLY", source="v5",
+        quantity=5, returns_qty=0,
+        revenue=2500.0, commission=375.0, logistics=200.0, storage=50.0,
+        services=25.0, income=1850.0,
+    ))
+    db.commit()
+    rec = recommendations(db, prices_df=_prices(("PW1", 1000, 0)), today=TODAY)
+    assert all(r["article"] != "OZ-ONLY" for r in rec["rows"])
+    assert rec["non_wb"] == 1
+    assert any(r["article"] == "W1" for r in rec["rows"])
+
+
+def test_use_inventory_off_ignores_doc(db):
+    """use_inventory=False: перезапас не снижается — остаток не влияет."""
+    _seed(db, "I1", "PI1", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PI1", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False, "use_inventory": False})
+    row = _row(rec, "I1")
+    assert row["action"] == "HOLD"
+    assert "остаток не влияет" in row["reason"]
+
+
+def test_use_sales_off_blocks_dead_stock_lowering(db):
+    """use_sales=False: мёртвый запас не снижается (продажи не влияют)."""
+    _seed(db, "S1", "PS1", stock=100, sales=[*_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PS1", 1000, 0)), today=TODAY,
+                          settings={"use_sales": False})
+    assert _row(rec, "S1")["action"] == "HOLD"
+
+
+def test_use_orders_off_disables_hot_raise(db):
+    """use_orders=False: нет «горячего спроса» — докупаемый дефицит не поднимаем."""
+    _seed(db, "O1", "PO1", stock=2, replenishable=True,
+          sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 10, 1, 0, 900))
+    rec = recommendations(db, prices_df=_prices(("PO1", 1000, 10)), today=TODAY,
+                          settings={"use_orders": False})
+    assert _row(rec, "O1")["action"] != "RAISE"
+
+
+def test_use_margin_off_relaxes_unit_econ_requirement(db):
+    """use_margin=False: нехватка unit-экономики не блокирует решение."""
+    _seed(db, "MU1", "PMU1", stock=10, sales=[(5, 2, 3)])
+    rec_on = recommendations(db, prices_df=_prices(("PMU1", 1000, 0)), today=TODAY)
+    assert _row(rec_on, "MU1")["status"] == "skipped_no_ratio"
+    rec_off = recommendations(db, prices_df=_prices(("PMU1", 1000, 0)), today=TODAY,
+                              settings={"use_margin": False})
+    assert _row(rec_off, "MU1")["status"] != "skipped_no_ratio"
+
+
+def test_use_replenishable_off_treats_as_last_units(db):
+    """use_replenishable=False: докупаемый дефицит поднимаем как «последние единицы»."""
+    _seed(db, "RPL1", "PRPL1", stock=2, replenishable=True,
+          sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 900))
+    rec = recommendations(db, prices_df=_prices(("PRPL1", 1000, 10)), today=TODAY,
+                          settings={"use_replenishable": False})
+    assert _row(rec, "RPL1")["action"] == "RAISE"
+
+
+def test_use_quality_off_default_allows_raise_with_bad_rating(db):
+    """use_quality=False (дефолт): низкий рейтинг не блокирует повышение."""
+    _seed(db, "Q0", "PQ0", stock=2, replenishable=False,
+          sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()],
+          funnel=(100, 1, 1, 0, 900), funnel_extra={"product_rating": 1.0})
+    rec = recommendations(db, prices_df=_prices(("PQ0", 1000, 10)), today=TODAY)
+    assert _row(rec, "Q0")["action"] == "RAISE"
+
+
+def test_use_min_price_off_ignores_min_price_clamp(db):
+    """use_min_price=False: рекомендация ниже минимальной цены WB не клампится."""
+    _seed(db, "MP0", "PMP0", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PMP0", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False},
+                          min_prices={"PMP0": 1900})
+    row = _row(rec, "MP0")
+    assert row["action"] == "LOWER"
+    assert row["target_vis"] < 1900 - 1  # без клампа к мин. цене
+
+
+def test_use_season_off_removes_trend_from_decision(db):
+    """use_season=False: скорость без экстраполяции тренда и без пометки в причине."""
+    _seed(db, "SE1", "PSE1", stock=2000,
+          sales=[(5, 1, 0), (14, 10, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec_on = recommendations(db, prices_df=_prices(("PSE1", 2000, 10)), today=TODAY,
+                             settings={"prefer_raise": False})
+    rec_off = recommendations(db, prices_df=_prices(("PSE1", 2000, 10)), today=TODAY,
+                              settings={"prefer_raise": False, "use_season": False})
+    on_row = _row(rec_on, "SE1")
+    off_row = _row(rec_off, "SE1")
+    assert on_row["action"] == off_row["action"] == "LOWER"
+    assert "тренд" in on_row["reason"]           # сезонность учитывается
+    assert "тренд" not in off_row["reason"]      # выключенный тренд не влияет
+    assert off_row["v_proj"] == pytest.approx(off_row["velocity"], abs=1e-9)
+    assert on_row["v_proj"] < off_row["v_proj"]  # экстраполяция смягчает спад

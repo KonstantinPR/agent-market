@@ -56,6 +56,17 @@ PRICING_DEFAULTS = {
     "dead_min_discount": 1.0,
     "prefer_raise": True,
     "prefer_raise_bias": 0.15,
+    # T-24: какие параметры влияют на решение (панель-чекбоксы в UI);
+    # выключенный фактор не меняет цену на основании своего сигнала.
+    "use_inventory": True,
+    "use_sales": True,
+    "use_orders": True,
+    "use_margin": True,
+    "use_replenishable": True,
+    "use_season": True,
+    "use_quality": False,
+    "use_returns": False,
+    "use_min_price": False,
 }
 
 
@@ -424,6 +435,13 @@ def recommendations(
     prices = _normalize_prices(prices_df)
     min_px = {str(k): _num(v) for k, v in (min_prices or {}).items()}
 
+    # Базас автопилота — только WB-карточки: article -> nmID. Товары без
+    # nm-карты (каталог Ozon/не-WB) из расчёта исключаются полностью.
+    art_to_nm: dict = {}
+    for nm, art in nm_map.items():
+        if art not in art_to_nm:
+            art_to_nm[art] = nm
+
     products = {}
     for r in db.execute(select(
             models.Product.article, models.Product.name,
@@ -456,15 +474,21 @@ def recommendations(
     has_life |= {a for a, v in stock.items() if _num(v) > 0}
 
     show_zero = bool(s["show_zero"])
+    use_season = bool(s.get("use_season", True))
+    use_sales = bool(s.get("use_sales", True))
     hidden_dead = 0
+    non_wb = 0
     out_rows = []
     for art, prod in products.items():
+        nm_id = art_to_nm.get(art)
+        if nm_id is None:
+            non_wb += 1
+            continue
         if art not in has_life and not show_zero:
             hidden_dead += 1
             continue
-        nm_id = next((nm for nm, a in nm_map.items() if a == art), None)
-        if nm_id is None or nm_id not in prices:
-            out_rows.append(_row_skip(art, prod, None, "нет карточки/цен WB (нет nmID в списке цен)"))
+        if nm_id not in prices:
+            out_rows.append(_row_skip(art, prod, nm_id, "нет карточки/цен WB (нет nmID в списке цен)"))
             continue
         pr = prices[nm_id]
         price = pr["price"]
@@ -479,7 +503,11 @@ def recommendations(
         s_prev = _num(art_prev["qty"].sum()) if not art_prev.empty else 0.0
         v_now = s_now / cover
         v_prev = s_prev / cover
-        v_proj = project_velocity(v_now, v_prev, bool(s["season_adj"]), _num(s["season_damp"]))
+        v_proj = project_velocity(v_now, v_prev,
+                                  use_season and bool(s["season_adj"]),
+                                  _num(s["season_damp"]))
+        if not use_sales:
+            v_proj = 0.0
 
         ue = _unit_economics(art_fb)
         fl = funnel.get(art, {})
@@ -549,6 +577,7 @@ def recommendations(
         "total": len(out_rows),
         "actionable": sum(1 for r in out_rows if r["action"] in ("RAISE", "LOWER", "HALVE")),
         "hidden_dead": hidden_dead,
+        "non_wb": non_wb,
         "as_of": str(today),
         "date_from": str(now_from),
         "date_to": str(now_to),
@@ -715,6 +744,18 @@ def _decide(f: dict, s: dict) -> dict:
     base = _base_row(f)
     base["eff"] = eff
 
+    # T-24: включаемые пользователем факторы решения (панель-чекбоксы в UI).
+    # Выключенный фактор не участвует в правилах; его данные остаются в колонках.
+    use_inv = bool(s.get("use_inventory", True))
+    use_sales = bool(s.get("use_sales", True))
+    use_orders = bool(s.get("use_orders", True))
+    use_margin = bool(s.get("use_margin", True))
+    use_repl = bool(s.get("use_replenishable", True))
+    use_season = bool(s.get("use_season", True))
+    use_quality = bool(s.get("use_quality", False))
+    use_returns = bool(s.get("use_returns", False))
+    use_minprice = bool(s.get("use_min_price", False))
+
     # Предпочтение «поднимать, а не опускать» (противовес автоскидкам WB):
     # зона дефицита шире (док_ло выше), зона перезапаса уже (док_хай выше),
     # шаг снижения мягче.
@@ -723,49 +764,55 @@ def _decide(f: dict, s: dict) -> dict:
     doc_high = _num(s["doc_high"]) * (1 + bias)
     max_drop = _num(s["max_drop_pct"]) * (1 - bias)
 
-    if stock is None:
+    if use_inv and stock is None:
         base.update(action="SKIP", status="skipped_no_stock",
                     reason="нет данных об остатках (вытяните WB Остатки)")
         return base
-    if stock <= 0:
+    if use_inv and stock <= 0:
         base.update(action="HOLD", status="hold", reason="распродан (остаток 0)")
         return base
-    if f["comm_rate"] is None or floor is None:
-        base.update(action="SKIP", status="skipped_no_ratio",
-                    reason="нет unit-экономики (нет продаж/доходов — не можем гарантировать break-even)")
-        return base
 
-    max_disc_item = min(_num(s["max_discount_pct"]), (1 - floor / price) * 100 if price > 0 else 0)
+    if use_margin:
+        if f["comm_rate"] is None or floor is None:
+            base.update(action="SKIP", status="skipped_no_ratio",
+                        reason="нет unit-экономики (нет продаж/доходов — не можем гарантировать break-even)")
+            return base
+        max_disc_item = min(_num(s["max_discount_pct"]), (1 - floor / price) * 100 if price > 0 else 0)
+    else:
+        # без поля безубыточности ниже опускаться нельзя лишь до потолка max_discount_pct
+        max_disc_item = _num(s["max_discount_pct"])
     base["max_discount_item"] = round(max_disc_item, 1)
 
-    doc = stock / v_proj if v_proj > 0 else float("inf")
+    doc = stock / v_proj if v_proj > 0 and stock is not None else float("inf")
     base["doc"] = round(doc, 1) if doc != float("inf") else None
     conv = (f["orders"] / f["views"] * 100) if f["views"] > 0 else 0.0
     base["conv_pct"] = round(conv, 2)
     backlog = max(f["adds"] - f["orders"], 0)
     base["backlog"] = backlog
 
-    # R3: пена возвратов/отмен
-    if f["returns_ratio"] > _num(s["return_penalty"]):
+    # R3: пена возвратов/отмен (фактор «Возвраты/отмены», по умолчанию выкл.)
+    if use_returns and f["returns_ratio"] > _num(s["return_penalty"]):
         base.update(action="SKIP", status="skipped_returns",
                     reason=f"высокая доля возвратов/отмен ({f['returns_ratio']:.0%}) — спрос мыльный, не трогаем")
         return base
 
-    hot_backlog = f["adds"] > 0 and f["adds"] >= _num(s["hot_backlog_factor"]) * max(f["orders"], 0)
+    hot_backlog = use_orders and f["adds"] > 0 and f["adds"] >= _num(s["hot_backlog_factor"]) * max(f["orders"], 0)
 
-    # R9: много в корзинах, но не покупают
-    if hot_backlog and conv < _num(s["low_conv_pct"]):
+    # R9: много в корзинах, но не покупают (фактор «Заказы и конверсия»)
+    if use_orders and hot_backlog and conv < _num(s["low_conv_pct"]):
         base.update(action="SKIP", status="skipped_carts",
                     reason="много в корзинах, но конверсия низкая — цена тормозит сделку, решить вне автопилота")
         return base
 
-    hot_demand = conv >= _num(s["hot_conv_pct"]) or hot_backlog
+    hot_demand = use_orders and (conv >= _num(s["hot_conv_pct"]) or hot_backlog)
+    # докупаемость участвует, только пока включён фактор
+    repl = use_repl and f["replenishable"]
 
-    # R4: мёртвый запас
-    if v_proj <= 0:
+    # R4: мёртвый запас (фактор «Продажи»)
+    if use_sales and v_proj <= 0:
         if f["last_sale_days_ago"] >= int(s["dead_stock_days"]):
-            min_price = f.get("min_price") or 0.0
-            target_vis = max(floor, eff * (1 - max_drop / 100), min_price)
+            min_price = (f.get("min_price") or 0.0) if use_minprice else 0.0
+            target_vis = max(_num(floor), eff * (1 - max_drop / 100), min_price)
             target_vis = min(target_vis, cur_vis)
             target_vis = max(target_vis, price * (1 - max_disc_item / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
@@ -776,7 +823,7 @@ def _decide(f: dict, s: dict) -> dict:
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))
             else:
-                if min_price > 0 and target_vis >= cur_vis:
+                if use_minprice and min_price > 0 and target_vis >= cur_vis:
                     base.update(action="HOLD", status="hold",
                                 reason=f"минимальная цена WB ({min_price:.0f} ₽) не позволяет опустить цену")
                 else:
@@ -785,14 +832,23 @@ def _decide(f: dict, s: dict) -> dict:
         base.update(action="HOLD", status="hold", reason="продаж нет (менее порога) — не трогаем")
         return base
 
+    if not use_sales:
+        base.update(action="HOLD", status="hold",
+                    reason="продажи не влияют (фактор выключен) — нет сигнала для изменения цены")
+        return base
+    if not use_inv:
+        base.update(action="HOLD", status="hold",
+                    reason="остаток не влияет (фактор выключен) — нет сигнала для изменения цены")
+        return base
+
     if doc < doc_low:
         if hot_demand:
-            gate = _raise_quality_gate(f, s)
+            gate = _raise_quality_gate(f, s) if use_quality else None
             if gate:
                 base.update(action="SKIP", status="skipped_quality", reason=gate)
                 return base
-            boost = _raise_boost(f, s)
-            raise_pct = _num(s["raise_pct_replenishable"]) * boost if f["replenishable"] else _num(s["max_raise_pct"]) * boost
+            boost = _raise_boost(f, s) if use_quality else 1.0
+            raise_pct = (_num(s["raise_pct_replenishable"]) if repl else _num(s["max_raise_pct"])) * boost
             target_vis = min(price, cur_vis * (1 + raise_pct / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
             if cur_disc - new_disc >= _num(s["min_delta_pp"]):
@@ -806,12 +862,12 @@ def _decide(f: dict, s: dict) -> dict:
             else:
                 base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
             return base
-        if not f["replenishable"]:
-            gate = _raise_quality_gate(f, s)
+        if not repl:
+            gate = _raise_quality_gate(f, s) if use_quality else None
             if gate:
                 base.update(action="SKIP", status="skipped_quality", reason=gate)
                 return base
-            boost = _raise_boost(f, s)
+            boost = _raise_boost(f, s) if use_quality else 1.0
             target_vis = min(price, cur_vis * (1 + _num(s["max_raise_pct"]) * boost / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
             if cur_disc - new_disc >= _num(s["min_delta_pp"]):
@@ -830,21 +886,22 @@ def _decide(f: dict, s: dict) -> dict:
 
     if doc >= doc_high:
         k = 0.5
-        if conv < 1.0:
+        if use_orders and conv < 1.0:
             k *= 0.8
-        if f["trend"] < 1.0:
-            k *= 0.8
-        elif f["trend"] > 1.0:
-            k *= 1.2
+        if use_season:
+            if f["trend"] < 1.0:
+                k *= 0.8
+            elif f["trend"] > 1.0:
+                k *= 1.2
         k = _clamp(k, 0.2, 1.2)
         factor = max(1 - max_drop / 100, (_num(s["target_doc"]) / doc) ** k)
-        min_price = f.get("min_price") or 0.0
-        target_vis = max(floor, eff * factor, price * (1 - max_disc_item / 100), min_price)
+        min_price = (f.get("min_price") or 0.0) if use_minprice else 0.0
+        target_vis = max(_num(floor), eff * factor, price * (1 - max_disc_item / 100), min_price)
         target_vis = min(target_vis, cur_vis)
         new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
         if new_disc - cur_disc >= _num(s["min_delta_pp"]):
             trend_note = ""
-            if bool(s["season_adj"]) and f["trend"] != 1.0:
+            if use_season and bool(s["season_adj"]) and f["trend"] != 1.0:
                 trend_note = " · тренд " + ("растёт ↓" if f["trend"] > 1 else "падает ↑")
             base.update(action="LOWER", status="suggested",
                         reason=f"перезапас (DOC={doc:.0f} дн.), целевые {_num(s['target_doc']):.0f} дн." + trend_note,
@@ -852,7 +909,7 @@ def _decide(f: dict, s: dict) -> dict:
                         target_vis=round(target_vis, 2),
                         margin_pct_at_target=_margin_pct(target_vis, f))
         else:
-            if min_price > 0 and target_vis >= cur_vis:
+            if use_minprice and min_price > 0 and target_vis >= cur_vis:
                 base.update(action="HOLD", status="hold",
                             reason=f"минимальная цена WB ({min_price:.0f} ₽) не позволяет опустить цену")
             else:
