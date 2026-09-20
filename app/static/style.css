@@ -348,12 +348,12 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
   padding: 6px 12px 4px;
 }
 .pricing-col-1 {
-  flex: 2 1 0;
-  min-width: 400px;
-}
-.pricing-col-2 {
   flex: 1 1 0;
   min-width: 280px;
+}
+.pricing-col-2 {
+  flex: 2 1 0;
+  min-width: 400px;
 }
 .p-group {
   border-bottom: 1px solid #eee;

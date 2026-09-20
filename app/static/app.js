@@ -919,7 +919,7 @@ async function renderProducts() {
       ? "Товаров: " + fmt(data.count)
       : "Каталог пуст — загрузите товары ниже или нажмите «Обновить базу» в шапке";
   }
-  pagedTable(box, colViewHeaders("products", productsVisibleHeaders()), data.rows || [], null, "#productsTablePager");
+  pagedTable(box, colViewHeaders("products", productsVisibleHeaders()), data.rows || [], data.totals || null, "#productsTablePager");
   initReplenishToggle();
 }
 
@@ -3092,7 +3092,7 @@ async function buildPricingSettings() {
   );
   const openSet = openSaved || defaultOpen;
   const detailsNodes = [];
-  // Две таблицы-блока: параметры (слева, 2/3) | факторы (справа, 1/3).
+  // Две таблицы-блока: параметры (слева, 1/3) | факторы (справа, 2/3).
   // Колонки создаём строго по данным — никаких лишних пустых контейнеров.
   const maxCol = Math.max(...PRICING_GROUPS.map((g) => g.col || 1));
   const cols = [];
