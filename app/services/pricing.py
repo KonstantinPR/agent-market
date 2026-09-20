@@ -39,6 +39,10 @@ PRICING_DEFAULTS = {
     "dead_stock_days": 7,
     "low_conv_pct": 0.7,
     "fallback_window_days": 90,
+    # «Рейтинг по отзывам» из воронки продаж (1..5): чем выше рейтинг — тем
+    # меньше скидку мы даём при снижении (ценный товар). От 0 = нет данных
+    # ограничений нет.
+    "min_rating_reviews": 4.0,
     "raise_pct_replenishable": 10.0,
     # T-14: quality gates for RAISE
     "min_rating_for_raise": 4.2,
@@ -733,6 +737,23 @@ def _decide_dead(f: dict, s: dict) -> dict:
     return base
 
 
+def _rating_discount_scale(fb_rating, threshold) -> float:
+    """Множитель снижения скидки по рейтингу по отзывам (воронка, 1..5).
+
+    Чем выше рейтинг — тем меньше скидка при LOWER (товар ценный).
+    0/нет данных или рейтинг ≤ порога → 1.0 (без ограничений),
+    5.0 → 0.0 (скидку не увеличиваем вовсе), между порогом и 5 — линейно.
+    """
+    r = _num(fb_rating)
+    th = _num(threshold)
+    if r <= 0 or r <= th:
+        return 1.0
+    if r >= 5.0:
+        return 0.0
+    denom = 5.0 - th
+    return (5.0 - r) / denom if denom > 0 else 0.0
+
+
 def _decide(f: dict, s: dict) -> dict:
     price = f["price"]
     cur_disc = f["current_discount"]
@@ -763,6 +784,8 @@ def _decide(f: dict, s: dict) -> dict:
     doc_low = _num(s["doc_low"]) * (1 + bias)
     doc_high = _num(s["doc_high"]) * (1 + bias)
     max_drop = _num(s["max_drop_pct"]) * (1 - bias)
+    # Рейтинг по отзывам (ценный товар): ограничивает скидку при LOWER.
+    rating_scale = _rating_discount_scale(f.get("feedback_rating"), s.get("min_rating_reviews", 4.0))
 
     if use_inv and stock is None:
         base.update(action="SKIP", status="skipped_no_stock",
@@ -811,8 +834,13 @@ def _decide(f: dict, s: dict) -> dict:
     # R4: мёртвый запас (фактор «Продажи»)
     if use_sales and v_proj <= 0:
         if f["last_sale_days_ago"] >= int(s["dead_stock_days"]):
+            if rating_scale <= 0.01:
+                base.update(action="HOLD", status="hold",
+                            reason=f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
+                                   f"— скидку не увеличиваем")
+                return base
             min_price = (f.get("min_price") or 0.0) if use_minprice else 0.0
-            target_vis = max(_num(floor), eff * (1 - max_drop / 100), min_price)
+            target_vis = max(_num(floor), eff * (1 - max_drop * rating_scale / 100), min_price)
             target_vis = min(target_vis, cur_vis)
             target_vis = max(target_vis, price * (1 - max_disc_item / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
@@ -885,6 +913,11 @@ def _decide(f: dict, s: dict) -> dict:
         return base
 
     if doc >= doc_high:
+        if rating_scale <= 0.01:
+            base.update(action="HOLD", status="hold",
+                        reason=f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
+                               f"— скидку не увеличиваем")
+            return base
         k = 0.5
         if use_orders and conv < 1.0:
             k *= 0.8
@@ -894,7 +927,7 @@ def _decide(f: dict, s: dict) -> dict:
             elif f["trend"] > 1.0:
                 k *= 1.2
         k = _clamp(k, 0.2, 1.2)
-        factor = max(1 - max_drop / 100, (_num(s["target_doc"]) / doc) ** k)
+        factor = max(1 - max_drop * rating_scale / 100, (_num(s["target_doc"]) / doc) ** k)
         min_price = (f.get("min_price") or 0.0) if use_minprice else 0.0
         target_vis = max(_num(floor), eff * factor, price * (1 - max_disc_item / 100), min_price)
         target_vis = min(target_vis, cur_vis)

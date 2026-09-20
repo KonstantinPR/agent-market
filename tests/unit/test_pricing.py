@@ -802,3 +802,80 @@ def test_use_season_off_removes_trend_from_decision(db):
     assert "тренд" not in off_row["reason"]      # выключенный тренд не влияет
     assert off_row["v_proj"] == pytest.approx(off_row["velocity"], abs=1e-9)
     assert on_row["v_proj"] < off_row["v_proj"]  # экстраполяция смягчает спад
+
+
+# ----------------------------------- Рейтинг по отзывам (ценный товар не раздают дёшево)
+
+
+def test_rating_reviews_high_blocks_overstock_lower(db):
+    """Рейтинг по отзывам 5.0 → ценному товару скидку не увеличиваем даже в перезапасе."""
+    _seed(db, "RR1", "PRR1", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
+          funnel_extra={"feedback_rating": 5.0})
+    rec = recommendations(db, prices_df=_prices(("PRR1", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "RR1")
+    assert row["action"] == "HOLD"
+    assert "ценный товар" in row["reason"]
+
+
+def test_rating_reviews_mid_softens_overstock_drop(db):
+    """4.5 (≥ порог 4.0) → LOWER разрешён, но скидка меньше, чем без рейтинга."""
+    _seed(db, "RR2", "PRR2", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
+          funnel_extra={"feedback_rating": 4.5})
+    rec = recommendations(db, prices_df=_prices(("PRR2", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "RR2")
+    assert row["action"] == "LOWER"
+    rated_disc = row["target_discount"]
+
+    _seed(db, "RR2B", "PRR2B", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec_base = recommendations(db, prices_df=_prices(("PRR2B", 2000, 10)), today=TODAY,
+                               settings={"prefer_raise": False})
+    base_disc = _row(rec_base, "RR2B")["target_discount"]
+    assert rated_disc < base_disc
+
+
+def test_rating_reviews_below_threshold_no_effect(db):
+    """3.8 < порог 4.0 → поведение как у R8 (без ограничений)."""
+    _seed(db, "RR3", "PRR3", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
+          funnel_extra={"feedback_rating": 3.8})
+    rec = recommendations(db, prices_df=_prices(("PRR3", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "RR3")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
+
+
+def test_rating_reviews_unknown_no_effect(db):
+    """Нет данных о рейтинге (0) → ограничений нет."""
+    _seed(db, "RR4", "PRR4", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PRR4", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "RR4")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
+
+
+def test_rating_reviews_high_blocks_dead_stock_lower(db):
+    """Мёртвый товар, но рейтинг по отзывам 5.0 → скидку не делим."""
+    _seed(db, "RR5", "PRR5", stock=100, sales=[*_fallback_sales()],
+          funnel_extra={"feedback_rating": 5.0})
+    rec = recommendations(db, prices_df=_prices(("PRR5", 1000, 0)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "RR5")
+    assert row["action"] == "HOLD"
+    assert "ценный товар" in row["reason"]
+
+
+def test_rating_reviews_does_not_limit_raise(db):
+    """Ценность по рейтингу не мешает RAISE при дефиците."""
+    _seed(db, "RR6", "PRR6", stock=5, replenishable=False,
+          sales=[(2, 6, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 0),
+          funnel_extra={"feedback_rating": 4.9})
+    rec = recommendations(db, prices_df=_prices(("PRR6", 1000, 20)), today=TODAY)
+    assert _row(rec, "RR6")["action"] == "RAISE"

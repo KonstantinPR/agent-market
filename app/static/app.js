@@ -2744,6 +2744,7 @@ const PRICING_LABELS = {
   return_penalty: "Порог доли возвратов/отмен, 0..1",
   dead_stock_days: "Дней без продаж → мёртвый запас, ≥",
   low_conv_pct: "Низкая конверсия витрины <, %",
+  min_rating_reviews: "Рейтинг по отзывам ≥, балл (ценный товар)",
   fallback_window_days: "Окно расчёта unit-экономики по факт., дн",
   raise_pct_replenishable: "Рост цены для докупаемых, %",
   min_rating_for_raise: "Мин. рейтинг для роста цены, балл",
@@ -2788,6 +2789,7 @@ const PRICING_HINTS = {
   return_penalty: "Если доля возвратов/отмен больше этой величины (0..1), продажи считаются «шумными» и товар не трогаем.",
   dead_stock_days: "Если продаж не было столько дней подряд → мёртвый запас, цену снижаем.",
   low_conv_pct: "Много «в корзине», но конверсия ниже этого %, % — интерес без покупок; товар пропускаем.",
+  min_rating_reviews: "Рейтинг по отзывам из воронки продаж (1..5): чем выше — тем меньше скидка при снижении, ведь товар ценный. При рейтинге ≥ этого порога снижение ограничивается, а при 5,0 скидка не увеличивается вовсе. 0 = нет данных — ограничений нет.",
   fallback_window_days: "Окно (дней), за которое берутся фактические продажи для расчёта unit-экономики: реальная цена, комиссия, маржа, возвраты.",
   raise_pct_replenishable: "Потолок повышения цены для докупаемых товаров, % — их поднимаем аккуратно, чтобы не потерять выкупы.",
   min_rating_for_raise: "Повышение цены блокируется, если рейтинг магазина ниже этого значения (сигналы с 0 трактуются как «нет данных» и не блокируют).",
@@ -3011,7 +3013,8 @@ const PRICING_GROUPS = [
       "min_delta_pp", "raise_pct_replenishable", "dead_min_discount",
   ] },
   { title: "Спрос и воронка", col: 1, keys: [
-      "hot_conv_pct", "hot_backlog_factor", "low_conv_pct", "return_penalty",
+      "min_rating_reviews", "hot_conv_pct", "hot_backlog_factor",
+      "low_conv_pct", "return_penalty",
   ] },
   { title: "Качество и рост", col: 1, keys: [
       "min_rating_for_raise", "min_conv_buyout_for_raise",
@@ -3066,7 +3069,8 @@ function pricingParamRow(key, cur) {
     input.checked = !!cur;
   } else {
     input.type = "number";
-    input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias") ? "0.1" : "1";
+    input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias"
+      || key === "min_rating_reviews") ? "0.1" : "1";
     input.value = cur;
   }
   lbl.appendChild(input);
