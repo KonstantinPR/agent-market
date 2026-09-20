@@ -2726,38 +2726,38 @@ function initHelp() {
 let pricingDefaults = null;
 
 const PRICING_LABELS = {
-  window_days: "Скорость продаж: окно расчёта, дн",
-  target_doc: "Целевой DOC, дн",
-  doc_low: "Дефицит ≤, дн",
-  doc_high: "Перезапас ≥, дн",
+  window_days: "Окно расчёта скорости продаж, дн",
+  target_doc: "Целевой запас в днях продаж (DOC), дн",
+  doc_low: "DOC дефицита ≤, дн",
+  doc_high: "DOC перезапаса ≥, дн",
   floor_margin_pct: "Минимальная маржа, %",
-  max_discount_pct: "Макс. скидка, %",
-  max_raise_pct: "Макс. рост цены, %",
-  max_drop_pct: "Макс. снижение цены, %",
-  min_delta_pp: "Мин. дельта, п.п.",
-  cooldown_days: "Кулдаун, дн",
-  season_adj: "Учёт тренда продаж (сезонность)",
-  season_damp: "Ослабление тренда, 0..1",
-  min_days_with_sales: "Мин. дней с продажами для тренда",
-  hot_conv_pct: "Горячий спрос: конверсия ≥, %",
-  hot_backlog_factor: "Горячий спрос: в корзине ≥ заказов×",
-  return_penalty: "Порог возвратов/отмен",
-  dead_stock_days: "Мёртвый запас ≥, дн",
-  low_conv_pct: "Низкая конверсия <, %",
-  fallback_window_days: "Unit-экономика: окно по факт. продажам, дн",
-  raise_pct_replenishable: "Рост для докупаемых, %",
-  min_rating_for_raise: "Мин. рейтинг для роста, балл",
-  min_conv_buyout_for_raise: "Мин. конв. выкупа для роста, %",
-  max_cancel_ratio_for_raise: "Макс. доля отмен, 0..1",
-  max_return_rate_for_raise: "Макс. возвраты, %",
-  strong_rating: "Сильный рейтинг ≥, балл",
-  strong_buyout_conv: "Сильная конв. выкупа ≥, %",
-  strong_return_rate: "Сильные возвраты ≤, %",
-  strong_margin_pct: "Сильная факт. маржа ≥, %",
-  raise_boost_pct: "Uplift при сильных сигналах, %",
-  dead_min_discount: "Мёртвые: мин. скидка, %",
-  prefer_raise: "Противовес: поднимать охотнее",
-  prefer_raise_bias: "Противовес: сдвиг порогов",
+  max_discount_pct: "Максимальная скидка от базовой цены, %",
+  max_raise_pct: "Максимальный рост цены за шаг, %",
+  max_drop_pct: "Максимальное снижение цены за шаг, %",
+  min_delta_pp: "Мин. изменение скидки, п.п.",
+  cooldown_days: "Кулдаун между изменениями цены, дн",
+  season_adj: "Экстраполяция тренда продаж (сезонность)",
+  season_damp: "Ослабление экстраполяции тренда, 0..1",
+  min_days_with_sales: "Мин. дней с продажами для учёта тренда",
+  hot_conv_pct: "Конверсия горячего спроса ≥, %",
+  hot_backlog_factor: "Горячий спрос: в корзине/заказов ≥, ×",
+  return_penalty: "Порог доли возвратов/отмен, 0..1",
+  dead_stock_days: "Дней без продаж → мёртвый запас, ≥",
+  low_conv_pct: "Низкая конверсия витрины <, %",
+  fallback_window_days: "Окно расчёта unit-экономики по факт., дн",
+  raise_pct_replenishable: "Рост цены для докупаемых, %",
+  min_rating_for_raise: "Мин. рейтинг для роста цены, балл",
+  min_conv_buyout_for_raise: "Мин. конв. выкупа для роста цены, %",
+  max_cancel_ratio_for_raise: "Макс. доля отмен для роста, 0..1",
+  max_return_rate_for_raise: "Макс. возвраты для роста цены, %",
+  strong_rating: "Сильные сигналы: рейтинг ≥, балл",
+  strong_buyout_conv: "Сильный сигнал: конв. выкупа ≥, %",
+  strong_return_rate: "Сильный сигнал: возвраты ≤, %",
+  strong_margin_pct: "Сильный сигнал: факт. маржа ≥, %",
+  raise_boost_pct: "Uplift роста при ≥2 сильных сигналах, %",
+  dead_min_discount: "Мин. скидка мёртвого (стоп деления), %",
+  prefer_raise: "Противовес: предпочитать подъём цены",
+  prefer_raise_bias: "Противовес: сдвиг порогов DOC",
   use_inventory: "Остаток: дефицит или перезапас на складе",
   use_sales: "Продажи: скорость и динамика реализации",
   use_orders: "Заказы и конверсия (витринная воронка)",
@@ -3003,23 +3003,23 @@ const PRICING_GROUPS = [
       "window_days", "season_adj", "season_damp", "min_days_with_sales",
       "fallback_window_days",
   ] },
-  { title: "DOC и запасы", col: 3, keys: [
+  { title: "DOC и запасы", col: 2, keys: [
       "target_doc", "doc_low", "doc_high", "dead_stock_days",
   ] },
-  { title: "Цены и шаги", col: 3, keys: [
+  { title: "Цены и шаги", col: 2, keys: [
       "floor_margin_pct", "max_discount_pct", "max_raise_pct", "max_drop_pct",
       "min_delta_pp", "raise_pct_replenishable", "dead_min_discount",
   ] },
   { title: "Спрос и воронка", col: 2, keys: [
       "hot_conv_pct", "hot_backlog_factor", "low_conv_pct", "return_penalty",
   ] },
-  { title: "Качество и рост", col: 3, keys: [
+  { title: "Качество и рост", col: 2, keys: [
       "min_rating_for_raise", "min_conv_buyout_for_raise",
       "max_cancel_ratio_for_raise", "max_return_rate_for_raise",
       "strong_rating", "strong_buyout_conv", "strong_return_rate",
       "strong_margin_pct", "raise_boost_pct",
   ] },
-  { title: "Применение и противовес", col: 3, keys: [
+  { title: "Применение и противовес", col: 2, keys: [
       "cooldown_days", "prefer_raise", "prefer_raise_bias",
   ] },
 ];
@@ -3092,7 +3092,7 @@ async function buildPricingSettings() {
   );
   const openSet = openSaved || defaultOpen;
   const detailsNodes = [];
-  // Три логических блока-таблицы: факторы | скорость и спрос | экономика и применение.
+  // Две таблицы-блока: факторы (1/3 ширины) | параметры (2/3).
   const cols = [null, null, null];
   for (let c = 1; c <= 3; c++) {
     const col = document.createElement("div");
