@@ -347,11 +347,14 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
   background: #fafafa;
   padding: 6px 12px 4px;
 }
-.pricing-col-factors {
+.pricing-col-1 {
   flex: 1 1 320px;
 }
-.pricing-col-params {
-  flex: 3 1 460px;
+.pricing-col-2 {
+  flex: 2 1 340px;
+}
+.pricing-col-3 {
+  flex: 2 1 340px;
 }
 .p-group {
   border-bottom: 1px solid #eee;

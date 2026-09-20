@@ -2994,32 +2994,32 @@ function collectPricingSettings() {
 // Порядок и группы настроек: каждый параметр в своей строке,
 // группы сворачиваются (состояние запоминается в localStorage).
 const PRICING_GROUPS = [
-  { title: "Какие параметры влияют на цену", keys: [
+  { title: "Какие параметры влияют на цену", col: 1, keys: [
       "use_inventory", "use_sales", "use_orders", "use_margin",
       "use_replenishable", "use_season", "use_quality", "use_returns",
       "use_min_price",
   ] },
-  { title: "Окно и скорость", keys: [
+  { title: "Окно и скорость", col: 2, keys: [
       "window_days", "season_adj", "season_damp", "min_days_with_sales",
       "fallback_window_days",
   ] },
-  { title: "DOC и запасы", keys: [
+  { title: "DOC и запасы", col: 3, keys: [
       "target_doc", "doc_low", "doc_high", "dead_stock_days",
   ] },
-  { title: "Цены и шаги", keys: [
+  { title: "Цены и шаги", col: 3, keys: [
       "floor_margin_pct", "max_discount_pct", "max_raise_pct", "max_drop_pct",
       "min_delta_pp", "raise_pct_replenishable", "dead_min_discount",
   ] },
-  { title: "Спрос и воронка", keys: [
+  { title: "Спрос и воронка", col: 2, keys: [
       "hot_conv_pct", "hot_backlog_factor", "low_conv_pct", "return_penalty",
   ] },
-  { title: "Качество и рост", keys: [
+  { title: "Качество и рост", col: 3, keys: [
       "min_rating_for_raise", "min_conv_buyout_for_raise",
       "max_cancel_ratio_for_raise", "max_return_rate_for_raise",
       "strong_rating", "strong_buyout_conv", "strong_return_rate",
       "strong_margin_pct", "raise_boost_pct",
   ] },
-  { title: "Применение и противовес", keys: [
+  { title: "Применение и противовес", col: 3, keys: [
       "cooldown_days", "prefer_raise", "prefer_raise_bias",
   ] },
 ];
@@ -3092,13 +3092,13 @@ async function buildPricingSettings() {
   );
   const openSet = openSaved || defaultOpen;
   const detailsNodes = [];
-  // Факторы (чекбоксы) — слева, остальные параметры (числа) — справа:
-  // это две функционально разные вещи, их удобнее видеть раздельно.
-  const left = document.createElement("div");
-  left.className = "pricing-col pricing-col-factors";
-  const right = document.createElement("div");
-  right.className = "pricing-col pricing-col-params";
-  const FACTORS_TITLE = "Какие параметры влияют на цену";
+  // Три логических блока-таблицы: факторы | скорость и спрос | экономика и применение.
+  const cols = [null, null, null];
+  for (let c = 1; c <= 3; c++) {
+    const col = document.createElement("div");
+    col.className = "pricing-col pricing-col-" + c;
+    cols[c - 1] = col;
+  }
   for (const grp of PRICING_GROUPS) {
     const det = document.createElement("details");
     det.className = "p-group";
@@ -3117,10 +3117,9 @@ async function buildPricingSettings() {
     }
     det.appendChild(body);
     detailsNodes.push(det);
-    (grp.title === FACTORS_TITLE ? left : right).appendChild(det);
+    cols[Math.min(grp.col || 2, 3) - 1].appendChild(det);
   }
-  box.appendChild(left);
-  box.appendChild(right);
+  cols.forEach((col) => box.appendChild(col));
   detailsNodes.forEach((d) =>
     d.addEventListener("toggle", () => saveOpenPricingGroups(detailsNodes))
   );
