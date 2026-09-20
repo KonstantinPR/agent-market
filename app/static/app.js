@@ -2994,32 +2994,32 @@ function collectPricingSettings() {
 // Порядок и группы настроек: каждый параметр в своей строке,
 // группы сворачиваются (состояние запоминается в localStorage).
 const PRICING_GROUPS = [
-  { title: "Какие параметры влияют на цену", col: 1, keys: [
+  { title: "Какие параметры влияют на цену", col: 2, keys: [
       "use_inventory", "use_sales", "use_orders", "use_margin",
       "use_replenishable", "use_season", "use_quality", "use_returns",
       "use_min_price",
   ] },
-  { title: "Окно и скорость", col: 2, keys: [
+  { title: "Окно и скорость", col: 1, keys: [
       "window_days", "season_adj", "season_damp", "min_days_with_sales",
       "fallback_window_days",
   ] },
-  { title: "DOC и запасы", col: 2, keys: [
+  { title: "DOC и запасы", col: 1, keys: [
       "target_doc", "doc_low", "doc_high", "dead_stock_days",
   ] },
-  { title: "Цены и шаги", col: 2, keys: [
+  { title: "Цены и шаги", col: 1, keys: [
       "floor_margin_pct", "max_discount_pct", "max_raise_pct", "max_drop_pct",
       "min_delta_pp", "raise_pct_replenishable", "dead_min_discount",
   ] },
-  { title: "Спрос и воронка", col: 2, keys: [
+  { title: "Спрос и воронка", col: 1, keys: [
       "hot_conv_pct", "hot_backlog_factor", "low_conv_pct", "return_penalty",
   ] },
-  { title: "Качество и рост", col: 2, keys: [
+  { title: "Качество и рост", col: 1, keys: [
       "min_rating_for_raise", "min_conv_buyout_for_raise",
       "max_cancel_ratio_for_raise", "max_return_rate_for_raise",
       "strong_rating", "strong_buyout_conv", "strong_return_rate",
       "strong_margin_pct", "raise_boost_pct",
   ] },
-  { title: "Применение и противовес", col: 2, keys: [
+  { title: "Применение и противовес", col: 1, keys: [
       "cooldown_days", "prefer_raise", "prefer_raise_bias",
   ] },
 ];
@@ -3092,7 +3092,7 @@ async function buildPricingSettings() {
   );
   const openSet = openSaved || defaultOpen;
   const detailsNodes = [];
-  // Две таблицы-блока: факторы (1/3 ширины) | параметры (2/3).
+  // Две таблицы-блока: параметры (слева, 2/3) | факторы (справа, 1/3).
   const cols = [null, null, null];
   for (let c = 1; c <= 3; c++) {
     const col = document.createElement("div");
