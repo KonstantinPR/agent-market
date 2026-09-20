@@ -333,21 +333,12 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 
 /* ------------------------------- автопилот цен WB ------------------------------- */
 .pricing-settings {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0 24px;
-  align-items: start;
   border: 1px solid #eee;
   border-radius: 6px;
-  padding: 6px 14px;
+  padding: 6px 12px;
   margin-bottom: 12px;
   background: #fafafa;
-}
-@media (max-width: 1200px) {
-  .pricing-settings { grid-template-columns: repeat(2, 1fr); }
-}
-@media (max-width: 700px) {
-  .pricing-settings { grid-template-columns: 1fr; }
+  max-width: 760px;
 }
 .p-group {
   border-bottom: 1px solid #eee;
