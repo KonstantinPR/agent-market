@@ -3093,11 +3093,13 @@ async function buildPricingSettings() {
   const openSet = openSaved || defaultOpen;
   const detailsNodes = [];
   // Две таблицы-блока: параметры (слева, 2/3) | факторы (справа, 1/3).
-  const cols = [null, null, null];
-  for (let c = 1; c <= 3; c++) {
+  // Колонки создаём строго по данным — никаких лишних пустых контейнеров.
+  const maxCol = Math.max(...PRICING_GROUPS.map((g) => g.col || 1));
+  const cols = [];
+  for (let c = 1; c <= maxCol; c++) {
     const col = document.createElement("div");
     col.className = "pricing-col pricing-col-" + c;
-    cols[c - 1] = col;
+    cols.push(col);
   }
   for (const grp of PRICING_GROUPS) {
     const det = document.createElement("details");
