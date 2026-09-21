@@ -280,9 +280,18 @@
 
   <section id="tab-products" class="pane">
     <div class="toolbar">
-      <input type="file" id="productsFile" accept=".xlsx">
-      <button id="productsImport" class="btn">Загрузить товары</button>
+      <div class="dz-row">
+        <input type="file" id="productsFile" class="hidden" accept=".xlsx">
+        <div class="dropzone" id="productsDrop">
+          <span class="dz-label">Перетащите сюда Excel-файл с товарами или нажмите</span>
+        </div>
+        <input type="file" id="netCostFile" class="hidden" accept=".xlsx">
+        <div class="dropzone" id="netCostDrop">
+          <span class="dz-label">Перетащите сюда Excel-файл с себестоимостью или нажмите</span>
+        </div>
+      </div>
       <span id="productsMsg" class="msg"></span>
+      <span id="netCostMsg" class="msg"></span>
       <input id="productsLike" placeholder="Артикул содержит…">
       <label class="chk"><input type="checkbox" id="productsSizes"> С размерами</label>
       <label class="chk"><input type="checkbox" id="productsStocks"> Показывать остатки</label>
@@ -301,10 +310,7 @@
       </span>
     </div>
     <div class="toolbar">
-      <input type="file" id="netCostFile" accept=".xlsx">
-      <button id="netCostImport" class="btn">Загрузить себестоимость</button>
-      <span id="netCostMsg" class="msg"></span>
-    </div>
+      <span class="hint">При обновлении из карточек WB/Ozon перезапись включена → поля товара и размеры перезапишутся, цена/себестоимость не трогаются</span>
     <div class="price-panel hidden" id="productsPricePanel">
       <div class="price-panel-title">Рекомендуемая цена = себестоимость × наценка от себестоимости × наценка за объём (пересчёт без записи в базу). Предпросмотр перезаписывает строки таблицы, «Обновить базу» в шапке применяет значения на карточках.</div>
       <div class="price-panel-fields" id="productsPriceFields"></div>

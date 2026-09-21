@@ -2472,6 +2472,92 @@ function initDetailUpload() {
   }
 }
 
+async function uploadProductsFiles(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  fd.append("file", files[0]);
+  const msg = document.getElementById("productsMsg");
+  msg.textContent = "Загружаю " + files[0].name + "…";
+  try {
+    const resp = await fetch("/api/import/products", { method: "POST", body: fd });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.status);
+    let m = "Товаров: строк " + fmt(data.imported || data.rows || 0);
+    if (data.total != null && Number(data.total) !== Number(data.imported)) m += " из " + fmt(data.total);
+    if (data.errors && data.errors.length) m += "; с ошибками: " + fmt(data.errors.length);
+    msg.textContent = m;
+    const input = document.getElementById("productsFile");
+    if (input) input.value = "";
+    pullsCache = null;
+    updateLastPull("products");
+    if (currentTab === "products") await renderProducts();
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadNetCostFiles(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  fd.append("file", files[0]);
+  const msg = document.getElementById("netCostMsg");
+  msg.textContent = "Загружаю " + files[0].name + "…";
+  try {
+    const resp = await fetch("/api/import/net-cost", { method: "POST", body: fd });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.status);
+    let m = "Себестоимость: строк " + fmt(data.imported || data.rows || 0);
+    if (data.total != null && Number(data.total) !== Number(data.imported)) m += " из " + fmt(data.total);
+    if (data.errors && data.errors.length) m += "; с ошибками: " + fmt(data.errors.length);
+    msg.textContent = m;
+    const input = document.getElementById("netCostFile");
+    if (input) input.value = "";
+    pullsCache = null;
+    updateLastPull("products");
+    if (currentTab === "products") await renderProducts();
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+function initProductsUpload() {
+  const file = document.getElementById("productsFile");
+  const drop = document.getElementById("productsDrop");
+  if (file) file.addEventListener("change", () => busyRun(() => uploadProductsFiles(file.files)));
+  if (drop) {
+    drop.addEventListener("click", () => { if (file) file.click(); });
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      if (e.dataTransfer && e.dataTransfer.files) busyRun(() => uploadProductsFiles(e.dataTransfer.files));
+    });
+  }
+}
+
+function initNetCostUpload() {
+  const file = document.getElementById("netCostFile");
+  const drop = document.getElementById("netCostDrop");
+  if (file) file.addEventListener("change", () => busyRun(() => uploadNetCostFiles(file.files)));
+  if (drop) {
+    drop.addEventListener("click", () => { if (file) file.click(); });
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      if (e.dataTransfer && e.dataTransfer.files) busyRun(() => uploadNetCostFiles(e.dataTransfer.files));
+    });
+  }
+}
+
 function initCardsUpload() {
   ["wb-cards", "oz-cards"].forEach((name) => {
     const ids = cardIds(name);
@@ -3607,8 +3693,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const ozPriceAgg = $("#ozPriceAgg");
   if (ozPriceAgg) ozPriceAgg.addEventListener("change", () => { if (currentTab === "oz-prices") loadTab(currentTab); });
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
-  $("#productsImport").addEventListener("click", () => uploadFile("/import/products", $("#productsFile"), "#productsMsg", "products"));
-  $("#netCostImport").addEventListener("click", () => uploadFile("/import/net-cost", $("#netCostFile"), "#netCostMsg", "products"));
   const productsLikeEl = $("#productsLike");
   if (productsLikeEl) {
     let productsLikeTimer;
