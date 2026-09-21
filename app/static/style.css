@@ -200,6 +200,31 @@ body.busy .btn { pointer-events: none; opacity: .6; }
 .chart-box h3 { font-weight: 600; font-size: 14px; color: #333; margin-bottom: 8px; }
 
 .table-wrap { width: 100%; overflow-x: auto; }
+.table-wrap.paged { overflow-x: visible; }
+.tscroll { overflow-x: auto; }
+.t-xbar {
+  position: sticky;
+  bottom: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 14px;
+  margin-top: 4px;
+  background: #fff;
+  border-top: 1px solid #e5e5e5;
+  box-shadow: 0 -1px 0 #eee;
+}
+.t-xbar.x-null { visibility: hidden; margin-top: 0; border-top: none; box-shadow: none; }
+.t-xbar div { height: 1px; }
+.t-xbar::-webkit-scrollbar { height: 11px; }
+.t-xbar::-webkit-scrollbar-track { background: transparent; }
+.t-xbar::-webkit-scrollbar-thumb { background: #c4cbd4; border-radius: 5px; }
+.t-xbar::-webkit-scrollbar-thumb:hover { background: #a9b2bd; }
+table.stck { border-collapse: separate; border-spacing: 0; }
+td.stck-col { position: sticky; left: 0; background: #fff; z-index: 1; }
+th.stck-col { position: sticky; left: 0; background: #fff; z-index: 3; }
+table.stck tr.totals-row th.stck-col { background: #f0f4f8; }
+.colview-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.colview-row .pin { margin-left: auto; font-size: 12px; }
 .pager {
   display: flex;
   align-items: center;

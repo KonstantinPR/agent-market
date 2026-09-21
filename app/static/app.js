@@ -170,13 +170,14 @@ const cellFmts = {
   tag: (v) => `<span class="tag ${v}">${MP_LABELS[v] || v}</span>`,
 };
 
-function pagedTable(container, headers, rows, footers, pagerSel) {
+function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
   if (!container._pt) container._pt = { limit: 100, showAll: false, sort: null };
   const st = container._pt;
   st.headers = headers;
   st.rows = rows;
   st.footers = footers || null;
   st.pagerSel = pagerSel || null;
+  st.pinned = pinned || null;
   if (!pagerSel && container.id) {
     const auto = document.getElementById(container.id + "Pager");
     if (auto) st.pagerSel = "#" + auto.id;
@@ -257,17 +258,68 @@ function pagedTable(container, headers, rows, footers, pagerSel) {
     const visible = st.showAll ? list : list.slice(0, st.limit);
     span.textContent = "Показано " + fmt(visible.length) + " из " + fmt(st.rows.length);
     (pagerHost || container).appendChild(bar);
+    container.classList.add("paged");
+    const tscroll = document.createElement("div");
+    tscroll.className = "tscroll";
     const wrap = document.createElement("div");
     wrap.innerHTML = table(st.headers, visible, st.sort, st.footers);
-    container.appendChild(wrap);
+    tscroll.appendChild(wrap);
+    container.appendChild(tscroll);
     const tr = wrap.querySelector("tr.totals-row");
     if (tr) {
       const hdr = wrap.querySelector("thead tr:not(.totals-row)");
       const h = hdr ? hdr.offsetHeight : 0;
       tr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
     }
+    applyStickyCols(wrap, st.headers, st.pinned);
+    mountXBar(container, tscroll);
   };
   paint();
+}
+
+function applyStickyCols(wrap, headers, pinned) {
+  if (!pinned || !pinned.length) return;
+  const tableEl = wrap.querySelector("table");
+  if (!tableEl) return;
+  const idxs = pinned.map((k) => headers.findIndex((h) => h.k === k)).filter((i) => i >= 0);
+  if (!idxs.length) return;
+  tableEl.classList.add("stck");
+  const firstRow = tableEl.querySelector("tbody tr");
+  const headRow = tableEl.querySelector("thead tr:not(.totals-row)");
+  let left = 0;
+  for (const i of idxs) {
+    const hc = headRow ? headRow.cells[i] : null;
+    const bc = firstRow ? firstRow.cells[i] : null;
+    const w = Math.max(hc ? hc.getBoundingClientRect().width : 0, bc ? bc.getBoundingClientRect().width : 0);
+    for (const tr of tableEl.rows) {
+      const cell = tr.cells[i];
+      if (cell) {
+        cell.classList.add("stck-col");
+        cell.style.left = left + "px";
+      }
+    }
+    left += Math.max(w, 8);
+  }
+}
+
+function mountXBar(container, scroll) {
+  let bar = container.querySelector(".t-xbar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "t-xbar";
+    bar.appendChild(document.createElement("div"));
+    bar.addEventListener("scroll", () => { scroll.scrollLeft = bar.scrollLeft; });
+    container.appendChild(bar);
+  }
+  const inner = bar.firstChild;
+  const fit = () => {
+    const over = scroll.scrollWidth > scroll.clientWidth + 1;
+    bar.classList.toggle("x-null", !over);
+    inner.style.width = Math.max(scroll.scrollWidth, scroll.clientWidth, 1) + "px";
+  };
+  bar.scrollLeft = scroll.scrollLeft;
+  scroll.onscroll = () => { bar.scrollLeft = scroll.scrollLeft; };
+  fit();
 }
 
 function tabLike(id) {
@@ -477,7 +529,15 @@ function colViewState(tab) {
   if (!saved || typeof saved !== "object") saved = {};
   const st = {};
   for (const o of set.optional) st[o.k] = (o.k in saved) ? !!saved[o.k] : !!o.def;
+  st.pin = Array.isArray(saved.pin)
+    ? saved.pin.filter((k) => set.headers.some((h) => h.k === k))
+    : [];
   return st;
+}
+function colViewPinKeys(tab) {
+  const set = colViewSet(tab);
+  if (!set) return [];
+  return (colViewState(tab).pin) || [];
 }
 function colViewSave(tab, state) {
   const set = colViewSet(tab);
@@ -514,41 +574,75 @@ function colViewParam(tab, extraKeys, modeHint) {
   return keys.length ? "cols=" + keys.join(",") : "";
 }
 function buildColViewMenu(tab) {
+  const c = _COLVIEWS[tab];
   const set = colViewSet(tab);
   const panel = $("#" + viewPanelId(tab));
   if (!set || !panel) return;
   panel.innerHTML = "";
   const st = colViewState(tab);
-  const mkChk = (k, label, checked, onChange) => {
+  const pinSet = new Set(st.pin || []);
+  const base = set.headers.filter((h) => !set.optional.some((o) => o.k === h.k));
+  const onToggle = () => { if (currentTab === tab) loadTab(tab); buildColViewMenu(tab); };
+  const item = (k, label, visOn, pinOn) => {
+    const row = document.createElement("div");
+    row.className = "colview-row";
     const lbl = document.createElement("label");
     lbl.className = "chk";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = checked;
-    cb.addEventListener("change", onChange);
-    lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(" " + label));
-    panel.appendChild(lbl);
-    return cb;
+    if (visOn !== null) {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = visOn;
+      cb.addEventListener("change", (e) => {
+        st[k] = e.target.checked;
+        colViewSave(tab, st);
+        onToggle();
+      });
+      lbl.appendChild(cb);
+    }
+    lbl.appendChild(document.createTextNode(visOn === null ? label : " " + label));
+    row.appendChild(lbl);
+    if (c && c.pinnable) {
+      const pinLbl = document.createElement("label");
+      pinLbl.className = "chk pin";
+      pinLbl.title = "Закрепить колонку — остаётся на месте при прокрутке таблицы вправо";
+      const pb = document.createElement("input");
+      pb.type = "checkbox";
+      pb.checked = pinOn;
+      pb.addEventListener("change", (e) => {
+        if (e.target.checked) pinSet.add(k); else pinSet.delete(k);
+        st.pin = Array.from(pinSet);
+        colViewSave(tab, st);
+        onToggle();
+      });
+      pinLbl.appendChild(pb);
+      pinLbl.appendChild(document.createTextNode(" \uD83D\uDCCC"));
+      row.appendChild(pinLbl);
+    }
+    panel.appendChild(row);
   };
-  const allOn = set.optional.every((o) => !!st[o.k]);
-  mkChk("__all", "Показать все", allOn, (e) => {
+  const lblAll = document.createElement("label");
+  lblAll.className = "chk";
+  const cbAll = document.createElement("input");
+  cbAll.type = "checkbox";
+  cbAll.checked = set.optional.every((o) => !!st[o.k]);
+  cbAll.addEventListener("change", (e) => {
     for (const o of set.optional) st[o.k] = e.target.checked;
     colViewSave(tab, st);
-    if (currentTab === tab) loadTab(tab);
-    buildColViewMenu(tab);
+    onToggle();
   });
+  lblAll.appendChild(cbAll);
+  lblAll.appendChild(document.createTextNode(" Показать все"));
+  panel.appendChild(lblAll);
   const sep = document.createElement("hr");
   sep.style.margin = "4px 0";
   panel.appendChild(sep);
-  for (const o of set.optional) {
-    mkChk(o.k, o.label, !!st[o.k], (e) => {
-      st[o.k] = e.target.checked;
-      colViewSave(tab, st);
-      if (currentTab === tab) loadTab(tab);
-      buildColViewMenu(tab);
-    });
+  if (base.length) {
+    for (const b of base) item(b.k, b.label, null, pinSet.has(b.k));
+    const sep2 = document.createElement("hr");
+    sep2.style.margin = "4px 0";
+    panel.appendChild(sep2);
   }
+  for (const o of set.optional) item(o.k, o.label, !!st[o.k], pinSet.has(o.k));
 }
 // Общий обработчик кнопки «Вид таблицы» (открыть/закрыть панель).
 function initColViewMenu(tab) {
@@ -3056,7 +3150,7 @@ const PRICING_OPTIONAL = [
   { k: "stock_wb", label: "Остаток WB", def: false },
   { k: "min_price", label: "Мин. цена WB, руб", def: true },
 ];
-registerColView("pricing", { storageKey: "pricingCols", headers: pricingHeaders, optional: PRICING_OPTIONAL });
+registerColView("pricing", { storageKey: "pricingCols", pinnable: true, headers: pricingHeaders, optional: PRICING_OPTIONAL });
 
 function loadPricingSettings() {
   try {
@@ -3310,7 +3404,7 @@ async function renderPricing(apply) {
       stock: rows.reduce((a, r) => a + (Number(r.stock) || 0), 0),
       target_vis: rows.reduce((a, r) => a + (Number(r.target_vis) || 0), 0),
     };
-    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows, footers);
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows, footers, null, colViewPinKeys("pricing"));
     await renderPricingHistory();
     refreshApplyButton();
   } catch (err) {
