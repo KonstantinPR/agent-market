@@ -755,6 +755,84 @@ def _rating_discount_scale(fb_rating, threshold) -> float:
     return (5.0 - r) / denom if denom > 0 else 0.0
 
 
+def _half_discount_guard(cur_disc: float, new_disc: float, factual: float, net_cost: float) -> float:
+    """R: при RAISE (скидку уменьшаем) никогда не режем её более чем пополам.
+
+    Исключение — фактическая цена продажи опустилась ниже себестоимости: тогда
+    повышаем свободно (иначе продолжаем отдавать товар в убыток).
+    """
+    if factual >= net_cost:
+        return max(new_disc, cur_disc / 2.0)
+    return new_disc
+
+
+def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str) -> dict:
+    """R: если есть остаток — изменение скидки обязательно, HOLD не выдаём.
+
+    Ставим минимальный шаг в заданном направлении (max(min_delta_pp, 1 п.п.))
+    с уважением к капсам (floor, max_discount_item, минимальная цена WB) и к правилу
+    «скидку при RAISE не режем более чем пополам». Если шаг в заданном направлении
+    невозможен — пробуем противоположное. Если не выходит вовсе (цена <= 0 или оба
+    направления упираются в капсы) — оставляем HOLD как есть.
+    """
+    step = max(_num(s["min_delta_pp"], 1.0), 1.0)
+    price = f["price"]
+    if price <= 0:
+        return base
+    cur_disc = f["current_discount"]
+    cur_vis = f["current_vis"]
+    eff = min(cur_vis, f["avg_price"]) if f["avg_price"] > 0 else cur_vis
+    net_cost = _num(f.get("net_cost"))
+    factual = f["avg_price"] if f["avg_price"] > 0 else eff
+    min_price = (f.get("min_price") or 0.0) if bool(s.get("use_min_price", False)) else 0.0
+    max_disc_item = base.get("max_discount_item")
+    if max_disc_item is None:
+        max_disc_item = _num(s["max_discount_pct"])
+    suffix = f" — коррекция скидки обязательна (есть остаток {f['stock']} шт)"
+
+    def try_lower():
+        target_vis = max(price * (1 - (cur_disc + step) / 100),
+                         _num(f["floor_price"]),
+                         price * (1 - max_disc_item / 100),
+                         min_price)
+        target_vis = min(target_vis, cur_vis)
+        new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
+        if new_disc > cur_disc + 1e-9:
+            return new_disc, target_vis
+        return None, None
+
+    def try_raise():
+        new_disc = max(cur_disc - step, 0.0)
+        new_disc = _half_discount_guard(cur_disc, new_disc, factual, net_cost)
+        if new_disc < cur_disc - 1e-9:
+            return new_disc, price * (1 - new_disc / 100)
+        return None, None
+
+    def emit(action, nd, tv):
+        base.update(action=action, status="suggested", reason=reason + suffix,
+                    target_discount=round(_clamp(nd, 0, 100), 1),
+                    target_vis=round(tv, 2),
+                    margin_pct_at_target=_margin_pct(tv, f))
+
+    if direction == "RAISE":
+        nd, tv = try_raise()
+        if nd is not None:
+            emit("RAISE", nd, tv)
+            return base
+        nd, tv = try_lower()
+        if nd is not None:
+            emit("LOWER", nd, tv)
+        return base
+    nd, tv = try_lower()
+    if nd is not None:
+        emit("LOWER", nd, tv)
+        return base
+    nd, tv = try_raise()
+    if nd is not None:
+        emit("RAISE", nd, tv)
+    return base
+
+
 def _decide(f: dict, s: dict) -> dict:
     price = f["price"]
     cur_disc = f["current_discount"]
@@ -762,6 +840,8 @@ def _decide(f: dict, s: dict) -> dict:
     stock = f["stock"]
     v_proj = f["v_proj"]
     eff = min(cur_vis, f["avg_price"]) if f["avg_price"] > 0 else cur_vis
+    # Фактическая цена продажи (есть данные о продаже — avg_price, иначе витрина).
+    factual = f["avg_price"] if f["avg_price"] > 0 else eff
     floor = f["floor_price"]
     base = _base_row(f)
     base["eff"] = eff
@@ -838,10 +918,10 @@ def _decide(f: dict, s: dict) -> dict:
     if use_sales and v_proj <= 0:
         if f["last_sale_days_ago"] >= int(s["dead_stock_days"]):
             if rating_scale <= 0.01:
-                base.update(action="HOLD", status="hold",
-                            reason=f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
-                                   f"— скидку не увеличиваем")
-                return base
+                return _mandatory_step(
+                    base, f, s, "LOWER",
+                    f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
+                    f"— скидку не увеличиваем")
             min_price = (f.get("min_price") or 0.0) if use_minprice else 0.0
             target_vis = max(_num(floor), eff * (1 - max_drop * rating_scale / 100), min_price)
             target_vis = min(target_vis, cur_vis)
@@ -853,23 +933,32 @@ def _decide(f: dict, s: dict) -> dict:
                             target_discount=round(_clamp(new_disc, 0, 100), 1),
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))
+                return base
             else:
-                if use_minprice and min_price > 0 and target_vis >= cur_vis:
-                    base.update(action="HOLD", status="hold",
-                                reason=f"минимальная цена WB ({min_price:.0f} ₽) не позволяет опустить цену")
-                else:
-                    base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
-            return base
-        base.update(action="HOLD", status="hold", reason="продаж нет (менее порога) — не трогаем")
-        return base
+                return _mandatory_step(
+                    base, f, s, "LOWER",
+                    f"мёртвый запас: продаж нет {f['last_sale_days_ago']} дн., остаток {stock} шт")
+        return _mandatory_step(base, f, s, "LOWER", "продаж нет (менее порога)")
 
     if not use_sales:
-        base.update(action="HOLD", status="hold",
-                    reason="продажи не влияют (фактор выключен) — нет сигнала для изменения цены")
+        if stock is None or stock <= 0:
+            base.update(action="HOLD", status="hold",
+                        reason="продажи не влияют (фактор выключен) — нет сигнала для изменения цены")
+        else:
+            return _mandatory_step(
+                base, f, s,
+                "LOWER" if doc >= _num(s["target_doc"]) else "RAISE",
+                "продажи не влияют (фактор выключен)")
         return base
     if not use_inv:
-        base.update(action="HOLD", status="hold",
-                    reason="остаток не влияет (фактор выключен) — нет сигнала для изменения цены")
+        if stock is None or stock <= 0:
+            base.update(action="HOLD", status="hold",
+                        reason="остаток не влияет (фактор выключен) — нет сигнала для изменения цены")
+        else:
+            return _mandatory_step(
+                base, f, s,
+                "LOWER" if doc >= _num(s["target_doc"]) else "RAISE",
+                "остаток не влияет (фактор выключен)")
         return base
 
     if doc < doc_low:
@@ -882,6 +971,8 @@ def _decide(f: dict, s: dict) -> dict:
             raise_pct = (_num(s["raise_pct_replenishable"]) if repl else _num(s["max_raise_pct"])) * boost
             target_vis = min(price, cur_vis * (1 + raise_pct / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
+            new_disc = _half_discount_guard(cur_disc, new_disc, factual, _num(f["net_cost"]))
+            target_vis = price * (1 - new_disc / 100) if price > 0 else target_vis
             if cur_disc - new_disc >= _num(s["min_delta_pp"]):
                 base.update(action="RAISE", status="suggested",
                             reason=f"дефицит (DOC={doc:.0f} дн.) и горячий спрос "
@@ -891,7 +982,8 @@ def _decide(f: dict, s: dict) -> dict:
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))
             else:
-                base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
+                return _mandatory_step(
+                    base, f, s, "RAISE", f"дефицит (DOC={doc:.0f} дн.) и горячий спрос")
             return base
         if not repl:
             gate = _raise_quality_gate(f, s) if use_quality else None
@@ -901,6 +993,8 @@ def _decide(f: dict, s: dict) -> dict:
             boost = _raise_boost(f, s) if use_quality else 1.0
             target_vis = min(price, cur_vis * (1 + _num(s["max_raise_pct"]) * boost / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
+            new_disc = _half_discount_guard(cur_disc, new_disc, factual, _num(f["net_cost"]))
+            target_vis = price * (1 - new_disc / 100) if price > 0 else target_vis
             if cur_disc - new_disc >= _num(s["min_delta_pp"]):
                 base.update(action="RAISE", status="suggested",
                             reason=f"дефицит (DOC={doc:.0f} дн.), товар не докупается — последние единицы"
@@ -909,18 +1003,18 @@ def _decide(f: dict, s: dict) -> dict:
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))
             else:
-                base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
+                return _mandatory_step(
+                    base, f, s, "RAISE", f"дефицит (DOC={doc:.0f} дн.), товар не докупается")
             return base
-        base.update(action="HOLD", status="hold",
-                    reason=f"дефицит, но товар докупаемый — темп важнее")
-        return base
+        return _mandatory_step(
+            base, f, s, "RAISE", f"дефицит (DOC={doc:.0f} дн., товар докупаемый) — темп важнее")
 
     if doc >= doc_high:
         if rating_scale <= 0.01:
-            base.update(action="HOLD", status="hold",
-                        reason=f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
-                               f"— скидку не увеличиваем")
-            return base
+            return _mandatory_step(
+                base, f, s, "LOWER",
+                f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
+                f"— скидку не увеличиваем")
         k = 0.5
         if use_orders and conv < 1.0:
             k *= 0.8
@@ -945,15 +1039,16 @@ def _decide(f: dict, s: dict) -> dict:
                         target_vis=round(target_vis, 2),
                         margin_pct_at_target=_margin_pct(target_vis, f))
         else:
-            if use_minprice and min_price > 0 and target_vis >= cur_vis:
-                base.update(action="HOLD", status="hold",
-                            reason=f"минимальная цена WB ({min_price:.0f} ₽) не позволяет опустить цену")
-            else:
-                base.update(action="HOLD", status="hold", reason="дельта скидки меньше порога")
+            return _mandatory_step(
+                base, f, s, "LOWER",
+                f"перезапас (DOC={doc:.0f} дн.), целевые {_num(s['target_doc']):.0f} дн."
+                + (f" · мин. цена WB {min_price:.0f} ₽" if use_minprice and min_price > 0 else ""))
         return base
 
-    base.update(action="HOLD", status="hold", reason=f"нормальные остатки (DOC={doc:.0f} дн.)")
-    return base
+    return _mandatory_step(
+        base, f, s,
+        "LOWER" if doc >= _num(s["target_doc"]) else "RAISE",
+        f"нормальные остатки (DOC={doc:.0f} дн.), целевые {_num(s['target_doc']):.0f} дн.")
 
 
 def _margin_pct(target_vis: float, f: dict) -> Optional[float]:

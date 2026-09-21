@@ -155,14 +155,38 @@ def test_r6_non_replenishable_deficit_raises_more(db):
     rec = recommendations(db, prices_df=_prices(("P6", 1000, 20)), today=TODAY)
     row = _row(rec, "R6")
     assert row["action"] == "RAISE"
-    assert row["target_discount"] == pytest.approx(8.0, abs=0.5)  # 800 -> 920 (+15%)
+    assert row["target_discount"] == pytest.approx(10.0, abs=0.5)  # 800 -> 920 (+15%) -> кап R2: 20/2 = 10
 
 
-def test_r7_replenishable_deficit_no_demand_holds(db):
+def test_r7_no_demand_in_normal_doc_zone_forces_raise(db):
+    """DOC≈17.5 (нормальная зона), остаток есть — коррекция скидки обязательна: RAISE на шаг."""
     _seed(db, "R7", "P7", stock=5, replenishable=True,
           sales=[(2, 4, 0), *_fallback_sales()], funnel=(200, 1, 1, 0, 0))
     rec = recommendations(db, prices_df=_prices(("P7", 1000, 20)), today=TODAY)
-    assert _row(rec, "R7")["action"] == "HOLD"
+    row = _row(rec, "R7")
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(19.0, abs=0.5)  # 20 -> 19 (шаг 1 п.п.)
+    assert "коррекция скидки обязательна" in row["reason"]
+
+
+def test_rule2_half_discount_cap_binds_raise(db):
+    """Половинный кап R2: даже при мощном RAISE скидку режем не более чем пополам (20 -> 10)."""
+    _seed(db, "C2", "PC2", stock=4, replenishable=False,
+          sales=[(2, 6, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 900))
+    rec = recommendations(db, prices_df=_prices(("PC2", 1000, 20)), today=TODAY)
+    row = _row(rec, "C2")
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(10.0, abs=0.5)  # raw 8.0 -> кап cur/2 = 10.0
+
+
+def test_rule2_exception_below_cost_allows_full_raise(db):
+    """Исключение R2: фактическая цена продажи ниже себестоимости → полный RAISE без капа (20 -> 8)."""
+    _seed(db, "C3", "PC3", stock=4, replenishable=False,
+          sales=[(2, 6, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 250))
+    rec = recommendations(db, prices_df=_prices(("PC3", 1000, 20)), today=TODAY)
+    row = _row(rec, "C3")
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(8.0, abs=0.5)  # 250 < net_cost 300 -> без капа
 
 
 def test_r8_overstock_lowers(db):
@@ -182,13 +206,16 @@ def test_r9_many_carts_low_conv_skips(db):
     assert _row(rec, "R9")["status"] == "skipped_carts"
 
 
-def test_r10_normal_stock_holds(db):
+def test_r10_normal_stock_forces_step(db):
+    """Нормальные остатки (DOC между зонами): остаток есть → скидка меняется на минимальный шаг."""
     _seed(db, "H", "P10", stock=20,
           sales=[(2, 5, 0), (14, 5, 0), *_fallback_sales()], funnel=(200, 4, 4, 0, 0))
     rec = recommendations(db, prices_df=_prices(("P10", 1000, 10)), today=TODAY)
     row = _row(rec, "H")
-    assert row["action"] == "HOLD"
     assert 14 <= row["doc"] < 60
+    assert row["action"] == "LOWER"  # DOC=56 ≥ целевые 30 → идём вниз на шаг
+    assert row["target_discount"] == pytest.approx(11.0, abs=0.5)
+    assert "коррекция скидки обязательна" in row["reason"]
 
 
 def test_min_delta_blocks_change_when_cannot_lower_below_floor(db):
@@ -396,15 +423,16 @@ def test_t15_min_price_clamps_overstock_lower(db):
     assert row["target_discount"] == pytest.approx((1 - 1600 / 2000) * 100, abs=0.5)
 
 
-def test_t15_min_price_above_current_blocks_lower(db):
-    """Мин. цена выше текущей витринной -> снижать уже некуда -> HOLD с причиной."""
+def test_t15_min_price_above_current_forces_raise(db):
+    """Мин. цена выше текущей витринной → снижать некуда → обязательный шаг вверх."""
     _seed(db, "M2", "PM2", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("PM2", 2000, 10)), today=TODAY,
                           min_prices={"PM2": 1900}, settings={"use_min_price": True})
     row = _row(rec, "M2")
-    assert row["action"] == "HOLD"
-    assert "минимальная цена" in row["reason"]
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(9.0, abs=0.5)
+    assert "мин. цена WB" in row["reason"] and "коррекция скидки обязательна" in row["reason"]
 
 
 def test_t15_min_price_clamps_dead_stock_lower(db):
@@ -674,15 +702,19 @@ def test_sales_match_products_case_insensitive(db):
 
 
 def test_prefer_raise_widens_deficit_zone(db):
-    """DOC≈15.8: с противовесом — RAISE (зона дефицита шире), без — HOLD."""
+    """DOC≈15.8: с противовесом — мощный RAISE (зона дефицита шире); без — обязательный шаг вверх."""
     _seed(db, "PR1", "PPR1", stock=8, replenishable=False,
           sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 900))
     rec_on = recommendations(db, prices_df=_prices(("PPR1", 1000, 10)), today=TODAY)
     row_on = _row(rec_on, "PR1")
     assert row_on["action"] == "RAISE"
+    assert row_on["target_discount"] == pytest.approx(5.0, abs=0.5)  # 900 -> 950 (дефицит, полный шаг)
     rec_off = recommendations(db, prices_df=_prices(("PPR1", 1000, 10)), today=TODAY,
                               settings={"prefer_raise": False})
-    assert _row(rec_off, "PR1")["action"] == "HOLD"
+    row_off = _row(rec_off, "PR1")
+    assert row_off["action"] == "RAISE"
+    assert row_off["target_discount"] == pytest.approx(9.0, abs=0.5)  # нормальная зона -> шаг 1 п.п.
+    assert "коррекция скидки обязательна" in row_off["reason"]
 
 
 def test_prefer_raise_softens_overstock_drop(db):
@@ -720,31 +752,38 @@ def test_wb_basis_excludes_non_wb_articles(db):
 
 
 def test_use_inventory_off_ignores_doc(db):
-    """use_inventory=False: перезапас не снижается — остаток не влияет."""
+    """use_inventory=False: перезапас больше не снижает — остаток не влияет (но шаг обязателен)."""
     _seed(db, "I1", "PI1", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("PI1", 2000, 10)), today=TODAY,
                           settings={"prefer_raise": False, "use_inventory": False})
     row = _row(rec, "I1")
-    assert row["action"] == "HOLD"
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(11.0, abs=0.5)
     assert "остаток не влияет" in row["reason"]
 
 
 def test_use_sales_off_blocks_dead_stock_lowering(db):
-    """use_sales=False: мёртвый запас не снижается (продажи не влияют)."""
+    """use_sales=False: продажи не влияют — но остаток есть, коррекция скидки обязательна (LOWER на 1)."""
     _seed(db, "S1", "PS1", stock=100, sales=[*_fallback_sales()])
     rec = recommendations(db, prices_df=_prices(("PS1", 1000, 0)), today=TODAY,
                           settings={"use_sales": False})
-    assert _row(rec, "S1")["action"] == "HOLD"
+    row = _row(rec, "S1")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(1.0, abs=0.5)
+    assert "продажи не влияют" in row["reason"]
 
 
 def test_use_orders_off_disables_hot_raise(db):
-    """use_orders=False: нет «горячего спроса» — докупаемый дефицит не поднимаем."""
+    """use_orders=False: нет «горячего спроса» — докупаемый дефицит всё равно поднимаем на шаг."""
     _seed(db, "O1", "PO1", stock=2, replenishable=True,
           sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 10, 1, 0, 900))
     rec = recommendations(db, prices_df=_prices(("PO1", 1000, 10)), today=TODAY,
                           settings={"use_orders": False})
-    assert _row(rec, "O1")["action"] != "RAISE"
+    row = _row(rec, "O1")
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(9.0, abs=0.5)
+    assert "темп важнее" in row["reason"]
 
 
 def test_use_margin_off_relaxes_unit_econ_requirement(db):
@@ -807,15 +846,16 @@ def test_use_season_off_removes_trend_from_decision(db):
 # ----------------------------------- Рейтинг по отзывам (ценный товар не раздают дёшево)
 
 
-def test_rating_reviews_high_blocks_overstock_lower(db):
-    """Рейтинг по отзывам 5.0 → ценному товару скидку не увеличиваем даже в перезапасе."""
+def test_rating_reviews_high_limits_overstock_lower(db):
+    """Рейтинг по отзывам 5.0 → ценному товару скидку не увеличиваем: только обязательный шаг."""
     _seed(db, "RR1", "PRR1", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
           funnel_extra={"feedback_rating": 5.0})
     rec = recommendations(db, prices_df=_prices(("PRR1", 2000, 10)), today=TODAY,
                           settings={"prefer_raise": False})
     row = _row(rec, "RR1")
-    assert row["action"] == "HOLD"
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(11.0, abs=0.5)  # 10 -> 11 (минимальный шаг)
     assert "ценный товар" in row["reason"]
 
 
@@ -861,14 +901,15 @@ def test_rating_reviews_unknown_no_effect(db):
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
 
 
-def test_rating_reviews_high_blocks_dead_stock_lower(db):
-    """Мёртвый товар, но рейтинг по отзывам 5.0 → скидку не делим."""
+def test_rating_reviews_high_limits_dead_stock_lower(db):
+    """Мёртвый товар с рейтингом 5.0 → скидку не делим, но коррекция обязательна (шаг 1)."""
     _seed(db, "RR5", "PRR5", stock=100, sales=[*_fallback_sales()],
           funnel_extra={"feedback_rating": 5.0})
     rec = recommendations(db, prices_df=_prices(("PRR5", 1000, 0)), today=TODAY,
                           settings={"prefer_raise": False})
     row = _row(rec, "RR5")
-    assert row["action"] == "HOLD"
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(1.0, abs=0.5)
     assert "ценный товар" in row["reason"]
 
 
