@@ -1456,3 +1456,71 @@ def apply_recommendations(
     return {"applied": applied_ids, "rows": rows, "pushed": len(items),
             "task_id": result.get("task_id") if isinstance(result, dict) else None,
             "note": note}
+
+
+def apply_rows(
+    db: Session,
+    rows: list,
+    settings=None,
+    provider=None,
+    require_min_prices: bool = False,
+    today: Optional[date] = None,
+) -> dict:
+    """Применяет скидки ровно для переданных строк — видимых в таблице автопилота.
+
+    Используется кнопкой «Применить в WB»: сервер НЕ пересчитывает рекомендации,
+    а отправляет на API WB то, что пользователь видит в таблице (с учётом фильтров
+    поиска и скрытых колонок). Строки — row-объекты из recommendations():
+    article, nm_id, price, current_discount, target_discount, action, status,
+    reason, min_price. Кулдаун и гейт мин. цен WB работают как обычно.
+    """
+    s = merge_settings(settings or {})
+    today = today or date.today()
+    rows = [dict(r) for r in rows]
+    now = datetime.now()
+    cooldown_from = today - timedelta(days=int(s["cooldown_days"]))
+
+    if require_min_prices:
+        lower_no_min = [
+            r["article"] for r in rows
+            if r["action"] == "LOWER"
+            and not (r.get("min_price") or 0) > 0
+        ]
+        if lower_no_min:
+            _record(db, rows, applied_at=now,
+                    error="нет данных о минимальных ценах WB — применение заблокировано")
+            raise ValueError(
+                "Нет данных о минимальных ценах WB (публичный Price API недоступен) — "
+                "применение скидок заблокировано до появления расчёта минимальной цены."
+            )
+
+    applied_past = set(db.scalars(
+        select(models.PriceChange.article).where(
+            models.PriceChange.status == "applied",
+            models.PriceChange.applied_at >= cooldown_from,
+        )
+    ).all())
+    items = _pushed_items(rows, s, applied_past)
+    prov = provider or provider_factory.get_wb_provider()
+
+    if not items:
+        _record(db, rows, applied_at=now)
+        return {"applied": [], "rows": rows, "pushed": 0,
+                "note": "Нет кандидатов на изменение (все hold/skip или в кулдауне)."}
+
+    try:
+        result = prov.update_prices(items)
+    except Exception as exc:  # noqa: BLE001
+        _record(db, rows, applied_at=now, error=str(exc))
+        raise
+
+    for r in rows:
+        if r["action"] in ("RAISE", "LOWER", "HALVE") and r["status"] == "suggested":
+            r["status"] = "applied"
+
+    _record(db, rows, applied_at=now)
+    applied_ids = [r["article"] for r in rows if r["status"] == "applied"]
+    note = f"Применено изменений: {len(applied_ids)} (из видимых в таблице: {len(rows)})."
+    return {"applied": applied_ids, "rows": rows, "pushed": len(items),
+            "task_id": result.get("task_id") if isinstance(result, dict) else None,
+            "note": note}

@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "6";
+const UI_VERSION = "7";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3448,14 +3448,13 @@ function refreshApplyButton() {
   const actives = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
   const lowers = _pricingRows.filter((r) => r.action === "LOWER");
   const noMin = lowers.filter((r) => !(Number(r.min_price) > 0));
-  const hiddenDead = _pricingResp && Number(_pricingResp.hidden_dead || 0) > 0;
-  const canApply = (actives.length > 0 || hiddenDead) && noMin.length === 0;
+  const canApply = actives.length > 0 && noMin.length === 0;
   btn.disabled = !canApply;
   btn.title = canApply
-    ? "Применить рекомендованные скидки через WB API" + (hiddenDead ? " (включая деление скидки у скрытых мёртвых)" : " (мин. цена WB учтена)")
+    ? "Применить через WB API только видимые в таблице строки (с учётом фильтра поиска)"
     : noMin.length > 0
-      ? "Нужен расчёт минимальной цены WB для всех рекомендаций на снижение — публичный Price API не вернул данных"
-      : "Нет рекомендаций на изменение — включите «С нулевыми товарами», чтобы применить и деление скидки у мёртвых";
+      ? "Нужен расчёт минимальной цены WB для всех видимых рекомендаций на снижение — публичный Price API не вернул данных"
+      : "Нет видимых рекомендаций на изменение — применить больше нечего (только строки таблицы)";
 }
 
 async function renderPricing(apply) {
@@ -3508,32 +3507,38 @@ async function applyPricing() {
   const s = pricingWithDates(collectPricingSettings());
   const showZeroEl = $("#pricingShowZero");
   if (showZeroEl) s.show_zero = showZeroEl.checked;
-  const lowers = _pricingRows.filter((r) => r.action === "LOWER");
-  const halve = _pricingRows.filter((r) => r.action === "HALVE");
-  const hiddenDead = _pricingResp ? Number(_pricingResp.hidden_dead || 0) : 0;
+  // Отправляем ровно то, что видно в таблице: _pricingRows уже отфильтрован
+  // по строке поиска и по «С нулевыми товарами» — сервер НЕ пересчитывает.
+  const toApply = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
+  const lowers = toApply.filter((r) => r.action === "LOWER");
+  const halve = toApply.filter((r) => r.action === "HALVE");
   const parts = [];
   if (lowers.length) {
     const list = lowers.slice(0, 5).map((r) => r.article).join(", ") + (lowers.length > 5 ? "…" : "");
     parts.push("снизить цену у " + lowers.length + " артикулов (" + list + ")");
   }
   if (halve.length) parts.push("разделить скидку пополам у " + halve.length + " мёртвых");
-  if (hiddenDead > 0) parts.push("разделить скидку пополам у " + hiddenDead + " скрытых мёртвых (скидка ÷2)");
   const confirmText = parts.length
-    ? "Применить?\n• " + parts.join("\n• ") + "\nМинимальная цена WB учтена для снижений."
-    : "Рекомендаций на изменение нет — применить всё равно?";
+    ? "Применить к видимым в таблице товарам?\n• " + parts.join("\n• ") + "\nМинимальная цена WB учтена для снижений."
+    : "У видимых товаров нет рекомендаций на изменение — применить всё равно?";
   const oldMode = pricingModeCurrent === "old";
   const finalConfirm = (oldMode ? "ВНИМАНИЕ — включена старая модель расчёта (не рекомендуется)!\n\n" : "") + confirmText;
   if (!confirm(finalConfirm)) return;
-  msg.textContent = "Применяю через WB API…";
+  if (!toApply.length) {
+    msg.textContent = "Нет видимых товаров для применения";
+    return;
+  }
+  msg.textContent = "Отправляю скидки в WB API…";
   try {
+    const body = Object.assign({}, s, { ui_rows: toApply });
     const resp = await fetch("/api/pricing/apply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(s),
+      body: JSON.stringify(body),
     });
     const j = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error((j.detail || resp.status) || "WB API не принял изменения");
-    msg.textContent = j.note || "Применено: " + (j.applied || []).length + " артикулов";
+    msg.textContent = j.note || ("Применено: " + (j.applied || []).length + " артикулов");
     await renderPricing(false);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;

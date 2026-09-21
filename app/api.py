@@ -1010,10 +1010,21 @@ def pricing_recommendations(payload: dict = Body(default={}), db: Session = Depe
 
 @router.post("/pricing/apply")
 def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db)):
-    """Применяет рекомендованные скидки через WB API upload/task и пишет журнал price_changes."""
+    """Применяет скидки через WB API upload/task и пишет журнал price_changes.
+
+    Если в теле передан list `ui_rows` (видимые строки таблицы автопилота) —
+    применяет ровно их (то, что видит пользователь с учётом фильтров поиска и
+    скрытых колонок). Иначе пересчитывает рекомендации и применяет всё.
+    """
     prov = provider_factory.get_wb_provider()
-    prices_df = prov.get_prices()
+    ui_rows = payload.get("ui_rows")
     try:
+        if ui_rows:
+            return pricing_service.apply_rows(
+                db, ui_rows, settings=payload, provider=prov,
+                require_min_prices=True,
+            )
+        prices_df = prov.get_prices()
         return pricing_service.apply_recommendations(
             db, settings=payload, prices_df=prices_df, provider=prov,
             min_prices=pricing_service.fetch_min_prices(prov, prices_df),

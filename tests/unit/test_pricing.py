@@ -567,6 +567,82 @@ class _FakeProvider:
         return {"task_id": "task-1"}
 
 
+# ------------------------------------------------ apply_rows (кнопка «Применить в WB»)
+
+
+def _ui_row(art="R8", nm="P8", price=2000.0, cur_disc=10.0, tgt_disc=23.5,
+            action="LOWER", min_price=1000.0, status="suggested"):
+    return {
+        "article": art, "nm_id": nm, "name": "Товар", "price": price,
+        "current_discount": cur_disc, "target_discount": tgt_disc,
+        "target_vis": price * (1 - tgt_disc / 100), "min_price": min_price,
+        "action": action, "status": status, "reason": "правила R1-R10",
+        "stock": 100, "replenishable": False,
+    }
+
+
+def test_apply_rows_pushes_exactly_visible(db):
+    """Применяет ровно переданные строки (видимые в таблице), без пересчёта."""
+    fake = _FakeProvider()
+    rows = [_ui_row()]
+    res = pricing_service.apply_rows(db, rows, provider=fake, today=TODAY,
+                                     require_min_prices=True)
+    assert res["applied"] == ["R8"]
+    assert res["pushed"] == 1
+    assert fake.applied_prices == [{"nmID": "P8", "price": 2000.0, "discount": 23.5}]
+    log = db.execute(select(models.PriceChange).where(models.PriceChange.article == "R8")).scalars().all()
+    assert log and log[-1].status == "applied"
+    assert log[-1].after_discount == pytest.approx(23.5)
+    assert log[-1].applied_at is not None
+
+
+def test_apply_rows_pushes_only_matching_rows(db):
+    """HOLD/RAISE/LOWER: в WB уходят только строки с действием изменения."""
+    fake = _FakeProvider()
+    rows = [
+        _ui_row(art="R8", nm="P8", action="LOWER"),
+        _ui_row(art="R9", nm="P9", action="HOLD"),
+        _ui_row(art="R10", nm="P10", action="RAISE"),
+    ]
+    res = pricing_service.apply_rows(db, rows, provider=fake, today=TODAY)
+    assert fake.applied_prices == [
+        {"nmID": "P8", "price": 2000.0, "discount": 23.5},
+        {"nmID": "P10", "price": 2000.0, "discount": 23.5},
+    ]
+    applied = [r["article"] for r in res["rows"] if r["status"] == "applied"]
+    assert applied == ["R8", "R10"]
+
+
+def test_apply_rows_cooldown_blocks_reapply(db):
+    """RAISE/LOWER не повторяются в кулдауне (HALVE — можно)."""
+    fake = _FakeProvider()
+    rows = [_ui_row()]
+    pricing_service.apply_rows(db, rows, provider=fake, today=TODAY)
+    res = pricing_service.apply_rows(db, [_ui_row()], provider=_FakeProvider(), today=TODAY)
+    assert res["pushed"] == 0
+    assert res["rows"][0]["status"] == "skipped_cooldown"
+
+
+def test_apply_rows_requires_min_price_for_lower(db):
+    """LOWER без известной мин. цены WB блокируется (require_min_prices)."""
+    rows = [_ui_row(min_price=0)]
+    with pytest.raises(ValueError, match="минимальных ценах WB"):
+        pricing_service.apply_rows(db, rows, provider=_FakeProvider(), today=TODAY,
+                                   require_min_prices=True)
+    logs = db.execute(select(models.PriceChange)).scalars().all()
+    assert any(log.status == "error" and "заблокировано" in log.reason for log in logs)
+
+
+def test_apply_rows_error_records_error_and_raises(db):
+    """Сбой WB API → журнал 'error' + исключение (как в apply_recommendations)."""
+    rows = [_ui_row()]
+    with pytest.raises(RuntimeError):
+        pricing_service.apply_rows(db, rows, provider=_FakeProvider(raise_on_update=True),
+                                   today=TODAY)
+    logs = db.execute(select(models.PriceChange)).scalars().all()
+    assert any(log.status == "error" and "boom" in log.reason for log in logs)
+
+
 # ------------------------------------------------------------------ T-21: мёртвые/нулевые товары и противовес
 
 
