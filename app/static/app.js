@@ -2926,6 +2926,7 @@ const pricingHeaders = [
   { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct },
   { k: "backlog", label: "В корзине", num: true, render: cellFmts.int },
   { k: "current_discount", label: "Скидка сейчас, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
+  { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money },
   { k: "avg_price", label: "Ср. цена факт", num: true, render: cellFmts.money },
   { k: "product_rating", label: "Рейтинг", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) },
   { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int },
@@ -3034,6 +3035,7 @@ const PRICING_OPTIONAL = [
   { k: "conv_pct", label: "Конверсия, %", def: true },
   { k: "backlog", label: "В корзине", def: true },
   { k: "current_discount", label: "Скидка сейчас, %", def: true },
+  { k: "current_vis", label: "Цена сейчас, руб", def: true },
   { k: "avg_price", label: "Ср. цена факт", def: true },
   { k: "margin_pct_at_target", label: "Маржа при цели, %", def: true },
   { k: "product_rating", label: "Рейтинг", def: true },
@@ -3774,6 +3776,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   initCardsUpload();
   initDetailUpload();
+  initProductsUpload();
+  initNetCostUpload();
   const pricingExport = $("#pricingExport");
   if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
   const pricingApply = $("#pricingApply");
