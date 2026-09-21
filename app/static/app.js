@@ -395,8 +395,9 @@ async function renderMargin(p) {
 }
 
 const marginHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name",    label: "Наименование", render: cellFmts.text },
+{ k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
   { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int },
   { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
   { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
@@ -3030,6 +3031,7 @@ registerColView("margin-detail", {
 });
 // Необязательные колонки автопилота (базовые — article/name/stock/doc/action/target_discount/target_vis/reason — видны всегда).
 const PRICING_OPTIONAL = [
+  { k: "nm_id", label: "Артикул WB", def: true },
   { k: "velocity", label: "v, шт/дн", def: true },
   { k: "trend", label: "Тренд", def: true },
   { k: "conv_pct", label: "Конверсия, %", def: true },
