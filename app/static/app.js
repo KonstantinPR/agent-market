@@ -5,6 +5,9 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
+const UI_VERSION = "3";
+if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
+
 function fmt(n) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(n || 0);
 }
