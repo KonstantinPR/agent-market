@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "5";
+const UI_VERSION = "6";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3199,6 +3199,57 @@ function savePricingSettings(s) {
   localStorage.setItem("pricing_settings", JSON.stringify(s));
 }
 
+let _pricingModeInited = false;
+
+function initPricingModeMenu(saved) {
+  const btn = $("#btnpricingMode");
+  const menu = $("#pricingModeMenu");
+  const panel = $("#pricingModePanel");
+  if (!btn || !menu || !panel) return;
+  if (pricingModeCurrent === null) {
+    pricingModeCurrent = (saved && (saved.mode === "old" || saved.mode === "new"))
+      ? saved.mode
+      : (pricingDefaults && pricingDefaults.mode === "old" ? "old" : "new");
+  }
+  const labels = { old: "Старая (не рекомендуется)", new: "Новая (рекомендуется)" };
+  const refresh = () => { btn.textContent = (labels[pricingModeCurrent] || "Новая (рекомендуется)") + " \u25BE"; };
+  if (!_pricingModeInited) {
+    _pricingModeInited = true;
+    panel.innerHTML = "";
+    for (const v of ["new", "old"]) {
+      const row = document.createElement("div");
+      row.className = "colview-row";
+      const lbl = document.createElement("label");
+      lbl.className = "chk";
+      const rb = document.createElement("input");
+      rb.type = "radio";
+      rb.name = "pricingMode";
+      rb.value = v;
+      rb.checked = v === pricingModeCurrent;
+      lbl.appendChild(rb);
+      lbl.appendChild(document.createTextNode(
+        v === "new"
+          ? " Новая (рекомендуется) — правила R1-R10"
+          : " Старая (не рекомендуется) — эвристика из finance"));
+      row.appendChild(lbl);
+      rb.addEventListener("change", () => {
+        pricingModeCurrent = v;
+        refresh();
+        panel.classList.add("hidden");
+        if (currentTab === "pricing") renderPricing(false);
+      });
+      panel.appendChild(row);
+    }
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      panel.classList.toggle("hidden");
+    });
+    menu.addEventListener("click", (e) => e.stopPropagation());
+    document.addEventListener("click", () => panel.classList.add("hidden"));
+  }
+  refresh();
+}
+
 function collectPricingSettings() {
   const box = $("#pricingSettings");
   const s = loadPricingSettings();
@@ -3210,8 +3261,7 @@ function collectPricingSettings() {
       if (!isNaN(v)) s[key] = v;
     }
   });
-  const modeEl = $("#pricingMode");
-  if (modeEl && (modeEl.value === "old" || modeEl.value === "new")) s.mode = modeEl.value;
+  if (pricingModeCurrent === "old" || pricingModeCurrent === "new") s.mode = pricingModeCurrent;
   savePricingSettings(s);
   return s;
 }
@@ -3313,13 +3363,7 @@ async function buildPricingSettings() {
   const saved = loadPricingSettings();
   const box = $("#pricingSettings");
   box.innerHTML = "";
-  const modeEl = $("#pricingMode");
-  if (modeEl && !modeEl.dataset.init) {
-    modeEl.dataset.init = "1";
-    modeEl.value = (saved.mode === "old" || saved.mode === "new")
-      ? saved.mode
-      : (pricingDefaults.mode === "old" ? "old" : "new");
-  }
+  initPricingModeMenu(saved);
   const openSaved = loadOpenPricingGroups();
   const defaultOpen = new Set(
     PRICING_GROUPS.filter((g) => !PRICING_GROUPS_CLOSED_BY_DEFAULT.has(g.title)).map((g) => g.title)
@@ -3396,6 +3440,7 @@ function pricingWithDates(s) {
 
 let _pricingRows = [];
 let _pricingResp = null;
+let pricingModeCurrent = null;
 
 function refreshApplyButton() {
   const btn = $("#pricingApply");
@@ -3476,8 +3521,7 @@ async function applyPricing() {
   const confirmText = parts.length
     ? "Применить?\n• " + parts.join("\n• ") + "\nМинимальная цена WB учтена для снижений."
     : "Рекомендаций на изменение нет — применить всё равно?";
-  const modeEl = $("#pricingMode");
-  const oldMode = modeEl && modeEl.value === "old";
+  const oldMode = pricingModeCurrent === "old";
   const finalConfirm = (oldMode ? "ВНИМАНИЕ — включена старая модель расчёта (не рекомендуется)!\n\n" : "") + confirmText;
   if (!confirm(finalConfirm)) return;
   msg.textContent = "Применяю через WB API…";

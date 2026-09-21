@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=5">
+<link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body>
 <nav class="navbar">
@@ -165,12 +165,11 @@
       <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» вносит новые скидки через API; она активна, когда публичный Price API вернул минимальные цены для всех рекомендаций на снижение.</span></span>
       <input id="pricingLike" placeholder="Артикул или название содержит…">
       <label class="chk"><input type="checkbox" id="pricingShowZero"> С нулевыми товарами</label>
-      <label class="chk">Версия расчёта:
-        <select id="pricingMode">
-          <option value="new">Новая (рекомендуется)</option>
-          <option value="old">Старая (не рекомендуется)</option>
-        </select>
-      </label>
+      <span class="tl">Версия расчёта:</span>
+      <div class="view-menu" id="pricingModeMenu">
+        <button type="button" class="btn" id="btnpricingMode">Новая (рекомендуется) &#9662;</button>
+        <div class="view-menu-panel hidden" id="pricingModePanel"></div>
+      </div>
       <span class="toolbar-right">
         <span id="pricingTablePager"></span>
         <div class="view-menu" id="pricingViewMenu">
@@ -684,6 +683,6 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=5"></script>
+<script src="/static/app.js?v=6"></script>
 </body>
 </html>
