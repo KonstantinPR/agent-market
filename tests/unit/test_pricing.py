@@ -407,78 +407,6 @@ def test_t14_unknown_quality_does_not_block_raise(db):
     assert _row(rec, "Q6")["action"] == "RAISE"
 
 
-# ------------------------------------------------ T-15: минимальная цена WB (priceLimits)
-
-
-def test_t15_min_price_clamps_overstock_lower(db):
-    """min_price поднимает target_vis в LOWER до минимальной витринной цены WB."""
-    _seed(db, "M1", "PM1", stock=1000,
-          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("PM1", 2000, 10)), today=TODAY,
-                          min_prices={"PM1": 1600}, settings={"use_min_price": True})
-    row = _row(rec, "M1")
-    assert row["action"] == "LOWER"
-    assert row["min_price"] == pytest.approx(1600)
-    assert row["target_vis"] == pytest.approx(1600.0, abs=1)
-    assert row["target_discount"] == pytest.approx((1 - 1600 / 2000) * 100, abs=0.5)
-
-
-def test_t15_min_price_above_current_forces_raise(db):
-    """Мин. цена выше текущей витринной → снижать некуда → обязательный шаг вверх."""
-    _seed(db, "M2", "PM2", stock=1000,
-          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("PM2", 2000, 10)), today=TODAY,
-                          min_prices={"PM2": 1900}, settings={"use_min_price": True})
-    row = _row(rec, "M2")
-    assert row["action"] == "RAISE"
-    assert row["target_discount"] == pytest.approx(9.0, abs=0.5)
-    assert "мин. цена WB" in row["reason"] and "коррекция скидки обязательна" in row["reason"]
-
-
-def test_t15_min_price_clamps_dead_stock_lower(db):
-    _seed(db, "M3", "PM3", stock=100, sales=[*_fallback_sales()])
-    rec = recommendations(db, prices_df=_prices(("PM3", 1000, 0)), today=TODAY,
-                          min_prices={"PM3": 900}, settings={"use_min_price": True})
-    row = _row(rec, "M3")
-    assert row["action"] == "LOWER"
-    assert row["target_vis"] == pytest.approx(900.0, abs=1)
-
-
-def test_t15_no_min_prices_leaves_row_unanchored(db):
-    """Без min_prices расчёт LOWER не меняется, колонка min_price пустая (None)."""
-    _seed(db, "M4", "PM4", stock=1000,
-          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("PM4", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False})
-    row = _row(rec, "M4")
-    assert row["action"] == "LOWER"
-    assert row["min_price"] is None
-    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
-
-
-def test_t15_fetch_min_prices_collects_ids():
-    df = _prices(("1001", 2000, 10), ("1002", 500, 5))
-
-    class _Prov:
-        def get_min_prices(self, ids):
-            assert ids == ["1001", "1002"]
-            return {1001: 1500.0, "1002": 420.0}
-
-    assert pricing_service.fetch_min_prices(_Prov(), df) == {"1001": 1500.0, "1002": 420.0}
-
-
-def test_t15_fetch_min_prices_falls_back_quietly():
-    df = _prices(("1001", 2000, 10))
-    assert pricing_service.fetch_min_prices(object(), df) == {}
-
-    class _Prov:
-        def get_min_prices(self, ids):
-            raise RuntimeError("нет интернета")
-
-    assert pricing_service.fetch_min_prices(_Prov(), df) == {}
-    assert pricing_service.fetch_min_prices(_Prov(), None) == {}
-
-
 # ------------------------------------------------------------------ применение
 
 
@@ -488,7 +416,7 @@ def test_apply_records_applied_and_returns_items(db):
     fake = _FakeProvider()
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("P8", 2000, 10)), provider=fake, today=TODAY,
-        min_prices={"P8": 1000}, settings={"prefer_raise": False},
+        settings={"prefer_raise": False},
     )
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
@@ -510,7 +438,6 @@ def test_apply_error_records_error_and_raises(db):
     with pytest.raises(RuntimeError):
         pricing_service.apply_recommendations(
             db, prices_df=_prices(("P8", 2000, 10)), provider=fake, today=TODAY,
-            min_prices={"P8": 1000},
         )
     logs = db.execute(select(models.PriceChange)).scalars().all()
     assert any(log.status == "error" and "boom" in log.reason for log in logs)
@@ -521,7 +448,6 @@ def test_apply_cooldown_blocks_reapply(db):
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     pricing_service.apply_recommendations(
         db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
-        min_prices={"P8": 1000},
     )
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
@@ -529,30 +455,6 @@ def test_apply_cooldown_blocks_reapply(db):
     assert res["pushed"] == 0
     assert all(r["status"] == "skipped_cooldown"
                for r in res["rows"] if r["action"] in ("RAISE", "LOWER"))
-
-
-def test_apply_requires_min_price_for_lower(db):
-    """T-16: LOWER без известной мин. цены WB блокирует применение (require_min_prices)."""
-    _seed(db, "R8", "P8", stock=1000,
-          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    with pytest.raises(ValueError, match="минимальных ценах WB"):
-        pricing_service.apply_recommendations(
-            db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(),
-            today=TODAY, require_min_prices=True,
-        )
-    logs = db.execute(select(models.PriceChange)).scalars().all()
-    assert any(log.status == "error" and "заблокировано" in log.reason for log in logs)
-
-
-def test_apply_guard_passes_when_min_price_known(db):
-    """T-16: при известной мин. цене (климп выполнен) применение не блокируется."""
-    _seed(db, "R8", "P8", stock=1000,
-          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    res = pricing_service.apply_recommendations(
-        db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
-        min_prices={"P8": 1000}, require_min_prices=True,
-    )
-    assert res["pushed"] == 1
 
 
 class _FakeProvider:
@@ -571,11 +473,11 @@ class _FakeProvider:
 
 
 def _ui_row(art="R8", nm="P8", price=2000.0, cur_disc=10.0, tgt_disc=23.5,
-            action="LOWER", min_price=1000.0, status="suggested"):
+            action="LOWER", status="suggested"):
     return {
         "article": art, "nm_id": nm, "name": "Товар", "price": price,
         "current_discount": cur_disc, "target_discount": tgt_disc,
-        "target_vis": price * (1 - tgt_disc / 100), "min_price": min_price,
+        "target_vis": price * (1 - tgt_disc / 100),
         "action": action, "status": status, "reason": "правила R1-R10",
         "stock": 100, "replenishable": False,
     }
@@ -585,8 +487,7 @@ def test_apply_rows_pushes_exactly_visible(db):
     """Применяет ровно переданные строки (видимые в таблице), без пересчёта."""
     fake = _FakeProvider()
     rows = [_ui_row()]
-    res = pricing_service.apply_rows(db, rows, provider=fake, today=TODAY,
-                                     require_min_prices=True)
+    res = pricing_service.apply_rows(db, rows, provider=fake, today=TODAY)
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
     assert fake.applied_prices == [{"nmID": "P8", "price": 2000.0, "discount": 23.5}]
@@ -621,16 +522,6 @@ def test_apply_rows_cooldown_blocks_reapply(db):
     res = pricing_service.apply_rows(db, [_ui_row()], provider=_FakeProvider(), today=TODAY)
     assert res["pushed"] == 0
     assert res["rows"][0]["status"] == "skipped_cooldown"
-
-
-def test_apply_rows_requires_min_price_for_lower(db):
-    """LOWER без известной мин. цены WB блокируется (require_min_prices)."""
-    rows = [_ui_row(min_price=0)]
-    with pytest.raises(ValueError, match="минимальных ценах WB"):
-        pricing_service.apply_rows(db, rows, provider=_FakeProvider(), today=TODAY,
-                                   require_min_prices=True)
-    logs = db.execute(select(models.PriceChange)).scalars().all()
-    assert any(log.status == "error" and "заблокировано" in log.reason for log in logs)
 
 
 def test_apply_rows_error_records_error_and_raises(db):
@@ -888,18 +779,6 @@ def test_use_quality_off_default_allows_raise_with_bad_rating(db):
           funnel=(100, 1, 1, 0, 900), funnel_extra={"product_rating": 1.0})
     rec = recommendations(db, prices_df=_prices(("PQ0", 1000, 10)), today=TODAY)
     assert _row(rec, "Q0")["action"] == "RAISE"
-
-
-def test_use_min_price_off_ignores_min_price_clamp(db):
-    """use_min_price=False: рекомендация ниже минимальной цены WB не клампится."""
-    _seed(db, "MP0", "PMP0", stock=1000,
-          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("PMP0", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False},
-                          min_prices={"PMP0": 1900})
-    row = _row(rec, "MP0")
-    assert row["action"] == "LOWER"
-    assert row["target_vis"] < 1900 - 1  # без клампа к мин. цене
 
 
 def test_use_season_off_removes_trend_from_decision(db):

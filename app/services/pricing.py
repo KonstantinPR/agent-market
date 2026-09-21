@@ -71,7 +71,6 @@ PRICING_DEFAULTS = {
     "use_reviews": True,
     "use_quality": False,
     "use_returns": False,
-    "use_min_price": False,
     # Версия расчёта: "new" — правила R1-R10 (рекомендуется), "old" — порт
     # старой эвристики из finance/price_module (НЕ рекомендуется, только для
     # сравнения результатов; общие стражи безопасности действуют в обеих).
@@ -158,31 +157,6 @@ def _normalize_prices(prices_df: Optional[pd.DataFrame]) -> dict:
                 discount = (price - disc_price) / price * 100
         out[nm] = {"price": price, "discount": max(0.0, min(discount, 100.0))}
     return out
-
-
-def fetch_min_prices(prov, prices_df: Optional[pd.DataFrame]) -> dict:
-    """Минимальные витринные цены WB для nmID из прайса ({str nmID: руб}).
-
-    Тихо возвращает {} при отсутствии метода у провайдера, пустом прайсе или
-    сбое запроса — в этом случае рекомендации идут без клампинга по мин. цене,
-    а кнопка «Применить в WB» блокируется на стороне клиента.
-    """
-    if prov is None or prices_df is None or prices_df.empty:
-        return {}
-    if not hasattr(prov, "get_min_prices"):
-        return {}
-    nm_col = next((c for c in ("nmID", "nm_id") if c in prices_df.columns), None)
-    if nm_col is None:
-        return {}
-    ids = [str(v) for v in prices_df[nm_col].tolist()
-           if str(v).strip() and str(v).strip().lower() not in ("nan", "none")]
-    if not ids:
-        return {}
-    try:
-        raw = prov.get_min_prices(ids)
-    except Exception:  # noqa: BLE001
-        return {}
-    return {str(k): _num(v) for k, v in (raw or {}).items() if v}
 
 
 def _funnel_slice(db: Session, date_from: date, date_to: date) -> dict:
@@ -348,7 +322,6 @@ def recommendations(
     db: Session,
     settings=None,
     prices_df: Optional[pd.DataFrame] = None,
-    min_prices: Optional[dict] = None,
     provider=None,
     today: Optional[date] = None,
 ) -> dict:
@@ -446,7 +419,6 @@ def recommendations(
         for r in db.execute(select(models.NmArticle.nm_id, models.NmArticle.article))
     }
     prices = _normalize_prices(prices_df)
-    min_px = {str(k): _num(v) for k, v in (min_prices or {}).items()}
 
     # Базас автопилота — только WB-карточки: article -> nmID. Товары без
     # nm-карты (каталог Ozon/не-WB) из расчёта исключаются полностью.
@@ -575,7 +547,6 @@ def recommendations(
             "sells_net": s_now, "cover_days": cover,
             "comm_rate": None, "logistics_unit": 0.0, "storage_unit": 0.0,
             "other_unit": 0.0, "floor_price": None,
-            "min_price": min_px.get(str(nm_id), 0.0),
         }
         qty_sold = int(art_now["qty_sold"].sum()) if not art_now.empty else 0
         ret_now = int(art_now["ret"].sum()) if not art_now.empty else 0
@@ -634,7 +605,6 @@ def _row_skip(art, prod, nm_id, reason):
         "max_discount_item": None, "action": "SKIP", "status": "skipped_no_data",
         "reason": reason, "target_discount": None, "target_vis": None,
         "margin_pct_at_target": None,
-        "min_price": None,
         **_enriched({}),
     }
 
@@ -689,7 +659,6 @@ def _base_row(f: dict) -> dict:
         "max_discount_item": None, "trend": round(f["trend"], 2),
         "action": "HOLD", "status": "hold", "reason": "",
         "target_discount": None, "target_vis": None, "margin_pct_at_target": None,
-        "min_price": f["min_price"] if f["min_price"] else None,
         **_enriched(f),
     }
 
@@ -807,7 +776,6 @@ def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str) -
     eff = min(cur_vis, f["avg_price"]) if f["avg_price"] > 0 else cur_vis
     net_cost = _num(f.get("net_cost"))
     factual = f["avg_price"] if f["avg_price"] > 0 else eff
-    min_price = (f.get("min_price") or 0.0) if bool(s.get("use_min_price", False)) else 0.0
     max_disc_item = base.get("max_discount_item")
     if max_disc_item is None:
         max_disc_item = _num(s["max_discount_pct"])
@@ -816,8 +784,7 @@ def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str) -
     def try_lower():
         target_vis = max(price * (1 - (cur_disc + step) / 100),
                          _num(f["floor_price"]),
-                         price * (1 - max_disc_item / 100),
-                         min_price)
+                         price * (1 - max_disc_item / 100))
         target_vis = min(target_vis, cur_vis)
         new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
         if new_disc > cur_disc + 1e-9:
@@ -880,7 +847,6 @@ def _decide(f: dict, s: dict) -> dict:
     use_reviews = bool(s.get("use_reviews", True))
     use_quality = bool(s.get("use_quality", False))
     use_returns = bool(s.get("use_returns", False))
-    use_minprice = bool(s.get("use_min_price", False))
 
     # Предпочтение «поднимать, а не опускать» (противовес автоскидкам WB):
     # зона дефицита шире (док_ло выше), зона перезапаса уже (док_хай выше),
@@ -945,8 +911,7 @@ def _decide(f: dict, s: dict) -> dict:
                     base, f, s, "LOWER",
                     f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
                     f"— скидку не увеличиваем")
-            min_price = (f.get("min_price") or 0.0) if use_minprice else 0.0
-            target_vis = max(_num(floor), eff * (1 - max_drop * rating_scale / 100), min_price)
+            target_vis = max(_num(floor), eff * (1 - max_drop * rating_scale / 100))
             target_vis = min(target_vis, cur_vis)
             target_vis = max(target_vis, price * (1 - max_disc_item / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
@@ -1048,8 +1013,7 @@ def _decide(f: dict, s: dict) -> dict:
                 k *= 1.2
         k = _clamp(k, 0.2, 1.2)
         factor = max(1 - max_drop * rating_scale / 100, (_num(s["target_doc"]) / doc) ** k)
-        min_price = (f.get("min_price") or 0.0) if use_minprice else 0.0
-        target_vis = max(_num(floor), eff * factor, price * (1 - max_disc_item / 100), min_price)
+        target_vis = max(_num(floor), eff * factor, price * (1 - max_disc_item / 100))
         target_vis = min(target_vis, cur_vis)
         new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
         if new_disc - cur_disc >= _num(s["min_delta_pp"]):
@@ -1064,8 +1028,7 @@ def _decide(f: dict, s: dict) -> dict:
         else:
             return _mandatory_step(
                 base, f, s, "LOWER",
-                f"перезапас (DOC={doc:.0f} дн.), целевые {_num(s['target_doc']):.0f} дн."
-                + (f" · мин. цена WB {min_price:.0f} ₽" if use_minprice and min_price > 0 else ""))
+                f"перезапас (DOC={doc:.0f} дн.), целевые {_num(s['target_doc']):.0f} дн.")
         return base
 
     return _mandatory_step(
@@ -1078,9 +1041,9 @@ def _decide(f: dict, s: dict) -> dict:
 # «Старая версия» коррекции скидки — порт finance/price_module.discount().
 # Режим НЕ рекомендуется: эвристика на взвешенных k-коэффициентах вместо
 # правил R1-R10, переносится для сравнения результатов. Общие стражи этого
-# автопилота (пол безубыточности floor_price, мин. цена WB при включённом
-# факторе, кламп 0..100, потолок max_discount_pct) действуют и здесь, чтобы
-# Apply не увёл витринную цену ниже точки убытка.
+# автопилота (пол безубыточности floor_price, кламп 0..100, потолок
+# max_discount_pct) действуют и здесь, чтобы Apply не увёл витринную цену
+# ниже точки убытка.
 
 DEFAULT_NET_COST = 500.0
 DEFAULT_PURE_VALUE = DEFAULT_NET_COST * 1.2  # 600
@@ -1288,11 +1251,9 @@ def _decide_legacy(f: dict, s: dict, k_norma_revenue: Optional[float] = None) ->
     target_discount = _clamp(n_discount, 0.0, _num(s["max_discount_pct"], 100.0))
     target_vis = price * (1 - target_discount / 100) if price > 0 else 0.0
 
-    # Общие стражи: пол безубыточности (всегда) и мин. цена WB (при факторе).
+    # Общий страж: пол безубыточности (всегда).
     if target_vis and price > 0:
         lo = _num(f.get("floor_price"))
-        if bool(s.get("use_min_price", False)) and f.get("min_price"):
-            lo = max(lo, _num(f["min_price"]))
         if lo and cur_vis > lo:
             target_vis = max(target_vis, lo)
             target_discount = (1 - target_vis / price) * 100
@@ -1386,22 +1347,16 @@ def apply_recommendations(
     settings=None,
     prices_df: Optional[pd.DataFrame] = None,
     provider=None,
-    min_prices: Optional[dict] = None,
-    require_min_prices: bool = False,
     today: Optional[date] = None,
 ) -> dict:
-    """Расчёт + применение скидок через WbProvider.update_prices + журнал PriceChange.
-
-    require_min_prices=True: если среди рекомендаций есть LOWER без известной
-    мин. цены WB, применение блокируется (ValueError) — снижать вслепую нельзя.
-    """
+    """Расчёт + применение скидок через WbProvider.update_prices + журнал PriceChange."""
     s = merge_settings(settings)
     # Мёртвые товары скрыты от UI, но применение обязано их обработать
     # (HALVE — шаг «скидка ÷2» идёт каждый прогон).
     rec_settings = merge_settings(s)
     rec_settings["show_zero"] = True
     rec = recommendations(db, rec_settings, prices_df=prices_df, provider=provider,
-                          min_prices=min_prices, today=today)
+                          today=today)
     rows = rec["rows"]
     today = today or date.today()
     cooldown_from = today - timedelta(days=int(s["cooldown_days"]))
@@ -1416,20 +1371,6 @@ def apply_recommendations(
     items = _pushed_items(rows, s, applied_past)
     now = datetime.now()
     prov = provider or provider_factory.get_wb_provider()
-
-    if require_min_prices:
-        lower_no_min = [
-            r["article"] for r in rows
-            if r["action"] == "LOWER" and r["status"] == "suggested"
-            and not (r.get("min_price") or 0) > 0
-        ]
-        if lower_no_min:
-            _record(db, rows, applied_at=now,
-                    error="нет данных о минимальных ценах WB — применение заблокировано")
-            raise ValueError(
-                "Нет данных о минимальных ценах WB (публичный Price API недоступен) — "
-                "применение скидок заблокировано до появления расчёта минимальной цены."
-            )
 
     if not items:
         _record(db, rows, applied_at=now)
@@ -1463,7 +1404,6 @@ def apply_rows(
     rows: list,
     settings=None,
     provider=None,
-    require_min_prices: bool = False,
     today: Optional[date] = None,
 ) -> dict:
     """Применяет скидки ровно для переданных строк — видимых в таблице автопилота.
@@ -1471,28 +1411,14 @@ def apply_rows(
     Используется кнопкой «Применить в WB»: сервер НЕ пересчитывает рекомендации,
     а отправляет на API WB то, что пользователь видит в таблице (с учётом фильтров
     поиска и скрытых колонок). Строки — row-объекты из recommendations():
-    article, nm_id, price, current_discount, target_discount, action, status,
-    reason, min_price. Кулдаун и гейт мин. цен WB работают как обычно.
+    article, nm_id, price, current_discount, target_discount, action, status, reason.
+    Кулдаун работает как обычно.
     """
     s = merge_settings(settings or {})
     today = today or date.today()
     rows = [dict(r) for r in rows]
     now = datetime.now()
     cooldown_from = today - timedelta(days=int(s["cooldown_days"]))
-
-    if require_min_prices:
-        lower_no_min = [
-            r["article"] for r in rows
-            if r["action"] == "LOWER"
-            and not (r.get("min_price") or 0) > 0
-        ]
-        if lower_no_min:
-            _record(db, rows, applied_at=now,
-                    error="нет данных о минимальных ценах WB — применение заблокировано")
-            raise ValueError(
-                "Нет данных о минимальных ценах WB (публичный Price API недоступен) — "
-                "применение скидок заблокировано до появления расчёта минимальной цены."
-            )
 
     applied_past = set(db.scalars(
         select(models.PriceChange.article).where(

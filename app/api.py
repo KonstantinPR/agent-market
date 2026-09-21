@@ -1138,7 +1138,6 @@ def pricing_recommendations(payload: dict = Body(default={}), db: Session = Depe
     prices_df = prov.get_prices()
     return pricing_service.recommendations(
         db, settings=payload, prices_df=prices_df,
-        min_prices=pricing_service.fetch_min_prices(prov, prices_df),
     )
 
 
@@ -1156,15 +1155,12 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
         if ui_rows:
             return pricing_service.apply_rows(
                 db, ui_rows, settings=payload, provider=prov,
-                require_min_prices=True,
             )
         prices_df = prov.get_prices()
         return pricing_service.apply_recommendations(
             db, settings=payload, prices_df=prices_df, provider=prov,
-            min_prices=pricing_service.fetch_min_prices(prov, prices_df),
-            require_min_prices=True,
         )
-    except ValueError as e:  # guard: нет мин. цен WB — снижать вслепую нельзя
+    except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"WB API не принял изменение цен: {e}")
@@ -1220,7 +1216,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "article", "name", "price", "current_vis", "current_discount", "target_vis",
         "target_discount", "action", "status", "reason", "doc", "velocity", "trend",
         "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
-        "min_price", "max_discount_item", "margin_pct_at_target", "replenishable",
+        "max_discount_item", "margin_pct_at_target", "replenishable",
         "product_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
         "add_to_wishlist", "stock_wb", "return_rate", "margin_pct", "margin_per_one",
         "revenue_per_one", "income_per_one", "commission_per_one",
@@ -1236,7 +1232,6 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "conv_pct": "Конверсия, %", "backlog": "В корзине", "stock": "Остаток",
         "avg_price": "Ср. цена факт, руб", "eff": "База расчёта, руб",
         "floor_price": "Пол (break-even), руб", "max_discount_item": "Макс. скидка, %",
-        "min_price": "Мин. цена WB, руб",
         "margin_pct_at_target": "Маржа при цели, %", "replenishable": "Докупаемый",
         "product_rating": "Рейтинг товара", "buyouts": "Выкупы, шт",
         "conv_buyout_percent": "Конверсия выкупа, %", "cancel_sum": "Отмены, руб",

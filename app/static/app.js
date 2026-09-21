@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "9";
+const UI_VERSION = "11";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -963,6 +963,7 @@ const productsBaseHeaders = [
   { k: "sizes_count", label: "Размеров", num: true, render: cellFmts.int },
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
   { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money },
+  { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money },
   { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) },
   { k: "replenishable", label: "Докупаемый", render: replenishableCell },
 ];
@@ -974,6 +975,7 @@ const productsSizeHeaders = [
   { k: "barcode", label: "Баркод", render: cellFmts.text },
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
   { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money },
+  { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money },
   { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) },
   { k: "replenishable", label: "Докупаемый", render: replenishableCell },
 ];
@@ -999,6 +1001,25 @@ function productsVisibleHeaders() {
   const sizes = sizesEl ? sizesEl.checked : false;
   const stocks = stocksEl ? stocksEl.checked : false;
   let headers = sizes ? productsSizeHeaders : productsBaseHeaders;
+  if (stocks) headers = headers.concat(productsStockHeaders);
+  return headers;
+}
+
+function productsPriceMode() {
+  const el = document.querySelector('input[name="productsPriceMode"]:checked');
+  return el ? el.value : "recommended";
+}
+
+function productsPreviewHeaders() {
+  const sizesEl = document.getElementById("productsSizes");
+  const stocksEl = document.getElementById("productsStocks");
+  const sizes = sizesEl ? sizesEl.checked : false;
+  const stocks = stocksEl ? stocksEl.checked : false;
+  let headers = (sizes ? productsSizeHeaders : productsBaseHeaders).map((h) => ({ ...h }));
+  const recIdx = headers.findIndex((h) => h.k === "recommended_price");
+  if (productsPriceMode() === "min" && recIdx >= 0) {
+    headers[recIdx] = { k: "price", label: "Цена (мин.)", num: true, render: cellFmts.money };
+  }
   if (stocks) headers = headers.concat(productsStockHeaders);
   return headers;
 }
@@ -1139,6 +1160,11 @@ function collectProductsPriceSettings() {
   });
   const chk = box.querySelector('input[data-key="round_nice"]');
   if (chk) s.round_nice = chk.checked;
+  const num = box.querySelector('input[data-key="min_margin_pct"]');
+  if (num) {
+    const v = parseFloat(String(num.value).replace(",", "."));
+    if (!isNaN(v) && v >= 0) s.min_margin_pct = v;
+  }
   saveProductsPriceSettings(s);
   return s;
 }
@@ -1159,7 +1185,7 @@ async function buildProductsPricePanel() {
   const saved = loadProductsPriceSettings();
   const box = document.getElementById("productsPriceFields");
   box.innerHTML = "";
-  for (const key of ["cost_anchors", "vol_anchors", "round_nice"]) {
+  for (const key of ["cost_anchors", "vol_anchors", "round_nice", "min_margin_pct"]) {
     if (!(key in defaults)) continue;
     const cur = saved[key] !== undefined ? saved[key] : defaults[key];
     const field = document.createElement("div");
@@ -1187,6 +1213,14 @@ async function buildProductsPricePanel() {
       chk.dataset.key = key;
       chk.checked = !!cur;
       field.appendChild(chk);
+    } else if (key === "min_margin_pct") {
+      const inp = document.createElement("input");
+      inp.type = "number";
+      inp.dataset.key = key;
+      inp.min = "0";
+      inp.step = "0.1";
+      inp.value = Number(cur);
+      field.appendChild(inp);
     } else {
       const ta = document.createElement("textarea");
       ta.dataset.key = key;
@@ -1205,13 +1239,14 @@ async function previewProductsPrices() {
   const sizesEl = document.getElementById("productsSizes");
   const stocksEl = document.getElementById("productsStocks");
   const q = likeEl ? likeEl.value.trim() : "";
-  msgEl.textContent = "Пересчитываю рекомендуемую цену…";
+  msgEl.textContent = "Пересчитываю цены…";
   try {
     const settings = collectProductsPriceSettings();
     const data = await apiPost("/products/preview", {
       like: q || undefined,
       sizes: sizesEl && sizesEl.checked ? 1 : 0,
       stocks: stocksEl && stocksEl.checked ? 1 : 0,
+      mode: productsPriceMode(),
       price_settings: settings,
     });
     const rows = data.rows || [];
@@ -1222,12 +1257,14 @@ async function previewProductsPrices() {
     }
     pagedTable(
       $("#productsTable"),
-      colViewHeaders("products", productsVisibleHeaders()),
+      colViewHeaders("products", productsPreviewHeaders()),
       rows,
       null,
       "#productsTablePager"
     );
-    msgEl.textContent = "Готово — пересчитано по вашим коэффициентам";
+    msgEl.textContent = productsPriceMode() === "min"
+      ? "Готово — минимальные цены (break-even) по вашим коэффициентам"
+      : "Готово — пересчитано по вашим коэффициентам";
   } catch (err) {
     msgEl.textContent = "Ошибка: " + err.message;
   }
@@ -1247,6 +1284,7 @@ async function sendProductsPrices() {
       like: q || undefined,
       sizes: sizesEl && sizesEl.checked ? 1 : 0,
       stocks: stocksEl && stocksEl.checked ? 1 : 0,
+      mode: productsPriceMode(),
       price_settings: settings,
     });
     if (data && data.ok === false) {
@@ -3004,7 +3042,6 @@ const PRICING_LABELS = {
   use_quality: "Качество: рейтинг, выкупы, отмены, возвраты",
   use_reviews: "Рейтинг по отзывам (ценность товара)",
   use_returns: "Возвраты/отмены: защита от мыльного спроса",
-  use_min_price: "Мин. цена WB: клампинг рекомендаций",
 };
 
 const PRICING_HINTS = {
@@ -3050,7 +3087,6 @@ const PRICING_HINTS = {
   use_quality: "Качество спроса: рейтинг магазина, конверсия выкупа, доля отмен и возвратов из детализации. Плохие показатели блокируют повышение цены; ≥2 сильных сигналов — «качество» добавляет uplift к росту. Выключено — качество не ограничивает повышение (по умолчанию выкл.).",
   use_returns: "Защита от «мыльного» спроса: когда доля возвратов/отмен превышает порог, продажи считаются шумными и товар не трогаем (повышение/снижение замораживается). Выключено — эта защита не действует (по умолчанию выкл.).",
   use_reviews: "Рейтинг по отзывам из воронки продаж (1..5): высокий рейтинг = ценный товар, скидку при снижении не раздаём (см. «Спрос и воронка» → «Рейтинг по отзывам ≥»). Выключено — рейтинг не ограничивает скидку.",
-  use_min_price: "Клампинг рекомендаций к минимальной витринной цене WB: итоговая рекомендация не опускается ниже price_minimum витрины, даже если правила требуют больше. Выключено — автопилот может предлагать цену ниже минимума, и WB API её не пропустит (по умолчанию выкл.).",
 };
 
 const PRICING_ACTION = {
@@ -3093,7 +3129,6 @@ const pricingHeaders = [
   { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money },
   { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money },
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money },
-  { k: "min_price", label: "Мин. цена WB, руб", num: true, render: cellFmts.money },
   { k: "action", label: "Решение", render: actionCell },
   { k: "target_discount", label: "Целевая скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
   { k: "target_vis", label: "Целевая цена", num: true, render: cellFmts.money },
@@ -3204,7 +3239,6 @@ const PRICING_OPTIONAL = [
   { k: "cancel_sum", label: "Отмены, руб", def: false },
   { k: "add_to_wishlist", label: "В избранное", def: false },
   { k: "stock_wb", label: "Остаток WB", def: false },
-  { k: "min_price", label: "Мин. цена WB, руб", def: true },
 ];
 registerColView("pricing", { storageKey: "pricingCols", pinnable: true, headers: pricingHeaders, optional: PRICING_OPTIONAL });
 
@@ -3293,7 +3327,7 @@ const PRICING_GROUPS = [
   { title: "Какие параметры влияют на цену", col: 2, keys: [
       "use_inventory", "use_sales", "use_orders", "use_margin",
       "use_replenishable", "use_season", "use_reviews", "use_quality",
-      "use_returns", "use_min_price",
+      "use_returns",
   ] },
   { title: "Окно и скорость", col: 1, keys: [
       "window_days", "season_adj", "season_damp", "min_days_with_sales",
@@ -3467,15 +3501,11 @@ function refreshApplyButton() {
   const btn = $("#pricingApply");
   if (!btn) return;
   const actives = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
-  const lowers = _pricingRows.filter((r) => r.action === "LOWER");
-  const noMin = lowers.filter((r) => !(Number(r.min_price) > 0));
-  const canApply = actives.length > 0 && noMin.length === 0;
+  const canApply = actives.length > 0;
   btn.disabled = !canApply;
   btn.title = canApply
     ? "Применить через WB API только видимые в таблице строки (с учётом фильтра поиска)"
-    : noMin.length > 0
-      ? "Нужен расчёт минимальной цены WB для всех видимых рекомендаций на снижение — публичный Price API не вернул данных"
-      : "Нет видимых рекомендаций на изменение — применить больше нечего (только строки таблицы)";
+    : "Нет видимых рекомендаций на изменение — применить больше нечего (только строки таблицы)";
 }
 
 async function renderPricing(apply) {
@@ -3540,7 +3570,7 @@ async function applyPricing() {
   }
   if (halve.length) parts.push("разделить скидку пополам у " + halve.length + " мёртвых");
   const confirmText = parts.length
-    ? "Применить к видимым в таблице товарам?\n• " + parts.join("\n• ") + "\nМинимальная цена WB учтена для снижений."
+    ? "Применить к видимым в таблице товарам?\n• " + parts.join("\n• ")
     : "У видимых товаров нет рекомендаций на изменение — применить всё равно?";
   const oldMode = pricingModeCurrent === "old";
   const finalConfirm = (oldMode ? "ВНИМАНИЕ — включена старая модель расчёта (не рекомендуется)!\n\n" : "") + confirmText;
