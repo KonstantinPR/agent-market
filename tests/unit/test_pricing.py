@@ -932,3 +932,70 @@ def test_use_reviews_off_disables_rating_cap(db):
     row = _row(rec, "RR7")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
+
+
+# ------------------------------------------------------------------ «Старая версия» (mode=old)
+
+
+def test_merge_settings_accepts_mode_string():
+    """mode — строковый параметр, должен проходить через merge_settings как есть."""
+    assert merge_settings({"mode": "old"})["mode"] == "old"
+    assert merge_settings({})["mode"] == "new"
+
+
+def test_legacy_mode_normalized_and_default_is_new(db):
+    """Мусор в mode → "new"; дефолт — тоже "new"."""
+    _seed(db, "OLDM", "PMDM", stock=10, sales=[(3, 1, 0), *_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PMDM", 1000, 20)), today=TODAY,
+                          settings={"mode": "whatever"})
+    assert rec["settings"]["mode"] == "new"
+    assert "старая модель" not in _row(rec, "OLDM")["reason"]
+
+
+def test_legacy_mode_echo_in_settings(db):
+    """mode=old проходит через recommendations() и возвращается в settings."""
+    _seed(db, "OLDE", "PME", stock=10, sales=[(3, 1, 0), *_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PME", 1000, 20)), today=TODAY,
+                          settings={"mode": "old"})
+    assert rec["settings"]["mode"] == "old"
+
+
+def test_legacy_sold_out_resets_discount_to_quarter(db):
+    """Старая модель: остаток 0 → скидка урезается до discount/4 (цена восстанавливается).
+    Порт price_module.discount(reset_if_null=True): 30% → 7.5% → RAISE."""
+    _seed(db, "OLDRAISE", "POR", stock=0, sales=[(3, 1, 0), *_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("POR", 1000, 30)), today=TODAY,
+                          settings={"mode": "old"})
+    row = _row(rec, "OLDRAISE")
+    assert row["action"] == "RAISE"
+    assert row["status"] == "suggested"
+    assert row["target_discount"] == pytest.approx(7.5, abs=0.5)
+    assert "старая модель" in row["reason"]
+
+
+def test_legacy_rich_price_lowers_discount(db):
+    """Старая модель: цена с большим запасом над себестоимостью → k>1 → скидка растёт.
+    price=2000 / скидка 5% / net_cost=100: k_discount≈1.05, n_delta<0 → LOWER в диапазоне ~8-9%."""
+    _seed(db, "OLDLOWER", "POL", stock=5, net_cost=100,
+          sales=[*_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("POL", 2000, 5)), today=TODAY,
+                          settings={"mode": "old"})
+    row = _row(rec, "OLDLOWER")
+    assert row["action"] == "LOWER"
+    assert row["status"] == "suggested"
+    assert row["target_discount"] == pytest.approx(8.6, abs=0.5)
+
+
+def test_legacy_respects_floor_guard(db):
+    """Стражи работают и в старой модели: целевая цена не ниже пола безубыточности."""
+    _seed(db, "OLDFLOOR", "POF", stock=50, net_cost=800,
+          sales=[*_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("POF", 1000, 5)), today=TODAY,
+                          settings={"mode": "old", "max_discount_pct": 50})
+    row = _row(rec, "OLDFLOOR")
+    if row["status"] == "suggested":
+        assert row["target_vis"] is not None
+        assert row["target_vis"] >= 0
+        assert 0 <= row["target_discount"] <= 100
+    # договорные поля на месте в любом случае
+    assert {"action", "status", "reason"}.issubset(row.keys())

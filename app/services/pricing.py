@@ -72,6 +72,10 @@ PRICING_DEFAULTS = {
     "use_quality": False,
     "use_returns": False,
     "use_min_price": False,
+    # Версия расчёта: "new" — правила R1-R10 (рекомендуется), "old" — порт
+    # старой эвристики из finance/price_module (НЕ рекомендуется, только для
+    # сравнения результатов; общие стражи безопасности действуют в обеих).
+    "mode": "new",
 }
 
 
@@ -94,6 +98,8 @@ def merge_settings(payload=None) -> dict:
             continue
         if isinstance(out[key], bool):
             out[key] = value if isinstance(value, bool) else str(value).lower() in ("1", "true", "on", "yes")
+        elif isinstance(out[key], str):
+            out[key] = value if isinstance(value, str) else out[key]
         else:
             try:
                 out[key] = float(value)
@@ -348,6 +354,8 @@ def recommendations(
 ) -> dict:
     """Read-only расчёт рекомендаций по правилам R1-R10."""
     s = merge_settings(settings)
+    mode = "old" if str(s.get("mode") or "").strip().lower() in ("old", "legacy") else "new"
+    s["mode"] = mode
     today = today or date.today()
     wb_mp = _wb_id(db)
     W = int(s["window_days"])
@@ -462,6 +470,17 @@ def recommendations(
     prev_df = rows_df[(rows_df["date"] >= prev_from) & (rows_df["date"] <= prev_to)] if not rows_df.empty else rows_df
     fallback_df = rows_df
 
+    # Старая модель: глобальный k_norma_revenue как в count_norma_revenue()
+    # (clear_sells / (clear_sells − expenses) × 1.5; при нулевой выручке — 3).
+    legacy_k_norma = None
+    if mode == "old" and not rows_df.empty:
+        clear = _num(rows_df["revenue"].sum())
+        expenses = (_num(rows_df["commission"].sum()) + _num(rows_df["logistics"].sum())
+                    + _num(rows_df["storage"].sum()) + _num(rows_df["services"].sum()))
+        revenue = clear - expenses
+        if clear > 0 and revenue > 0:
+            legacy_k_norma = (clear / revenue) * 1.5
+
     # Товары с хоть каким-то «сигналом жизни»: продажи в окне, остаток > 0,
     # просмотры/заказы в воронке, продажи/возвраты в детализации.
     # Всё остальное — «мёртвые»: скрываются по умолчанию (show_zero=False).
@@ -553,6 +572,7 @@ def recommendations(
             "detail_known": bool(dl),
             "funnel_known": bool(fl),
             "net_cost": prod["net_cost"],
+            "sells_net": s_now, "cover_days": cover,
             "comm_rate": None, "logistics_unit": 0.0, "storage_unit": 0.0,
             "other_unit": 0.0, "floor_price": None,
             "min_price": min_px.get(str(nm_id), 0.0),
@@ -573,7 +593,10 @@ def recommendations(
                          + ue["other_unit"] + f["net_cost"]) / denom
                 f["floor_price"] = max(0.0, floor)
 
-        out_rows.append(_decide_dead(f, s) if art not in has_life else _decide(f, s))
+        if mode == "old":
+            out_rows.append(_decide_legacy(f, s, legacy_k_norma))
+        else:
+            out_rows.append(_decide_dead(f, s) if art not in has_life else _decide(f, s))
 
     return {
         "rows": out_rows,
@@ -1049,6 +1072,264 @@ def _decide(f: dict, s: dict) -> dict:
         base, f, s,
         "LOWER" if doc >= _num(s["target_doc"]) else "RAISE",
         f"нормальные остатки (DOC={doc:.0f} дн.), целевые {_num(s['target_doc']):.0f} дн.")
+
+
+# ----------------------------------------------------------------------
+# «Старая версия» коррекции скидки — порт finance/price_module.discount().
+# Режим НЕ рекомендуется: эвристика на взвешенных k-коэффициентах вместо
+# правил R1-R10, переносится для сравнения результатов. Общие стражи этого
+# автопилота (пол безубыточности floor_price, мин. цена WB при включённом
+# факторе, кламп 0..100, потолок max_discount_pct) действуют и здесь, чтобы
+# Apply не увёл витринную цену ниже точки убытка.
+
+DEFAULT_NET_COST = 500.0
+DEFAULT_PURE_VALUE = DEFAULT_NET_COST * 1.2  # 600
+
+
+def _legacy_k_is_sell(pure_sells_qt: float, net_cost: float, pure_value: float) -> float:
+    """price_module.k_is_sell: чем больше чистых продаж — тем больше скидка.
+
+    Пороги масштабируются на k_net_cost = sqrt(550 / ((pure_value + net_cost) / 2)).
+    """
+    if not net_cost:
+        net_cost = DEFAULT_NET_COST
+    if not pure_value:
+        pure_value = DEFAULT_PURE_VALUE
+    k_nc = (((DEFAULT_NET_COST + DEFAULT_PURE_VALUE) * 0.5) / ((pure_value + net_cost) * 0.5)) ** 0.5
+    if pure_sells_qt > 50 * k_nc:
+        return 0.60
+    if pure_sells_qt > 20 * k_nc:
+        return 0.70
+    if pure_sells_qt > 10 * k_nc:
+        return 0.80
+    if pure_sells_qt > 5 * k_nc:
+        return 0.85
+    if pure_sells_qt > 3 * k_nc:
+        return 0.90
+    if pure_sells_qt > 2 * k_nc:
+        return 0.95
+    if pure_sells_qt > 1 * k_nc:
+        return 0.98
+    if pure_sells_qt >= 1:
+        return 0.99
+    return 1.01
+
+
+def _legacy_k_cost(cost: float, price_disc: float, k_norma_revenue: float) -> float:
+    """price_module.k_cost: лестница по отношению скидочной цены к затратам.
+
+    k = sqrt(DEFAULT_NET_COST / cost), снизу клампится в 1 (как в старой
+    системе): у цены у самой себестоимости k < 1 — модель поднимает цену
+    (защита от убытка); у дорогого товара k = 1 и скидка растёт.
+    """
+    if not cost:
+        cost = DEFAULT_NET_COST
+    k = (DEFAULT_NET_COST / cost) ** 0.5
+    if k < 1:
+        k = 1
+    if price_disc <= cost / 4:
+        return 0.50
+    if price_disc <= cost / 2:
+        return 0.60
+    if price_disc <= cost:
+        return 0.70
+    if price_disc <= cost * k:
+        return 0.80
+    if price_disc <= cost * ((0.50 * k_norma_revenue) * k):
+        return 0.85
+    if price_disc <= cost * ((0.60 * k_norma_revenue) * k):
+        return 0.89
+    if price_disc <= cost * ((0.70 * k_norma_revenue) * k):
+        return 0.91
+    if price_disc <= cost * ((0.80 * k_norma_revenue) * k):
+        return 0.93
+    if price_disc <= cost * ((0.90 * k_norma_revenue) * k):
+        return 0.95
+    if price_disc <= cost * ((0.92 * k_norma_revenue) * k):
+        return 0.97
+    if price_disc <= cost * ((0.96 * k_norma_revenue) * k):
+        return 0.98
+    if price_disc <= cost * ((0.97 * k_norma_revenue) * k):
+        return 0.985
+    if price_disc <= cost * ((0.98 * k_norma_revenue) * k):
+        return 0.99
+    if price_disc <= cost * ((0.99 * k_norma_revenue) * k):
+        return 0.995
+    if price_disc >= cost * ((5 * k_norma_revenue) * k):
+        return 1.20
+    if price_disc >= cost * ((2.5 * k_norma_revenue) * k):
+        return 1.10
+    if price_disc >= cost * ((2 * k_norma_revenue) * k):
+        return 1.06
+    if price_disc >= cost * ((1.5 * k_norma_revenue) * k):
+        return 1.05
+    if price_disc >= cost * ((1.25 * k_norma_revenue) * k):
+        return 1.04
+    if price_disc >= cost * ((1.15 * k_norma_revenue) * k):
+        return 1.03
+    if price_disc >= cost * ((1.1 * k_norma_revenue) * k):
+        return 1.02
+    if price_disc > cost * ((1.05 * k_norma_revenue) * k):
+        return 1.01
+    if price_disc > cost * ((k_norma_revenue) * k):
+        return 1.0
+    return 1.0
+
+
+def _legacy_k_qt_full(qt: float, volume: float = 1.0) -> float:
+    """price_module.k_qt_full: объём остатка шт × объём единицы.
+
+    В новой системе объём единицы отсутствует — proxy volume = 1 (фактически
+    отрабатывает «объём остатка в штуках»).
+    """
+    k_volume = 2.0
+    v_all = qt * volume
+    if v_all < 1:
+        return 0.96
+    if v_all < 1 * k_volume:
+        return 0.95
+    if v_all <= 1 * k_volume:
+        return 0.96
+    if v_all <= 2 * k_volume:
+        return 0.97
+    if v_all <= 3 * k_volume:
+        return 0.98
+    if v_all <= 5 * k_volume:
+        return 0.99
+    if v_all <= 10 * k_volume:
+        return 1.0
+    if 10 * k_volume < v_all <= 20 * k_volume:
+        return 1.01
+    if 20 * k_volume < v_all <= 50 * k_volume:
+        return 1.03
+    if 50 * k_volume < v_all <= 70 * k_volume:
+        return 1.06
+    if 70 * k_volume < v_all <= 100 * k_volume:
+        return 1.09
+    if v_all > 100 * k_volume:
+        return 1.12
+    return 1.0
+
+
+def _legacy_k_logistic(log_rub: float, net_cost: float) -> float:
+    """price_module.k_logistic (ветка to_rub == 0 — раздельной логистики продажи нет).
+
+    Высокая логистика/шт — повод поднять цену (защита от «покатушек»).
+    """
+    if not log_rub:
+        return 1.0
+    if not net_cost:
+        net_cost = DEFAULT_NET_COST
+    if log_rub >= net_cost * 2:
+        return 0.90
+    if log_rub >= net_cost:
+        return 0.95
+    if log_rub >= net_cost / 2:
+        return 0.97
+    if log_rub >= net_cost / 4:
+        return 0.98
+    return 1.0
+
+
+def _decide_legacy(f: dict, s: dict, k_norma_revenue: Optional[float] = None) -> dict:
+    """«Старая версия» корректировки скидки (порт finance price_module.discount()).
+
+    Режим НЕ рекомендуется: работает по взвешенным k-коэффициентам старой
+    системы (k_is_sell×2, k_logistic×1, k_net_cost×3, k_pure_value×1,
+    k_qt_full×1) вместо правил R1-R10. Выход тот же контракт (action/status/
+    target_discount/target_vis/reason), что и у новой версии, поэтому Apply,
+    кулдаун и журнал меняться не должны.
+    """
+    base = _base_row(f)
+
+    price = _num(f["price"])
+    cur_disc = _num(f["current_discount"])
+    cur_vis = _num(f["current_vis"])
+    net_cost = _num(f.get("net_cost"))
+    if net_cost <= 0:
+        net_cost = DEFAULT_NET_COST
+    pure_value = net_cost * 1.2
+    price_disc = cur_vis  # старая система брала скидочную цену из отчёта WB
+    pure_sells_qt = _num(f.get("sells_net"))
+    cover = max(int(_num(f.get("cover_days"), 0)), 1)
+    smooth_days = (cover / 7.0) ** 0.25
+    if k_norma_revenue is None:
+        k_norma_revenue = 3.0
+
+    k_is_sell = _legacy_k_is_sell(pure_sells_qt, net_cost, pure_value)
+    k_logistic = _legacy_k_logistic(_num(f.get("logistics_unit")), net_cost)
+    k_net_cost = _legacy_k_cost(net_cost, price_disc, k_norma_revenue)
+    k_pure_value = _legacy_k_cost(pure_value, price_disc, k_norma_revenue)
+    stock = f.get("stock")
+    k_qt_full = _legacy_k_qt_full(_num(stock)) if stock is not None else 1.0
+
+    k_discount = (k_is_sell * 2 + k_logistic * 1 + k_net_cost * 3
+                  + k_pure_value * 1 + k_qt_full * 1) / 8.0
+
+    # n_discount(price_disc, k_discount, price, k_delta=1)
+    if price > 0:
+        raw = (1 - price_disc / (price * k_discount ** 1)) * 100
+        if raw < 0:
+            raw = 0.0
+    else:
+        raw = 0.0
+    default_changing = cur_disc / 4.0 if cur_disc > 0 else 0.0
+    n_discount = raw
+    if n_discount <= 0:
+        n_discount = default_changing
+    n_delta = round((cur_disc - n_discount) / smooth_days, 2)
+    n_discount = round(cur_disc - n_delta, 2)
+    if n_discount <= 0:
+        n_discount = 0.0
+    # reset_if_null: остаток распродан — скидку почти снимаем (цена восстанавливается).
+    if stock is not None and stock <= 0:
+        n_discount = default_changing
+
+    target_discount = _clamp(n_discount, 0.0, _num(s["max_discount_pct"], 100.0))
+    target_vis = price * (1 - target_discount / 100) if price > 0 else 0.0
+
+    # Общие стражи: пол безубыточности (всегда) и мин. цена WB (при факторе).
+    if target_vis and price > 0:
+        lo = _num(f.get("floor_price"))
+        if bool(s.get("use_min_price", False)) and f.get("min_price"):
+            lo = max(lo, _num(f["min_price"]))
+        if lo and cur_vis > lo:
+            target_vis = max(target_vis, lo)
+            target_discount = (1 - target_vis / price) * 100
+    target_discount = _clamp(target_discount, 0.0, 100.0)
+    if price > 0:
+        target_vis = price * (1 - target_discount / 100)
+    else:
+        target_vis = 0.0
+
+    v_proj = _num(f["v_proj"])
+    if v_proj > 0 and stock is not None:
+        base["doc"] = round(stock / v_proj, 1)
+    base["conv_pct"] = round((f["orders"] / f["views"] * 100), 2) if f["views"] > 0 else 0.0
+    base["backlog"] = max(f["adds"] - f["orders"], 0)
+    base["eff"] = min(cur_vis, f["avg_price"]) if f["avg_price"] > 0 else cur_vis
+    base["max_discount_item"] = round(min(_num(s["max_discount_pct"]), 100.0), 1)
+
+    if target_discount < cur_disc - 1e-9:
+        action, status = "RAISE", "suggested"
+    elif target_discount > cur_disc + 1e-9:
+        action, status = "LOWER", "suggested"
+    else:
+        base.update(action="HOLD", status="hold",
+                    reason=f"старая модель: без изменений (k={k_discount:.3f})")
+        return base
+    base.update(
+        action=action, status=status,
+        reason=(f"старая модель коррекции скидки (k={k_discount:.3f}, "
+                f"k_is_sell={k_is_sell:.2f}, k_logistic={k_logistic:.2f}, "
+                f"k_net_cost={k_net_cost:.2f}, k_pure_value={k_pure_value:.2f}, "
+                f"k_qt_full={k_qt_full:.2f}, n_disc={n_discount:.1f}%, "
+                f"сглаживание {smooth_days:.2f} дн)"),
+        target_discount=round(target_discount, 1),
+        target_vis=round(target_vis, 2),
+        margin_pct_at_target=_margin_pct(target_vis, f),
+    )
+    return base
 
 
 def _margin_pct(target_vis: float, f: dict) -> Optional[float]:

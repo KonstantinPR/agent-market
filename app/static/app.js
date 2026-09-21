@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "4";
+const UI_VERSION = "5";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3210,6 +3210,8 @@ function collectPricingSettings() {
       if (!isNaN(v)) s[key] = v;
     }
   });
+  const modeEl = $("#pricingMode");
+  if (modeEl && (modeEl.value === "old" || modeEl.value === "new")) s.mode = modeEl.value;
   savePricingSettings(s);
   return s;
 }
@@ -3311,6 +3313,13 @@ async function buildPricingSettings() {
   const saved = loadPricingSettings();
   const box = $("#pricingSettings");
   box.innerHTML = "";
+  const modeEl = $("#pricingMode");
+  if (modeEl && !modeEl.dataset.init) {
+    modeEl.dataset.init = "1";
+    modeEl.value = (saved.mode === "old" || saved.mode === "new")
+      ? saved.mode
+      : (pricingDefaults.mode === "old" ? "old" : "new");
+  }
   const openSaved = loadOpenPricingGroups();
   const defaultOpen = new Set(
     PRICING_GROUPS.filter((g) => !PRICING_GROUPS_CLOSED_BY_DEFAULT.has(g.title)).map((g) => g.title)
@@ -3431,6 +3440,7 @@ async function renderPricing(apply) {
     const nonWb = Number(data.non_wb || 0);
     if (nonWb > 0) summary += ", артикулов не из WB-карточек: " + fmt(nonWb) + " (исключены)";
     if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
+    if (data.settings && data.settings.mode === "old") summary += " · старая модель (не рекомендуется)";
     if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
     if (data.as_of) summary += " · на " + data.as_of;
     $("#pricingSummary").textContent = summary;
@@ -3466,7 +3476,10 @@ async function applyPricing() {
   const confirmText = parts.length
     ? "Применить?\n• " + parts.join("\n• ") + "\nМинимальная цена WB учтена для снижений."
     : "Рекомендаций на изменение нет — применить всё равно?";
-  if (!confirm(confirmText)) return;
+  const modeEl = $("#pricingMode");
+  const oldMode = modeEl && modeEl.value === "old";
+  const finalConfirm = (oldMode ? "ВНИМАНИЕ — включена старая модель расчёта (не рекомендуется)!\n\n" : "") + confirmText;
+  if (!confirm(finalConfirm)) return;
   msg.textContent = "Применяю через WB API…";
   try {
     const resp = await fetch("/api/pricing/apply", {
