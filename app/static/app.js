@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "3";
+const UI_VERSION = "4";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -451,7 +451,6 @@ async function renderMargin(p) {
 
 const marginHeaders = [
 { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
   { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int },
   { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
@@ -618,7 +617,10 @@ function buildColViewMenu(tab) {
         onToggle();
       });
       pinLbl.appendChild(pb);
-      pinLbl.appendChild(document.createTextNode(" \uD83D\uDCCC"));
+      const pico = document.createElement("span");
+      pico.className = "pin-ico";
+      pico.textContent = "\uD83D\uDCCC";
+      pinLbl.appendChild(pico);
       row.appendChild(pinLbl);
     }
     panel.appendChild(row);
@@ -1226,6 +1228,35 @@ async function previewProductsPrices() {
       "#productsTablePager"
     );
     msgEl.textContent = "Готово — пересчитано по вашим коэффициентам";
+  } catch (err) {
+    msgEl.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function sendProductsPrices() {
+  const msgEl = document.getElementById("productsPriceMsg");
+  if (!msgEl) return;
+  const likeEl = document.getElementById("productsLike");
+  const sizesEl = document.getElementById("productsSizes");
+  const stocksEl = document.getElementById("productsStocks");
+  const q = likeEl ? likeEl.value.trim() : "";
+  msgEl.textContent = "Отправляю цены в WB API…";
+  try {
+    const settings = collectProductsPriceSettings();
+    const data = await apiPost("/products/prices/apply", {
+      like: q || undefined,
+      sizes: sizesEl && sizesEl.checked ? 1 : 0,
+      stocks: stocksEl && stocksEl.checked ? 1 : 0,
+      price_settings: settings,
+    });
+    if (data && data.ok === false) {
+      msgEl.textContent = "Ошибка: " + (data.error || "неизвестная");
+      return;
+    }
+    let msg = "Отправлено на WB: " + (data.pushed ?? 0);
+    if (data.skipped) msg += "; пропущено без nm_id: " + data.skipped;
+    if (data.note) msg += ": " + data.note;
+    msgEl.textContent = msg;
   } catch (err) {
     msgEl.textContent = "Ошибка: " + err.message;
   }
@@ -3016,6 +3047,7 @@ function actionCell(v) {
 
 const pricingHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
   { k: "stock", label: "Остаток", num: true, render: cellFmts.int },
   { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) },
@@ -3832,6 +3864,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const productsPreviewBtn = $("#productsPreview");
   if (productsPreviewBtn) productsPreviewBtn.addEventListener("click", () => busyRun(previewProductsPrices));
+  const productsApplyPriceBtn = $("#productsApplyPrice");
+  if (productsApplyPriceBtn) productsApplyPriceBtn.addEventListener("click", () => busyRun(sendProductsPrices));
   const productsPriceClose = $("#productsPriceClose");
   if (productsPriceClose) {
     productsPriceClose.addEventListener("click", () => {

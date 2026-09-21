@@ -225,6 +225,7 @@ th.stck-col { position: sticky; left: 0; background: #fff; z-index: 3; }
 table.stck tr.totals-row th.stck-col { background: #f0f4f8; }
 .colview-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .colview-row .pin { margin-left: auto; font-size: 12px; }
+.colview-row .pin-ico { font-size: 11px; line-height: 1; filter: grayscale(1); opacity: .55; }
 .pager {
   display: flex;
   align-items: center;
