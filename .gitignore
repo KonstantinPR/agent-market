@@ -11,3 +11,4 @@ data/mock/
 htmlcov/
 *.log
 .idea/
+*.db

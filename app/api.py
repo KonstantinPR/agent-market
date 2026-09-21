@@ -15,6 +15,7 @@ from app import models
 from app.config import settings
 from app.database import get_db
 from app.providers import factory as provider_factory
+from app.providers.errors import WbApiError
 from app.providers.ozon import OZON_RU_COLUMNS
 from app.providers.wb import DETAIL_RU_COLUMNS, DETAIL_UPLOAD_RENAME, SALES_RU_COLUMNS, V5_RU_COLUMNS
 from app.services import (
@@ -813,27 +814,73 @@ def _catalog_tags(db: Session) -> dict:
 
 
 def _catalog_stock_maps(db: Session):
-    """mp_stock: {(мрп, артикул): кол-во} по последнему срезу; own: {артикул: баланс склада}."""
+    """Остатки по последнему срезу.
+
+    mp_stock:      {(мрп, артикул): кол-во} — агрегат по артикулу;
+    mp_stock_size: {(мрп, артикул, размер): кол-во} — для WB (размер из techSize карточек);
+    mp_covers:     {артикул: {размер: кол-во}} — WB-остатки в разрезе размеров;
+    ozon_total:    {артикул: кол-во} — Ozon без размера (суммируется целиком на строку);
+    own:           {артикул: баланс склада}.
+    """
     mp_stock: dict = {}
+    mp_stock_size: dict = {}
+    ozon_total: dict = {}
     for code in ("wb", "ozon"):
         mp_id = select(models.Marketplace.id).where(models.Marketplace.code == code).scalar_subquery()
         latest = db.scalar(select(func.max(models.Stock.date)).where(models.Stock.marketplace_id == mp_id))
         if latest is None:
             continue
-        for art, qty in db.execute(
-            select(models.Stock.article, func.sum(models.Stock.quantity))
+        for art, size, qty in db.execute(
+            select(models.Stock.article, func.coalesce(models.Stock.size, ""),
+                   func.sum(models.Stock.quantity))
             .where(models.Stock.marketplace_id == mp_id, models.Stock.date == latest)
-            .group_by(models.Stock.article)
+            .group_by(models.Stock.article, models.Stock.size)
         ):
-            mp_stock[(code, art)] = int(qty or 0)
+            mp_stock[(code, art)] = mp_stock.get((code, art), 0) + int(qty or 0)
+            mp_stock_size[(code, art, size or "")] = int(qty or 0)
+            if code == "ozon":
+                ozon_total[art] = ozon_total.get(art, 0) + int(qty or 0)
     own = {r["article"]: float(r["balance"]) for r in warehouse_service.stock_view(db)}
-    return mp_stock, own
+    mp_covers = {art: {} for art in {a for (_, a, _) in mp_stock_size if (_, a) and _ in ("wb",)}}
+    for (code, art, size), qty in mp_stock_size.items():
+        if code == "wb" and size:
+            mp_covers.setdefault(art, {})[size] = mp_covers.get(art, {}).get(size, 0) + qty
+    return mp_stock, mp_stock_size, mp_covers, ozon_total, own
 
 
-def _catalog_price_fields(prod, settings) -> dict:
-    comp = base_price_service.price_components(prod.net_cost, prod.volume_l, settings)
+def _product_prefix(article) -> str:
+    """Префикс артикула до первой «-» (для группировки похожих товаров)."""
+    return str(article or "").strip().split("-", 1)[0].strip()
+
+def _prefix_avg_cost_map(prods) -> dict:
+    """Префикс → средневзвешенная (по объёму) себестоимость среди товаров с net_cost>0."""
+    acc: dict = {}
+    for o in prods:
+        cost = float(o.net_cost or 0)
+        if cost <= 0:
+            continue
+        key = _product_prefix(o.article)
+        if not key:
+            continue
+        w = max(float(o.volume_l or 0), 1.0)
+        a = acc.setdefault(key, [0.0, 0.0])
+        a[0] += cost * w
+        a[1] += w
+    return {k: (v[0] / v[1]) if v[1] else 0.0 for k, v in acc.items()}
+
+def _eff_net_cost(article, raw_cost, prefix_map) -> float:
+    """Себестоимость для расчёта: своя; если 0 — выводить из среднего по префиксу артикула."""
+    cost = float(raw_cost or 0)
+    if cost > 0:
+        return cost
+    return float(prefix_map.get(_product_prefix(article), 0) or 0)
+
+
+def _catalog_price_fields(prod, settings, net_cost=None) -> dict:
+    cost = float(prod.net_cost or 0) if net_cost is None else float(net_cost or 0)
+    comp = base_price_service.price_components(cost, prod.volume_l, settings)
     return {
-        "recommended_price": base_price_service.recommended_price(prod.net_cost, prod.volume_l, settings),
+        "recommended_price": base_price_service.recommended_price(cost, prod.volume_l, settings),
         "markup": comp["markup"],
         "f_cost": comp["f_cost"],
         "f_vol": comp["f_vol"],
@@ -857,6 +904,7 @@ def api_products(
     prods = list(db.execute(
         select(models.Product).order_by(models.Product.article)
     ).scalars())
+    prefix_map = _prefix_avg_cost_map(prods)
     if like and like.strip():
         pat = like.strip().lower()
         prods = [p for p in prods if pat in (p.article or "").lower()
@@ -865,14 +913,21 @@ def api_products(
     size_map = _catalog_size_map(db)
     tags = _catalog_tags(db)
     mp_stock: dict = {}
+    mp_stock_size: dict = {}
+    mp_covers: dict = {}
+    ozon_total: dict = {}
     own: dict = {}
     with_stock = bool(int(stocks))
     if with_stock:
-        mp_stock, own = _catalog_stock_maps(db)
+        mp_stock, mp_stock_size, mp_covers, ozon_total, own = _catalog_stock_maps(db)
     settings = base_price_service.PRICE_DEFAULTS
 
     def mp_total(article: str) -> int:
         return mp_stock.get(("wb", article), 0) + mp_stock.get(("ozon", article), 0)
+
+    def wb_size_qty(article: str, size: str) -> int:
+        """WB-остаток в разрезе размера (0 если данных по размеру нет)."""
+        return int(mp_stock_size.get(("wb", article, size or ""), 0))
 
     rows = []
     if int(sizes):
@@ -887,8 +942,9 @@ def api_products(
                 }
                 if with_stock:
                     row["own_stock"] = own.get(p.article, 0.0)
-                    row["mp_stock"] = mp_total(p.article)
-                row.update(_catalog_price_fields(p, settings))
+                    row["mp_stock"] = wb_size_qty(p.article, s["size"])
+                    row["ozon_stock"] = int(ozon_total.get(p.article, 0))
+                row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map)))
                 rows.append(row)
     else:
         for p in prods:
@@ -904,9 +960,18 @@ def api_products(
             if with_stock:
                 row["own_stock"] = own.get(p.article, 0.0)
                 row["mp_stock"] = mp_total(p.article)
-            row.update(_catalog_price_fields(p, settings))
+                row["ozon_stock"] = int(ozon_total.get(p.article, 0))
+            row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map)))
             rows.append(row)
-    return {"rows": rows, "count": len(rows), "price_settings": settings}
+    totals = {}
+    if with_stock and rows:
+        if int(sizes):
+            totals["own_stock"] = sum(own.get(p.article, 0.0) for p in prods)
+            totals["mp_stock"] = sum(mp_total(p.article) for p in prods)
+        else:
+            totals["own_stock"] = sum(r["own_stock"] for r in rows)
+            totals["mp_stock"] = sum(r["mp_stock"] for r in rows)
+    return {"rows": rows, "count": len(rows), "price_settings": settings, "totals": totals}
 
 
 @router.post("/products/refresh")
@@ -924,15 +989,84 @@ def products_preview(payload: dict = Body(default={}), db: Session = Depends(get
     """Пересчёт рекомендуемой цены с пользовательскими коэффициентами (без записи)."""
     settings = base_price_service.merge_price_settings(payload.get("price_settings"))
     like = str(payload.get("like") or "").strip().lower()
+    prefix_map = _prefix_avg_cost_map(list(db.execute(
+        select(models.Product).order_by(models.Product.article)).scalars()))
     rows = []
     for p in db.execute(select(models.Product).order_by(models.Product.article)).scalars():
         if like and like not in (p.article or "").lower() and like not in (p.name or "").lower():
             continue
         row = {"article": p.article, "name": p.name,
                "net_cost": float(p.net_cost or 0), "volume_l": float(p.volume_l or 0)}
-        row.update(_catalog_price_fields(p, settings))
+        row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map)))
         rows.append(row)
     return {"rows": rows, "count": len(rows), "price_settings": settings}
+
+
+@router.post("/products/prices/apply")
+def products_prices_apply(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Применяет рекомендуемые цены **только к видимым в таблице товарам** и пушит
+    на Wildberries через WB API (v2/upload/task). Артикулы без nm_id (не заведены
+    на WB) пропускаются молча [pushed]."""
+    settings = base_price_service.merge_price_settings(payload.get("price_settings"))
+    like = str(payload.get("like") or "").strip().lower()
+    sizes = int(payload.get("sizes") or 0)
+    stocks = int(payload.get("stocks") or 0)
+
+    prods = list(db.execute(
+        select(models.Product).order_by(models.Product.article)
+    ).scalars())
+    prefix_map = _prefix_avg_cost_map(prods)
+
+    rows = []
+    for p in db.execute(select(models.Product).order_by(models.Product.article)).scalars():
+        if like and like not in (p.article or "").lower() and like not in (p.name or "").lower():
+            continue
+        rows.append({
+            "article": p.article,
+            "name": p.name,
+            "net_cost": float(p.net_cost or 0),
+            "volume_l": float(p.volume_l or 0),
+            "recommended_price": float(base_price_service.recommended_price(
+                _eff_net_cost(p.article, p.net_cost, prefix_map), p.volume_l, settings)),
+        })
+
+    if not rows:
+        return {"ok": True, "pushed": 0, "skipped": 0, "note": "Нет видимых товаров."}
+
+    nm_map = {a.article: a.nm_id for a in db.execute(select(models.NmArticle)).scalars()}
+    items = []
+    skipped = []
+    for r in rows:
+        nm = nm_map.get(r["article"])
+        if not nm:
+            skipped.append(r["article"])
+            continue
+        items.append({
+            "nmID": int(nm),
+            "price": float(r["recommended_price"] or 0),
+            "discount": 0,
+        })
+    if not items:
+        return {"ok": True, "pushed": 0, "skipped": len(skipped),
+                "note": "Ни один из видимых товаров не заведён в WB (нет nm_id)."}
+    try:
+        prov = provider_factory.get_wb_provider()
+        res = prov.update_prices(items)
+    except WbApiError as e:
+        return {"ok": False, "pushed": 0, "skipped": len(skipped), "error": str(e)}
+
+    notes = [f"Отправлено товаров: {len(items)}"]
+    if sizes or stocks:
+        notes.append(" с учётом фильтров «с размерами/остатки»")
+    if skipped:
+        notes.append(f"; пропущено без nm_id: {len(skipped)}")
+    return {
+        "ok": True,
+        "pushed": len(items),
+        "skipped": len(skipped),
+        "task_id": res.get("task_id") if isinstance(res, dict) else None,
+        "note": " ".join(notes),
+    }
 
 
 @router.get("/products/price-settings")
@@ -2416,7 +2550,8 @@ def api_ozon_detail_rows(
         "return_total": float(r.return_total or 0),
         "source": r.source,
     } for r in rows]
-    return {"rows": out, "total": int(total)}
+    df = pd.DataFrame(out) if out else pd.DataFrame()
+    return {"rows": out, "total": int(total), "totals": _df_totals(df) if len(df) else {}}
 
 
 @router.get("/ozon/detail-summary")

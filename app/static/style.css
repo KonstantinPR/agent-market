@@ -201,7 +201,7 @@ body.busy .btn { pointer-events: none; opacity: .6; }
 
 .table-wrap { width: 100%; overflow-x: auto; }
 .table-wrap.paged { overflow-x: visible; }
-.tscroll { overflow-x: auto; }
+.tscroll { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 210px); }
 .t-xbar {
   position: sticky;
   bottom: 0;
@@ -558,6 +558,14 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 .pricing-h { font-size: 13px; color: #333; margin: 18px 0 8px; }
 .repl-toggle { width: 16px; height: 16px; cursor: pointer; }
 
+.dz-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+.dz-row .dropzone {
+  flex: 1 1 0;
+}
 .dropzone {
   border: 2px dashed #b9c8e0;
   border-radius: 6px;

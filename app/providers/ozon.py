@@ -236,13 +236,13 @@ class OzonProvider(BaseProvider):
         try:
             resp = self._post(f"{OZON_API}/v2/finance/realization", {"month": month, "year": year})
         except (OzonApiError, requests.HTTPError) as e:
-            # GET /v2/finance/realization перехватываем здесь, а не в _post, потому
-            # что _post кидает именно requests.HTTPError (с .response).
+            # _post бросает именной requests.HTTPError (у которого есть .response),
+            # а не OzonApiError, поэтому реализацию перехватываем здесь, а не в _post.
             code = getattr(e, "status_code", None)
             if code is None:
                 code = getattr(getattr(e, "response", None), "status_code", None)
-            # "Report was not found" лежит в ТЕЛЕ ответа (e.response.text), а не в
-            # str(e) (= "404 Client Error: ..."), поэтому проверяем оба места.
+            # Сообщение "Report was not found" живёт в ТЕЛЕ ответа (e.response.text),
+            # а не в str(e) (= "404 Client Error: Not Found for url: ...").
             detail = str(e) + " " + getattr(getattr(e, "response", None), "text", "")
             if code == 404 and "Report was not found" in detail:
                 # Отчёт реализации за этот месяц ещё не сформирован (обычно для

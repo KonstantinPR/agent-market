@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "7";
+const UI_VERSION = "9";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1719,6 +1719,15 @@ function cardIds(name) {
   };
 }
 
+function cardsTotals(headers, rows) {
+  const t = {};
+  for (const h of headers) {
+    if (!h.num) continue;
+    t[h.k] = (rows || []).reduce((s, r) => s + (Number(r[h.k]) || 0), 0);
+  }
+  return t;
+}
+
 async function renderCards(name) {
   const ids = cardIds(name);
   const box = document.getElementById(ids.prefix + "Table");
@@ -1750,9 +1759,21 @@ async function renderCards(name) {
       bar.appendChild(btn);
     }
     box.appendChild(bar);
+    box.classList.add("paged");
+    const headers = colViewHeaders(name, cardsHeaders);
+    const tscroll = document.createElement("div");
+    tscroll.className = "tscroll";
     const wrap = document.createElement("div");
-    wrap.innerHTML = table(colViewHeaders(name, cardsHeaders), st.rows);
-    box.appendChild(wrap);
+    wrap.innerHTML = table(headers, st.rows, null, cardsTotals(headers, st.rows));
+    tscroll.appendChild(wrap);
+    box.appendChild(tscroll);
+    const tr = wrap.querySelector("tr.totals-row");
+    if (tr) {
+      const hdr = wrap.querySelector("thead tr:not(.totals-row)");
+      const h = hdr ? hdr.offsetHeight : 0;
+      tr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
+    }
+    mountXBar(box, tscroll);
   };
 
   st.fetching = async () => {
