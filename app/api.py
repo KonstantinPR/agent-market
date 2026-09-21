@@ -1162,6 +1162,8 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except WbApiError as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"WB API не принял изменение цен: {e}")
 

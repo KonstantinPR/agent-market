@@ -16,6 +16,47 @@ from app.config import settings
 from app.providers.base import BaseProvider
 from app.providers.errors import WbApiError
 
+
+def _upload_error_detail(resp) -> Optional[str]:
+    """Читает ошибку WB в ответе upload/task (400) → короткое русское описание.
+
+    WB присылает в теле {"title": ..., "errors": [...]} или {"data":
+    [{"nmID": ..., "errors": [...]}]}. Возвращает None, если тело не читается.
+    """
+    try:
+        body = resp.json()
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    parts: list = []
+    title = body.get("title")
+    if title:
+        parts.append(str(title))
+    if isinstance(body.get("errors"), list):
+        parts.extend(str(e) for e in body["errors"] if e)
+    data = body.get("data")
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            errs = item.get("errors") or []
+            if isinstance(errs, list):
+                for e in errs:
+                    parts.append(f"{item.get('nmID', '—')}: {e}")
+    elif isinstance(data, dict):
+        errs = data.get("errors") or []
+        if isinstance(errs, list):
+            parts.extend(str(e) for e in errs if e)
+    if not parts:
+        return None
+    seen, out = set(), []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return "; ".join(out)[:500]
+
 # Русские заголовки для отчёта детализации продаж (финансовый API)
 DETAIL_RU_COLUMNS = {
     "reportId": "Номер отчёта", "dateFrom": "Начало периода", "dateTo": "Конец периода",
@@ -468,8 +509,19 @@ class WbProvider(BaseProvider):
         if self.testing:
             self.applied_prices = items
             return {"uploadId": "mock-123", "task_id": "mock-123"}
+        if not items:
+            return {"body": {"data": {}}, "task_id": None}
         url = "https://discounts-prices-api.wildberries.ru/api/v2/upload/task"
-        resp = self._session_post(url, {"data": items})
+        try:
+            resp = self._session_post(url, {"data": items})
+        except requests.HTTPError as exc:  # noqa: BLE001
+            detail = _upload_error_detail(exc.response) if exc.response is not None else None
+            if detail:
+                raise WbApiError(
+                    f"WB API отклонил задачу изменения цен: {detail}",
+                    status_code=getattr(exc.response, "status_code", 400),
+                ) from exc
+            raise
         body = resp.json()
         task_id = None
         if isinstance(body, dict):

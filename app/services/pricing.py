@@ -1317,10 +1317,16 @@ def _pushed_items(rows: list, s: dict, applied_past: set) -> list:
             nm = int(r["nm_id"])
         except (ValueError, TypeError):
             nm = r["nm_id"]
+        if not isinstance(nm, int) or nm <= 0:
+            # upload/task требует числовой nmID: без WB-карты из задачи исключаем
+            r["status"] = "skipped_no_nm"
+            r["reason"] += " — нет nm-карты WB, в задачу изменения цен не включён"
+            continue
+        # upload/task принимает только целые price и discount (0..99): иначе 400.
         items.append({
             "nmID": nm,
-            "price": float(r["price"]),
-            "discount": float(r["target_discount"]),
+            "price": max(100, int(float(r["price"] or 0))),
+            "discount": max(0, min(99, int(float(r["target_discount"] or 0)))),
         })
     return items
 

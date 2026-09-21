@@ -3,7 +3,7 @@ import requests
 
 from app.config import settings
 from app.providers.errors import MarketError, OzonApiError, WbApiError, translate_request_error
-from app.providers.wb import WbProvider
+from app.providers.wb import WbProvider, _upload_error_detail
 from app.services.refresh import _OZ_MESSAGES, _WB_MESSAGES
 
 
@@ -125,3 +125,52 @@ def test_session_post_without_alt_key_does_not_rotate(monkeypatch):
     with pytest.raises(WbApiError):
         provider._session_post("https://example.invalid/x", {"a": 1}, finance=True)
     assert calls == ["PRIMARY"]
+
+
+def test_upload_error_detail_parses_wb_body():
+    class Resp:
+        def json(self):
+            return {"title": "Ошибка валидации",
+                    "data": [{"nmID": 123456, "errors": ["Минимальная цена ..."]}]}
+
+    detail = _upload_error_detail(Resp())
+    assert "Ошибка валидации" in detail
+    assert "123456: Минимальная цена" in detail
+
+
+def test_upload_error_detail_none_for_non_json():
+    class Resp:
+        def json(self):
+            raise ValueError("нет json")
+
+    assert _upload_error_detail(Resp()) is None
+
+
+def test_update_prices_raises_readable_wbapierror(monkeypatch):
+    provider = WbProvider()
+    resp = requests.Response()
+    resp.status_code = 400
+    resp.json = lambda: {"title": "Стоимость не может быть меньше минимальной цены"}
+
+    def boom(url, payload, num_retries=6, finance=False, key=None):
+        raise requests.HTTPError("400 Client Error", response=resp)
+
+    monkeypatch.setattr(provider, "_session_post", boom)
+    with pytest.raises(WbApiError) as exc:
+        provider.update_prices([{"nmID": 123456, "price": 100, "discount": 0}])
+    assert "Стоимость не может быть меньше минимальной цены" in str(exc.value)
+    assert exc.value.status_code == 400
+
+
+def test_update_prices_without_detail_re_raises_http(monkeypatch):
+    provider = WbProvider()
+    resp = requests.Response()
+    resp.status_code = 400
+    resp.json = lambda: lambda: None  # нечитаемое тело → HTTPError летит дальше
+
+    def boom(url, payload, num_retries=6, finance=False, key=None):
+        raise requests.HTTPError("400 Client Error", response=resp)
+
+    monkeypatch.setattr(provider, "_session_post", boom)
+    with pytest.raises(requests.HTTPError):
+        provider.update_prices([{"nmID": 123456, "price": 100, "discount": 0}])

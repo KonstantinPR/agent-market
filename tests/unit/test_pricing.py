@@ -411,17 +411,17 @@ def test_t14_unknown_quality_does_not_block_raise(db):
 
 
 def test_apply_records_applied_and_returns_items(db):
-    _seed(db, "R8", "P8", stock=1000,
+    _seed(db, "R8", "881234", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     fake = _FakeProvider()
     res = pricing_service.apply_recommendations(
-        db, prices_df=_prices(("P8", 2000, 10)), provider=fake, today=TODAY,
+        db, prices_df=_prices(("881234", 2000, 10)), provider=fake, today=TODAY,
         settings={"prefer_raise": False},
     )
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
     assert fake.applied_prices == [{
-        "nmID": "P8", "price": 2000.0, "discount": pytest.approx((1 - 1530 / 2000) * 100, abs=0.5),
+        "nmID": 881234, "price": 2000, "discount": 23,
     }]
     log = db.execute(
         select(models.PriceChange).where(models.PriceChange.article == "R8")
@@ -432,25 +432,25 @@ def test_apply_records_applied_and_returns_items(db):
 
 
 def test_apply_error_records_error_and_raises(db):
-    _seed(db, "R8", "P8", stock=1000,
+    _seed(db, "R8", "881234", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     fake = _FakeProvider(raise_on_update=True)
     with pytest.raises(RuntimeError):
         pricing_service.apply_recommendations(
-            db, prices_df=_prices(("P8", 2000, 10)), provider=fake, today=TODAY,
+            db, prices_df=_prices(("881234", 2000, 10)), provider=fake, today=TODAY,
         )
     logs = db.execute(select(models.PriceChange)).scalars().all()
     assert any(log.status == "error" and "boom" in log.reason for log in logs)
 
 
 def test_apply_cooldown_blocks_reapply(db):
-    _seed(db, "R8", "P8", stock=1000,
+    _seed(db, "R8", "881234", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     pricing_service.apply_recommendations(
-        db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
     )
     res = pricing_service.apply_recommendations(
-        db, prices_df=_prices(("P8", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
     )
     assert res["pushed"] == 0
     assert all(r["status"] == "skipped_cooldown"
@@ -472,7 +472,7 @@ class _FakeProvider:
 # ------------------------------------------------ apply_rows (кнопка «Применить в WB»)
 
 
-def _ui_row(art="R8", nm="P8", price=2000.0, cur_disc=10.0, tgt_disc=23.5,
+def _ui_row(art="R8", nm="123456", price=2000.0, cur_disc=10.0, tgt_disc=23.5,
             action="LOWER", status="suggested"):
     return {
         "article": art, "nm_id": nm, "name": "Товар", "price": price,
@@ -490,7 +490,7 @@ def test_apply_rows_pushes_exactly_visible(db):
     res = pricing_service.apply_rows(db, rows, provider=fake, today=TODAY)
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
-    assert fake.applied_prices == [{"nmID": "P8", "price": 2000.0, "discount": 23.5}]
+    assert fake.applied_prices == [{"nmID": 123456, "price": 2000, "discount": 23}]
     log = db.execute(select(models.PriceChange).where(models.PriceChange.article == "R8")).scalars().all()
     assert log and log[-1].status == "applied"
     assert log[-1].after_discount == pytest.approx(23.5)
@@ -501,14 +501,14 @@ def test_apply_rows_pushes_only_matching_rows(db):
     """HOLD/RAISE/LOWER: в WB уходят только строки с действием изменения."""
     fake = _FakeProvider()
     rows = [
-        _ui_row(art="R8", nm="P8", action="LOWER"),
-        _ui_row(art="R9", nm="P9", action="HOLD"),
-        _ui_row(art="R10", nm="P10", action="RAISE"),
+        _ui_row(art="R8", nm="123456", action="LOWER"),
+        _ui_row(art="R9", nm="111111", action="HOLD"),
+        _ui_row(art="R10", nm="222222", action="RAISE"),
     ]
     res = pricing_service.apply_rows(db, rows, provider=fake, today=TODAY)
     assert fake.applied_prices == [
-        {"nmID": "P8", "price": 2000.0, "discount": 23.5},
-        {"nmID": "P10", "price": 2000.0, "discount": 23.5},
+        {"nmID": 123456, "price": 2000, "discount": 23},
+        {"nmID": 222222, "price": 2000, "discount": 23},
     ]
     applied = [r["article"] for r in res["rows"] if r["status"] == "applied"]
     assert applied == ["R8", "R10"]
@@ -532,6 +532,23 @@ def test_apply_rows_error_records_error_and_raises(db):
                                    today=TODAY)
     logs = db.execute(select(models.PriceChange)).scalars().all()
     assert any(log.status == "error" and "boom" in log.reason for log in logs)
+
+
+def test_pushed_items_integerizes_and_skips_without_nm(db):
+    """upload/task: целые price/discount (0..99), строки без nm-карты исключаются."""
+    s = pricing_service.merge_settings({})
+    rows = [
+        _ui_row(art="R8", nm="123456", action="LOWER", price=2000.6, tgt_disc=23.9),
+        _ui_row(art="R9", nm="", action="LOWER", tgt_disc=10.0),
+        _ui_row(art="R10", nm="654321", action="RAISE", price=50.0, tgt_disc=150.0),
+    ]
+    items = pricing_service._pushed_items(rows, s, set())
+    assert items == [
+        {"nmID": 123456, "price": 2000, "discount": 23},
+        {"nmID": 654321, "price": 100, "discount": 99},
+    ]
+    assert rows[1]["status"] == "skipped_no_nm"
+    assert "nm-карты" in rows[1]["reason"]
 
 
 # ------------------------------------------------------------------ T-21: мёртвые/нулевые товары и противовес
@@ -596,25 +613,25 @@ def test_halving_sequence_hits_floor(db):
 
 def test_apply_halves_dead_even_when_hidden(db):
     """Применение обязано обрабатывать мёртвых даже при show_zero=False."""
-    _seed_dead(db, "D3", "P3")
+    _seed_dead(db, "D3", "771111")
     fake = _FakeProvider()
     res = pricing_service.apply_recommendations(
-        db, prices_df=_prices(("P3", 1000, 50)), provider=fake, today=TODAY)
+        db, prices_df=_prices(("771111", 1000, 50)), provider=fake, today=TODAY)
     assert res["pushed"] == 1
     assert "D3" in res["applied"]
     assert fake.applied_prices == [{
-        "nmID": "P3", "price": 1000.0, "discount": pytest.approx(25.0, abs=0.1),
+        "nmID": 771111, "price": 1000, "discount": pytest.approx(25.0, abs=0.1),
     }]
 
 
 def test_halve_bypasses_cooldown_within_budget(db):
     """HALVE не тонет в кулдауне: второй прогон «Применить» делит скидку снова."""
-    _seed_dead(db, "D4", "P4")
+    _seed_dead(db, "D4", "772222")
     fake = _FakeProvider()
     pricing_service.apply_recommendations(
-        db, prices_df=_prices(("P4", 1000, 50)), provider=fake, today=TODAY)
+        db, prices_df=_prices(("772222", 1000, 50)), provider=fake, today=TODAY)
     res = pricing_service.apply_recommendations(
-        db, prices_df=_prices(("P4", 1000, 25)), provider=fake, today=TODAY)
+        db, prices_df=_prices(("772222", 1000, 25)), provider=fake, today=TODAY)
     assert res["pushed"] == 1
     row = next(r for r in res["rows"] if r["article"] == "D4")
     assert row["action"] == "HALVE"
