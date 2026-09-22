@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=11">
+<link rel="stylesheet" href="/static/style.css?v=14">
 </head>
 <body>
 <nav class="navbar">
@@ -158,13 +158,15 @@
   </section>
 
   <section id="tab-pricing" class="pane">
-    <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает), опирается на данные воронки и фактическую маржу из детализации и не опускает витринную цену ниже порога убытка и минимальной цены WB. «Применить» в шапке пересчитывает рекомендации, «Применить в WB» вносит новые скидки через API (доступно, когда для всех снижений известна минимальная цена WB).</span>
+    <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает), опирается на данные воронки и фактическую маржу из детализации и не опускает витринную цену ниже порога убытка. «Применить» в шапке пересчитывает рекомендации, «Применить в WB» вносит новые скидки через API.</span>
     <div class="toolbar">
-      <button id="pricingApply" class="btn" disabled title="Применение скидок через WB API — доступно, когда для всех рекомендаций на снижение известна минимальная цена WB">Применить в WB</button>
+      <button id="pricingApply" class="btn" disabled title="Применение скидок через WB API — доступно, когда есть рекомендации на изменение в видимой таблице">Применить в WB</button>
       <span class="msg" id="pricingMsg"></span>
-      <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» вносит новые скидки через API; она активна, когда публичный Price API вернул минимальные цены для всех рекомендаций на снижение.</span></span>
+      <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» вносит новые скидки через API — только по видимым в таблице строкам (с учётом фильтров).</span></span>
       <input id="pricingLike" placeholder="Артикул или название содержит…">
       <label class="chk"><input type="checkbox" id="pricingShowZero"> С нулевыми товарами</label>
+      <label class="chk"><input type="checkbox" id="pricingHideSkip" checked> Скрыть «пропустить»</label>
+      <button id="pricingFiltersBtn" class="btn" title="Фильтры по каждой колонке таблицы">Фильтры</button>
       <span class="tl">Версия расчёта:</span>
       <div class="view-menu" id="pricingModeMenu">
         <button type="button" class="btn" id="btnpricingMode">Новая (рекомендуется) &#9662;</button>
@@ -180,6 +182,7 @@
         <button id="pricingUpload" class="btn">Загрузить на диск</button>
       </span>
     </div>
+    <div class="pfilter-bar hidden" id="pricingFilters"></div>
     <div id="pricingSettings" class="pricing-settings"></div>
     <div class="pricing-summary" id="pricingSummary"></div>
     <div class="table-wrap" id="pricingTable"></div>
@@ -687,6 +690,6 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=11"></script>
+<script src="/static/app.js?v=15"></script>
 </body>
 </html>

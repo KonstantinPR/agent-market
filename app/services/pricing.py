@@ -569,6 +569,12 @@ def recommendations(
         else:
             out_rows.append(_decide_dead(f, s) if art not in has_life else _decide(f, s))
 
+    for r in out_rows:
+        if r.get("target_discount") is not None and r.get("current_discount") is not None:
+            r["delta_discount"] = round(r["target_discount"] - r["current_discount"], 1)
+        else:
+            r["delta_discount"] = None
+
     return {
         "rows": out_rows,
         "settings": s,

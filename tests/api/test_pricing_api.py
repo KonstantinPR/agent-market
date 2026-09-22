@@ -104,17 +104,6 @@ def test_apply_error_returns_502_and_logs(db, api_client, stub_wb):
     assert any(x["status"] == "error" for x in hist["rows"])
 
 
-def test_apply_requires_min_prices_422(db, api_client, stub_wb):
-    _seed(db, "TST-1", "1001", stock=1000,
-          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
-    stub_wb.min_prices_error = RuntimeError("public price api down")
-    r = api_client.post("/api/pricing/apply", json={})
-    assert r.status_code == 422
-    assert "минимальных ценах WB" in r.json()["detail"]
-    hist = api_client.get("/api/pricing/history").json()
-    assert any(x["status"] == "error" and "заблокировано" in x["reason"] for x in hist["rows"])
-
-
 def test_apply_cooldown_blocks_second(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))

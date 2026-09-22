@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "11";
+const UI_VERSION = "15";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -132,18 +132,8 @@ function table(headers, rows, sort, footers) {
         h += '<th class="totals"><b>ИТОГО</b></th>';
       } else if (v == null) {
         h += "<th class=\"totals\"></th>";
-      } else if (c.render === cellFmts.money) {
-        h += '<th class="num totals"><b>' + fmtMoney(v) + "</b></th>";
-      } else if (c.render === cellFmts.moneyZero) {
-        h += '<th class="num totals"><b>' + (v ? fmtMoney(v) : "—") + "</b></th>";
-      } else if (c.render === cellFmts.int) {
-        h += '<th class="num totals"><b>' + fmt(Math.round(v)) + "</b></th>";
-      } else if (c.render === cellFmts.intZero) {
-        h += '<th class="num totals"><b>' + (v ? fmt(Math.round(v)) : "—") + "</b></th>";
-      } else if (c.render === cellFmts.pct) {
-        h += '<th class="num totals"><b>' + fmtPct(v) + "</b></th>";
       } else {
-        h += '<th class="num totals"><b>' + fmtMoney(v) + "</b></th>";
+        h += totCell(c, v);
       }
     }
     h += "</tr>";
@@ -155,6 +145,23 @@ function table(headers, rows, sort, footers) {
     h += "</tr>";
   }
   return "<table>" + h + "</tbody></table>";
+}
+
+// Ячейка строки «Итого»: v — число (сумма) или {avg: n} (среднее по видимым строкам).
+function totCell(c, v) {
+  const avg = v && typeof v === "object" && typeof v.avg === "number" ? v.avg : null;
+  const n = avg !== null ? avg : v;
+  const cls = "num totals" + (avg !== null ? " avg" : "");
+  const attr = avg !== null ? ' title="Среднее по видимым строкам"' : "";
+  const pre = avg !== null ? "≈ " : "";
+  let s;
+  if (c.render === cellFmts.money) s = fmtMoney(n);
+  else if (c.render === cellFmts.moneyZero) s = n ? fmtMoney(n) : "—";
+  else if (c.render === cellFmts.int) s = fmt(Math.round(n));
+  else if (c.render === cellFmts.intZero) s = n ? fmt(Math.round(n)) : "—";
+  else if (c.render === cellFmts.pct) s = fmtPct(n);
+  else s = n == null ? "—" : fmt(Math.round(Number(n)));
+  return '<th class="' + cls + '"' + attr + '><b>' + pre + s + "</b></th>";
 }
 
 const cellFmts = {
@@ -451,6 +458,7 @@ async function renderMargin(p) {
 
 const marginHeaders = [
 { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
   { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int },
   { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
@@ -478,6 +486,7 @@ const marginHeaders = [
   { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct },
 ];
 const MARGIN_DETAIL_OPTIONAL = [
+  { k: "nm_id", label: "Артикул WB" },
   { k: "returns_qty", label: "Возвращено, шт" },
   { k: "logistics_out", label: "Логистика туда" },
   { k: "logistics_in", label: "Логистика обратно" },
@@ -647,7 +656,75 @@ function buildColViewMenu(tab) {
     sep2.style.margin = "4px 0";
     panel.appendChild(sep2);
   }
-  for (const o of set.optional) item(o.k, o.label, !!st[o.k], pinSet.has(o.k));
+  const subPin = (k) => {
+    const pinLbl = document.createElement("label");
+    pinLbl.className = "chk pin";
+    pinLbl.title = "Закрепить колонку — остаётся на месте при прокрутке таблицы вправо";
+    const pb = document.createElement("input");
+    pb.type = "checkbox";
+    pb.checked = pinSet.has(k);
+    pb.addEventListener("change", (e) => {
+      if (e.target.checked) pinSet.add(k); else pinSet.delete(k);
+      st.pin = Array.from(pinSet);
+      colViewSave(tab, st);
+      onToggle();
+    });
+    pinLbl.appendChild(pb);
+    const pico = document.createElement("span");
+    pico.className = "pin-ico";
+    pico.textContent = "\uD83D\uDCCC";
+    pinLbl.appendChild(pico);
+    return pinLbl;
+  };
+  if (c.groups && c.groups.length) {
+    for (const g of c.groups) {
+      const entries = g.keys.map((k) => set.optional.find((o) => o.k === k)).filter(Boolean);
+      if (!entries.length) continue;
+      const allOn = entries.every((o) => !!st[o.k]);
+      const anyOn = entries.some((o) => !!st[o.k]);
+      const grp = document.createElement("div");
+      grp.className = "colview-grp";
+      const lbl = document.createElement("label");
+      lbl.className = "chk colview-grp-lbl";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = allOn;
+      cb.indeterminate = !allOn && anyOn;
+      cb.addEventListener("change", (e) => {
+        for (const o of entries) st[o.k] = e.target.checked;
+        colViewSave(tab, st);
+        onToggle();
+      });
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(" " + g.title));
+      grp.appendChild(lbl);
+      const wrap = document.createElement("div");
+      wrap.className = "colview-grp-items";
+      for (const o of entries) {
+        const row = document.createElement("div");
+        row.className = "colview-row colview-sub";
+        const il = document.createElement("label");
+        il.className = "chk";
+        const icb = document.createElement("input");
+        icb.type = "checkbox";
+        icb.checked = !!st[o.k];
+        icb.addEventListener("change", (e) => {
+          st[o.k] = e.target.checked;
+          colViewSave(tab, st);
+          onToggle();
+        });
+        il.appendChild(icb);
+        il.appendChild(document.createTextNode(" " + o.label));
+        row.appendChild(il);
+        if (c.pinnable) row.appendChild(subPin(o.k));
+        wrap.appendChild(row);
+      }
+      grp.appendChild(wrap);
+      panel.appendChild(grp);
+    }
+  } else {
+    for (const o of set.optional) item(o.k, o.label, !!st[o.k], pinSet.has(o.k));
+  }
 }
 // Общий обработчик кнопки «Вид таблицы» (открыть/закрыть панель).
 function initColViewMenu(tab) {
@@ -3102,38 +3179,87 @@ function actionCell(v) {
   return a ? `<span class="tag p-tag ${a.cls}">${a.txt}</span>` : (v || "—");
 }
 
+// Подсветка целевой скидки: дельта к текущей. Скидка падает (d<0) → цена вверх (▲, зелёный),
+// растёт (d>0) → скидка больше, цена вниз (▼, красный); мелкая дельта (<0.5 п.п.) — жёлтая (→).
+function targetDiscCell(v, r) {
+  if (v == null) return "—";
+  const cur = Number(r && r.current_discount);
+  const d = isNaN(cur) ? 0 : Number(v) - cur;
+  const mag = Math.abs(d);
+  let arrow = "", cls = "";
+  if (d !== 0) {
+    if (mag < 0.5) { arrow = "→ "; cls = "warn"; }
+    else if (d < 0) { arrow = "▲ "; cls = "pos"; }
+    else { arrow = "▼ "; cls = "neg"; }
+  }
+  return arrow ? `<span class="${cls}">${arrow}${fmt(v)}%</span>` : fmt(v) + "%";
+}
+// Подсветка целевой цены: дельта к текущей цене. Дороже (d>0) → ▲ зелёный, дешевле (d<0) → ▼ красный,
+// дельта <0.5% от текущей цены — жёлтая (→).
+function targetVisCell(v, r) {
+  if (v == null) return "—";
+  const base = Number(r && r.current_vis);
+  const d = isNaN(base) || base === 0 ? 0 : Number(v) - base;
+  const mag = d === 0 ? 0 : Math.abs(d) / Math.abs(base);
+  let arrow = "", cls = "";
+  if (d !== 0) {
+    if (mag < 0.005) { arrow = "→ "; cls = "warn"; }
+    else if (d > 0) { arrow = "▲ "; cls = "pos"; }
+    else { arrow = "▼ "; cls = "neg"; }
+  }
+  return arrow ? `<span class="${cls}">${arrow}${fmtMoney(v)}</span>` : fmtMoney(v);
+}
+
+// Подсветка дельты скидки (целевая − текущая): скидка растёт (d>0) → цена вниз (▼, красный),
+// падает (d<0) → цена вверх (▲, зелёный); мелкая дельта (<0.5 п.п.) — жёлтая (→).
+function deltaDiscCell(v, r) {
+  if (v == null) return "—";
+  const d = Number(v);
+  const mag = Math.abs(d);
+  let arrow = "", cls = "";
+  if (d !== 0) {
+    if (mag < 0.5) { arrow = "→ "; cls = "warn"; }
+    else if (d < 0) { arrow = "▲ "; cls = "pos"; }
+    else { arrow = "▼ "; cls = "neg"; }
+  }
+  const s = (d > 0 ? "+" : "") + fmtFloat(d, 1) + "%";
+  return arrow ? `<span class="${cls}">${arrow}${s}</span>` : s;
+}
+
 const pricingHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "stock", label: "Остаток", num: true, render: cellFmts.int },
-  { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) },
-  { k: "velocity", label: "v, шт/дн", num: true, render: (v) => v == null ? "—" : v.toFixed(1) },
-  { k: "trend", label: "Тренд", num: true, render: (v) => v == null ? "—" : (v && v > 1 ? "<span class='pos'>▲ " : v && v < 1 ? "<span class='neg'>▼ " : "<span>") + (v || 0).toFixed(2) + "</span>" },
-  { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct },
-  { k: "backlog", label: "В корзине", num: true, render: cellFmts.int },
+  { k: "target_discount", label: "Целевая скидка, %", num: true, render: targetDiscCell },
   { k: "current_discount", label: "Скидка сейчас, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
+  { k: "delta_discount", label: "Дельта скидки", num: true, render: deltaDiscCell },
+  { k: "target_vis", label: "Целевая цена, руб", num: true, render: targetVisCell },
   { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money },
-  { k: "avg_price", label: "Ср. цена факт", num: true, render: cellFmts.money },
-  { k: "product_rating", label: "Рейтинг", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) },
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.moneyZero },
+  { k: "avg_price", label: "Ср. цена факт, руб", num: true, render: cellFmts.money },
+  { k: "stock", label: "Остаток", num: true, render: cellFmts.int },
   { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int },
+  { k: "backlog", label: "В корзине", num: true, render: cellFmts.int },
+  { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct },
+  { k: "margin_pct", label: "Маржа факт, % от выручки", num: true, render: cellFmts.pct },
+  { k: "margin_per_one", label: "Маржа/шт факт, руб", num: true, render: cellFmts.money },
+  { k: "product_rating", label: "Рейтинг товара", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) },
+  { k: "action", label: "Решение", render: actionCell },
+  { k: "reason", label: "Причина", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "stock_wb", label: "Остаток WB", num: true, render: cellFmts.int },
+  { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) },
+  { k: "velocity", label: "v, шт/дн", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) },
+  { k: "trend", label: "Тренд", num: true, render: (v) => v == null ? "—" : (v && v > 1 ? "<span class='pos'>▲ " : v && v < 1 ? "<span class='neg'>▼ " : "<span>") + (v || 0).toFixed(2) + "</span>" },
   { k: "conv_buyout_percent", label: "Конв. выкупа, %", num: true, render: cellFmts.pct },
   { k: "cancel_sum", label: "Отмены, руб", num: true, render: cellFmts.money },
   { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int },
-  { k: "stock_wb", label: "Остаток WB", num: true, render: cellFmts.int },
   { k: "return_rate", label: "Возвраты, %", num: true, render: cellFmts.pct },
-  { k: "margin_pct", label: "Маржа факт, %", num: true, render: cellFmts.pct },
-  { k: "margin_per_one", label: "Маржа/шт, руб", num: true, render: cellFmts.money },
+  { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct },
   { k: "revenue_per_one", label: "Ср. чек, руб", num: true, render: cellFmts.money },
   { k: "income_per_one", label: "К переч./шт, руб", num: true, render: cellFmts.money },
   { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money },
   { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money },
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money },
-  { k: "action", label: "Решение", render: actionCell },
-  { k: "target_discount", label: "Целевая скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
-  { k: "target_vis", label: "Целевая цена", num: true, render: cellFmts.money },
-  { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct },
-  { k: "reason", label: "Причина", render: cellFmts.text },
 ];
 
 // ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
@@ -3212,35 +3338,160 @@ registerColView("margin-funnel", { storageKey: "marginFunnelCols", headers: funn
 registerColView("margin-detail", {
   storageKey: "marginDetailCols",
   headers: marginHeaders,
-  optional: MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: _OLD_OPTIONAL.has(c.k) })),
+  optional: MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: _OLD_OPTIONAL.has(c.k) || c.k === "nm_id" })),
 });
-// Необязательные колонки автопилота (базовые — article/name/stock/doc/action/target_discount/target_vis/reason — видны всегда).
+// Необязательные колонки автопилота. Порядок = порядок колонок в таблице.
+// По умолчанию видимы только 18 основных (см. def: true) — остальные скрыты и
+// раскрываются по одному или группами (PRICING_COLGROUPS) в «Вид таблицы».
 const PRICING_OPTIONAL = [
+  { k: "article", label: "Артикул", def: true },
   { k: "nm_id", label: "Артикул WB", def: true },
-  { k: "velocity", label: "v, шт/дн", def: true },
-  { k: "trend", label: "Тренд", def: true },
-  { k: "conv_pct", label: "Конверсия, %", def: true },
-  { k: "backlog", label: "В корзине", def: true },
+  { k: "target_discount", label: "Целевая скидка, %", def: true },
   { k: "current_discount", label: "Скидка сейчас, %", def: true },
+  { k: "delta_discount", label: "Дельта скидки", def: true },
+  { k: "target_vis", label: "Целевая цена, руб", def: true },
   { k: "current_vis", label: "Цена сейчас, руб", def: true },
-  { k: "avg_price", label: "Ср. цена факт", def: true },
-  { k: "margin_pct_at_target", label: "Маржа при цели, %", def: true },
-  { k: "product_rating", label: "Рейтинг", def: true },
-  { k: "return_rate", label: "Возвраты, %", def: true },
-  { k: "margin_pct", label: "Маржа факт, %", def: true },
+  { k: "net_cost", label: "Себестоимость", def: true },
+  { k: "avg_price", label: "Ср. цена факт, руб", def: true },
+  { k: "stock", label: "Остаток", def: true },
+  { k: "buyouts", label: "Выкупы, шт", def: true },
+  { k: "backlog", label: "В корзине", def: true },
+  { k: "conv_pct", label: "Конверсия, %", def: true },
+  { k: "margin_pct", label: "Маржа факт, % от выручки", def: true },
+  { k: "margin_per_one", label: "Маржа/шт факт, руб", def: true },
+  { k: "product_rating", label: "Рейтинг товара", def: true },
+  { k: "action", label: "Решение", def: true },
+  { k: "reason", label: "Причина", def: true },
+  { k: "name", label: "Наименование", def: false },
+  { k: "stock_wb", label: "Остаток WB", def: false },
+  { k: "doc", label: "DOC, дн", def: false },
+  { k: "velocity", label: "v, шт/дн", def: false },
+  { k: "trend", label: "Тренд", def: false },
+  { k: "conv_buyout_percent", label: "Конв. выкупа, %", def: false },
+  { k: "cancel_sum", label: "Отмены, руб", def: false },
+  { k: "add_to_wishlist", label: "В избранное", def: false },
+  { k: "return_rate", label: "Возвраты, %", def: false },
+  { k: "margin_pct_at_target", label: "Маржа при цели, %", def: false },
   { k: "revenue_per_one", label: "Ср. чек, руб", def: false },
-  { k: "margin_per_one", label: "Маржа/шт, руб", def: false },
   { k: "income_per_one", label: "К переч./шт, руб", def: false },
   { k: "commission_per_one", label: "Комиссия/шт, руб", def: false },
   { k: "logistics_per_one", label: "Логистика/шт, руб", def: false },
   { k: "storage_per_one", label: "Хранение/шт, руб", def: false },
-  { k: "buyouts", label: "Выкупы, шт", def: false },
-  { k: "conv_buyout_percent", label: "Конв. выкупа, %", def: false },
-  { k: "cancel_sum", label: "Отмены, руб", def: false },
-  { k: "add_to_wishlist", label: "В избранное", def: false },
-  { k: "stock_wb", label: "Остаток WB", def: false },
 ];
-registerColView("pricing", { storageKey: "pricingCols", pinnable: true, headers: pricingHeaders, optional: PRICING_OPTIONAL });
+// Группы колонок для «Вид таблицы» — раскрывать сразу по смыслу.
+const PRICING_COLGROUPS = [
+  { title: "Товар", keys: ["article", "nm_id", "name", "product_rating"] },
+  { title: "Цена и скидка", keys: ["current_discount", "current_vis", "target_discount", "target_vis", "delta_discount", "avg_price", "margin_pct_at_target"] },
+  { title: "Запасы и продажи", keys: ["stock", "stock_wb", "doc", "velocity", "trend", "buyouts", "conv_buyout_percent", "cancel_sum", "add_to_wishlist", "return_rate"] },
+  { title: "Воронка и конверсия", keys: ["backlog", "conv_pct"] },
+  { title: "Экономика на единицу", keys: ["margin_pct", "margin_per_one", "net_cost", "revenue_per_one", "income_per_one", "commission_per_one", "logistics_per_one", "storage_per_one"] },
+  { title: "Решение", keys: ["action", "reason"] },
+];
+registerColView("pricing", {
+  storageKey: "pricingCols", pinnable: true,
+  headers: pricingHeaders, optional: PRICING_OPTIONAL, groups: PRICING_COLGROUPS,
+});
+
+// ----------------------------------------------------- Фильтр по колонкам таблицы автопилота
+let _pricingColFilters = loadPricingColFilters();
+function loadPricingColFilters() {
+  try { return JSON.parse(localStorage.getItem("pricing_filters") || "{}"); }
+  catch (e) { return {}; }
+}
+function savePricingColFilters(f) { localStorage.setItem("pricing_filters", JSON.stringify(f)); }
+function pricingFiltersOn() {
+  const v = localStorage.getItem("pricing_filters_on");
+  return v == null ? false : v === "1";
+}
+function setPricingFiltersOn(on) { localStorage.setItem("pricing_filters_on", on ? "1" : "0"); }
+
+// Числовой фильтр: диапазон «10..50», оператор «>100», «<5», «>=3», «=200» или точное число.
+function numMatch(v, raw) {
+  if (v == null || v === "") return false;
+  const n = Number(v);
+  if (!isFinite(n)) return true;
+  const s = String(raw).trim().replace(/\s+/g, "").replace(/,/g, ".");
+  if (s === "") return true;
+  const parts = s.split("..");
+  if (parts.length === 2) {
+    if (parts[0] !== "" && n < Number(parts[0])) return false;
+    if (parts[1] !== "" && n > Number(parts[1])) return false;
+    return true;
+  }
+  const m = s.match(/^(<=|>=|<|>|=)?([-+]?\d+(?:\.\d+)?)$/);
+  if (!m) return true;
+  const num = Number(m[2]);
+  switch (m[1] || "=") {
+    case "<": return n < num;
+    case "<=": return n <= num;
+    case ">": return n > num;
+    case ">=": return n >= num;
+    default: return Number(n) === num;
+  }
+}
+function pricingRowMatches(r, filters) {
+  for (const k of Object.keys(filters)) {
+    const raw = String(filters[k] || "").trim();
+    if (!raw) continue;
+    const hd = pricingHeaders.find((x) => x.k === k);
+    if (hd && hd.num) {
+      if (!numMatch(r[k], raw)) return false;
+    } else {
+      const label = String(r[k] == null ? "" : r[k]).toLowerCase();
+      if (!label.includes(raw.toLowerCase())) return false;
+    }
+  }
+  return true;
+}
+
+let _pricingFilterTimer = null;
+function schedulePricingFilter() {
+  if (_pricingFilterTimer) clearTimeout(_pricingFilterTimer);
+  _pricingFilterTimer = setTimeout(() => { if (currentTab === "pricing") renderPricing(false); }, 300);
+}
+// Бар фильтров: один input на каждую видимую колонку. Перестраивается только при смене набора
+// колонок (чтобы не терять фокус при вводе), значения живут в _pricingColFilters.
+function buildPricingFilterBar() {
+  const host = $("#pricingFilters");
+  if (!host) return;
+  const headers = colViewHeaders("pricing", pricingHeaders);
+  const sig = headers.map((h) => h.k).join(",");
+  if (host._sig === sig) return;
+  host._sig = sig;
+  host.innerHTML = "";
+  for (const h of headers) {
+    const lbl = document.createElement("label");
+    lbl.className = "pfilter";
+    const t = document.createElement("span");
+    t.className = "pfilter-lbl";
+    t.textContent = h.label;
+    lbl.appendChild(t);
+    const inp = document.createElement("input");
+    inp.dataset.k = h.k;
+    inp.placeholder = h.num ? "мин..макс" : "содержит…";
+    inp.title = h.num
+      ? "Диапазон «10..50», оператор «>100», «<5», «=200» или точное число"
+      : "Текст, который должен содержаться в ячейке";
+    inp.value = _pricingColFilters[h.k] || "";
+    inp.addEventListener("input", (e) => {
+      _pricingColFilters[h.k] = e.target.value;
+      savePricingColFilters(_pricingColFilters);
+      schedulePricingFilter();
+    });
+    lbl.appendChild(inp);
+    host.appendChild(lbl);
+  }
+}
+// Активные фильтры — только по тем колонкам, что сейчас видимы и непусты.
+function pricingEffectiveColFilters() {
+  const visible = new Set(colViewHeaders("pricing", pricingHeaders).map((h) => h.k));
+  const out = {};
+  for (const k of Object.keys(_pricingColFilters)) {
+    const v = String(_pricingColFilters[k] || "").trim();
+    if (visible.has(k) && v) out[k] = v;
+  }
+  return out;
+}
 
 function loadPricingSettings() {
   try {
@@ -3504,8 +3755,32 @@ function refreshApplyButton() {
   const canApply = actives.length > 0;
   btn.disabled = !canApply;
   btn.title = canApply
-    ? "Применить через WB API только видимые в таблице строки (с учётом фильтра поиска)"
+    ? "Применить через WB API только видимые в таблице строки (с учётом фильтров)"
     : "Нет видимых рекомендаций на изменение — применить больше нечего (только строки таблицы)";
+}
+
+// Какая агрегация нужна в строке «Итого» для каждой колонки: sum (сумма) или avg (среднее).
+const PRICING_FOOT = {
+  stock: "sum", stock_wb: "sum", buyouts: "sum", backlog: "sum",
+  add_to_wishlist: "sum", cancel_sum: "sum",
+  delta_discount: "avg", target_discount: "avg", current_discount: "avg", target_vis: "avg", current_vis: "avg",
+  avg_price: "avg", net_cost: "avg", margin_pct: "avg", margin_per_one: "avg", product_rating: "avg",
+  margin_pct_at_target: "avg", conv_buyout_percent: "avg", return_rate: "avg", conv_pct: "avg",
+  revenue_per_one: "avg", income_per_one: "avg", commission_per_one: "avg",
+  logistics_per_one: "avg", storage_per_one: "avg", doc: "avg", velocity: "avg", trend: "avg",
+};
+function pricingFooters(rows) {
+  const accum = {};
+  for (const k of Object.keys(PRICING_FOOT)) {
+    let sum = 0, cnt = 0;
+    for (const r of rows) {
+      const n = Number(r[k]);
+      if (r[k] != null && r[k] !== "" && isFinite(n)) { sum += n; cnt++; }
+    }
+    if (!cnt) continue;
+    accum[k] = PRICING_FOOT[k] === "sum" ? sum : { avg: sum / cnt };
+  }
+  return accum;
 }
 
 async function renderPricing(apply) {
@@ -3516,20 +3791,32 @@ async function renderPricing(apply) {
   const msg = $("#pricingMsg");
   const likeEl = $("#pricingLike") || { value: "" };
   const q = likeEl.value.trim().toLowerCase();
+  const hideSkipEl = $("#pricingHideSkip");
+  const hideSkip = hideSkipEl ? hideSkipEl.checked : false;
+  buildPricingFilterBar();
+  const filtersHost = $("#pricingFilters");
+  if (filtersHost) filtersHost.classList.toggle("hidden", !pricingFiltersOn());
+  const colFilters = pricingEffectiveColFilters();
   msg.textContent = "Считаю рекомендации…";
   try {
     const data = await apiPost("/pricing/recommendations", s);
     _pricingResp = data;
     const allRows = data.rows || [];
-    const rows = allRows.filter((r) =>
-      !q || (String(r.article || "") + " " + (r.name || "")).toLowerCase().includes(q)
-    );
+    let pre = allRows;
+    if (q) {
+      pre = pre.filter((r) =>
+        (String(r.article || "") + " " + (r.name || "")).toLowerCase().includes(q)
+      );
+    }
+    const hiddenSkips = hideSkip ? pre.filter((r) => r.action === "SKIP").length : 0;
+    const rows = pre.filter((r) => (!hideSkip || r.action !== "SKIP") && pricingRowMatches(r, colFilters));
     _pricingRows = rows;
     const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE").length;
     const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
     let summary = "Товаров: " + fmt(rows.length);
     if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
     summary += ", решений: " + fmt(actionable);
+    if (hiddenSkips > 0) summary += ", скрыто пропущенных: " + fmt(hiddenSkips);
     const hiddenDead = Number(data.hidden_dead || 0);
     if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
     const nonWb = Number(data.non_wb || 0);
@@ -3540,11 +3827,7 @@ async function renderPricing(apply) {
     if (data.as_of) summary += " · на " + data.as_of;
     $("#pricingSummary").textContent = summary;
     msg.textContent = data.note || "";
-    const footers = {
-      stock: rows.reduce((a, r) => a + (Number(r.stock) || 0), 0),
-      target_vis: rows.reduce((a, r) => a + (Number(r.target_vis) || 0), 0),
-    };
-    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows, footers, null, colViewPinKeys("pricing"));
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows, pricingFooters(rows), null, colViewPinKeys("pricing"));
     await renderPricingHistory();
     refreshApplyButton();
   } catch (err) {
@@ -3559,7 +3842,7 @@ async function applyPricing() {
   const showZeroEl = $("#pricingShowZero");
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   // Отправляем ровно то, что видно в таблице: _pricingRows уже отфильтрован
-  // по строке поиска и по «С нулевыми товарами» — сервер НЕ пересчитывает.
+  // по строке поиска, фильтрам колонок, «С нулевыми товарами» и «Скрыть пропустить» — сервер НЕ пересчитывает.
   const toApply = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
   const lowers = toApply.filter((r) => r.action === "LOWER");
   const halve = toApply.filter((r) => r.action === "HALVE");
@@ -4043,6 +4326,25 @@ document.addEventListener("DOMContentLoaded", () => {
       ss.show_zero = pricingShowZero.checked;
       savePricingSettings(ss);
       if (currentTab === "pricing") renderPricing(false);
+    });
+  }
+  const pricingHideSkip = $("#pricingHideSkip");
+  if (pricingHideSkip) {
+    pricingHideSkip.checked = localStorage.getItem("pricing_hide_skip") !== "0";
+    pricingHideSkip.addEventListener("change", () => {
+      localStorage.setItem("pricing_hide_skip", pricingHideSkip.checked ? "1" : "0");
+      if (currentTab === "pricing") renderPricing(false);
+    });
+  }
+  const pricingFiltersBtn = $("#pricingFiltersBtn");
+  if (pricingFiltersBtn) {
+    pricingFiltersBtn.classList.toggle("active", pricingFiltersOn());
+    pricingFiltersBtn.addEventListener("click", () => {
+      setPricingFiltersOn(!pricingFiltersOn());
+      pricingFiltersBtn.classList.toggle("active", pricingFiltersOn());
+      buildPricingFilterBar();
+      const fh = $("#pricingFilters");
+      if (fh) fh.classList.toggle("hidden", !pricingFiltersOn());
     });
   }
   syncHeaderForTab(currentTab);
