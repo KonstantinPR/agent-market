@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=14">
+<link rel="stylesheet" href="/static/style.css?v=20">
 </head>
 <body>
 <nav class="navbar">
@@ -29,6 +29,7 @@
         <a class="nav-link" data-tab="margin" href="#">Маржинальность</a>
         <a class="nav-link" data-tab="margin-funnel" href="#">Воронка Продаж WB</a>
         <a class="nav-link" data-tab="margin-detail" href="#">Детализация Продаж WB</a>
+        <a class="nav-link" data-tab="margin-ozon-detail" href="#">Анализ Продаж OZON</a>
         <a class="nav-link" data-tab="pricing" href="#">Автопилот цен WB</a>
       </div>
     </div>
@@ -137,6 +138,26 @@
     <div class="table-wrap" id="marginFunnelTable"></div>
   </section>
 
+  <section id="tab-margin-ozon-detail" class="pane">
+    <div class="toolbar">
+      <span class="msg" id="marginOzonDetailMsg"></span>
+      <span class="tip" id="marginOzonDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из детализации реализаций OZON. Прибыль = "К перечислению" − себестоимость×продано. Фактические комиссия/услуги OZON уже вычтены из "К перечислению" (они показаны справочными колонками). Рассчитано на ~2 недели ретроспективы, пока детализация не натянута за больший период.</span></span>
+      <input id="marginOzonDetailLike" placeholder="Артикул содержит… (напр. BAND)">
+      <label class="chk"><input type="checkbox" id="marginOzonDetailCompare"> Сравнить с пред. периодом</label>
+      <span class="msg" id="marginOzonDetailCompareMsg"></span>
+      <span class="toolbar-right">
+        <span id="marginOzonDetailTablePager"></span>
+        <div class="view-menu" id="marginOzonDetailViewMenu">
+          <button type="button" class="btn" id="btnmarginOzonDetailView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="marginOzonDetailViewPanel"></div>
+        </div>
+        <button type="button" class="btn" id="exportMarginOzonDetail">Экспорт в Excel</button>
+        <button type="button" class="btn" id="uploadMarginOzonDetail">Загрузить на диск</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="marginOzonDetailTable"></div>
+  </section>
+
   <section id="tab-margin-detail" class="pane">
     <div class="toolbar">
       <span class="msg" id="marginDetailMsg"></span>
@@ -164,12 +185,18 @@
       <span class="msg" id="pricingMsg"></span>
       <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» вносит новые скидки через API — только по видимым в таблице строкам (с учётом фильтров).</span></span>
       <input id="pricingLike" placeholder="Артикул или название содержит…">
-      <label class="chk"><input type="checkbox" id="pricingShowZero"> С нулевыми товарами</label>
-      <label class="chk"><input type="checkbox" id="pricingHideSkip" checked> Скрыть «пропустить»</label>
+      <div class="view-menu" id="pricingShowMenu">
+        <button type="button" class="btn" id="btnpricingShow" title="Показ строк таблицы: с нулевыми товарами, скрыть «держать» и «пропустить»">Показ ▾</button>
+        <div class="view-menu-panel hidden" id="pricingShowPanel"></div>
+      </div>
       <button id="pricingFiltersBtn" class="btn" title="Фильтры по каждой колонке таблицы">Фильтры</button>
-      <span class="tl">Версия расчёта:</span>
+      <div class="view-menu" id="pricingSettingsMenu">
+        <button type="button" class="btn split-l" id="btnpricingSettings" title="Раскрыть панели настроек">Настройки</button>
+        <button type="button" class="btn split-r" id="btnpricingSettingsCaret" title="Действия: обновить расчёт, развернуть всё">▾</button>
+        <div class="view-menu-panel hidden" id="pricingSettingsPanel"></div>
+      </div>
       <div class="view-menu" id="pricingModeMenu">
-        <button type="button" class="btn" id="btnpricingMode">Новая (рекомендуется) &#9662;</button>
+        <button type="button" class="btn" id="btnpricingMode">Версия ▾</button>
         <div class="view-menu-panel hidden" id="pricingModePanel"></div>
       </div>
       <span class="toolbar-right">
@@ -690,6 +717,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=15"></script>
+<script src="/static/app.js?v=20"></script>
 </body>
 </html>
+

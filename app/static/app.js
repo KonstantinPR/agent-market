@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "15";
+const UI_VERSION = "20";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -352,6 +352,9 @@ async function loadTabInner(name, f) {
     } else if (name === "margin-detail") {
       const cmpEl = $("#marginDetailCompare");
       await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined }));
+    } else if (name === "margin-ozon-detail") {
+      const cmpEl = $("#marginOzonDetailCompare");
+      await renderMarginOzonDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginOzonDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined }));
     } else if (name === "sales") await renderSales(qs(f));
     else if (name === "stocks") await renderStocks(f.marketplace);
     else if (name === "ours") await renderOurs();
@@ -506,6 +509,44 @@ const MARGIN_DETAIL_OPTIONAL = [
   { k: "return_rate", label: "Доля возвратов, %" },
 ];
 const _OLD_OPTIONAL = new Set(["storage", "services", "net_cost", "margin_gross", "margin_per_one"]);
+// ----------------------------------------------------- «Анализ Продаж OZON» — при
+// ----------------------------------------------------- маржинальности от детализации Ozon
+const ozonMarginHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text },
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
+  { k: "postings", label: "Постинги", num: true, render: cellFmts.int },
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
+  { k: "amount", label: "Сумма продажи", num: true, render: cellFmts.money },
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
+  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
+  { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls },
+  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls },
+  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct },
+  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls },
+  { k: "services_per_one", label: "Услуги/ед.", num: true, render: cellFmts.moneyCls },
+  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls },
+  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls },
+  { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct },
+];
+const OZON_MARGIN_DETAIL_OPTIONAL = [
+  { k: "nm_id", label: "Артикул WB" },
+  { k: "returns_qty", label: "Возвращено, шт" },
+  { k: "postings", label: "Постинги" },
+  { k: "amount", label: "Сумма продажи" },
+  { k: "services", label: "Услуги" },
+  { k: "net_cost", label: "Себестоимость" },
+  { k: "margin_per_one", label: "Прибыль на ед." },
+  { k: "commission_per_one", label: "Комиссия/ед." },
+  { k: "services_per_one", label: "Услуги/ед." },
+  { k: "income_per_one", label: "К перечисл./ед." },
+  { k: "revenue_per_one", label: "Средняя цена" },
+  { k: "return_rate", label: "Доля возвратов, %" },
+];
 // ----------------------------------------------------- «Вид таблицы» — единый механизм
 // Для каждого таба регистрируется набор настраиваемых колонок. Состояние живёт в
 // localStorage под ключом `<storageKey>[_<mode>]` (mode — активный режим таба, напр.
@@ -881,6 +922,40 @@ async function renderMarginDetail(p) {
       "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день.";
   } else {
     msg.textContent = "Строк: " + fmt((data.rows || []).length);
+  }
+}
+
+async function renderMarginOzonDetail(p) {
+  const compare = /compare=1/.test(p || "");
+  const data = await api("/margin/ozon-detail" + p);
+  let headers = colViewHeaders("margin-ozon-detail", ozonMarginHeaders);
+  if (compare) {
+    headers = headers.concat([
+      { k: "sells_pp", label: "Пред. период: шт", num: true, render: cellFmts.int },
+      { k: "margin_pp", label: "Пред. период: Прибыль", num: true, render: cellFmts.moneyCls },
+      { k: "delta_ru", label: "Δ прибыли", num: true, render: cellFmts.moneyCls },
+      { k: "delta_pct", label: "Δ, %", num: true, render: cellFmts.pct },
+    ]);
+  }
+  pagedTable($("#marginOzonDetailTable"), headers, data.rows || [], data.totals);
+  const exportBtn = $("#exportMarginOzonDetail");
+  if (exportBtn) {
+    const cp = colViewParam("margin-ozon-detail", compare ? ["sells_pp", "margin_pp", "delta_ru", "delta_pct"] : null);
+    exportBtn.dataset.url = "/api/export/margin/ozon-detail" + p + (cp ? (p ? "&" : "?") + cp : "");
+  }
+  const msg = $("#marginOzonDetailMsg");
+  const cmpMsg = $("#marginOzonDetailCompareMsg");
+  if (cmpMsg) {
+    cmpMsg.textContent = (compare && data.prev_window) ?
+      "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
+      (compare ? "для сравнения нужны даты «С» и «По»" : "");
+  }
+  if ((data.rows || []).length === 0) {
+    msg.textContent =
+      "Нет данных. OZON API ▸ Детализация продаж — период с данными: 2026-02-21 … 2026-08-30. Обновите детализацию за нужный период, чтобы раздел наполнился.";
+  } else {
+    msg.textContent = "Строк: " + fmt((data.rows || []).length) +
+      (data.estimated ? " (оценка себестоимости: " + data.estimated + ")" : "");
   }
 }
 
@@ -3340,6 +3415,11 @@ registerColView("margin-detail", {
   headers: marginHeaders,
   optional: MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: _OLD_OPTIONAL.has(c.k) || c.k === "nm_id" })),
 });
+registerColView("margin-ozon-detail", {
+  storageKey: "marginOzonDetailCols",
+  headers: ozonMarginHeaders,
+  optional: OZON_MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: c.k === "nm_id" })),
+});
 // Необязательные колонки автопилота. Порядок = порядок колонок в таблице.
 // По умолчанию видимы только 18 основных (см. def: true) — остальные скрыты и
 // раскрываются по одному или группами (PRICING_COLGROUPS) в «Вид таблицы».
@@ -3518,7 +3598,10 @@ function initPricingModeMenu(saved) {
       : (pricingDefaults && pricingDefaults.mode === "old" ? "old" : "new");
   }
   const labels = { old: "Старая (не рекомендуется)", new: "Новая (рекомендуется)" };
-  const refresh = () => { btn.textContent = (labels[pricingModeCurrent] || "Новая (рекомендуется)") + " \u25BE"; };
+  const refresh = () => {
+    btn.textContent = "Версия \u25BE";
+    btn.title = "Версия расчёта: " + (labels[pricingModeCurrent] || "Новая (рекомендуется)");
+  };
   if (!_pricingModeInited) {
     _pricingModeInited = true;
     panel.innerHTML = "";
@@ -3570,6 +3653,134 @@ function collectPricingSettings() {
   if (pricingModeCurrent === "old" || pricingModeCurrent === "new") s.mode = pricingModeCurrent;
   savePricingSettings(s);
   return s;
+}
+
+let _pricingShowMenuInited = false;
+
+// Селектор «Показ»: чекбоксы «С нулевыми товарами» и «Скрыть "пропустить"».
+function initPricingShowMenu() {
+  const btn = $("#btnpricingShow");
+  const menu = $("#pricingShowMenu");
+  const panel = $("#pricingShowPanel");
+  if (!btn || !menu || !panel) return;
+  if (_pricingShowMenuInited) return;
+  _pricingShowMenuInited = true;
+
+  const mkRow = (text, checked) => {
+    const row = document.createElement("div");
+    row.className = "colview-row";
+    const lbl = document.createElement("label");
+    lbl.className = "chk";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = checked;
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(" " + text));
+    row.appendChild(lbl);
+    return { row, cb };
+  };
+
+  const zero = mkRow("С нулевыми товарами", loadPricingSettings().show_zero === true);
+  panel.appendChild(zero.row);
+  zero.cb.addEventListener("change", () => {
+    const ss = loadPricingSettings();
+    ss.show_zero = zero.cb.checked;
+    savePricingSettings(ss);
+    panel.classList.add("hidden");
+    if (currentTab === "pricing") renderPricing(false);
+  });
+
+  const skip = mkRow("Скрыть «держать» и «пропустить»", localStorage.getItem("pricing_hide_skip") !== "0");
+  panel.appendChild(skip.row);
+  skip.cb.addEventListener("change", () => {
+    localStorage.setItem("pricing_hide_skip", skip.cb.checked ? "1" : "0");
+    panel.classList.add("hidden");
+    if (currentTab === "pricing") renderPricing(false);
+  });
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    panel.classList.toggle("hidden");
+  });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+}
+
+let _pricingSettingsMenuInited = false;
+let _pricingSettingsVisible = localStorage.getItem("pricing_settings_visible") === "1";
+
+// Показать/скрыть панели настроек. Вызывается и кнопкой «Настройки», и крестиком в панели.
+function setPricingSettingsVisible(v) {
+  _pricingSettingsVisible = !!v;
+  localStorage.setItem("pricing_settings_visible", _pricingSettingsVisible ? "1" : "0");
+  const box = $("#pricingSettings");
+  if (box) box.classList.toggle("hidden", !_pricingSettingsVisible);
+  const btn = $("#btnpricingSettings");
+  if (btn) {
+    btn.classList.toggle("active", _pricingSettingsVisible);
+    btn.title = _pricingSettingsVisible ? "Свернуть панели настроек" : "Раскрыть панели настроек";
+  }
+}
+
+// Селектор «Настройки»: сама кнопка раскрывает/сворачивает панели,
+// каретка ▾ открывает меню с «Обновить» и «Развернуть всё».
+function initPricingSettingsMenu() {
+  const btn = $("#btnpricingSettings");
+  const caret = $("#btnpricingSettingsCaret");
+  const menu = $("#pricingSettingsMenu");
+  const panel = $("#pricingSettingsPanel");
+  const box = $("#pricingSettings");
+  if (!btn || !caret || !menu || !panel || !box) return;
+  if (_pricingSettingsMenuInited) return;
+  _pricingSettingsMenuInited = true;
+
+  const itemSave = document.createElement("button");
+  itemSave.type = "button";
+  itemSave.className = "menu-item";
+  itemSave.textContent = "Обновить";
+  itemSave.title = "Сохранить значения из формы и пересчитать рекомендации с новыми коэффициентами";
+  const itemExpand = document.createElement("button");
+  itemExpand.type = "button";
+  itemExpand.className = "menu-item";
+  panel.appendChild(itemSave);
+  panel.appendChild(itemExpand);
+
+  const groups = () => Array.from(box.querySelectorAll("details.p-group"));
+  const refresh = () => {
+    const g = groups();
+    itemExpand.textContent = g.length && g.every((d) => d.open) ? "Свернуть всё" : "Развернуть всё";
+  };
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setPricingSettingsVisible(!_pricingSettingsVisible);
+  });
+
+  caret.addEventListener("click", (e) => {
+    e.stopPropagation();
+    refresh();
+    panel.classList.toggle("hidden");
+  });
+
+  itemSave.addEventListener("click", () => {
+    collectPricingSettings();
+    panel.classList.add("hidden");
+    if (currentTab === "pricing") renderPricing(false);
+  });
+
+  itemExpand.addEventListener("click", () => {
+    const g = groups();
+    const anyClosed = g.some((d) => !d.open);
+    g.forEach((d) => { d.open = anyClosed; });
+    saveOpenPricingGroups(g);
+    refresh();
+    panel.classList.add("hidden");
+  });
+
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+
+  setPricingSettingsVisible(_pricingSettingsVisible);
 }
 
 // Порядок и группы настроек: каждый параметр в своей строке,
@@ -3705,6 +3916,21 @@ async function buildPricingSettings() {
     detailsNodes.push(det);
     cols[Math.min(grp.col || 2, 3) - 1].appendChild(det);
   }
+  // Шапка панели: заголовок и крестик «✕» для сворачивания всех панелей.
+  const head = document.createElement("div");
+  head.className = "p-settings-ctrl";
+  const cap = document.createElement("span");
+  cap.className = "p-settings-cap";
+  cap.textContent = "Настройки и коэффициенты";
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "p-settings-close";
+  closeBtn.title = "Свернуть панели настроек";
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", () => setPricingSettingsVisible(false));
+  head.appendChild(cap);
+  head.appendChild(closeBtn);
+  box.appendChild(head);
   cols.forEach((col) => box.appendChild(col));
   detailsNodes.forEach((d) =>
     d.addEventListener("toggle", () => saveOpenPricingGroups(detailsNodes))
@@ -3792,7 +4018,7 @@ async function renderPricing(apply) {
   const likeEl = $("#pricingLike") || { value: "" };
   const q = likeEl.value.trim().toLowerCase();
   const hideSkipEl = $("#pricingHideSkip");
-  const hideSkip = hideSkipEl ? hideSkipEl.checked : false;
+  const hidePassive = hideSkipEl ? hideSkipEl.checked : false;
   buildPricingFilterBar();
   const filtersHost = $("#pricingFilters");
   if (filtersHost) filtersHost.classList.toggle("hidden", !pricingFiltersOn());
@@ -3808,15 +4034,17 @@ async function renderPricing(apply) {
         (String(r.article || "") + " " + (r.name || "")).toLowerCase().includes(q)
       );
     }
-    const hiddenSkips = hideSkip ? pre.filter((r) => r.action === "SKIP").length : 0;
-    const rows = pre.filter((r) => (!hideSkip || r.action !== "SKIP") && pricingRowMatches(r, colFilters));
+    const hiddenPassive = hidePassive ? pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length : 0;
+    const rows = pre.filter((r) =>
+      (!hidePassive || (r.action !== "SKIP" && r.action !== "HOLD")) && pricingRowMatches(r, colFilters)
+    );
     _pricingRows = rows;
     const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE").length;
     const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
     let summary = "Товаров: " + fmt(rows.length);
     if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
     summary += ", решений: " + fmt(actionable);
-    if (hiddenSkips > 0) summary += ", скрыто пропущенных: " + fmt(hiddenSkips);
+    if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
     const hiddenDead = Number(data.hidden_dead || 0);
     if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
     const nonWb = Number(data.non_wb || 0);
@@ -3842,7 +4070,7 @@ async function applyPricing() {
   const showZeroEl = $("#pricingShowZero");
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   // Отправляем ровно то, что видно в таблице: _pricingRows уже отфильтрован
-  // по строке поиска, фильтрам колонок, «С нулевыми товарами» и «Скрыть пропустить» — сервер НЕ пересчитывает.
+  // по строке поиска, фильтрам колонок, «С нулевыми товарами» и «Скрыть держать/пропустить» — сервер НЕ пересчитывает.
   const toApply = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
   const lowers = toApply.filter((r) => r.action === "LOWER");
   const halve = toApply.filter((r) => r.action === "HALVE");
@@ -3977,6 +4205,23 @@ async function uploadMarginDetailToDisk() {
     const blob = await resp.blob();
     const f = filters();
     const name = "margin_detail_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + yandexStamp() + ".xlsx";
+    await uploadBlobToYandex(blob, name, msg);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadMarginOzonDetailToDisk() {
+  const msg = $("#marginOzonDetailMsg");
+  const url = $("#exportMarginOzonDetail") ? $("#exportMarginOzonDetail").dataset.url : "";
+  if (!url || !msg) return;
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const f = filters();
+    const name = "margin_ozon_detail_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + yandexStamp() + ".xlsx";
     await uploadBlobToYandex(blob, name, msg);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
@@ -4143,7 +4388,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (currentTab === "margin") loadTab(currentTab);
     });
   });
-  [["marginLike", "margin"], ["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"]].forEach(([id, tab]) => {
+  [["marginLike", "margin"], ["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"], ["marginOzonDetailLike", "margin-ozon-detail"]].forEach(([id, tab]) => {
     const el = $("#" + id);
     if (!el) return;
     let timer;
@@ -4156,6 +4401,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (marginDetailCompare) {
     marginDetailCompare.addEventListener("change", () => {
       if (currentTab === "margin-detail") loadTab(currentTab);
+    });
+  }
+  const marginOzonDetailCompare = $("#marginOzonDetailCompare");
+  if (marginOzonDetailCompare) {
+    marginOzonDetailCompare.addEventListener("change", () => {
+      if (currentTab === "margin-ozon-detail") loadTab(currentTab);
     });
   }
   const funnelLike = $("#wbFunnelLike");
@@ -4319,23 +4570,7 @@ document.addEventListener("DOMContentLoaded", () => {
       pricingLikeTimer = setTimeout(() => { if (currentTab === "pricing") renderPricing(false); }, 350);
     });
   }
-  const pricingShowZero = $("#pricingShowZero");
-  if (pricingShowZero) {
-    pricingShowZero.addEventListener("change", () => {
-      const ss = loadPricingSettings();
-      ss.show_zero = pricingShowZero.checked;
-      savePricingSettings(ss);
-      if (currentTab === "pricing") renderPricing(false);
-    });
-  }
-  const pricingHideSkip = $("#pricingHideSkip");
-  if (pricingHideSkip) {
-    pricingHideSkip.checked = localStorage.getItem("pricing_hide_skip") !== "0";
-    pricingHideSkip.addEventListener("change", () => {
-      localStorage.setItem("pricing_hide_skip", pricingHideSkip.checked ? "1" : "0");
-      if (currentTab === "pricing") renderPricing(false);
-    });
-  }
+  initPricingShowMenu();
   const pricingFiltersBtn = $("#pricingFiltersBtn");
   if (pricingFiltersBtn) {
     pricingFiltersBtn.classList.toggle("active", pricingFiltersOn());
@@ -4347,6 +4582,22 @@ document.addEventListener("DOMContentLoaded", () => {
       if (fh) fh.classList.toggle("hidden", !pricingFiltersOn());
     });
   }
+  initPricingSettingsMenu();
+  const pricingSettingsBox = $("#pricingSettings");
+  if (pricingSettingsBox) {
+    // Автосохранение: любое изменение поля в форме сразу пишется в localStorage,
+    // чтобы значения не терялись. Пересчёт — только «Обновить» в меню «Настройки».
+    let autosaveTimer = null;
+    pricingSettingsBox.addEventListener("change", (ev) => {
+      if (!ev.target.matches || !ev.target.matches("input[data-key]")) return;
+      clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(() => {
+        collectPricingSettings();
+        const m = $("#pricingMsg");
+        if (m) m.textContent = "Настройки сохранены — примените их кнопкой «Обновить» в меню «Настройки»";
+      }, 400);
+    });
+  }
   syncHeaderForTab(currentTab);
   for (const t of Object.keys(_COLVIEWS)) initColViewMenu(t);
   const btnExportMarginDetail = $("#exportMarginDetail");
@@ -4356,12 +4607,21 @@ document.addEventListener("DOMContentLoaded", () => {
       if (url) window.open(url, "_blank");
     });
   }
+  const btnExportMarginOzonDetail = $("#exportMarginOzonDetail");
+  if (btnExportMarginOzonDetail) {
+    btnExportMarginOzonDetail.addEventListener("click", () => {
+      const url = btnExportMarginOzonDetail.dataset.url;
+      if (url) window.open(url, "_blank");
+    });
+  }
   const uploadMargin = $("#uploadMargin");
   if (uploadMargin) uploadMargin.addEventListener("click", () => uploadMarginToDisk());
   const uploadMarginFunnel = $("#uploadMarginFunnel");
   if (uploadMarginFunnel) uploadMarginFunnel.addEventListener("click", () => uploadMarginFunnelToDisk());
   const uploadMarginDetail = $("#uploadMarginDetail");
   if (uploadMarginDetail) uploadMarginDetail.addEventListener("click", () => uploadMarginDetailToDisk());
+  const uploadMarginOzonDetail = $("#uploadMarginOzonDetail");
+  if (uploadMarginOzonDetail) uploadMarginOzonDetail.addEventListener("click", () => uploadMarginOzonDetailToDisk());
   const pricingUpload = $("#pricingUpload");
   if (pricingUpload) pricingUpload.addEventListener("click", () => uploadPricingToDisk());
   initTicketsTab();

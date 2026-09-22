@@ -4,7 +4,7 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 
 .navbar, .filters, main {
   width: 100%;
-  max-width: min(90vw, 2000px);
+  max-width: min(95vw, 2400px);
   margin-left: auto;
   margin-right: auto;
 }
@@ -127,7 +127,7 @@ main { padding: 20px; }
   z-index: 55;
   top: calc(100% + 4px);
   right: 0;
-  min-width: 200px;
+  min-width: 300px;
   max-height: 70vh;
   overflow-y: auto;
   background: #fff;
@@ -223,9 +223,10 @@ table.stck { border-collapse: separate; border-spacing: 0; }
 td.stck-col { position: sticky; left: 0; background: #fff; z-index: 1; }
 th.stck-col { position: sticky; left: 0; background: #fff; z-index: 3; }
 table.stck tr.totals-row th.stck-col { background: #f0f4f8; }
-.colview-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.colview-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; white-space: nowrap; }
 .colview-row .pin { margin-left: auto; font-size: 12px; }
 .colview-row .pin-ico { font-size: 11px; line-height: 1; filter: grayscale(1); opacity: .55; }
+.colview-grp-lbl { white-space: nowrap; }
 .pager {
   display: flex;
   align-items: center;
@@ -454,6 +455,53 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 .pricing-settings .p-st input[type="checkbox"] {
   margin: 0;
 }
+.pricing-settings.hidden { display: none; }
+.split-l { border-radius: 3px 0 0 3px; }
+.split-r { border-radius: 0 3px 3px 0; margin-left: -1px; padding: 4px 8px; }
+.p-settings-ctrl {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 2px 0 4px;
+  border-bottom: 1px solid #e8e8e8;
+  margin-bottom: 6px;
+}
+.p-settings-cap {
+  font-size: 12px;
+  font-weight: 600;
+  color: #24507f;
+  margin-right: auto;
+}
+.p-settings-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: #888;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.p-settings-close:hover { color: #c0392b; background: #f7e8e8; }
+.view-menu-panel .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 5px 4px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 12.5px;
+  color: #111;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 3px;
+}
+.view-menu-panel .menu-item:hover { background: #eef4fb; }
 .tip {
   position: relative;
   display: inline-block;
@@ -664,3 +712,41 @@ a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
   color: #111;
   font-family: inherit;
 }
+
+/* ---------- Автопилот: фильтр по колонкам ---------- */
+.pfilter-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid #e3e3e3;
+  border-radius: 5px;
+  background: #fafbfc;
+}
+.pfilter { display: inline-flex; flex-direction: column; gap: 2px; font-size: 11px; color: #666; }
+.pfilter-lbl { white-space: nowrap; }
+.pfilter input {
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 12px;
+  width: 130px;
+  max-width: 170px;
+  background: #fff;
+  color: #111;
+}
+.btn.active { background: #eef4ff; border-color: #0a58ca; color: #0a58ca; }
+
+/* Мелкая дельта цели (→) — третий цвет между красным и зелёным */
+.warn { color: #b07d00; font-weight: 600; }
+
+/* Средние в строке «Итого» (≈) */
+.totals-row th.avg { color: #234; }
+
+/* ---------- «Вид таблицы»: группы колонок ---------- */
+.colview-grp { border: 1px solid #e8e8e8; border-radius: 4px; padding: 6px 8px; }
+.colview-grp-lbl { font-weight: 600; }
+.colview-grp-items { margin: 4px 0 0 16px; display: flex; flex-direction: column; gap: 3px; }
+.colview-row.colview-sub { gap: 4px; }
