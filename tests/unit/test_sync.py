@@ -4,8 +4,10 @@ from sqlalchemy import select
 
 from app.services.sync import (
     detail_summary_dataframe,
+    enrich_oz_cards_with_wb_nm,
     normalize_ozon_buyout,
     normalize_ozon_detail,
+    normalize_ozon_placement,
     normalize_ozon_realization,
     normalize_oz_cards,
     normalize_wb_detail,
@@ -15,6 +17,7 @@ from app.services.sync import (
     record_api_pull,
     upsert_ozon_buyouts,
     upsert_ozon_detail_rows,
+    upsert_ozon_placements,
     upsert_price_snapshots,
     upsert_products,
     upsert_ozon_price_snapshots,
@@ -146,9 +149,9 @@ def test_normalize_oz_cards_english_columns():
     out = normalize_oz_cards(df)
     assert out is not None and len(out) == 2
     rec = out.iloc[0].to_dict()
-    assert rec["chrt_id"] == "111" and rec["nm_id"] == "111"
+    assert rec["chrt_id"] == "111" and rec["nm_id"] == ""
     assert rec["vendor_code"] == "OZ-1"
-    assert rec["barcode"] == "88"
+    assert rec["barcode"] == "4-а"
     assert rec["name"] == "Товар 1"
     assert rec["brand"] == "Обувь"
     assert rec["size"] == "" and rec["subject"] == "" and rec["volume_l"] == 0.0
@@ -172,6 +175,52 @@ def test_normalize_oz_cards_russian_columns_and_dedupe():
 def test_normalize_oz_cards_empty_returns_none():
     assert normalize_oz_cards(None) is None
     assert normalize_oz_cards(pd.DataFrame({"x": [1]})) is None
+
+
+def _add_wb_cards(db, rows):
+    mp_wb = db.execute(select(models.Marketplace).where(models.Marketplace.code == "wb")).scalar_one()
+    for r in rows:
+        db.add(models.MarketplaceCard(
+            marketplace_id=mp_wb.id, chrt_id=r["chrt_id"], nm_id=r.get("nm_id", ""),
+            vendor_code=r.get("vendor_code", ""), brand="", subject="",
+            size=r.get("size", ""), barcode=r.get("barcode", ""),
+            volume_l=0, composition="", name="",
+        ))
+    db.commit()
+
+
+def test_enrich_oz_cards_with_wb_nm_by_barcode(db):
+    _add_wb_cards(db, [
+        {"chrt_id": "1001", "nm_id": "5001", "vendor_code": "JBR-1", "size": "36", "barcode": "20001"},
+        {"chrt_id": "1002", "nm_id": "5002", "vendor_code": "JBR-2", "size": "38", "barcode": "20002"},
+    ])
+    mdf = pd.DataFrame([
+        {"chrt_id": "9001", "nm_id": "", "vendor_code": "OZ-1", "barcode": "20001"},
+        {"chrt_id": "9002", "nm_id": "", "vendor_code": "OZ-2", "barcode": "99999"},
+    ])
+    out = enrich_oz_cards_with_wb_nm(db, mdf)
+    assert out.iloc[0]["nm_id"] == "5001"
+    assert out.iloc[1]["nm_id"] == ""
+
+
+def test_enrich_oz_cards_with_wb_nm_by_article_size_suffix(db):
+    # у WB артикул и размер отдельно; Ozon вшивает размер в конец артикула
+    _add_wb_cards(db, [
+        {"chrt_id": "1001", "nm_id": "5001", "vendor_code": "JBR-1", "size": "", "barcode": "20001"},
+        {"chrt_id": "1002", "nm_id": "5002", "vendor_code": "JBR-LYA-297-A-BLUE", "size": "34", "barcode": "20002"},
+        {"chrt_id": "1003", "nm_id": "5003", "vendor_code": "JBR-LYA-297-A-BLUE", "size": "36", "barcode": "20003"},
+    ])
+    mdf = pd.DataFrame([
+        {"chrt_id": "9001", "nm_id": "", "vendor_code": "JBR-LYA-297-A-BLUE-34", "barcode": "99999"},
+    ])
+    out = enrich_oz_cards_with_wb_nm(db, mdf)
+    assert out.iloc[0]["nm_id"] == "5002"
+
+
+def test_enrich_oz_cards_with_wb_nm_none_and_empty(db):
+    assert enrich_oz_cards_with_wb_nm(db, None) is None
+    assert enrich_oz_cards_with_wb_nm(db, pd.DataFrame()) is not None
+    assert enrich_oz_cards_with_wb_nm(db, pd.DataFrame({"x": []})).empty
 
 
 def test_wb_price_snapshots_tagged_marketplace(db):
@@ -422,6 +471,68 @@ def test_detail_summary_includes_storage_estimate(db):
     assert not (out["article"] == "").any()  # всё разнесено — остатка нет
 
 
+def test_detail_summary_storage_share_is_global_under_filter(db):
+    """Фильтр в строке поиска не пересчитывает распределение хранения.
+
+    Полный вид: A1 получает 100×200/500=40.0 (объём 2×остаток 100), B2 — 60.0.
+    С фильтром по A1 доля остаётся глобальной (40.0), а не весь пул 100.
+    """
+    upsert_wb_detail_rows(db, pd.DataFrame([
+        {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 0,
+         "retail_amount": 1000.0, "for_pay": 900.0},
+        {"op_key": "sr:s2", "article": "B2", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 0,
+         "retail_amount": 800.0, "for_pay": 700.0},
+    ]), source="excel")
+    db.add_all([
+        models.StorageCost(nm_id="1", article="A1", volume=2.0),
+        models.StorageCost(nm_id="2", article="B2", volume=1.0),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 1), article="A1", quantity=100),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 1), article="B2", quantity=300),
+        models.WbDetailRow(op_key="sr:st1", source="excel", article="",
+                           doc_type_name="Хранение", sale_dt=date(2026, 9, 1),
+                           paid_storage=100.0),
+    ])
+    db.commit()
+    full = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    got = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10",
+                                   article_like="A1")
+    assert len(got) == 1
+    a1 = got[got["article"] == "A1"].iloc[0]
+    full_a1 = full[full["article"] == "A1"].iloc[0]
+    assert a1["storage"] == full_a1["storage"] == 40.0
+
+
+def test_detail_summary_articleless_logistics_global_under_filter(db):
+    """Безартикульная логистика распределяется по глобальным весам продаж.
+
+    A1 (1 шт) и B2 (2 шт) — веса 1 и 2, пул логистики 90: A1 получает 30.0
+    и при фильтре по A1 (а не весь пул 90).
+    """
+    upsert_wb_detail_rows(db, pd.DataFrame([
+        {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
+         "retail_amount": 1000.0, "for_pay": 900.0},
+        {"op_key": "sr:s2", "article": "B2", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 2,
+         "retail_amount": 1600.0, "for_pay": 1400.0},
+    ]), source="excel")
+    db.add_all([
+        models.WbDetailRow(op_key="sr:lg1", source="excel", article="",
+                           doc_type_name="Логистика", sale_dt=date(2026, 9, 1),
+                           delivery_service=90.0),
+    ])
+    db.commit()
+    full = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    got = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10",
+                                   article_like="A1")
+    assert len(got) == 1
+    a1 = got[got["article"] == "A1"].iloc[0]
+    full_a1 = full[full["article"] == "A1"].iloc[0]
+    assert a1["logistics"] == full_a1["logistics"] == 30.0
+
+
 def test_detail_summary_storage_full_distribution_db(db):
     """Плата за день вне окна ±7 разносится по ближайшему полезному срезу,
     излишка (строки-остатка) не остаётся."""
@@ -606,6 +717,26 @@ def _oz_buyout_rows():
     ])
 
 
+def _oz_placement_rows():
+    return pd.DataFrame([
+        {
+            "date": "2026-09-01", "sku": "3001", "offer_id": "OZ-1",
+            "warehouse": "ЦП", "paid_quantity": 5, "paid_volume": 0.01,
+            "storage": 12.5,
+        },
+        {
+            "date": "2026-09-02", "sku": "3001", "offer_id": "OZ-1",
+            "warehouse": "ЦП", "paid_quantity": 5, "paid_volume": 0.01,
+            "storage": 12.5,
+        },
+        {
+            "date": "2026-09-01", "sku": "3002", "offer_id": "OZ-2",
+            "warehouse": "ЦП", "paid_quantity": 3, "paid_volume": 0.01,
+            "storage": 7.0,
+        },
+    ])
+
+
 def test_normalize_ozon_buyout_maps_columns():
     out = normalize_ozon_buyout(_oz_buyout_rows())
     assert out is not None
@@ -631,6 +762,7 @@ def test_oz_detail_summary_dataframe_aggregates_and_buyout(db):
     day = pd.Timestamp("2026-09-01")
     upsert_ozon_detail_rows(db, normalize_ozon_detail(_oz_detail_rows()))
     upsert_ozon_buyouts(db, normalize_ozon_buyout(_oz_buyout_rows()))
+    upsert_ozon_placements(db, normalize_ozon_placement(_oz_placement_rows()))
     out = oz_detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-30")
     o1 = out[out["article"] == "OZ-1"].iloc[0]
     o2 = out[out["article"] == "OZ-2"].iloc[0]
@@ -644,3 +776,7 @@ def test_oz_detail_summary_dataframe_aggregates_and_buyout(db):
     assert o1["buyout_sum"] == 2500.0
     assert abs(o1["buyout_percent"] - 96.15) < 0.01
     assert abs(o2["buyout_percent"] - 97.78) < 0.01
+    # хранение из ozon_placements (storage — отрицательный расход в БД):
+    # OZ-1 = 12.5 + 12.5 → (после normalize со знаком минус) -25.0, OZ-2 = -7.0
+    assert o1["storage"] == -25.0
+    assert o2["storage"] == -7.0

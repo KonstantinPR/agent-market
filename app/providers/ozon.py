@@ -190,7 +190,7 @@ class OzonProvider(BaseProvider):
             returns_qty = 0
             if rc and rc.get("total"):
                 return_total = float(rc.get("total") or 0)
-                income += return_total
+                income -= return_total
                 returns_qty += int(rc.get("quantity") or 0)
             commission = -(standard_fee if standard_fee else income * float(r.get("commission_ratio") or 0))
             out.append({
@@ -363,7 +363,7 @@ class OzonProvider(BaseProvider):
             income = dc_total
             returns_qty = int(rc.get("quantity") or 0)
             return_total = float(rc.get("total") or 0)
-            income += return_total
+            income -= return_total
             ratio = float(r.get("commission_ratio") or 0)
             # Комиссию отражаем со знаком минус (как в реализации).
             commission = -(standard_fee if standard_fee else income * ratio)
@@ -492,7 +492,7 @@ class OzonProvider(BaseProvider):
                                           standard_fee.to_numpy(),
                                           (income * ratio).to_numpy()),
                                  index=data.index)
-        data["income"] = income + data["return_total"]
+        data["income"] = income - data["return_total"]
         data["seller_price"] = price * data["quantity"]
         data["commission_ratio"] = ratio
         data["commission"] = commissions
@@ -531,9 +531,23 @@ class OzonProvider(BaseProvider):
                     })
             return pd.DataFrame(rows)
 
-        resp = self._post(f"{OZON_API}/v1/finance/realization/posting",
-                          {"month": month, "year": year})
-        data = resp.json()
+        try:
+            resp = self._post(f"{OZON_API}/v1/finance/realization/posting",
+                              {"month": month, "year": year})
+        except (OzonApiError, requests.HTTPError) as e:
+            code = getattr(e, "status_code", None)
+            if code is None:
+                code = getattr(getattr(e, "response", None), "status_code", None)
+            detail = str(e) + " " + getattr(getattr(e, "response", None), "text", "")
+            if code == 404 and "Report was not found" in detail:
+                # Отчёт реализации за этот месяц ещё не сформирован (обычно для
+                # текущего месяца) — пропускаем месяц, а не падаем с ошибкой.
+                self.__last_month_skipped = (month, year)
+                return pd.DataFrame()
+            raise
+        else:
+            self.__last_month_skipped = None
+            data = resp.json()
         stop = pd.Timestamp((data.get("header") or {}).get("stop_date")).date() \
             if (data.get("header") or {}).get("stop_date") else date(year, month, 28)
         df = self._parse_realization_posting_rows(data, stop)
@@ -610,3 +624,120 @@ class OzonProvider(BaseProvider):
                 "vat_percent": int(p.get("vat_percent") or 0),
             })
         return pd.DataFrame(out)
+
+    # ------------------------------------------------------------- размещение
+    def get_placement(self, date_from, date_to) -> pd.DataFrame:
+        """Стоимость размещения (хранение) по SKU за период.
+
+        Отчёт «Стоимость размещения на складе» (аналог ЛК): асинхронный
+        /v1/report/placement/by-products/create -> poll /v1/report/info ->
+        XLSX с колонками: Дата, SKU, Артикул, Категория товара, Описательный
+        тип, Склад, Признак товара, Суммарный объем (мл), Кол-во экземпляров,
+        Платный объем (мл), Кол-во платных экземпляров, Начисленная стоимость
+        размещения. Отчёт формируется по одному календарному месяцу, поэтому
+        интервал разбивается на месяцы.
+        """
+        if self.testing:
+            arts = self._mock_articles()
+            rng = np.random.default_rng(24)
+            rows = []
+            for a in arts:
+                for _ in range(int(rng.integers(0, 3))):
+                    rows.append({
+                        "date": pd.Timestamp(
+                            rng.integers(int(pd.Timestamp(date_from).value),
+                                         int(pd.Timestamp(date_to).value))
+                        ).date(),
+                        "sku": f"1{f'{int(a[4:]):010d}'}",
+                        "offer_id": a, "warehouse": "Павловская Слобода (доставка)",
+                        "paid_quantity": int(rng.integers(1, 6)),
+                        "paid_volume": round(float(rng.uniform(500, 5000)), 2),
+                        "storage": round(float(rng.uniform(-300, -20)), 2),
+                    })
+            return pd.DataFrame(rows)
+
+        start_d = pd.Timestamp(date_from).date()
+        end_d = pd.Timestamp(date_to).date()
+        frames = []
+        month = date(start_d.year, start_d.month, 1)
+        while month <= end_d:
+            m_from = max(start_d, month).isoformat()
+            m_to = min(end_d, date(month.year, month.month + 1, 1)
+                       - pd.Timedelta(days=1).to_pytimedelta()).isoformat()
+            df = self._placement_month(m_from, m_to)
+            if not df.empty:
+                frames.append(df)
+            if month.month == 12:
+                month = date(month.year + 1, 1, 1)
+            else:
+                month = date(month.year, month.month + 1, 1)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def _placement_month(self, date_from, date_to) -> pd.DataFrame:
+        """Один месяц отчёта по размещению (by-products) -> датафрейм."""
+        resp = self._post(f"{OZON_API}/v1/report/placement/by-products/create",
+                          {"date_from": date_from, "date_to": date_to})
+        code = (resp.json() or {}).get("code") or ""
+        if not code:
+            return pd.DataFrame()
+        for attempt in range(25):
+            time.sleep(20)
+            info = self._post(f"{OZON_API}/v1/report/info", {"code": code})
+            result = (info.json() or {}).get("result") or {}
+            status = result.get("status")
+            if status == "success":
+                content = requests.get(result["file"], timeout=300).content
+                return self._parse_placement_file(content)
+            if status not in ("processing", "waiting"):
+                raise RuntimeError(f"Ozon: отчёт по размещению завершился статусом {status}")
+        raise RuntimeError("Ozon: отчёт по размещению не сформировался за отведённое время")
+
+    def _parse_placement_file(self, content) -> pd.DataFrame:
+        """XLSX отчёта по размещению -> датафрейм (date, sku, offer_id, …storage)."""
+        data = None
+        try:
+            data = pd.read_excel(io.BytesIO(content), engine="openpyxl")
+        except Exception:
+            for sep in (",", ";"):
+                try:
+                    data = pd.read_csv(io.BytesIO(content), sep=sep, dtype=str)
+                    if data.shape[1] > 1:
+                        break
+                except Exception:
+                    continue
+        if data is None or data.empty:
+            return pd.DataFrame()
+        cols = {str(c).strip().lower(): c for c in data.columns}
+        ru = {"Дата": "date", "SKU": "sku", "Артикул": "offer_id",
+              "Категория товара": "category", "Описательный тип": "dtype",
+              "Склад": "warehouse", "Признак товара": "flag",
+              "Суммарный объем в миллилитрах": "total_volume",
+              "Кол-во экземпляров": "quantity",
+              "Платный объем в миллилитрах": "paid_volume",
+              "Кол-во платных экземпляров": "paid_quantity",
+              "Начисленная стоимость размещения": "storage"}
+        mapping = {}
+        for ru_name, eng in ru.items():
+            key = ru_name.lower()
+            if key in cols:
+                mapping[cols[key]] = eng
+            else:
+                for name, col in cols.items():
+                    if name == key or name.endswith(key):
+                        mapping[col] = eng
+                        break
+        if not mapping or "storage" not in mapping.values():
+            return pd.DataFrame()
+        data = data.rename(columns=mapping)[list(mapping.values())]
+        data["date"] = pd.to_datetime(data["date"], errors="coerce").dt.date
+        for c in ("quantity", "paid_quantity"):
+            if c in data.columns:
+                data[c] = pd.to_numeric(data[c], errors="coerce").fillna(0)
+        for c in ("total_volume", "paid_volume", "storage"):
+            if c in data.columns:
+                data[c] = pd.to_numeric(data[c], errors="coerce").fillna(0)
+        data["offer_id"] = data["offer_id"].astype(str).str.strip()
+        data = data.dropna(subset=["date"])
+        return data

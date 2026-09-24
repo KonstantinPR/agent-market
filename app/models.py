@@ -197,6 +197,11 @@ class FunnelMetric(Base):
     wb_club_avg_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     wb_club_buyout_percent: Mapped[float] = mapped_column(Numeric(8, 3), default=0)
     wb_club_avg_orders_per_day: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
+    title: Mapped[str] = mapped_column(String(250), default="")
+    subject_id: Mapped[str] = mapped_column(String(40), default="")
+    tags: Mapped[str] = mapped_column(Text, default="")
+    past_json: Mapped[Optional[str]] = mapped_column(Text, default="")
+    comparison_json: Mapped[Optional[str]] = mapped_column(Text, default="")
     raw_json: Mapped[Optional[str]] = mapped_column(Text, default="")
 
 
@@ -487,6 +492,64 @@ class OzonDetailRow(Base):
     income: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # к перечислению
     return_qty: Mapped[int] = mapped_column(Integer, default=0)
     return_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class OzonPlacement(Base):
+    """Стоимость размещения (хранение) Ozon по артикулам и дням.
+
+    Отчёт «Стоимость размещения на складе» (аналог ЛК): /v1/report/placement/
+    by-products -> XLSX. Суммы начисления отрицательные (расход).
+    Ключ op_key — дата|sku|склад.
+    """
+
+    __tablename__ = "ozon_placements"
+    __table_args__ = (
+        UniqueConstraint("op_key", name="uq_ozon_placement_op_key"),
+        Index("ix_ozon_placement_dates", "date"),
+        Index("ix_ozon_placement_offer_id", "offer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    op_key: Mapped[str] = mapped_column(String(220), nullable=False)
+    date: Mapped[date_type] = mapped_column(Date, nullable=True)
+    sku: Mapped[str] = mapped_column(String(40), default="")
+    offer_id: Mapped[str] = mapped_column(String(100), default="")
+    warehouse: Mapped[str] = mapped_column(String(200), default="")
+    paid_quantity: Mapped[int] = mapped_column(Integer, default=0)  # платных экз.
+    paid_volume: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # платный объём, мл
+    storage: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # начислено, в минус
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class OzonCashFlow(Base):
+    """Движение средств Ozon (/v1/finance/cash-flow-statement/list) по периодам.
+
+    Ключ op_key — period_begin (дата начала периода). Идемпотентно
+    перезаписывается при повторных загрузках.
+    """
+
+    __tablename__ = "ozon_cash_flows"
+    __table_args__ = (
+        UniqueConstraint("op_key", name="uq_ozon_cashflow_op_key"),
+        Index("ix_ozon_cashflow_period_begin", "period_begin"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    op_key: Mapped[str] = mapped_column(String(40), nullable=False)
+    period_begin: Mapped[date_type] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date_type] = mapped_column(Date, nullable=True)
+    begin_balance: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    payments_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    delivery_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    return_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    services_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    others_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    end_balance: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     imported_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
     )

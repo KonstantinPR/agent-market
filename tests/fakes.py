@@ -206,6 +206,17 @@ class FakeOz:
     detail_error = None
     buyout_error = None
 
+    def get_placement(self, date_from, date_to):
+        return pd.DataFrame({
+            "date": [str(D1), str(D1)],
+            "sku": ["3001", "3002"],
+            "offer_id": ["OZ-1", "OZ-2"],
+            "warehouse": ["FBO", "FBO"],
+            "paid_quantity": [2, 1],
+            "paid_volume": [120.0, 60.0],
+            "storage": [0.0, 0.0],
+        })
+
     def get_sales_detail(self, date_from, date_to):
         if self.detail_error:
             raise self.detail_error

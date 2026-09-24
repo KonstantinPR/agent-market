@@ -50,7 +50,7 @@ def test_parse_realization_posting_rows_math():
                 "order": {"posting_number": "789-012-1", "created_date": "2026-08-20T10:00:00Z"},
                 "commission_ratio": 0.1,
                 "delivery_commission": {"quantity": 0, "amount": 0, "standard_fee": 0},
-                "return_commission": {"quantity": 1, "total": -900.0},
+                "return_commission": {"quantity": 1, "total": 777.0},
             },
         ],
     }
@@ -67,8 +67,8 @@ def test_parse_realization_posting_rows_math():
     assert sale["commission"] == -300.0  # standard_fee как комиссия
     ret = df.iloc[1]
     assert ret["return_qty"] == 1
-    assert ret["return_total"] == -900.0
-    assert ret["income"] == -900.0
+    assert ret["return_total"] == 777.0
+    assert ret["income"] == -777.0  # возврат без продажи: минус к перечислению
 
 
 def test_get_sales_detail_iterates_months(monkeypatch):
@@ -90,6 +90,24 @@ def test_get_sales_detail_iterates_months(monkeypatch):
     assert calls == [(7, 2026), (8, 2026), (9, 2026)]
     assert len(df) == 3
     assert df["posting_number"].tolist() == ["p-7", "p-8", "p-9"]
+
+
+def test_realization_posting_404_report_not_found_skips_month(monkeypatch):
+    prov = _prov()
+    prov.testing = False
+    import requests
+
+    class Resp:
+        status_code = 404
+        text = '{"code":5,"message":"Report was not found"}'
+
+    def boom(url, payload, num_retries=4):
+        raise requests.HTTPError("404 Client Error: Not Found for url: ...", response=Resp())
+
+    monkeypatch.setattr(prov, "_post", boom)
+    df = prov.get_realization_posting(9, 2026)
+    assert df.empty
+    assert prov._OzonProvider__last_month_skipped == (9, 2026)
 
 
 def test_buyout_mock_columns():

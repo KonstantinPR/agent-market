@@ -1,4 +1,6 @@
 """T-19: API каталога «Наш склад → Товары» (/api/products*)."""
+import pytest
+
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -78,6 +80,65 @@ def test_products_preview_custom_settings(api_client, db):
     assert body["count"] == 1
     assert body["rows"][0]["recommended_price"] == 209.0  # 100 × 2 × 1 → 209
     assert body["price_settings"]["cost_anchors"] == [[100.0, 2.0], [2000.0, 2.0]]
+
+
+def test_products_preview_min_mode(api_client, db):
+    from app import models
+
+    _refresh(api_client)
+    prod = db.get(models.Product, "TST-1")
+    prod.net_cost = 100.0
+    prod.volume_l = 1.0
+    db.commit()
+
+    r = api_client.post("/api/products/preview", json={
+        "like": "TST-1",
+        "mode": "min",
+        "price_settings": {"min_margin_pct": 10.0},
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    row = body["rows"][0]
+    assert row["mode"] == "min"
+    # без проданных артикулов в тестовой БД unit-экономики нет → минимум = себестоимость
+    assert row["min_price"] == pytest.approx(100.0)
+    assert row["price"] == row["min_price"] == 100.0
+    assert row["ue_comm_rate"] is None or row["ue_comm_rate"] == 0
+
+
+def test_products_preview_min_mode_uses_global_ue(api_client, db):
+    from datetime import date, timedelta
+    from sqlalchemy import select
+
+    from app import models
+
+    _refresh(api_client)
+    wb = db.execute(select(models.Marketplace.id).where(models.Marketplace.code == "wb")).scalar_one()
+    db.add(models.Sale(
+        marketplace_id=wb,
+        date=date.today() - timedelta(days=1),
+        article="TST-SALE-1", source="v5",
+        quantity=1, returns_qty=0,
+        revenue=1000.0, commission=100.0, logistics=50.0, storage=10.0,
+        services=0.0, income=1000.0,
+    ))
+    prod = db.get(models.Product, "TST-1")
+    prod.net_cost = 100.0
+    prod.volume_l = 1.0
+    db.commit()
+
+    r = api_client.post("/api/products/preview", json={
+        "like": "TST-1",
+        "mode": "min",
+        "price_settings": {"min_margin_pct": 10.0},
+    })
+    body = r.json()
+    row = body["rows"][0]
+    # глобальная unit-экономика: комиссия 10%, логистика 50, хранение 10
+    expect = (100 + 50 + 10) / (1 - 0.10 - 0.10)
+    assert row["min_price"] == pytest.approx(expect, abs=0.01)
+    assert row["price"] == row["min_price"]
 
 
 def test_export_products_xlsx(api_client):

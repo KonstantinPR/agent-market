@@ -1,4 +1,5 @@
 """Синхронизация данных провайдеров в PostgreSQL (upsert-логика)."""
+import re
 from datetime import timedelta
 from typing import Optional
 
@@ -143,6 +144,91 @@ def normalize_ozon_buyout(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         "vat_percent": num("vat_percent", 0).astype(int),
     })
     out = out[(out["offer_id"] != "") & (out["posting_number"] != "")]
+    return out
+
+
+def normalize_ozon_placement(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Строки стоимости размещения Ozon -> схема ozon_placements.
+
+    Источник: /v1/report/placement/by-products -> XLSX с колонками
+    date, sku, offer_id, warehouse, paid_quantity, paid_volume, storage.
+    op_key = дата|sku|склад (повторные загрузки идемпотентно перезаписывают).
+    """
+    if df is None or df.empty:
+        return None
+    need = {"date", "sku", "offer_id", "storage"}
+    if not need.issubset(df.columns):
+        return None
+    df = df.copy()
+    dates = pd.to_datetime(df["date"], errors="coerce")
+
+    def txt(col, default=""):
+        if col not in df.columns:
+            return pd.Series(default, index=df.index)
+        return df[col].fillna("").astype(str).str.strip()
+
+    def num(col, default=0):
+        if col not in df.columns:
+            return pd.Series(default, index=df.index)
+        return pd.to_numeric(df[col], errors="coerce").fillna(default)
+
+    out = pd.DataFrame({
+        "op_key": (dates.dt.strftime("%Y-%m-%d").fillna("") + "|"
+                   + txt("sku") + "|" + txt("warehouse", "")),
+        "date": dates.dt.date,
+        "sku": txt("sku"),
+        "offer_id": txt("offer_id"),
+        "warehouse": txt("warehouse", ""),
+        "paid_quantity": num("paid_quantity", 0).astype(int),
+        "paid_volume": num("paid_volume", 0),
+        "storage": -num("storage"),
+    })
+    out = out.dropna(subset=["date"])
+    out = out[(out["sku"] != "") & (out["offer_id"] != "")]
+    return out
+
+
+def normalize_ozon_cashflow(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Строки движения средств Ozon -> схема ozon_cash_flows.
+
+    Источник: /v1/finance/cash-flow-statement/list с колонками period_begin,
+    period_end, begin_balance, payments_amount, delivery_total, return_total,
+    services_total, others_total, end_balance. op_key = period_begin —
+    повторные загрузки идемпотентно перезаписывают периоды.
+    """
+    if df is None or df.empty:
+        return None
+    need = {"period_begin"}
+    if not need.issubset(df.columns):
+        return None
+    df = df.copy()
+    begins = pd.to_datetime(df["period_begin"], errors="coerce")
+
+    def txt(col, default=""):
+        if col not in df.columns:
+            return pd.Series(default, index=df.index)
+        return df[col].fillna("").astype(str).str.strip()
+
+    def num(col, default=0):
+        if col not in df.columns:
+            return pd.Series(default, index=df.index)
+        return pd.to_numeric(df[col], errors="coerce").fillna(default)
+
+    ends = pd.to_datetime(df["period_end"], errors="coerce") if "period_end" in df.columns \
+        else pd.Series(pd.NaT, index=df.index)
+    out = pd.DataFrame({
+        "op_key": begins.dt.strftime("%Y-%m-%d").fillna(""),
+        "period_begin": begins.dt.date,
+        "period_end": ends.dt.date,
+        "begin_balance": num("begin_balance"),
+        "payments_amount": num("payments_amount"),
+        "delivery_total": num("delivery_total"),
+        "return_total": num("return_total"),
+        "services_total": num("services_total"),
+        "others_total": num("others_total"),
+        "end_balance": num("end_balance"),
+    })
+    out = out.dropna(subset=["period_begin"])
     return out
 
 
@@ -836,6 +922,21 @@ def _redistribute_articleless(rows, cells, fields, weight_idx=(6, 7)):
                 c[idx] += total * weights[a] / total_w
 
 
+def like_pattern(pattern: Optional[str]):
+    """SQL LIKE '%…%' → скомпилированный regex (регистронезависимо) или None.
+
+    Сохраняет семантику ilike: % — любая последовательность, _ — один символ.
+    Используется, чтобы фильтр поиска применялся только к выводу, а не к
+    агрегации (распределение расходов не должно пересчитываться под фильтр).
+    """
+    if not pattern:
+        return None
+    return re.compile(
+        re.escape(pattern).replace("%", r".*").replace("_", r"."),
+        re.IGNORECASE,
+    )
+
+
 def detail_summary_dataframe(
     db,
     date_from=None,
@@ -860,11 +961,14 @@ def detail_summary_dataframe(
         q = q.where(models.WbDetailRow.sale_dt >= date_from)
     if date_to:
         q = q.where(models.WbDetailRow.sale_dt <= date_to)
-    if article_like:
-        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
     rows = list(db.execute(q).scalars().all())
     if not rows:
         return out
+
+    # Фильтр поиска применяется только к выводу (см. like_pattern): распределение
+    # безартикульных расходов и хранения не пересчитывается под фильтр, доли
+    # считаются по всему окну.
+    art_check = like_pattern(article_like)
 
     cells: dict = {}
     titles: dict = {}
@@ -919,11 +1023,12 @@ def detail_summary_dataframe(
         db,
         date_from=date_from,
         date_to=date_to,
-        target_articles={art.strip().upper() for art in cells},
     )
 
     recs = []
     for art, c in cells.items():
+        if art_check is not None and art_check.search(art) is None:
+            continue
         (sells, returns_qty, revenue, commission, for_pay, logistics,
          delivery_count, return_delivery_count, storage, pvz_compensation,
          payment_services, services, ops, srcs) = c
@@ -940,7 +1045,7 @@ def detail_summary_dataframe(
             "ops_count": ops,
             "sources": ",".join(sorted(s for s in srcs if s)),
         })
-    out = pd.DataFrame(recs)
+    out = pd.DataFrame(recs, columns=cols)
     out = out.sort_values("for_pay", ascending=False).reset_index(drop=True)
     return out
 
@@ -1027,20 +1132,21 @@ def _oz_col(df: pd.DataFrame, *names: str) -> Optional[str]:
 def normalize_oz_cards(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     """Приводит карточки товара Ozon (отчёт /v1/report/products) к схеме marketplace_cards.
 
-    chrt_id/nm_id = Ozon Product ID, vendor_code = Offer ID/Артикул,
-    barcode = SKU/Штрихкод. Размер/предмет/состав для Ozon пустые.
+    chrt_id = Ozon Product ID, nm_id = артикул WB (заполняется позже из карточек WB),
+    vendor_code = Offer ID/Артикул, barcode = «Штрихкод (Серийный номер / EAN)».
+    Размер/предмет/состав для Ozon пустые.
     """
     if df is None or df.empty:
         return None
     idx = df.index
     out = pd.DataFrame({
         "chrt_id": df.get(_oz_col(df, "Ozon Product ID", "Product ID", "product_id"), pd.Series("", index=idx)),
-        "nm_id": df.get(_oz_col(df, "Ozon Product ID", "Product ID", "product_id"), pd.Series("", index=idx)),
+        "nm_id": "",
         "vendor_code": df.get(_oz_col(df, "Offer ID", "Артикул", "Артикул продавца"), pd.Series("", index=idx)),
         "brand": df.get(_oz_col(df, "Бренд", "Категория", "Brand", "Category"), pd.Series("", index=idx)),
         "subject": "",
         "size": "",
-        "barcode": df.get(_oz_col(df, "SKU", "Штрихкод", "Barcode", "Штрихкод (Серийный номер / EAN)"), pd.Series("", index=idx)),
+        "barcode": df.get(_oz_col(df, "Штрихкод (Серийный номер / EAN)", "Штрихкод", "Barcode", "SKU"), pd.Series("", index=idx)),
         "composition": "",
         "name": df.get(_oz_col(df, "Name", "Название товара", "Название", "Наименование"), pd.Series("", index=idx)),
         "volume_l": 0.0,
@@ -1052,6 +1158,59 @@ def normalize_oz_cards(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     out = out.drop_duplicates(subset=["chrt_id", "vendor_code", "barcode"], keep="first")
     out = out[out["chrt_id"] != ""]
     return out if not out.empty else None
+
+
+def enrich_oz_cards_with_wb_nm(db, mdf: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Заполняет nm_id (Артикул WB) карточек Ozon по карточкам WB.
+
+    Сначала по штрихкоду (баркоды WB и Ozon совпадают в большинстве случаев),
+    затем по артикулу: у WB артикул и размер хранятся отдельно, а у Ozon
+    размер вшит в конец артикула (например JBR-LYA-297-A-BLUE-34 — артикул
+    Ozon, где -34 размер; у WB это JBR-LYA-297-A-BLUE и размер 34), поэтому
+    последовательно отрезаем хвостовые сегменты артикула (после "-") и ищем
+    WB-карточку с таким артикулом. При совпадении в nm_id пишется реальный
+    артикул WB (nmID). Строки без совпадения оставляем с пустым nm_id.
+    """
+    if mdf is None or mdf.empty:
+        return mdf
+    mp_wb = marketplace_id(db, "wb")
+    wb_rows = db.execute(
+        select(models.MarketplaceCard)
+        .where(models.MarketplaceCard.marketplace_id == mp_wb)
+        .order_by(models.MarketplaceCard.imported_at.asc(), models.MarketplaceCard.id.asc())
+    ).scalars().all()
+    by_barcode: dict = {}
+    by_vendor: dict = {}
+    for r in wb_rows:
+        nm = str(r.nm_id or "").strip()
+        if not nm:
+            continue
+        if r.barcode:
+            by_barcode.setdefault(str(r.barcode).strip().lower(), nm)
+        if r.vendor_code:
+            by_vendor.setdefault(str(r.vendor_code).strip().lower(), nm)
+
+    def _find_nm(barcode: str, vendor_code: str) -> str:
+        if barcode:
+            hit = by_barcode.get(barcode.strip().lower())
+            if hit:
+                return hit
+        art = str(vendor_code or "").strip()
+        while art:
+            hit = by_vendor.get(art.lower())
+            if hit:
+                return hit
+            if "-" not in art:
+                break
+            art = art.rsplit("-", 1)[0]
+        return ""
+
+    out = mdf.copy()
+    out["nm_id"] = [
+        _find_nm(str(r.get("barcode") or ""), str(r.get("vendor_code") or ""))
+        for r in out.to_dict("records")
+    ]
+    return out
 
 
 def normalize_marketplace_cards(df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -1198,7 +1357,7 @@ def normalize_catalog_card(df: pd.DataFrame, source: str = "wb") -> Optional[pd.
         cat = col("Category", "category", "категория")
         brand_src = brand if brand is not None else cat
         subject_src = cat if cat is not None else brand
-        barcode_src = col("SKU", "sku", "штрихкод", "barcode", "Штрихкод (Серийный номер / EAN)")
+        barcode_src = col("штрихкод (серийный номер / ean)", "штрихкод", "barcode", "sku")
         out = {
             "article": txt(raw_article),
             "name": txt(col("Name", "название товара", "название", "наименование")),
@@ -1522,6 +1681,11 @@ def upsert_funnel(db, df: pd.DataFrame) -> int:
     df["nm_id"] = df.get("nm_id", "").astype(str)
     df["subject_name"] = df.get("subject_name", "").astype(str)
     df["brand_name"] = df.get("brand_name", "").astype(str)
+    df["title"] = df.get("title", "").astype(str)
+    df["subject_id"] = df.get("subject_id", "").astype(str)
+    df["tags"] = df.get("tags", "").astype(str)
+    df["past_json"] = df.get("past_json", "").astype(str)
+    df["comparison_json"] = df.get("comparison_json", "").astype(str)
     df["raw_json"] = df.get("raw_json", "").astype(str)
     new_cols = ["subject_name", "brand_name", "stock_wb", "stock_mp",
                 "stock_balance_sum", "cancel_sum", "avg_orders_per_day",
@@ -1531,7 +1695,9 @@ def upsert_funnel(db, df: pd.DataFrame) -> int:
                 "product_rating", "feedback_rating", "wb_club_order_count",
                 "wb_club_order_sum", "wb_club_buyout_count", "wb_club_buyout_sum",
                 "wb_club_cancel_count", "wb_club_cancel_sum", "wb_club_avg_price",
-                "wb_club_buyout_percent", "wb_club_avg_orders_per_day", "raw_json"]
+                "wb_club_buyout_percent", "wb_club_avg_orders_per_day",
+                "title", "subject_id", "tags", "past_json", "comparison_json",
+                "raw_json"]
     agg = {"nm_id": "first", "views": "sum", "opens": "sum", "adds": "sum",
            "orders": "sum", "cancelled": "sum", "buyouts": "sum",
            "avg_price": "first", "revenue": "sum", "buyout_sum": "sum"}
@@ -1764,6 +1930,79 @@ def upsert_ozon_buyouts(db, df: pd.DataFrame) -> int:
     return len(values)
 
 
+def upsert_ozon_placements(db, df: pd.DataFrame) -> int:
+    """Стоимость размещения Ozon -> ozon_placements, upsert по op_key."""
+    if df is None or df.empty:
+        return 0
+    if "op_key" not in df.columns:
+        return 0
+    fields = ["op_key", "date", "sku", "offer_id", "warehouse",
+              "paid_quantity", "paid_volume", "storage"]
+    cols = [c for c in fields if c in df.columns]
+    gdf = df[cols].copy().drop_duplicates("op_key")
+    values = []
+    for r in gdf.to_dict("records"):
+        values.append({
+            "op_key": str(r["op_key"]),
+            "date": _as_date(r.get("date")),
+            "sku": str(r.get("sku", "") or ""),
+            "offer_id": str(r.get("offer_id", "") or ""),
+            "warehouse": str(r.get("warehouse", "") or ""),
+            "paid_quantity": int(_f(r.get("paid_quantity"))),
+            "paid_volume": _f(r.get("paid_volume")),
+            "storage": _f(r.get("storage")),
+        })
+    if not values:
+        return 0
+    ins = insert(models.OzonPlacement)
+    set_cols = [c for c in values[0].keys() if c != "op_key"]
+    stmt = ins.on_conflict_do_update(
+        index_elements=["op_key"],
+        set_={c: ins.excluded[c] for c in set_cols},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
+def upsert_ozon_cashflows(db, df: pd.DataFrame) -> int:
+    """Движение средств Ozon -> ozon_cash_flows, upsert по op_key."""
+    if df is None or df.empty:
+        return 0
+    if "op_key" not in df.columns:
+        return 0
+    fields = ["op_key", "period_begin", "period_end", "begin_balance",
+              "payments_amount", "delivery_total", "return_total",
+              "services_total", "others_total", "end_balance"]
+    cols = [c for c in fields if c in df.columns]
+    gdf = df[cols].copy().drop_duplicates("op_key")
+    values = []
+    for r in gdf.to_dict("records"):
+        values.append({
+            "op_key": str(r["op_key"]),
+            "period_begin": _as_date(r.get("period_begin")),
+            "period_end": _as_date(r.get("period_end")),
+            "begin_balance": _f(r.get("begin_balance")),
+            "payments_amount": _f(r.get("payments_amount")),
+            "delivery_total": _f(r.get("delivery_total")),
+            "return_total": _f(r.get("return_total")),
+            "services_total": _f(r.get("services_total")),
+            "others_total": _f(r.get("others_total")),
+            "end_balance": _f(r.get("end_balance")),
+        })
+    if not values:
+        return 0
+    ins = insert(models.OzonCashFlow)
+    set_cols = [c for c in values[0].keys() if c != "op_key"]
+    stmt = ins.on_conflict_do_update(
+        index_elements=["op_key"],
+        set_={c: ins.excluded[c] for c in set_cols},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
 def oz_detail_summary_dataframe(
     db,
     date_from=None,
@@ -1781,7 +2020,7 @@ def oz_detail_summary_dataframe(
     """
     cols = ["article", "name", "sells", "returns_qty", "postings",
             "seller_total", "amount", "commission", "services", "income",
-            "ops_count", "buyout_sum", "buyout_percent"]
+            "ops_count", "buyout_sum", "buyout_percent", "storage"]
     out = pd.DataFrame(columns=cols)
     q = select(models.OzonDetailRow)
     if date_from:
@@ -1793,6 +2032,22 @@ def oz_detail_summary_dataframe(
     rows = list(db.execute(q).scalars().all())
     if not rows:
         return out
+
+    # Стоимость размещения (хранение) по артикулам за окно: ozon_placements.
+    # Из отчёта /v1/report/placement/by-products/create, отрицательная = расход.
+    storage_by_art: dict = {}
+    pq = select(models.OzonPlacement)
+    if date_from:
+        pq = pq.where(models.OzonPlacement.date >= date_from)
+    if date_to:
+        pq = pq.where(models.OzonPlacement.date <= date_to)
+    if article_like:
+        pq = pq.where(models.OzonPlacement.offer_id.ilike(f"%{article_like}%"))
+    for p in db.execute(pq).scalars().all():
+        art = (p.offer_id or "").strip()
+        if not art:
+            continue
+        storage_by_art[art] = storage_by_art.get(art, 0.0) + float(p.storage or 0)
 
     cells: dict = {}
     postings: dict = {}
@@ -1842,6 +2097,7 @@ def oz_detail_summary_dataframe(
             "services": round(services, 2), "income": round(income, 2),
             "ops_count": ops,
             "buyout_sum": b_sum, "buyout_percent": b_pct,
+            "storage": round(storage_by_art.get(art, 0.0), 2),
         })
     out = pd.DataFrame(recs)
     out = out.sort_values("income", ascending=False).reset_index(drop=True)

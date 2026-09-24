@@ -49,7 +49,7 @@ def test_normalize_oz_card():
         "Offer ID": ["OZ-1", "OZ-2"],
         "Name": ["Ozon 1", "Ozon 2"],
         "SKU": ["3000000001", "3000000002"],
-        "Barcode": ["3 000000001", "3 000000002"],
+        "Barcode": ["471000000001", "471000000002"],
         "Category": ["Обувь", "Обувь"],
     })
     n = normalize_catalog_card(df, "ozon")
@@ -57,7 +57,7 @@ def test_normalize_oz_card():
     r0 = n.iloc[0]
     assert r0["article"] == "OZ-1"
     assert r0["name"] == "Ozon 1"
-    assert r0["barcode"] == "3000000001"
+    assert r0["barcode"] == "471000000001"
     assert r0["subject"] == "Обувь"
     assert r0["size"] == ""
     assert r0["source"] == "ozon"

@@ -344,12 +344,76 @@ class WbProvider(BaseProvider):
                     orders = int(views * rng.uniform(0.01, 0.06))
                     buyouts = int(orders * rng.uniform(0.5, 0.9))
                     price = round(rng.uniform(1000, 3000), 2)
-                    rows.append({
+                    p_views = int(views * 0.7)
+                    p_adds = int(adds * 0.7)
+                    p_orders = int(orders * 0.7)
+                    p_buyouts = int(buyouts * 0.7)
+                    stat = {
+                        "period": {"start": str(date_from), "end": str(date_to)},
+                        "openCount": views, "cartCount": adds, "orderCount": orders,
+                        "orderSum": round(orders * price, 2),
+                        "cancelCount": 0, "cancelSum": 0,
+                        "buyoutCount": buyouts, "buyoutSum": round(buyouts * price, 2),
+                        "avgPrice": price,
+                        "avgOrdersCountPerDay": round(rng.uniform(0.1, 2), 2),
+                        "shareOrderPercent": round(rng.uniform(0, 20), 2),
+                        "addToWishlist": int(views * rng.uniform(0.01, 0.05)),
+                        "timeToReady": {"days": 1, "hours": int(rng.integers(2, 12)),
+                                        "mins": int(rng.integers(0, 59))},
+                        "localizationPercent": 100,
+                        "conversions": {
+                            "addToCartPercent": round(100 * adds / views, 2) if views else 0,
+                            "cartToOrderPercent": round(100 * orders / adds, 2) if adds else 0,
+                            "buyoutPercent": round(100 * buyouts / orders, 2) if orders else 0,
+                        },
+                        "wbClub": {
+                            "orderCount": 0, "orderSum": 0, "buyoutCount": 0,
+                            "buyoutSum": 0, "cancelCount": 0, "cancelSum": 0,
+                            "avgPrice": 0, "buyoutPercent": 0, "avgOrderCountPerDay": 0,
+                        },
+                    }
+                    past_ = dict(stat)
+                    past_["period"]["start"] = str(date_from - timedelta(days=30))
+                    past_["period"]["end"] = str(date_to - timedelta(days=30))
+                    past_["openCount"] = p_views
+                    past_["cartCount"] = p_adds
+                    past_["orderCount"] = p_orders
+                    past_["orderSum"] = round(p_orders * price, 2)
+                    past_["buyoutCount"] = p_buyouts
+                    past_["buyoutSum"] = round(p_buyouts * price, 2)
+                    def _dyn(a0, b0):
+                        return round(100 * (a0 - b0) / b0, 2) if b0 else 0
+                    comp = {
+                        "openCountDynamic": _dyn(views, p_views),
+                        "cartCountDynamic": _dyn(adds, p_adds),
+                        "orderCountDynamic": _dyn(orders, p_orders),
+                        "orderSumDynamic": _dyn(round(orders * price, 2), round(p_orders * price, 2)),
+                        "buyoutCountDynamic": _dyn(buyouts, p_buyouts),
+                        "buyoutSumDynamic": _dyn(round(buyouts * price, 2), round(p_buyouts * price, 2)),
+                        "cancelCountDynamic": 0, "cancelSumDynamic": 0,
+                        "avgOrdersCountPerDayDynamic": _dyn(stat["avgOrdersCountPerDay"], past_["avgOrdersCountPerDay"]),
+                        "avgPriceDynamic": 0,
+                        "shareOrderPercentDynamic": _dyn(stat["shareOrderPercent"], past_["shareOrderPercent"]),
+                        "addToWishlistDynamic": _dyn(stat["addToWishlist"], past_["addToWishlist"]),
+                        "timeToReadyDynamic": {"days": 0, "hours": 0, "mins": 0},
+                        "localizationPercentDynamic": 0,
+                        "conversions": {
+                            "addToCartPercent": _dyn(stat["conversions"]["addToCartPercent"], past_["conversions"]["addToCartPercent"]),
+                            "cartToOrderPercent": _dyn(stat["conversions"]["cartToOrderPercent"], past_["conversions"]["cartToOrderPercent"]),
+                            "buyoutPercent": _dyn(stat["conversions"]["buyoutPercent"], past_["conversions"]["buyoutPercent"]),
+                        },
+                        "wbClubDynamic": {"orderCount": 0, "orderSum": 0, "buyoutCount": 0,
+                                          "buyoutSum": 0, "cancelCount": 0, "cancelSum": 0,
+                                          "avgPrice": 0, "buyoutPercent": 0, "avgOrderCountPerDay": 0},
+                    }
+                    row = {
                         "product.nmID": 530000 + i,
                         "product.vendorCode": a,
                         "product.brandName": f"Бренд {chr(65 + i % 3)}",
                         "product.title": f"Товар {a}",
+                        "product.subjectId": 100 + i % 5,
                         "product.subjectName": "Куртки",
+                        "product.tags": ["новинка", "sale"] if i % 2 else [],
                         "product.productRating": round(rng.uniform(6, 10), 1),
                         "product.feedbackRating": round(rng.uniform(3.5, 5.0), 2),
                         "product.stocks.wb": int(rng.integers(0, 15)),
@@ -366,20 +430,26 @@ class WbProvider(BaseProvider):
                         "statistic.selected.buyoutCount": buyouts,
                         "statistic.selected.buyoutSum": round(buyouts * price, 2),
                         "statistic.selected.avgPrice": price,
-                        "statistic.selected.avgOrdersCountPerDay": round(rng.uniform(0.1, 2), 2),
-                        "statistic.selected.shareOrderPercent": round(rng.uniform(0, 20), 2),
-                        "statistic.selected.addToWishlist": int(views * rng.uniform(0.01, 0.05)),
+                        "statistic.selected.avgOrdersCountPerDay": stat["avgOrdersCountPerDay"],
+                        "statistic.selected.shareOrderPercent": stat["shareOrderPercent"],
+                        "statistic.selected.addToWishlist": stat["addToWishlist"],
                         "statistic.selected.timeToReady.days": 1,
-                        "statistic.selected.timeToReady.hours": int(rng.integers(2, 12)),
-                        "statistic.selected.timeToReady.mins": int(rng.integers(0, 59)),
+                        "statistic.selected.timeToReady.hours": stat["timeToReady"]["hours"],
+                        "statistic.selected.timeToReady.mins": stat["timeToReady"]["mins"],
                         "statistic.selected.localizationPercent": 100,
                         "statistic.selected.conversions.addToCartPercent":
-                            round(100 * adds / views, 2) if views else 0,
+                            stat["conversions"]["addToCartPercent"],
                         "statistic.selected.conversions.cartToOrderPercent":
-                            round(100 * orders / adds, 2) if adds else 0,
+                            stat["conversions"]["cartToOrderPercent"],
                         "statistic.selected.conversions.buyoutPercent":
-                            round(100 * buyouts / orders, 2) if orders else 0,
-                    })
+                            stat["conversions"]["buyoutPercent"],
+                        "product": {"nmID": 530000 + i, "vendorCode": a, "brandName": f"Бренд {chr(65 + i % 3)}",
+                                    "title": f"Товар {a}", "subjectId": 100 + i % 5,
+                                    "subjectName": "Куртки",
+                                    "tags": ["новинка", "sale"] if i % 2 else []},
+                        "statistic": {"selected": stat, "past": past_, "comparison": comp},
+                    }
+                    rows.append(row)
             df = pd.DataFrame(rows)
             df["_raw"] = rows
             return df

@@ -18,12 +18,14 @@ PRICE_DEFAULTS = {
     "cost_anchors": [[100.0, 10.0], [2000.0, 3.0]],
     "vol_anchors": [[1.0, 1.0], [10.0, 2.0]],   # объём, л → множитель цены
     "round_nice": True,                          # округлять вверх до «…9»
+    "min_margin_pct": 10.0,                      # мин. прибыль для break-even (минимальная цена)
 }
 
 PRICE_LABELS = {
     "cost_anchors": "Наценка от себестоимости",
     "vol_anchors": "Наценка за объём",
     "round_nice": "Округлять до …9",
+    "min_margin_pct": "Мин. прибыль, %",
 }
 
 PRICE_HINTS = {
@@ -34,9 +36,13 @@ PRICE_HINTS = {
                    "10 л → ×2. Объём меньше 1 л не повышает цену.",
     "round_nice": "Округлять рекомендуемую цену вверх так, чтобы она оканчивалась на 9 "
                   "(например 376 → 379, 3776 → 3799).",
+    "min_margin_pct": "Минимальная прибыль сверх расходов (Win×Loss): "
+                      "(себестоимость + хранение + логистика + услуги) ÷ (1 − комиссия% − мин.прибыль%). "
+                      "0 = точка безубыточности.",
 }
 
 _KNOWN_KEYS = set(PRICE_DEFAULTS)
+_FLOAT_KEYS = {"min_margin_pct"}
 
 
 def merge_price_settings(payload=None) -> dict:
@@ -57,6 +63,13 @@ def merge_price_settings(payload=None) -> dict:
                 out[key] = val
             else:
                 out[key] = str(val).lower() in ("1", "true", "on", "yes", "да")
+            continue
+        if key in _FLOAT_KEYS:
+            try:
+                num = float(val)
+            except (TypeError, ValueError):
+                continue
+            out[key] = max(0.0, num)
             continue
         anchors = []
         for a in val or []:
@@ -139,3 +152,27 @@ def recommended_price(cost, vol_l, settings=None) -> float:
     if s["round_nice"]:
         price = _round_nice(price)
     return max(float(price), float(cost or 0))
+
+
+def minimum_price(cost, ue=None, settings=None) -> float:
+    """Минимальная цена без убытка (break-even) на единицу, ₽.
+
+    ue — усреднённая единичная экономика артикула (или глобальная):
+    {"comm_rate": доля комиссии от выручки [0..1], "logistics_unit": ₽/шт,
+    "storage_unit": ₽/шт, "other_unit": ₽/шт}. Если unit-экономики нет —
+    минимум равен себестоимости. Формула: (себестоимость + хранение +
+    логистика + услуги) ÷ (1 − комиссия% − мин.прибыль%). Не опускается
+    ниже себестоимости, округление не применяется (реальный break-even).
+    """
+    cost = float(cost or 0)
+    if not ue:
+        return round(cost, 2)
+    s = merge_price_settings(settings)
+    denom = 1 - float(ue.get("comm_rate") or 0) - float(s["min_margin_pct"]) / 100
+    if denom <= 0.05:
+        denom = 0.05
+    parts = (float(ue.get("logistics_unit") or 0)
+             + float(ue.get("storage_unit") or 0)
+             + float(ue.get("other_unit") or 0))
+    price = (parts + cost) / denom
+    return round(max(float(price), cost), 2)

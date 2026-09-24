@@ -1,4 +1,5 @@
 """Расчёт маржинальности по продажам (агрегация sales + products)."""
+from datetime import date
 from typing import Optional
 
 import numpy as np
@@ -8,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.services.sync import _is_goods_row, _redistribute_articleless, storage_split
+from app.services import funnel as funnel_service
+from app.services.sync import _is_goods_row, _redistribute_articleless, storage_split, like_pattern, marketplace_id
 
 
 def funnel_dataframe(
@@ -19,82 +21,162 @@ def funnel_dataframe(
 ) -> pd.DataFrame:
     """Прибыльность по Воронке Продаж WB (funnel_metric + себестоимость).
 
-    Воронка WB — срез метрик за период (не по дням), поэтому выбираем один
-    последний срез, пересекающий запрошенный диапазон, и не суммируем срезы.
-    Это ОЦЕНКА: в воронке нет комиссий/логистики/хранения WB, поэтому маржа =
-    выручка (или avg_price*orders) минус себестоимость (маржинальность «до расходов WB»).
+    Воронка WB — срез метрик за период (не по дням), поэтому выбирается один
+    срез через pick_funnel_window (как в WB API → Воронка продаж): точное окно →
+    самый широкий внутри запрошенного → самый свежий пересекающийся → последний
+    в базе. Маржа — ОЦЕНКА «до расходов WB»: выручка (или avg_price × orders)
+    минус себестоимость (net_cost × orders); комиссий/логистики/хранения WB
+    в воронке нет. Хранение (storage_est) считается отдельно по детализации и
+    в маржу не входит. article_like фильтрует только вывод и не влияет на
+    агрегацию. В attrs: date_from/date_to — показанный срез, matched — совпал ли
+    срез с запрошенным диапазоном.
     """
-    rows = pd.DataFrame(columns=[
-        "article", "name", "views", "opens", "adds", "orders", "cancelled",
-        "avg_price", "revenue", "cart_pct", "order_pct", "net_cost", "margin", "margin_pct",
-    ])
+    base_cols = [c for c in funnel_service.funnel_columns()
+                 if c not in ("past_json", "comparison_json")]
+    extra_cols = ["name", "cart_pct", "order_pct", "net_cost", "margin", "margin_pct",
+                  "storage_est"]
+    all_cols = (base_cols + extra_cols
+                + ["past_" + k for k in funnel_service.FUNNEL_PAST_KEYS]
+                + ["dy_" + k for k in funnel_service.FUNNEL_DY_KEYS])
 
-    # 1. Последний срез воронки в диапазоне (максимальная дата окончания)
-    snap = db.execute(
+    def _empty():
+        return pd.DataFrame(columns=all_cols)
+
+    def _num(v):
+        try:
+            f = float(v)
+            return int(f) if f.is_integer() else f
+        except (TypeError, ValueError):
+            return 0
+
+    # 1. Выбор среза: как в /api/funnel (pick_funnel_window).
+    latest = db.execute(
         select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
-        .where(models.FunnelMetric.date_from <= date_to,
-               models.FunnelMetric.date_to >= date_from)
-        .order_by(models.FunnelMetric.date_to.desc())
+        .order_by(models.FunnelMetric.date_to.desc(), models.FunnelMetric.date_from.desc())
+        .limit(1)
     ).first()
-    if snap is None:
-        return rows
+    if latest is None:
+        return _empty()
+    windows = [
+        (r[0], r[1])
+        for r in db.execute(
+            select(models.FunnelMetric.date_from, models.FunnelMetric.date_to).distinct()
+        )
+    ]
+    requested = None
+    if date_from is not None and date_to is not None:
+        requested = (date_from, date_to)
+        chosen = funnel_service.pick_funnel_window(windows, requested[0], requested[1])
+        from_, to_ = chosen if chosen is not None else (latest[0], latest[1])
+    else:
+        from_, to_ = latest[0], latest[1]
 
-    from_, to_ = snap.date_from, snap.date_to
-
-    # 2. Метрики по артикулам за этот срез + себестоимость из products
+    name_subq = (
+        select(models.Product.name)
+        .where(models.Product.article == models.FunnelMetric.article)
+        .limit(1)
+        .scalar_subquery()
+    )
+    cost_subq = (
+        select(models.Product.net_cost)
+        .where(models.Product.article == models.FunnelMetric.article)
+        .limit(1)
+        .scalar_subquery()
+    )
     q = (
         select(
-            models.FunnelMetric.article,
-            func.sum(models.FunnelMetric.views).label("views"),
-            func.sum(models.FunnelMetric.opens).label("opens"),
-            func.sum(models.FunnelMetric.adds).label("adds"),
-            func.sum(models.FunnelMetric.orders).label("orders"),
-            func.sum(models.FunnelMetric.cancelled).label("cancelled"),
-            func.max(models.FunnelMetric.avg_price).label("avg_price"),
-            func.sum(models.FunnelMetric.revenue).label("revenue"),
-            models.Product.name.label("name"),
-            models.Product.net_cost.label("net_cost"),
+            models.FunnelMetric,
+            name_subq.label("p_name"),
+            cost_subq.label("p_cost"),
         )
-        .outerjoin(models.Product, models.FunnelMetric.article == models.Product.article)
         .where(models.FunnelMetric.date_from == from_,
                models.FunnelMetric.date_to == to_)
-        .group_by(models.FunnelMetric.article, models.Product.name, models.Product.net_cost)
+        .order_by(models.FunnelMetric.revenue.desc(), models.FunnelMetric.article)
     )
-    if article_like:
-        q = q.where(models.FunnelMetric.article.ilike(f"%{article_like}%"))
 
-    for r in db.execute(q):
-        orders = int(r.orders)
-        net_cost = float(r.net_cost or 0)
-        avg_price = float(r.avg_price or 0)
-        revenue = float(r.revenue or 0)
-        revenue_eff = revenue if revenue else avg_price * orders
-        cost = net_cost * orders
-        margin = round(revenue_eff - cost, 2)
-        margin_pct = round(margin / revenue_eff * 100, 2) if revenue_eff else 0.0
-        cart_pct = round((r.adds / r.views * 100) if r.views else 0.0, 2)
-        order_pct = round((orders / r.views * 100) if r.views else 0.0, 2)
-        rows = pd.concat([rows, pd.DataFrame([{
-            "article": r.article,
-            "name": r.name or "",
-            "views": int(r.views),
-            "opens": int(r.opens),
-            "adds": int(r.adds),
-            "orders": orders,
-            "cancelled": int(r.cancelled),
-            "avg_price": avg_price,
-            "revenue": revenue_eff,
-            "cart_pct": cart_pct,
-            "order_pct": order_pct,
+    storage_est_map = storage_split(db, date_from=from_, date_to=to_)
+
+    art_check = like_pattern(article_like)
+    seen = set()
+    recs = []
+    for fm, p_name, p_cost in db.execute(q):
+        if fm.article in seen:
+            continue
+        seen.add(fm.article)
+        r = {
+            "nm_id": _num(fm.nm_id or 0),
+            "article": str(fm.article or ""),
+            "views": _num(fm.views or 0),
+            "opens": _num(fm.opens or 0),
+            "adds": _num(fm.adds or 0),
+            "orders": _num(fm.orders or 0),
+            "cancelled": _num(fm.cancelled or 0),
+            "buyouts": _num(fm.buyouts or 0),
+            "avg_price": _num(fm.avg_price or 0),
+            "revenue": _num(fm.revenue or 0),
+            "buyout_sum": _num(fm.buyout_sum or 0),
+            "subject_name": str(fm.subject_name or ""),
+            "brand_name": str(fm.brand_name or ""),
+            "product_rating": _num(fm.product_rating or 0),
+            "feedback_rating": _num(fm.feedback_rating or 0),
+            "stock_wb": _num(fm.stock_wb or 0),
+            "stock_mp": _num(fm.stock_mp or 0),
+            "stock_balance_sum": _num(fm.stock_balance_sum or 0),
+            "cancel_sum": _num(fm.cancel_sum or 0),
+            "avg_orders_per_day": _num(fm.avg_orders_per_day or 0),
+            "share_order_percent": _num(fm.share_order_percent or 0),
+            "add_to_wishlist": _num(fm.add_to_wishlist or 0),
+            "time_to_ready_min": _num(fm.time_to_ready_min or 0),
+            "localization_percent": _num(fm.localization_percent or 0),
+            "conv_to_cart_percent": _num(fm.conv_to_cart_percent or 0),
+            "conv_cart_to_order_percent": _num(fm.conv_cart_to_order_percent or 0),
+            "conv_buyout_percent": _num(fm.conv_buyout_percent or 0),
+            "wb_club_order_count": _num(fm.wb_club_order_count or 0),
+            "wb_club_order_sum": _num(fm.wb_club_order_sum or 0),
+            "wb_club_buyout_count": _num(fm.wb_club_buyout_count or 0),
+            "wb_club_buyout_sum": _num(fm.wb_club_buyout_sum or 0),
+            "wb_club_cancel_count": _num(fm.wb_club_cancel_count or 0),
+            "wb_club_cancel_sum": _num(fm.wb_club_cancel_sum or 0),
+            "wb_club_avg_price": _num(fm.wb_club_avg_price or 0),
+            "wb_club_buyout_percent": _num(fm.wb_club_buyout_percent or 0),
+            "wb_club_avg_orders_per_day": _num(fm.wb_club_avg_orders_per_day or 0),
+            "title": str(fm.title or ""),
+            "subject_id": _num(fm.subject_id or 0),
+            "tags": str(fm.tags or ""),
+            "past_json": str(fm.past_json or ""),
+            "comparison_json": str(fm.comparison_json or ""),
+        }
+        funnel_service.flatten_past_dy(r)
+        name = str(fm.title or p_name or "")
+        orders = int(r["orders"])
+        net_cost = float(p_cost or 0)
+        revenue_eff = float(r["revenue"]) or float(r["avg_price"]) * orders
+        margin = round(revenue_eff - net_cost * orders, 2)
+        r.update({
+            "name": name,
+            "cart_pct": round((r["adds"] / r["views"] * 100) if r["views"] else 0.0, 2),
+            "order_pct": round((orders / r["views"] * 100) if r["views"] else 0.0, 2),
             "net_cost": net_cost,
             "margin": margin,
-            "margin_pct": margin_pct,
-        }])], ignore_index=True)
+            "margin_pct": round(margin / revenue_eff * 100, 2) if revenue_eff else 0.0,
+            "storage_est": round(storage_est_map.get(
+                r["article"].strip().upper(), 0.0), 2),
+        })
+        recs.append(r)
 
-    rows = rows.sort_values("margin", ascending=False).reset_index(drop=True)
-    rows.attrs["date_from"] = str(from_)
-    rows.attrs["date_to"] = str(to_)
-    return rows
+    if art_check is not None:
+        recs = [r for r in recs if art_check.search(r["article"])]
+    for r in recs:
+        for c in all_cols:
+            if c not in r:
+                r[c] = 0
+    out = pd.DataFrame(recs, columns=all_cols)
+    if not out.empty:
+        out = out.sort_values("margin", ascending=False).reset_index(drop=True)
+    out.attrs["date_from"] = str(from_)
+    out.attrs["date_to"] = str(to_)
+    out.attrs["matched"] = bool(requested) and (from_, to_) == requested
+    return out
 
 
 def margin_columns() -> list:
@@ -140,15 +222,53 @@ def empty_margin_df() -> pd.DataFrame:
 
 
 DETAIL_MARGIN_COLUMNS = [
-    "article", "name", "sells", "returns_qty", "revenue", "commission",
-    "logistics", "logistics_out", "logistics_in", "storage", "services",
-    "income", "margin_gross", "net_cost", "net_cost_est", "margin",
-    "margin_per_one", "margin_pct",
+    "article", "nm_id", "name", "sells", "returns_qty",
+    "stock_qty", "stock_total", "stock_in_way",
+    "revenue", "commission", "logistics", "logistics_out", "logistics_in",
+    "storage", "services", "income", "margin_gross", "net_cost", "net_cost_est",
+    "margin", "margin_per_one", "margin_pct",
     "commission_per_one", "logistics_per_one",
     "logistics_out_per_one", "logistics_in_per_one",
     "storage_per_one", "income_per_one", "revenue_per_one",
     "margin_gross_per_one", "return_rate",
 ]
+
+
+def _wb_stock_map(db: Session, date_to) -> dict:
+    """Остатки WB на конец окна: {UPPER(article): (quantity, quantity_full, in_way)}.
+
+    Срез стоков — последняя дата <= date_to (строки «ВБ Остатки» по дням);
+    если такого среза нет — возвращается {} (нули в колонках). Количество
+    суммируется по всем складам и chrt_id артикула (в детализации продаж
+    артикул уже агрегирован).
+    """
+    if isinstance(date_to, str):
+        date_to = date.fromisoformat(date_to)
+    mp = marketplace_id(db, "wb")
+    snap = db.scalar(
+        select(func.max(models.Stock.date)).where(
+            models.Stock.marketplace_id == mp,
+            models.Stock.date <= date_to,
+        )
+    )
+    if snap is None:
+        return {}
+    out: dict = {}
+    q = (
+        select(
+            models.Stock.article,
+            func.sum(models.Stock.quantity).label("q"),
+            func.sum(models.Stock.quantity_full).label("qf"),
+            func.sum(models.Stock.in_way).label("w"),
+        )
+        .where(models.Stock.date == snap, models.Stock.marketplace_id == mp)
+        .group_by(models.Stock.article)
+    )
+    for art, qty, full, way in db.execute(q):
+        a = (art or "").strip().upper()
+        if a:
+            out[a] = (int(qty or 0), int(full or 0), int(way or 0))
+    return out
 
 
 def margin_detail_dataframe(
@@ -178,11 +298,16 @@ def margin_detail_dataframe(
     logistics_out/logistics_in — логистика туда/обратно (по типу строки);
     *_per_one — деление на количество проданных (sells);
     return_rate — % возвратов от общего количества (продажи + возвраты).
+
+    article_like фильтрует только вывод: доли безартикульных плат (хранение,
+    логистика, услуги) всегда считаются по всему окну периода и не меняются
+    от фильтра в строке поиска.
     """
-    cols = ["article", "name", "sells", "returns_qty", "revenue", "commission",
-            "logistics", "logistics_out", "logistics_in", "storage", "services",
-            "income", "margin_gross", "net_cost", "net_cost_est", "margin",
-            "margin_per_one", "margin_pct",
+    cols = ["article", "nm_id", "name", "sells", "returns_qty",
+            "stock_qty", "stock_total", "stock_in_way",
+            "revenue", "commission", "logistics", "logistics_out", "logistics_in",
+            "storage", "services", "income", "margin_gross", "net_cost",
+            "net_cost_est", "margin", "margin_per_one", "margin_pct",
             "commission_per_one", "logistics_per_one",
             "logistics_out_per_one", "logistics_in_per_one",
             "storage_per_one", "income_per_one", "revenue_per_one",
@@ -194,23 +319,27 @@ def margin_detail_dataframe(
         q = q.where(models.WbDetailRow.sale_dt >= date_from)
     if date_to:
         q = q.where(models.WbDetailRow.sale_dt <= date_to)
-    if article_like:
-        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
     rows = list(db.execute(q).scalars().all())
     if not rows:
         return out
 
+    # Фильтр поиска применяется только к выводу (см. like_pattern): распределение
+    # безартикульных плат «Хранение», логистики и услуг не пересчитывается под
+    # фильтр в строке поиска — доли считаются по всему окну периода.
+    art_check = like_pattern(article_like)
+
     # Распределение безартикульных плат «Хранение» по товарам продаж пропорц.
     # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
-    # продажи периода). Распределение идёт только по артикулам с операциями
-    # в окне — орфанные доли не теряются.
+    # продажи периода). Распределение идёт по всем товарам окна; отфильтрованный
+    # вид показывает только их доли.
     storage_est = storage_split(
         db,
         date_from=date_from,
         date_to=date_to,
-        target_articles={r.article.strip().upper() for r in rows
-                         if (r.article or "").strip()},
     )
+
+    # Остатки WB на конец окна: последний срез стоков <= date_to.
+    stock_map = _wb_stock_map(db, date_to=date_to) if date_to else {}
 
     prods = db.execute(select(models.Product).where(
         func.upper(models.Product.article).in_(
@@ -247,10 +376,14 @@ def margin_detail_dataframe(
     is_ret = (lambda t: "возврат" in str(t or "").lower() or "return" in str(t or "").lower())
     cells: dict = {}
     titles: dict = {}
+    nms: dict = {}
     for r in rows:
         art = r.article
         if not art or r.sale_dt is None:
             continue
+        nm = (r.nm_id or "").strip()
+        if nm and nm != "0" and art not in nms:
+            nms[art] = nm
         sign = -1 if is_ret(r.doc_type_name) else 1
         if art not in cells:
             cells[art] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -292,6 +425,8 @@ def margin_detail_dataframe(
 
     recs = []
     for art, c in cells.items():
+        if art_check is not None and art_check.search(art) is None:
+            continue
         (sells, revenue, commission, logistics, storage, services, income,
          logistics_out, logistics_in, returns_qty) = c
         prod = _find_product(art)
@@ -323,9 +458,11 @@ def margin_detail_dataframe(
         margin_gross_per_one = round(margin_gross / _s, 2) if _s else 0.0
         denom = sells + returns_qty
         return_rate = round(returns_qty / denom * 100, 1) if denom > 0 else 0.0
+        st_q, st_f, st_w = stock_map.get(art.strip().upper(), (0, 0, 0))
         recs.append({
-            "article": art, "name": name, "sells": sells,
+            "article": art, "nm_id": nms.get(art, ""), "name": name, "sells": sells,
             "returns_qty": returns_qty,
+            "stock_qty": st_q, "stock_total": st_f, "stock_in_way": st_w,
             "revenue": round(revenue, 2),
             "commission": round(commission, 2),
             "logistics": round(logistics, 2),
@@ -345,6 +482,177 @@ def margin_detail_dataframe(
             "income_per_one": income_per_one,
             "revenue_per_one": revenue_per_one,
             "margin_gross_per_one": margin_gross_per_one,
+            "return_rate": return_rate,
+        })
+    out = pd.DataFrame(recs, columns=DETAIL_MARGIN_COLUMNS).sort_values(
+        "margin", ascending=False).reset_index(drop=True)
+    return out
+
+
+OZON_DETAIL_MARGIN_COLUMNS = [
+    "article", "nm_id", "name", "sells", "returns_qty", "postings",
+    "revenue", "amount", "commission", "services", "income",
+    "storage",
+    "net_cost", "net_cost_est", "margin", "margin_per_one", "margin_pct",
+    "commission_per_one", "services_per_one", "storage_per_one",
+    "income_per_one", "revenue_per_one", "return_rate",
+]
+
+
+def ozon_margin_detail_dataframe(
+    db: Session,
+    date_from=None,
+    date_to=None,
+    article_like: Optional[str] = None,
+    default_net_cost: float = 0.0,
+) -> pd.DataFrame:
+    """Прибыльность по «Детализации продаж» Ozon из ozon_detail_rows.
+
+    Аналог margin_detail_dataframe для WB: одна строка — операция (постинг/
+    выкуп на артикул), агрегируется по offer_id. Возвраты учитываются отдельно
+    (returns_qty и в деньгах income), продано остаётся гроссом — как в своде
+    oz-detail. income в Ozon уже чистый к перечислению (комиссия и услуги из
+    него вычтены), поэтому маржа-себест. = income − net_cost × продано, а
+    commission/services показываются справочно (`в минус`).
+
+    Себестоимость: из каталога products — матчинг UPPER(offer_id) по product
+    (товары в верхнем регистре), фолбэк по barcode строки детализации;
+    промах → default_net_cost c флагом net_cost_est=True.
+
+    Артикул WB (nm_id) подтягивается из marketplace_cards (ozon) по совпадению
+    vendor_code с offer_id (зависит от enrich_oz_cards_with_wb_nm).
+    """
+    cols = list(OZON_DETAIL_MARGIN_COLUMNS)
+    out = pd.DataFrame(columns=cols)
+
+    q = select(models.OzonDetailRow)
+    if date_from:
+        q = q.where(models.OzonDetailRow.date >= date_from)
+    if date_to:
+        q = q.where(models.OzonDetailRow.date <= date_to)
+    if article_like:
+        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%"))
+    rows = list(db.execute(q).scalars().all())
+    if not rows:
+        return out
+
+    # Стоимость размещения (хранение) по артикулам за окно: ozon_placements.
+    storage_by_art: dict = {}
+    pq = select(models.OzonPlacement)
+    if date_from:
+        pq = pq.where(models.OzonPlacement.date >= date_from)
+    if date_to:
+        pq = pq.where(models.OzonPlacement.date <= date_to)
+    for p in db.execute(pq).scalars().all():
+        art = (p.offer_id or "").strip()
+        if not art:
+            continue
+        storage_by_art[art] = storage_by_art.get(art, 0.0) + float(p.storage or 0)
+
+    # Артикул WB: marketplace_cards (ozon): vendor_code (offer_id) -> nm_id.
+    mp_oz = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "ozon")
+    ).scalar_one_or_none()
+    nms: dict = {}
+    if mp_oz is not None:
+        for c in db.execute(select(
+                models.MarketplaceCard.vendor_code, models.MarketplaceCard.nm_id)
+                .where(
+                    models.MarketplaceCard.marketplace_id == mp_oz,
+                    models.MarketplaceCard.nm_id != "",
+                )).all():
+            vc = (c[0] or "").strip().upper()
+            nm = (c[1] or "").strip()
+            if vc and nm and nm != "0" and vc not in nms:
+                nms[vc] = nm
+
+    prods = db.execute(select(models.Product).where(
+        func.upper(models.Product.article).in_(
+            {(r.offer_id or "").strip().upper() for r in rows if (r.offer_id or "").strip()})
+        | func.upper(func.coalesce(models.Product.barcode, "")).in_(
+            {(r.barcode or "").strip().upper() for r in rows if (r.barcode or "").strip()})
+    )).scalars().all()
+    prods_by_upper = {p.article.strip().upper(): p for p in prods}
+    prods_by_barcode = {p.barcode.strip().upper(): p for p in prods if (p.barcode or "").strip()}
+    art_bcs: dict = {}
+    for r in rows:
+        art = (r.offer_id or "").strip()
+        bc = (r.barcode or "").strip().upper()
+        if art and bc and bc in prods_by_barcode:
+            art_bcs.setdefault(art.upper(), set()).add(bc)
+
+    def _find_product(art: str):
+        p = prods_by_upper.get(art.strip().upper())
+        if p is not None:
+            return p
+        for bc in art_bcs.get(art.strip().upper(), set()):
+            qq = prods_by_barcode.get(bc)
+            if qq is not None:
+                return qq
+        return None
+
+    cells: dict = {}
+    titles: dict = {}
+    postings: dict = {}
+    for r in rows:
+        art = (r.offer_id or "").strip()
+        if not art or r.date is None:
+            continue
+        if art not in cells:
+            cells[art] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        c = cells[art]
+        c[0] += int(r.quantity or 0)                         # sells (гросс)
+        c[1] += int(r.return_qty or 0)                       # returns_qty
+        c[2] += float(r.seller_price or 0) * int(r.quantity or 0)   # revenue
+        c[3] += float(r.commission or 0)                     # commission (в минус)
+        c[4] += float(r.standard_fee or 0)                   # services (в минус)
+        c[5] += float(r.income or 0)                         # income
+        c[6] += float(r.amount or 0)                         # amount (бизнес-база)
+        postings.setdefault(art, set()).add(str(r.posting_number or ""))
+        if (r.name or "").strip():
+            titles.setdefault(art, str(r.name).strip())
+
+    recs = []
+    for art, c in cells.items():
+        (sells, returns_qty, revenue, commission, services, income, amount) = c
+        prod = _find_product(art)
+        name = (prod.name or "") if prod else ""
+        if not name:
+            name = titles.get(art, "")
+        net_cost = float(prod.net_cost or 0) if prod else 0.0
+        if net_cost <= 0:
+            net_cost = default_net_cost
+            est = True
+        else:
+            est = False
+        storage = round(storage_by_art.get(art, 0.0), 2)
+        margin = round(income - net_cost * max(0, sells) + storage, 2)
+        margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
+        margin_pct = margin / revenue * 100 if revenue > 0 and sells > 0 else 0.0
+        _s = sells if sells > 0 else 0
+        commission_per_one = round(commission / _s, 2) if _s else 0.0
+        services_per_one = round(services / _s, 2) if _s else 0.0
+        storage_per_one = round(storage / _s, 2) if _s else 0.0
+        income_per_one = round(income / _s, 2) if _s else 0.0
+        revenue_per_one = round(revenue / _s, 2) if _s else 0.0
+        denom = sells + returns_qty
+        return_rate = round(returns_qty / denom * 100, 1) if denom > 0 else 0.0
+        recs.append({
+            "article": art, "nm_id": nms.get(art.upper(), ""), "name": name,
+            "sells": sells, "returns_qty": returns_qty,
+            "postings": len(postings.get(art, set())),
+            "revenue": round(revenue, 2), "amount": round(amount, 2),
+            "commission": round(commission, 2),
+            "services": round(services, 2), "income": round(income, 2),
+            "storage": storage,
+            "net_cost": round(net_cost, 2), "net_cost_est": est,
+            "margin": margin, "margin_per_one": margin_per_one,
+            "margin_pct": margin_pct,
+            "commission_per_one": commission_per_one,
+            "services_per_one": services_per_one,
+            "storage_per_one": storage_per_one,
+            "income_per_one": income_per_one,
+            "revenue_per_one": revenue_per_one,
             "return_rate": return_rate,
         })
     out = pd.DataFrame(recs).sort_values("margin", ascending=False).reset_index(drop=True)

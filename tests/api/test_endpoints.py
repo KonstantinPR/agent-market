@@ -386,6 +386,98 @@ def test_funnel_view_returns_extended_fields(api_client, db):
     assert "share_order_percent" not in view["totals"]
 
 
+def test_funnel_view_returns_past_and_dynamics_fields(api_client, db):
+    """Полный отчёт WB: title/subject_id/tags + его прошлый период (past_*) и
+    динамика к нему (dy_*) читаются из JSON-блоков statistic.past/comparison."""
+    from datetime import date as _date
+    import json
+
+    from app import models
+
+    db.add_all([
+        models.FunnelMetric(
+            date_from=_date(2026, 9, 1), date_to=_date(2026, 9, 10),
+            nm_id="1001", article="TST-1", views=100, orders=4, revenue=12000,
+            title="Пальто LQ", subject_id="100", tags="новинка, sale",
+            past_json=json.dumps({
+                "openCount": 70, "cartCount": 3, "orderCount": 2,
+                "cancelCount": 0, "buyoutCount": 1,
+                "orderSum": 6000, "buyoutSum": 3000, "cancelSum": 0,
+                "avgPrice": 3000,
+            }),
+            comparison_json=json.dumps({
+                "openCountDynamic": 42.86, "cartCountDynamic": 33.33,
+                "orderCountDynamic": 100.0, "cancelCountDynamic": 0,
+                "buyoutCountDynamic": 0.0, "orderSumDynamic": 100.0,
+                "avgPriceDynamic": 0.0,
+            }),
+        ),
+    ])
+    db.commit()
+
+    row = api_client.get("/api/funnel",
+                         params={"date_from": "2026-09-01", "date_to": "2026-09-10"}
+                         ).json()["rows"][0]
+    assert row["title"] == "Пальто LQ"
+    assert row["subject_id"] == "100"
+    assert row["tags"] == "новинка, sale"
+    assert row["past_views"] == 70
+    assert row["past_adds"] == 3
+    assert row["past_orders"] == 2
+    assert row["past_buyouts"] == 1
+    assert row["past_revenue"] == 6000.0
+    assert row["past_buyout_sum"] == 3000.0
+    assert row["past_avg_price"] == 3000.0
+    assert row["dy_views"] == 42.86
+    assert row["dy_orders"] == 100.0
+    assert row["dy_avg_price"] == 0.0
+    assert "past_json" not in row and "comparison_json" not in row
+    totals = api_client.get("/api/funnel",
+                            params={"date_from": "2026-09-01", "date_to": "2026-09-10"}
+                            ).json()["totals"]
+    assert "dy_orders" not in totals
+    assert "past_avg_price" not in totals
+    assert totals["past_orders"] == 2
+
+
+def test_funnel_to_db_stores_all_api_fields():
+    """_funnel_to_db протаскивает title/subjectId/tags и блоки past/comparison."""
+    import json
+
+    from app.services.refresh import _funnel_to_db
+    from datetime import date as _date
+
+    df = pd.DataFrame({
+        "product.nmID": ["1001"],
+        "product.vendorCode": ["TST-1"],
+        "product.title": ["Пальто LQ"],
+        "product.subjectId": [100],
+        "product.tags": [["новинка", "sale"]],
+        "statistic.selected.openCount": [100],
+        "statistic.past.openCount": [70],
+        "statistic.comparison.openCountDynamic": [42.86],
+    })
+    raw = [{
+        "product": {"nmID": 1001, "vendorCode": "TST-1", "title": "Пальто LQ",
+                    "subjectId": 100, "tags": ["новинка", "sale"]},
+        "statistic": {
+            "selected": {"openCount": 100},
+            "past": {"openCount": 70},
+            "comparison": {"openCountDynamic": 42.86},
+        },
+    }]
+    df["_raw"] = raw
+    out = _funnel_to_db(df, _date(2026, 9, 1), _date(2026, 9, 10))
+    r = out.iloc[0]
+    assert r["title"] == "Пальто LQ"
+    assert r["subject_id"] == "100"
+    assert r["tags"] == "новинка, sale"
+    past = json.loads(r["past_json"])
+    assert past["openCount"] == 70
+    comp = json.loads(r["comparison_json"])
+    assert comp["openCountDynamic"] == 42.86
+
+
 def test_wb_detail_fills_margin_detail_view(api_client):
     api_client.post("/api/wb/cards")  # nm_articles/products для join
     r = api_client.post("/api/wb/detail",
@@ -395,6 +487,35 @@ def test_wb_detail_fills_margin_detail_view(api_client):
                           params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
     assert view["count"] == 2
     assert {row["article"] for row in view["rows"]} == {"TST-1", "TST-2"}
+
+
+def test_margin_detail_includes_stock_columns(api_client, db):
+    """Детализация WB отдаёт остатки со среза стоков на конец окна."""
+    from datetime import date
+
+    from app import models as app_models
+    from app.services.sync import marketplace_id
+    api_client.post("/api/wb/cards")
+    r = api_client.post("/api/wb/detail",
+                        params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    wb_id = marketplace_id(db, "wb")
+    db.add_all([
+        app_models.Stock(marketplace_id=wb_id, date=date(2026, 9, 10), article="tst-1",
+                         warehouse="WH1", chrt_id="1", quantity=4, quantity_full=6, in_way=2),
+    ])
+    db.commit()
+    view = api_client.get("/api/margin/detail",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    row = next(x for x in view["rows"] if x["article"].upper() == "TST-1")
+    assert row["stock_qty"] == 4
+    assert row["stock_total"] == 6
+    assert row["stock_in_way"] == 2
+    assert view["totals"]["stock_qty"] == 4
+    assert view["totals"]["stock_total"] == 6
+    assert view["totals"]["stock_in_way"] == 2
+    assert isinstance(view["totals"].get("margin_per_one"), dict)
+    assert "avg" in view["totals"]["margin_per_one"]
 
 
 def test_funnel_view_returns_loaded_rows(api_client):
@@ -448,8 +569,45 @@ def test_funnel_view_falls_back_to_latest_snapshot_for_wider_window(api_client):
     # среза с точным периодом нет — показывается последний, с пометкой о периоде
     assert view["snapshot_from"] == "2026-09-01"
     assert view["snapshot_to"] == "2026-09-10"
+    assert view["matched"] is False
     assert {row["article"] for row in view["rows"]} == {"TST-1", "TST-2"}
     assert all(row["date_from"] == "2026-09-01" for row in view["rows"])
+
+
+def test_funnel_view_picks_widest_snapshot_inside_window(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-05", "date_to": "2026-09-12"})
+    # запрошен 08-30..09-12: оба среза целиком внутри, выбирается самый широкий (09-01..09-10)
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-08-30", "date_to": "2026-09-12"}).json()
+    assert view["snapshot_from"] == "2026-09-01"
+    assert view["snapshot_to"] == "2026-09-10"
+    assert view["matched"] is False
+    assert all(row["date_from"] == "2026-09-01" for row in view["rows"])
+
+
+def test_funnel_view_picks_newest_overlapping_snapshot(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-05", "date_to": "2026-09-12"})
+    # запрошен 09-09..09-15: ни один срез не лежит целиком внутри; выбран самый свежий пересекающийся (09-05..09-12)
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-09-09", "date_to": "2026-09-15"}).json()
+    assert view["snapshot_from"] == "2026-09-05"
+    assert view["snapshot_to"] == "2026-09-12"
+    assert view["matched"] is False
+
+
+def test_funnel_view_exact_window_is_matched(api_client):
+    api_client.post("/api/wb/cards")
+    r = api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    view = api_client.get("/api/funnel",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert view["matched"] is True
+    assert view["snapshot_from"] == view["date_from"] == "2026-09-01"
+    assert view["snapshot_to"] == view["date_to"] == "2026-09-10"
 
 
 def test_funnel_view_empty_without_any_snapshot(api_client):
@@ -457,6 +615,42 @@ def test_funnel_view_empty_without_any_snapshot(api_client):
                           params={"date_from": "2026-08-01", "date_to": "2026-08-30"}).json()
     assert view["count"] == 0
     assert view["totals"] == {}
+
+
+def test_margin_funnel_full_fields_and_matched(api_client):
+    """Прибыльность → Воронка: весь набор полей funnel_metric, matched=true при
+    точном окне, запрошенный период и срез совпадают."""
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    view = api_client.get("/api/margin/funnel",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert view["matched"] is True
+    assert view["snapshot_from"] == view["date_from"] == "2026-09-01"
+    assert view["snapshot_to"] == view["date_to"] == "2026-09-10"
+    assert view["count"] == 2
+    row = view["rows"][0]
+    assert row["article"] in {"TST-1", "TST-2"} and row["name"]
+    for col in ("title", "subject_name", "brand_name", "product_rating", "stock_wb",
+                "conv_to_cart_percent", "conv_cart_to_order_percent",
+                "conv_buyout_percent", "wb_club_buyout_percent", "buyout_sum",
+                "avg_orders_per_day", "storage_est", "margin", "margin_pct",
+                "past_views", "dy_orders"):
+        assert col in row, col
+
+
+def test_margin_funnel_picks_widest_snapshot_inside_window(api_client):
+    """Прибыльность → Воронка использует тот же подбор среза, что и Воронка WB API."""
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    api_client.post("/api/wb/funnel", params={"date_from": "2026-09-05", "date_to": "2026-09-12"})
+    view = api_client.get("/api/margin/funnel",
+                          params={"date_from": "2026-08-30", "date_to": "2026-09-12"}).json()
+    assert view["count"] == 2
+    assert view["snapshot_from"] == "2026-09-01"
+    assert view["snapshot_to"] == "2026-09-10"
+    assert view["matched"] is False
+    assert view["date_from"] == "2026-08-30"
+    assert view["date_to"] == "2026-09-12"
 
 
 # ---------------------------------------------------------------------- импорт
@@ -734,3 +928,75 @@ def test_export_ozon_detail_summary_and_rows(api_client):
     df2 = _read_xlsx(r)
     assert len(df2) == 2
     assert df2["Постинг"].tolist() == ["PZ-1", "PZ-2"]
+
+
+def test_margin_ozon_detail_view(api_client):
+    """Прибыльность Ozon из ozon_detail_rows: income − себестоимость×продано."""
+    api_client.post("/api/ozon/cards")
+    api_client.post("/api/ozon/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10", "excel": 0})
+    view = api_client.get("/api/margin/ozon-detail",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    by = {x["article"]: x for x in view["rows"]}
+    o1 = by["OZ-1"]
+    # фикстура: OZ-1 ×2 шт, seller_price 1300 → доход 2280; себестоимость дефолт 500
+    assert o1["sells"] == 2
+    assert o1["revenue"] == 2600.0
+    assert o1["commission"] == -281.6
+    assert o1["services"] == -38.4
+    assert o1["income"] == 2280.0
+    assert o1["margin"] == pytest.approx(2280.0 - 2 * 500.0)
+    assert o1["margin_pct"] == pytest.approx((2280.0 - 1000.0) / 2600.0 * 100.0)
+    assert view["estimated"] == 2  # оба без себестоимости в product
+    assert "totals" in view and view["totals"].get("income") == pytest.approx(2980.0)
+
+
+def test_margin_ozon_detail_compare(api_client, db):
+    """compare=1 добавляет показатели предыдущего аналогичного периода."""
+    from datetime import date
+    from sqlalchemy import select
+    from app import models
+    mp_oz = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "ozon")).scalar_one()
+    db.add(models.MarketplaceCard(marketplace_id=mp_oz, chrt_id="c1",
+                                  vendor_code="CMP-OZ", nm_id="9")
+           )
+    db.add_all([
+        models.OzonDetailRow(op_key="cur", source="api", date=date(2026, 8, 15),
+                             posting_number="p-cur", offer_id="CMP-OZ", name="Сравн. 1",
+                             sku="", barcode="", quantity=2, seller_price=1300.0,
+                             amount=2560.0, commission_ratio=0.11, commission=-281.6,
+                             standard_fee=-38.4, income=2280.0, return_qty=0, return_total=0.0),
+        models.OzonDetailRow(op_key="prev", source="api", date=date(2026, 7, 15),
+                             posting_number="p-prev", offer_id="CMP-OZ", name="Сравн. 1",
+                             sku="", barcode="", quantity=1, seller_price=1300.0,
+                             amount=1280.0, commission_ratio=0.11, commission=-140.8,
+                             standard_fee=-19.2, income=1140.0, return_qty=0, return_total=0.0),
+    ])
+    db.commit()
+    # текущее окно (31 день) → предыдущее 2026-07-15..2026-08-14
+    r = api_client.get("/api/margin/ozon-detail", params={
+        "date_from": "2026-08-15", "date_to": "2026-09-14", "compare": 1,
+    })
+    body = r.json()
+    row = next(x for x in body["rows"] if x["article"] == "CMP-OZ")
+    assert row["nm_id"] == "9"
+    assert row["sells"] == 2
+    assert row["margin"] == pytest.approx(2280.0 - 2 * 500.0)
+    assert row["sells_pp"] == 1
+    assert row["margin_pp"] == pytest.approx(1140.0 - 500.0)
+    assert row["delta_ru"] == pytest.approx((2280.0 - 1000.0) - (1140.0 - 500.0))
+    assert body["prev_window"] == {"date_from": "2026-07-15", "date_to": "2026-08-14"}
+
+
+def test_export_margin_ozon_detail(api_client):
+    """Экспорт Анализа Продаж OZON: русские колонки + файл."""
+    api_client.post("/api/ozon/cards")
+    api_client.post("/api/ozon/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10", "excel": 0})
+    r = api_client.get("/api/export/margin/ozon-detail",
+                       params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    out = pd.read_excel(io.BytesIO(r.content))
+    assert {"Артикул", "Прибыль, руб", "К перечислению, руб"}.issubset(set(out.columns))
+    assert set(out["Артикул"]) == {"OZ-1", "OZ-2"}

@@ -50,6 +50,12 @@ def create_tables():
         # Фаза A: воронка — выкупы и сумма выкупа
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyouts integer DEFAULT 0"))
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyout_sum numeric(14,2) DEFAULT 0"))
+        # Фаза A2: воронка — полный набор полей отчёта (title, subjectId, tags, past, comparison)
+        conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS title varchar(250) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS subject_id varchar(40) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS tags text DEFAULT ''"))
+        conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS past_json text"))
+        conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS comparison_json text"))
         conn.execute(text("ALTER TABLE stocks DROP CONSTRAINT IF EXISTS uq_stocks_market_date_article_wh"))
         conn.execute(text("""
             DO $$

@@ -5,7 +5,7 @@ const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "22";
+const UI_VERSION = "33";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -170,6 +170,8 @@ const cellFmts = {
   money4: (v) => v == null ? "—" : fmtMoney4(v),
   moneyCls: (v) => v == null ? "—" : `<span class="${cls(v)}">${fmtMoney(v)}</span>`,
   pct: (v) => v == null ? "—" : `<span class="${cls(v)}">${fmtPct(v)}</span>`,
+  signedPct: (v) => v == null || v === "" || isNaN(Number(v)) ? "—"
+    : `<span class="${Number(v) < 0 ? "neg" : "pos"}">${Number(v) > 0 ? "+" : ""}${fmtPct(v)}</span>`,
   int: (v) => v == null ? "—" : fmt(v),
   intZero: (v) => !v ? "—" : fmt(v),
   moneyZero: (v) => !v ? "—" : fmtMoney(v),
@@ -449,7 +451,7 @@ const marginTableHeaders = [
 async function renderMargin(p) {
   const data = await api("/margin" + p);
   const headers = colViewHeaders("margin", marginTableHeaders);
-  const draw = (rows) => { pagedTable($("#marginTable"), headers, rows); };
+  const draw = (rows) => { pagedTable($("#marginTable"), headers, rows, null, null, colViewPinKeys("margin")); };
   draw(data.rows);
   $("#marginSearch").oninput = (e) => {
     const q = e.target.value.trim().toLowerCase();
@@ -465,6 +467,9 @@ const marginHeaders = [
   { k: "name", label: "Наименование", render: cellFmts.text },
   { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int },
   { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
+  { k: "stock_qty", label: "Остаток, шт", num: true, render: cellFmts.int, tip: "По последнему срезу стоков на конец периода (≤ date_to)" },
+  { k: "stock_total", label: "Остаток всего, шт", num: true, render: cellFmts.int, tip: "Всего на складах WB по последнему срезу стоков" },
+  { k: "stock_in_way", label: "В пути, шт", num: true, render: cellFmts.int, tip: "Ожидается поставкой по последнему срезу стоков" },
   { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
   { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
   { k: "logistics", label: "Логистика", num: true, render: cellFmts.moneyCls },
@@ -491,6 +496,9 @@ const marginHeaders = [
 const MARGIN_DETAIL_OPTIONAL = [
   { k: "nm_id", label: "Артикул WB" },
   { k: "returns_qty", label: "Возвращено, шт" },
+  { k: "stock_qty", label: "Остаток, шт" },
+  { k: "stock_total", label: "Остаток всего, шт" },
+  { k: "stock_in_way", label: "В пути, шт" },
   { k: "logistics_out", label: "Логистика туда" },
   { k: "logistics_in", label: "Логистика обратно" },
   { k: "storage", label: "Хранение (оц)" },
@@ -523,6 +531,7 @@ const ozonMarginHeaders = [
   { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
   { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
   { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "storage", label: "Хранение", num: true, render: cellFmts.moneyCls },
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
   { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls },
   { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls },
@@ -543,6 +552,7 @@ const OZON_MARGIN_DETAIL_OPTIONAL = [
   { k: "margin_per_one", label: "Прибыль на ед." },
   { k: "commission_per_one", label: "Комиссия/ед." },
   { k: "services_per_one", label: "Услуги/ед." },
+  { k: "storage_per_one", label: "Хранение/ед." },
   { k: "income_per_one", label: "К перечисл./ед." },
   { k: "revenue_per_one", label: "Средняя цена" },
   { k: "return_rate", label: "Доля возвратов, %" },
@@ -584,6 +594,10 @@ function colViewState(tab) {
   st.pin = Array.isArray(saved.pin)
     ? saved.pin.filter((k) => set.headers.some((h) => h.k === k))
     : [];
+  st.order = Array.isArray(saved.order)
+    ? saved.order.filter((k) => set.headers.some((h) => h.k === k))
+    : [];
+  for (const h of set.headers) if (!st.order.includes(h.k)) st.order.push(h.k);
   return st;
 }
 function colViewPinKeys(tab) {
@@ -600,7 +614,16 @@ function colViewHeaders(tab, headersList) {
   const set = colViewSet(tab);
   if (!set) return headersList;
   const st = colViewState(tab);
-  return headersList.filter((h) => st[h.k] !== false);
+  const map = new Map(headersList.map((h) => [h.k, h]));
+  const out = [];
+  for (const k of st.order || []) {
+    const h = map.get(k);
+    if (h && st[h.k] !== false) out.push(h);
+  }
+  for (const h of headersList) {
+    if (st[h.k] !== false && !st.order.includes(h.k)) out.push(h);
+  }
+  return out;
 }
 // Параметр экспорта «cols» — только видимые колонки. Если видны все — не отправляем
 // ничего (бэкенд отдаёт полный набор). extraKeys — всегда добавляемые ключи (напр.
@@ -615,16 +638,20 @@ function colViewParam(tab, extraKeys, modeHint) {
   const st = colViewState(tab);
   const optKeys = new Set(set.optional.map((o) => o.k));
   const keys = [];
-  for (const h of set.headers) {
-    if (optKeys.has(h.k)) {
-      if (st[h.k] !== false) keys.push(h.k);
-    } else {
-      keys.push(h.k);
-    }
-  }
+  const push = (k) => {
+    if (!optKeys.has(k)) { keys.push(k); return; }
+    if (st[k] !== false) keys.push(k);
+  };
+  const done = new Set();
+  for (const k of st.order || []) { done.add(k); push(k); }
+  for (const h of set.headers) if (!done.has(h.k)) { done.add(h.k); push(h.k); }
   if (extraKeys) keys.push(...extraKeys);
   return keys.length ? "cols=" + keys.join(",") : "";
 }
+// Способ перестановки колонок в «Вид таблицы»: "drag" — перетаскивание,
+// "arrows" — кнопки ◀ ▶ (прежний способ, доступен для возврата).
+const COLVIEW_REORDER = "drag";
+
 function buildColViewMenu(tab) {
   const c = _COLVIEWS[tab];
   const set = colViewSet(tab);
@@ -635,6 +662,97 @@ function buildColViewMenu(tab) {
   const pinSet = new Set(st.pin || []);
   const base = set.headers.filter((h) => !set.optional.some((o) => o.k === h.k));
   const onToggle = () => { if (currentTab === tab) loadTab(tab); buildColViewMenu(tab); };
+  const dragMode = COLVIEW_REORDER === "drag";
+  const orderFor = (keys) => {
+    const ord = (st.order || []).filter((k) => keys.includes(k));
+    for (const k of keys) if (!ord.includes(k)) ord.push(k);
+    return ord;
+  };
+  // Можно ли колонки a и b менять местами: только в рамках одной секции меню
+  // (базовые/необязательные у плоских видов; в групповых — в пределах своей группы).
+  const sameGrp = (a, b) => {
+    const ta = set.optional.some((o) => o.k === a);
+    const tb = set.optional.some((o) => o.k === b);
+    if (ta !== tb) return false;
+    if (!c.groups) return true;
+    const gi = (kk) => { for (let i = 0; i < c.groups.length; i++) if (c.groups[i].keys.includes(kk)) return i; return -1; };
+    const ia = gi(a), ib = gi(b);
+    return ia !== -1 && ia === ib;
+  };
+  const addMoves = (row, k) => {
+    const mw = document.createElement("span");
+    mw.className = "colview-mv";
+    const mk = (txt, dir) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn small";
+      b.textContent = txt;
+      b.title = dir < 0 ? "Сдвинуть влево" : "Сдвинуть вправо";
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const s2 = colViewState(tab);
+        const o = s2.order || [];
+        const i = o.indexOf(k);
+        const n = i + dir;
+        if (i < 0 || n < 0 || n >= o.length || !sameGrp(k, o[n])) return;
+        o[i] = o[n]; o[n] = k;
+        s2.order = o;
+        colViewSave(tab, s2);
+        buildColViewMenu(tab);
+        if (currentTab === tab) loadTab(tab);
+      });
+      return b;
+    };
+    mw.appendChild(mk("\u25C0", -1));
+    mw.appendChild(mk("\u25B6", 1));
+    row.appendChild(mw);
+  };
+  const addDrag = (row, k) => {
+    const h = document.createElement("span");
+    h.className = "colview-drag";
+    h.draggable = true;
+    h.title = "Перетащить, чтобы менять порядок колонок";
+    h.textContent = "\u2630";
+    h.addEventListener("dragstart", (ev) => {
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", k);
+      h.classList.add("dragging");
+    });
+    h.addEventListener("dragend", () => {
+      h.classList.remove("dragging");
+      row.classList.remove("drag-over");
+    });
+    h.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      row.classList.add("drag-over");
+    });
+    h.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    h.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      row.classList.remove("drag-over");
+      const src = ev.dataTransfer.getData("text/plain");
+      if (!src || src === k) return;
+      const s2 = colViewState(tab);
+      if (!sameGrp(src, k)) {
+        row.classList.add("drag-no");
+        setTimeout(() => row.classList.remove("drag-no"), 400);
+        return;
+      }
+      const o = s2.order || [];
+      const si = o.indexOf(src);
+      const ti = o.indexOf(k);
+      if (si < 0 || ti < 0 || si === ti) return;
+      o.splice(si, 1);
+      o.splice(Math.min(o.indexOf(k), o.length), 0, src);
+      s2.order = o;
+      colViewSave(tab, s2);
+      buildColViewMenu(tab);
+      if (currentTab === tab) loadTab(tab);
+    });
+    row.appendChild(h);
+  };
   const item = (k, label, visOn, pinOn) => {
     const row = document.createElement("div");
     row.className = "colview-row";
@@ -653,6 +771,7 @@ function buildColViewMenu(tab) {
     }
     lbl.appendChild(document.createTextNode(visOn === null ? label : " " + label));
     row.appendChild(lbl);
+    if (dragMode) addDrag(row, k); else addMoves(row, k);
     if (c && c.pinnable) {
       const pinLbl = document.createElement("label");
       pinLbl.className = "chk pin";
@@ -688,6 +807,28 @@ function buildColViewMenu(tab) {
   lblAll.appendChild(cbAll);
   lblAll.appendChild(document.createTextNode(" Показать все"));
   panel.appendChild(lblAll);
+  const lblReset = document.createElement("label");
+  lblReset.className = "chk";
+  lblReset.title = "Сбросить колонки к виду по умолчанию";
+  const cbReset = document.createElement("input");
+  cbReset.type = "checkbox";
+  cbReset.addEventListener("change", (e) => {
+    if (!e.target.checked) return;
+    try {
+      const base = _COLVIEWS[tab] && _COLVIEWS[tab].storageKey;
+      if (base) {
+        for (const k of Object.keys(localStorage)) {
+          if (k === base || k.startsWith(base + "_")) localStorage.removeItem(k);
+        }
+      }
+    } catch (err) { /* ignore */ }
+    cbReset.checked = false;
+    buildColViewMenu(tab);
+    if (currentTab === tab) loadTab(tab);
+  });
+  lblReset.appendChild(cbReset);
+  lblReset.appendChild(document.createTextNode(" По умолчанию"));
+  panel.appendChild(lblReset);
   const sep = document.createElement("hr");
   sep.style.margin = "4px 0";
   panel.appendChild(sep);
@@ -717,9 +858,10 @@ function buildColViewMenu(tab) {
     pinLbl.appendChild(pico);
     return pinLbl;
   };
+  const optByKey = new Map(set.optional.map((o) => [o.k, o]));
   if (c.groups && c.groups.length) {
     for (const g of c.groups) {
-      const entries = g.keys.map((k) => set.optional.find((o) => o.k === k)).filter(Boolean);
+      const entries = orderFor(g.keys.filter((k) => optByKey.has(k))).map((k) => optByKey.get(k));
       if (!entries.length) continue;
       const allOn = entries.every((o) => !!st[o.k]);
       const anyOn = entries.some((o) => !!st[o.k]);
@@ -757,6 +899,7 @@ function buildColViewMenu(tab) {
         il.appendChild(icb);
         il.appendChild(document.createTextNode(" " + o.label));
         row.appendChild(il);
+        if (dragMode) addDrag(row, o.k); else addMoves(row, o.k);
         if (c.pinnable) row.appendChild(subPin(o.k));
         wrap.appendChild(row);
       }
@@ -764,7 +907,10 @@ function buildColViewMenu(tab) {
       panel.appendChild(grp);
     }
   } else {
-    for (const o of set.optional) item(o.k, o.label, !!st[o.k], pinSet.has(o.k));
+    for (const k of orderFor(set.optional.map((o) => o.k))) {
+      const o = optByKey.get(k);
+      if (o) item(o.k, o.label, !!st[o.k], pinSet.has(o.k));
+    }
   }
 }
 // Общий обработчик кнопки «Вид таблицы» (открыть/закрыть панель).
@@ -855,12 +1001,18 @@ const ozDetailSummaryHeaders = [
   { k: "amount", label: "Реализовано", num: true, render: cellFmts.money },
   { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
   { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
+  { k: "storage", label: "Хранение", num: true, render: cellFmts.moneyCls },
   { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
   { k: "ops_count", label: "Операций", num: true, render: cellFmts.int },
   { k: "buyout_sum", label: "Сумма выкупов", num: true, render: cellFmts.money },
   { k: "buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct },
 ];
 
+// Колонки маржинальной воронки. Порядок = порядок по умолчанию: первые 16 —
+// «базовые» (видны сразу), остальные включаются чекбоксами в «Вид таблицы».
+const FUNNEL_DEFAULT_KEYS = ["article", "name", "views", "opens", "adds", "orders",
+  "cancelled", "buyouts", "cart_pct", "order_pct", "avg_price", "revenue",
+  "net_cost", "margin", "margin_pct", "storage_est"];
 const funnelHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "name", label: "Наименование", render: cellFmts.text },
@@ -869,6 +1021,7 @@ const funnelHeaders = [
   { k: "adds", label: "В корзину", num: true, render: cellFmts.int },
   { k: "orders", label: "Заказы", num: true, render: cellFmts.int },
   { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int },
+  { k: "buyouts", label: "Выкупы", num: true, render: cellFmts.int },
   { k: "cart_pct", label: "В корзину, %", num: true, render: cellFmts.pct },
   { k: "order_pct", label: "Заказы, %", num: true, render: cellFmts.pct },
   { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money },
@@ -876,18 +1029,79 @@ const funnelHeaders = [
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
   { k: "margin", label: "Маржа (оц.)", num: true, render: cellFmts.moneyCls },
   { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct },
+  { k: "storage_est", label: "Хранение (оц.)", num: true, render: cellFmts.money },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
+  { k: "title", label: "Название из воронки", render: cellFmts.text },
+  { k: "subject_id", label: "ID предмета", render: cellFmts.text },
+  { k: "subject_name", label: "Предмет", render: cellFmts.text },
+  { k: "brand_name", label: "Бренд", render: cellFmts.text },
+  { k: "tags", label: "Теги", render: cellFmts.text },
+  { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int },
+  { k: "avg_orders_per_day", label: "Заказов в день", num: true, render: numDec(2) },
+  { k: "cancel_sum", label: "Отмены, руб", num: true, render: cellFmts.money },
+  { k: "buyout_sum", label: "Сумма выкупов, руб", num: true, render: cellFmts.money },
+  { k: "share_order_percent", label: "Доля заказов, %", num: true, render: cellFmts.pct },
+  { k: "conv_to_cart_percent", label: "В корзину (воронка WB), %", num: true, render: cellFmts.pct },
+  { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct },
+  { k: "conv_buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct },
+  { k: "localization_percent", label: "Локализация, %", num: true, render: cellFmts.pct },
+  { k: "stock_wb", label: "Остаток WB, шт", num: true, render: cellFmts.int },
+  { k: "stock_mp", label: "Остаток МП, шт", num: true, render: cellFmts.int },
+  { k: "stock_balance_sum", label: "Остаток (баланс), руб", num: true, render: cellFmts.money },
+  { k: "product_rating", label: "Рейтинг товара", num: true, render: numDec(1) },
+  { k: "feedback_rating", label: "Рейтинг отзывов", num: true, render: numDec(2) },
+  { k: "time_to_ready_min", label: "До готовности, мин", num: true, render: cellFmts.int },
+  { k: "wb_club_order_count", label: "WB Клуб: заказы", num: true, render: cellFmts.int },
+  { k: "wb_club_order_sum", label: "WB Клуб: заказы, руб", num: true, render: cellFmts.money },
+  { k: "wb_club_buyout_count", label: "WB Клуб: выкупы", num: true, render: cellFmts.int },
+  { k: "wb_club_buyout_sum", label: "WB Клуб: выкупы, руб", num: true, render: cellFmts.money },
+  { k: "wb_club_cancel_count", label: "WB Клуб: отмены", num: true, render: cellFmts.int },
+  { k: "wb_club_cancel_sum", label: "WB Клуб: отмены, руб", num: true, render: cellFmts.money },
+  { k: "wb_club_avg_price", label: "WB Клуб: ср. цена", num: true, render: cellFmts.money },
+  { k: "wb_club_buyout_percent", label: "WB Клуб: выкуп, %", num: true, render: cellFmts.pct },
+  { k: "wb_club_avg_orders_per_day", label: "WB Клуб: заказов в день", num: true, render: numDec(2) },
+  { k: "past_views", label: "Пред. период: просмотры", num: true, render: cellFmts.int },
+  { k: "past_adds", label: "Пред. период: в корзину", num: true, render: cellFmts.int },
+  { k: "past_orders", label: "Пред. период: заказы", num: true, render: cellFmts.int },
+  { k: "past_cancelled", label: "Пред. период: отмены", num: true, render: cellFmts.int },
+  { k: "past_buyouts", label: "Пред. период: выкупы", num: true, render: cellFmts.int },
+  { k: "past_revenue", label: "Пред. период: выручка", num: true, render: cellFmts.money },
+  { k: "past_buyout_sum", label: "Пред. период: выкуп, руб", num: true, render: cellFmts.money },
+  { k: "past_cancel_sum", label: "Пред. период: отмены, руб", num: true, render: cellFmts.money },
+  { k: "past_avg_price", label: "Пред. период: ср. цена", num: true, render: cellFmts.money },
+  { k: "dy_views", label: "Динамика просмотров, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_adds", label: "Динамика корзины, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_orders", label: "Динамика заказов, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_cancelled", label: "Динамика отмен, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_buyouts", label: "Динамика выкупов, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_revenue", label: "Динамика выручки, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_avg_price", label: "Динамика ср. цены, %", num: true, render: cellFmts.signedPct },
 ];
 
 async function renderMarginFunnel(p) {
   const data = await api("/margin/funnel" + p);
-  pagedTable($("#marginFunnelTable"), colViewHeaders("margin-funnel", funnelHeaders), data.rows || []);
+  pagedTable($("#marginFunnelTable"), colViewHeaders("margin-funnel", funnelHeaders), data.rows || [], null, null, colViewPinKeys("margin-funnel"));
   const cp = colViewParam("margin-funnel");
   $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p + (cp ? (p ? "&" : "?") + cp : "");
   const msg = $("#marginFunnelMsg");
+  const warn = document.getElementById("marginFunnelPeriodWarn");
   if (data.snapshot_from && data.snapshot_to) {
-    msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to;
+    msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to +
+      (data.matched ? "" : " (запрошено " + data.date_from + " — " + data.date_to + ")");
+    if (warn) {
+      if (!data.matched && data.rows && data.rows.length) {
+        warn.style.display = "block";
+        warn.textContent = "В базе нет среза точно за " + data.date_from + " — " + data.date_to
+          + ". Показан срез " + data.snapshot_from + " — " + data.snapshot_to
+          + " (итоги — по нему). Чтобы увидеть свой период, нажмите «Обновить базу» в шапке.";
+      } else {
+        warn.style.display = "none";
+        warn.textContent = "";
+      }
+    }
   } else {
     msg.textContent = "Нет данных. Сначала скачайте WB API ▸ Воронка продаж.";
+    if (warn) { warn.style.display = "none"; warn.textContent = ""; }
   }
 }
 
@@ -903,7 +1117,7 @@ async function renderMarginDetail(p) {
       { k: "delta_pct", label: "Δ, %", num: true, render: cellFmts.pct },
     ]);
   }
-  pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals);
+  pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-detail"));
   const exportBtn = $("#exportMarginDetail");
   if (exportBtn) {
     const cp = colViewParam("margin-detail", compare ? ["sells_pp", "margin_pp", "delta_ru", "delta_pct"] : null);
@@ -937,7 +1151,7 @@ async function renderMarginOzonDetail(p) {
       { k: "delta_pct", label: "Δ, %", num: true, render: cellFmts.pct },
     ]);
   }
-  pagedTable($("#marginOzonDetailTable"), headers, data.rows || [], data.totals);
+  pagedTable($("#marginOzonDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-ozon-detail"));
   const exportBtn = $("#exportMarginOzonDetail");
   if (exportBtn) {
     const cp = colViewParam("margin-ozon-detail", compare ? ["sells_pp", "margin_pp", "delta_ru", "delta_pct"] : null);
@@ -1192,7 +1406,7 @@ async function renderProducts() {
       ? "Товаров: " + fmt(data.count)
       : "Каталог пуст — загрузите товары ниже или нажмите «Обновить базу» в шапке";
   }
-  pagedTable(box, colViewHeaders("products", productsVisibleHeaders()), data.rows || [], data.totals || null, "#productsTablePager");
+  pagedTable(box, colViewHeaders("products", productsVisibleHeaders()), data.rows || [], data.totals || null, "#productsTablePager", colViewPinKeys("products"));
   initReplenishToggle();
 }
 
@@ -1412,7 +1626,8 @@ async function previewProductsPrices() {
       colViewHeaders("products", productsPreviewHeaders()),
       rows,
       null,
-      "#productsTablePager"
+      "#productsTablePager",
+      colViewPinKeys("products")
     );
     msgEl.textContent = productsPriceMode() === "min"
       ? "Готово — минимальные цены (break-even) по вашим коэффициентам"
@@ -1963,6 +2178,7 @@ async function renderCards(name) {
       const h = hdr ? hdr.offsetHeight : 0;
       tr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
     }
+    applyStickyCols(wrap, headers, colViewPinKeys(name));
     mountXBar(box, tscroll);
   };
 
@@ -2021,8 +2237,11 @@ const wbFunnelHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text },
   { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
   { k: "name", label: "Название", render: cellFmts.text },
+  { k: "title", label: "Название (API)", render: cellFmts.text },
   { k: "subject_name", label: "Предмет", render: cellFmts.text },
+  { k: "subject_id", label: "ID предмета", render: cellFmts.text },
   { k: "brand_name", label: "Бренд", render: cellFmts.text },
+  { k: "tags", label: "Теги", render: cellFmts.text },
   { k: "product_rating", label: "Рейтинг карточки", num: true, render: numDec(1) },
   { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: numDec(2) },
   { k: "stock_wb", label: "Остатки WB", num: true, render: cellFmts.intZero },
@@ -2046,6 +2265,22 @@ const wbFunnelHeaders = [
   { k: "conv_to_cart_percent", label: "Просмотр→Корзина, %", num: true, render: cellFmts.pct },
   { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct },
   { k: "conv_buyout_percent", label: "Заказ→Выкуп, %", num: true, render: cellFmts.pct },
+  { k: "past_views", label: "Просмотры (пред. период)", num: true, render: cellFmts.int },
+  { k: "past_adds", label: "В корзину (пред. период)", num: true, render: cellFmts.int },
+  { k: "past_orders", label: "Заказы (пред. период)", num: true, render: cellFmts.int },
+  { k: "past_cancelled", label: "Отмены (пред. период)", num: true, render: cellFmts.int },
+  { k: "past_buyouts", label: "Выкупы (пред. период)", num: true, render: cellFmts.int },
+  { k: "past_revenue", label: "Выручка (пред. период)", num: true, render: cellFmts.money },
+  { k: "past_buyout_sum", label: "Сумма выкупа (пред. период)", num: true, render: cellFmts.money },
+  { k: "past_cancel_sum", label: "Сумма отмен (пред. период)", num: true, render: cellFmts.money },
+  { k: "past_avg_price", label: "Ср. цена (пред. период)", num: true, render: cellFmts.money },
+  { k: "dy_views", label: "Динамика просмотров, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_adds", label: "Динамика «в корзину», %", num: true, render: cellFmts.signedPct },
+  { k: "dy_orders", label: "Динамика заказов, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_cancelled", label: "Динамика отмен, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_buyouts", label: "Динамика выкупов, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_revenue", label: "Динамика выручки, %", num: true, render: cellFmts.signedPct },
+  { k: "dy_avg_price", label: "Динамика ср. цены, %", num: true, render: cellFmts.signedPct },
   { k: "wb_club_order_count", label: "WB Клуб: заказы", num: true, render: cellFmts.intZero },
   { k: "wb_club_order_sum", label: "WB Клуб: заказы, ₽", num: true, render: cellFmts.moneyZero },
   { k: "wb_club_buyout_count", label: "WB Клуб: выкупы", num: true, render: cellFmts.intZero },
@@ -2101,9 +2336,21 @@ async function renderWbFunnel() {
       ? "В базе срез только за " + data.snapshot_from + " — " + data.snapshot_to + ". Полный период загрузите через «Обновить базу» в шапке."
       : "";
     tipNote.classList.toggle("hidden", !partial);
+    const warn = document.getElementById("wbFunnelPeriodWarn");
+    if (warn) {
+      if (partial && data.rows && data.rows.length) {
+        warn.style.display = "block";
+        warn.textContent = "В базе нет среза точно за " + p.date_from + " — " + p.date_to
+          + ". Показан срез " + data.snapshot_from + " — " + data.snapshot_to
+          + " (итоги — по нему). Чтобы увидеть свой период, нажмите «Обновить базу» в шапке.";
+      } else {
+        warn.style.display = "none";
+        warn.textContent = "";
+      }
+    }
   }
   const headers = colViewHeaders("wb-funnel", expandedEl && expandedEl.checked ? wbFunnelHeaders : wbFunnelCompact);
-  pagedTable(box, headers, data.rows || [], data.totals || null, "#wbFunnelTablePager");
+  pagedTable(box, headers, data.rows || [], data.totals || null, "#wbFunnelTablePager", colViewPinKeys("wb-funnel"));
 }
 
 function aggregateStocks(rows) {
@@ -2182,7 +2429,7 @@ async function renderWbStocks() {
   const head = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = document.querySelector("#wbMsg-stock-table");
   if (msg) msg.textContent = stockSummary(rows, data.date, "Остатки");
-  pagedTable(box, head, rows);
+  pagedTable(box, head, rows, null, null, colViewPinKeys("wb-stock"));
 }
 
 function aggregatePrices(rows) {
@@ -2254,7 +2501,7 @@ async function renderWbPrices() {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, colViewHeaders("wb-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows);
+  pagedTable(box, colViewHeaders("wb-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows, null, null, colViewPinKeys("wb-prices"));
 }
 
 async function renderOzStocks() {
@@ -2280,7 +2527,7 @@ async function renderOzStocks() {
   const head = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = document.querySelector("#ozMsg-stock-table");
   if (msg) msg.textContent = stockSummary(rows, data.date, "Остатки");
-  pagedTable(box, head, rows);
+  pagedTable(box, head, rows, null, null, colViewPinKeys("oz-stock"));
 }
 
 async function renderOzPrices() {
@@ -2303,7 +2550,7 @@ async function renderOzPrices() {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, colViewHeaders("oz-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows);
+  pagedTable(box, colViewHeaders("oz-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows, null, null, colViewPinKeys("oz-prices"));
 }
 
 async function renderOzSales() {
@@ -2328,7 +2575,7 @@ async function renderOzSales() {
   }
   const msg = document.querySelector("#ozMsg-realization-table");
   if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
-  pagedTable(box, colViewHeaders("oz-realization", salesHeaders), rows);
+  pagedTable(box, colViewHeaders("oz-realization", salesHeaders), rows, null, null, colViewPinKeys("oz-realization"));
 }
 
 const wbStorageHeaders = [
@@ -2356,7 +2603,7 @@ async function renderWbStorage() {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, colViewHeaders("wb-storage", wbStorageHeaders), data.rows || []);
+  pagedTable(box, colViewHeaders("wb-storage", wbStorageHeaders), data.rows || [], null, null, colViewPinKeys("wb-storage"));
 }
 
 const salesHeaders = [
@@ -2391,7 +2638,7 @@ async function renderWbSales() {
   }
   const msg = document.querySelector("#wbMsg-sales-table");
   if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
-  pagedTable(box, colViewHeaders("wb-sales", salesHeaders), rows);
+  pagedTable(box, colViewHeaders("wb-sales", salesHeaders), rows, null, null, colViewPinKeys("wb-sales"));
 }
 
 async function renderWbDetail() {
@@ -2416,7 +2663,7 @@ async function renderWbDetail() {
       tipEl.classList.add("hidden");
       if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
-      pagedTable(box, colViewHeaders("wb-detail", wbDetailRowHeaders), rows, null, "#wbDetailTablePager");
+      pagedTable(box, colViewHeaders("wb-detail", wbDetailRowHeaders), rows, null, "#wbDetailTablePager", colViewPinKeys("wb-detail"));
     } else {
       const data = await api("/wb/detail-summary" + qs({
         date_from: p.date_from || undefined,
@@ -2426,7 +2673,7 @@ async function renderWbDetail() {
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
       if (msg) msg.textContent = "По артикулам: " + fmt(data.count || 0);
-      pagedTable(box, colViewHeaders("wb-detail", wbDetailSummaryHeaders), rows, data.totals, "#wbDetailTablePager");
+      pagedTable(box, colViewHeaders("wb-detail", wbDetailSummaryHeaders), rows, data.totals, "#wbDetailTablePager", colViewPinKeys("wb-detail"));
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию: ' + escapeHtml(err.message) + "</div>";
@@ -2532,7 +2779,7 @@ async function renderOzDetail() {
       tipEl.classList.add("hidden");
       if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
-      pagedTable(box, colViewHeaders("oz-detail", ozDetailRowHeaders), rows, null, "#ozDetailTablePager");
+      pagedTable(box, colViewHeaders("oz-detail", ozDetailRowHeaders), rows, null, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     } else {
       const data = await api("/ozon/detail-summary" + qs({
         date_from: f.date_from || undefined,
@@ -2542,7 +2789,7 @@ async function renderOzDetail() {
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
       if (msg) msg.textContent = "По артикулам: " + fmt(data.count || 0);
-      pagedTable(box, colViewHeaders("oz-detail", ozDetailSummaryHeaders), rows, data.totals, "#ozDetailTablePager");
+      pagedTable(box, colViewHeaders("oz-detail", ozDetailSummaryHeaders), rows, data.totals, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию Ozon: ' + escapeHtml(err.message) + "</div>";
@@ -3350,7 +3597,7 @@ const pricingHeaders = [
 // ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
 const mkOpt = (list) => list.map((h) => ({ k: h.k, label: h.label, def: true }));
 registerColView("wb-detail", {
-  storageKey: "wbDetailCols",
+  storageKey: "wbDetailCols", pinnable: true,
   mode: () => { const rawEl = document.getElementById("wbDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
   sets: {
     rows: { headers: wbDetailRowHeaders, optional: mkOpt(wbDetailRowHeaders) },
@@ -3358,16 +3605,16 @@ registerColView("wb-detail", {
   },
 });
 registerColView("oz-detail", {
-  storageKey: "ozDetailCols",
+  storageKey: "ozDetailCols", pinnable: true,
   mode: () => { const rawEl = document.getElementById("ozDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
   sets: {
     rows: { headers: ozDetailRowHeaders, optional: mkOpt(ozDetailRowHeaders) },
     summary: { headers: ozDetailSummaryHeaders, optional: mkOpt(ozDetailSummaryHeaders) },
   },
 });
-registerColView("wb-cards", { storageKey: "wbCardsCols", headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
+registerColView("wb-cards", { storageKey: "wbCardsCols", pinnable: true, headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
 registerColView("wb-stock", {
-  storageKey: "wbStockCols",
+  storageKey: "wbStockCols", pinnable: true,
   mode: () => { const agg = document.getElementById("wbStockAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
     base: { headers: wbStockHeaders, optional: mkOpt(wbStockHeaders) },
@@ -3375,26 +3622,26 @@ registerColView("wb-stock", {
   },
 });
 registerColView("wb-funnel", {
-  storageKey: "wbFunnelCols",
+  storageKey: "wbFunnelCols", pinnable: true,
   mode: () => { const exp = document.getElementById("wbFunnelExpanded"); return exp && exp.checked ? "expanded" : "compact"; },
   sets: {
     compact: { headers: wbFunnelCompact, optional: mkOpt(wbFunnelCompact) },
     expanded: { headers: wbFunnelHeaders, optional: mkOpt(wbFunnelHeaders) },
   },
 });
-registerColView("wb-sales", { storageKey: "wbSalesCols", headers: salesHeaders, optional: mkOpt(salesHeaders) });
+registerColView("wb-sales", { storageKey: "wbSalesCols", pinnable: true, headers: salesHeaders, optional: mkOpt(salesHeaders) });
 registerColView("wb-prices", {
-  storageKey: "wbPricesCols",
+  storageKey: "wbPricesCols", pinnable: true,
   mode: () => { const agg = document.getElementById("wbPriceAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
     base: { headers: wbPricesHeaders, optional: mkOpt(wbPricesHeaders) },
     agg: { headers: wbPricesAggHeaders, optional: mkOpt(wbPricesAggHeaders) },
   },
 });
-registerColView("wb-storage", { storageKey: "wbStorageCols", headers: wbStorageHeaders, optional: mkOpt(wbStorageHeaders) });
-registerColView("oz-cards", { storageKey: "ozCardsCols", headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
+registerColView("wb-storage", { storageKey: "wbStorageCols", pinnable: true, headers: wbStorageHeaders, optional: mkOpt(wbStorageHeaders) });
+registerColView("oz-cards", { storageKey: "ozCardsCols", pinnable: true, headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
 registerColView("oz-stock", {
-  storageKey: "ozStockCols",
+  storageKey: "ozStockCols", pinnable: true,
   mode: () => { const agg = document.getElementById("ozStockAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
     base: { headers: wbStockHeaders, optional: mkOpt(wbStockHeaders) },
@@ -3402,33 +3649,46 @@ registerColView("oz-stock", {
   },
 });
 registerColView("oz-prices", {
-  storageKey: "ozPricesCols",
+  storageKey: "ozPricesCols", pinnable: true,
   mode: () => { const agg = document.getElementById("ozPriceAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
     base: { headers: wbPricesHeaders, optional: mkOpt(wbPricesHeaders) },
     agg: { headers: wbPricesAggHeaders, optional: mkOpt(wbPricesAggHeaders) },
   },
 });
-registerColView("oz-realization", { storageKey: "ozRealCols", headers: salesHeaders, optional: mkOpt(salesHeaders) });
+registerColView("oz-realization", { storageKey: "ozRealCols", pinnable: true, headers: salesHeaders, optional: mkOpt(salesHeaders) });
 registerColView("products", {
-  storageKey: "productsCols",
+  storageKey: "productsCols", pinnable: true,
   mode: () => { const s = document.getElementById("productsSizes"); return s && s.checked ? "sizes" : "agg"; },
   sets: {
     agg: { headers: productsBaseHeaders, optional: mkOpt(productsBaseHeaders) },
     sizes: { headers: productsSizeHeaders, optional: mkOpt(productsSizeHeaders) },
   },
 });
-registerColView("margin", { storageKey: "marginCols", headers: marginTableHeaders, optional: mkOpt(marginTableHeaders) });
-registerColView("margin-funnel", { storageKey: "marginFunnelCols", headers: funnelHeaders, optional: mkOpt(funnelHeaders) });
+registerColView("margin", { storageKey: "marginCols", pinnable: true, headers: marginTableHeaders, optional: mkOpt(marginTableHeaders) });
+registerColView("margin-funnel", {
+  storageKey: "marginFunnelCols", pinnable: true,
+  headers: funnelHeaders,
+  optional: funnelHeaders.map((h) => ({
+    k: h.k, label: h.label, def: FUNNEL_DEFAULT_KEYS.includes(h.k),
+  })),
+});
 registerColView("margin-detail", {
-  storageKey: "marginDetailCols",
+  storageKey: "marginDetailCols", pinnable: true,
   headers: marginHeaders,
-  optional: MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: _OLD_OPTIONAL.has(c.k) || c.k === "nm_id" })),
+  optional: marginHeaders.map((h) => ({
+    k: h.k, label: h.label,
+    def: !MARGIN_DETAIL_OPTIONAL.some((c) => c.k === h.k) || _OLD_OPTIONAL.has(h.k) || h.k === "nm_id"
+      || h.k === "stock_qty" || h.k === "stock_total" || h.k === "stock_in_way",
+  })),
 });
 registerColView("margin-ozon-detail", {
-  storageKey: "marginOzonDetailCols",
+  storageKey: "marginOzonDetailCols", pinnable: true,
   headers: ozonMarginHeaders,
-  optional: OZON_MARGIN_DETAIL_OPTIONAL.map((c) => ({ k: c.k, label: c.label, def: c.k === "nm_id" })),
+  optional: ozonMarginHeaders.map((h) => ({
+    k: h.k, label: h.label,
+    def: !OZON_MARGIN_DETAIL_OPTIONAL.some((c) => c.k === h.k) || h.k === "nm_id",
+  })),
 });
 // Необязательные колонки автопилота. Порядок = порядок колонок в таблице.
 // По умолчанию видимы только 18 основных (см. def: true) — остальные скрыты и

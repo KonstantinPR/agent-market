@@ -22,6 +22,7 @@ from app.services import (
     base_price as base_price_service,
     common as common_service,
     excel_io,
+    funnel as funnel_service,
     margin as margin_service,
     pricing as pricing_service,
     refresh as refresh_service,
@@ -49,7 +50,8 @@ def _df_totals(df: pd.DataFrame) -> dict:
         return {}
     skip = {"margin_pct", "delta_pct", "margin_per_one", "net_cost_est",
             "commission_per_one", "logistics_per_one", "logistics_out_per_one",
-            "logistics_in_per_one", "storage_per_one", "income_per_one",
+            "logistics_in_per_one", "storage_per_one", "services_per_one",
+            "income_per_one",
             "revenue_per_one", "margin_gross_per_one", "return_rate",
             "avg_price", "product_rating", "feedback_rating",
             "avg_orders_per_day", "share_order_percent", "time_to_ready_min",
@@ -58,7 +60,10 @@ def _df_totals(df: pd.DataFrame) -> dict:
             "wb_club_avg_price", "wb_club_buyout_percent",
             "wb_club_avg_orders_per_day",
             "buyout_percent", "commission_ratio", "deduction_by_category_percent",
-            "vat_percent"}
+            "vat_percent",
+            "past_avg_price",
+            "dy_views", "dy_adds", "dy_orders", "dy_cancelled", "dy_buyouts",
+            "dy_revenue", "dy_avg_price"}
     out: dict = {}
     for c in df.columns:
         if c in skip:
@@ -67,6 +72,39 @@ def _df_totals(df: pd.DataFrame) -> dict:
         if s.dtype.kind in "iuf":
             out[c] = round(float(s.sum()), 2)
     return out
+
+
+# Удельные/процентные колонки детализации маржинальности: в «Итого» — среднее.
+_MARGIN_AVG_TOTALS = (
+    "margin_per_one", "margin_pct", "commission_per_one",
+    "logistics_per_one", "logistics_out_per_one", "logistics_in_per_one",
+    "storage_per_one", "income_per_one", "revenue_per_one",
+    "margin_gross_per_one", "services_per_one", "return_rate", "delta_pct",
+)
+
+
+def _margin_detail_totals(df: pd.DataFrame) -> dict:
+    """Итоги для «Детализации» маржинальности: суммы + средние по удельным.
+
+    _df_totals даёт суммы денежных/количественных колонок (включая остатки WB);
+    сверху добавляются `{avg}` для удельных и процентных показателей —
+    фронт рендерит их как «≈ среднее по видимым строкам».
+    """
+    totals = _df_totals(df)
+    # Колонки сравнения периодов: суммы (артикулы без данных пред. периода дают None).
+    for c in ("sells_pp", "margin_pp", "delta_ru"):
+        if c not in df.columns:
+            continue
+        s = pd.to_numeric(pd.Series(df[c]), errors="coerce").dropna()
+        if len(s):
+            totals[c] = round(float(s.sum()), 2)
+    for c in _MARGIN_AVG_TOTALS:
+        if c not in df.columns:
+            continue
+        s = pd.to_numeric(pd.Series(df[c]), errors="coerce").dropna()
+        if len(s):
+            totals[c] = {"avg": round(float(s.mean()), 2)}
+    return totals
 
 
 @router.get("/sales")
@@ -111,7 +149,8 @@ def api_sales(
         }
         for r in db.execute(query)
     ]
-    return {"rows": rows, "count": len(rows), "date_from": str(from_), "date_to": str(to_)}
+    _t = _df_totals(pd.DataFrame(rows)) if rows else {}
+    return {"rows": rows, "count": len(rows), "date_from": str(from_), "date_to": str(to_), "totals": _t}
 
 
 @router.get("/margin")
@@ -188,7 +227,71 @@ def api_margin_detail(
             q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
         detail_articles = int(db.execute(q).scalar_one() or 0)
     estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
-    totals = _df_totals(df)
+    totals = _margin_detail_totals(df)
+    return {
+        "rows": df.replace({None: ""}).to_dict("records"),
+        "count": len(df),
+        "detail_articles": detail_articles,
+        "estimated": estimated,
+        "default_net_cost": settings.default_net_cost,
+        "prev_window": prev_window,
+        "totals": totals,
+    }
+
+
+@router.get("/margin/ozon-detail")
+def api_margin_ozon_detail(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    compare: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Прибыльность по Детализации Продаж Ozon напрямую из ozon_detail_rows.
+
+    Аналог margin/detail для WB. income в Ozon уже чистый к перечислению
+    (комиссия и услуги вычтены), поэтому Прибыль = income − себестоимость×продано;
+    commission/services показываются справочными колонками (в минусе).
+
+    compare=1 добавляет показатели предыдущего аналогичного периода
+    (та же длительность окна, сдвинутая назад): sells_pp, margin_pp,
+    delta_ru (руб), delta_pct (%). Требует даты date_from/date_to.
+    """
+    from_, to_ = _parse_window400(date_from, date_to)
+
+    df = margin_service.ozon_margin_detail_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like,
+        default_net_cost=settings.default_net_cost,
+    )
+    prev_window = None
+    if compare and date_from and date_to:
+        try:
+            f = date.fromisoformat(date_from)
+            t = date.fromisoformat(date_to)
+            delta = (t - f).days
+            prev_from = f - timedelta(days=delta + 1)
+            prev_to = f - timedelta(days=1)
+            prev_df = margin_service.ozon_margin_detail_dataframe(
+                db, date_from=prev_from, date_to=prev_to, article_like=article_like,
+                default_net_cost=settings.default_net_cost,
+            )
+            df = margin_service.compare_margin_periods(df, prev_df)
+            prev_window = {"date_from": prev_from.isoformat(), "date_to": prev_to.isoformat()}
+        except (ValueError, TypeError):
+            prev_window = None
+    detail_articles = 0
+    if from_ and to_:
+        q = select(func.count(func.distinct(models.OzonDetailRow.offer_id))).where(
+            models.OzonDetailRow.offer_id != "",
+            models.OzonDetailRow.date.isnot(None),
+            models.OzonDetailRow.date >= from_,
+            models.OzonDetailRow.date <= to_,
+        )
+        if article_like:
+            q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%"))
+        detail_articles = int(db.execute(q).scalar_one() or 0)
+    estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
+    totals = _margin_detail_totals(df)
     return {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
@@ -207,7 +310,13 @@ def api_margin_funnel(
     article_like: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Прибыльность по Воронке Продаж WB (данные funnel_metric, оценка)."""
+    """Прибыльность по Воронке Продаж WB (данные funnel_metric, оценка).
+
+    Срез выбирается через pick_funnel_window, как в /api/funnel: точное окно →
+    самый широкий внутри запрошенного → самый свежий пересекающийся → последний
+    в базе. date_from/date_to — запрошенный период, snapshot_from/snapshot_to —
+    фактически показанный срез, matched — совпали ли они.
+    """
     from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.funnel_dataframe(
@@ -216,8 +325,11 @@ def api_margin_funnel(
     return {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
+        "date_from": str(from_),
+        "date_to": str(to_),
         "snapshot_from": df.attrs.get("date_from", ""),
         "snapshot_to": df.attrs.get("date_to", ""),
+        "matched": bool(df.attrs.get("matched", False)),
     }
 
 
@@ -230,26 +342,37 @@ def api_funnel(
 ):
     """Строки воронки продаж WB из funnel_metric.
 
-    Без дат — окно последней загрузки (max(date_to)); иначе заданное окно.
-    Ищется срез с точным совпадением периода (date_from..date_to); если такого
-    нет, показывается последний срез в базе (сниппет snapshot_from/snapshot_to,
-    чтобы UI сообщил о несовпадении с запрошенным окном).
+    Без дат — окно последней загрузки (max(date_to)); иначе запрошенный период.
+    Срез выбирается через pick_funnel_window (точное окно → самый широкий
+    внутри запрошенного → самый свежий пересекающийся → последний в базе).
+    В ответе date_from/date_to — запрошенный период, snapshot_from/snapshot_to —
+    фактически показанный срез, matched — совпали ли они.
     """
-    snapshot = db.execute(
-        select(func.max(models.FunnelMetric.date_to))
-    ).scalar()
     latest_win = db.execute(
         select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
         .order_by(models.FunnelMetric.date_to.desc(), models.FunnelMetric.date_from.desc())
         .limit(1)
     ).first()
-    if date_from is None or date_to is None:
+    windows = [
+        (r[0], r[1])
+        for r in db.execute(
+            select(models.FunnelMetric.date_from, models.FunnelMetric.date_to).distinct()
+        )
+    ]
+
+    requested = None
+    if date_from is not None and date_to is not None:
+        requested = _parse_window400(date_from, date_to)
+        if latest_win is None:
+            from_, to_ = requested
+        else:
+            chosen = funnel_service.pick_funnel_window(windows, requested[0], requested[1])
+            from_, to_ = chosen if chosen is not None else (latest_win[0], latest_win[1])
+    else:
         if latest_win is None:
             return {"rows": [], "count": 0, "date_from": "", "date_to": "",
-                    "snapshot_from": "", "snapshot_to": ""}
+                    "snapshot_from": "", "snapshot_to": "", "matched": False, "totals": {}}
         from_, to_ = latest_win[0], latest_win[1]
-    else:
-        from_, to_ = _parse_window400(date_from, date_to)
 
     name_subq = (
         select(models.Product.name)
@@ -300,6 +423,11 @@ def api_funnel(
                 models.FunnelMetric.wb_club_avg_price,
                 models.FunnelMetric.wb_club_buyout_percent,
                 models.FunnelMetric.wb_club_avg_orders_per_day,
+                models.FunnelMetric.title,
+                models.FunnelMetric.subject_id,
+                models.FunnelMetric.tags,
+                models.FunnelMetric.past_json,
+                models.FunnelMetric.comparison_json,
             )
             .where(models.FunnelMetric.date_from == sf,
                    models.FunnelMetric.date_to == st)
@@ -320,6 +448,7 @@ def api_funnel(
             "wb_club_buyout_sum", "wb_club_cancel_count", "wb_club_cancel_sum",
             "wb_club_avg_price", "wb_club_buyout_percent",
             "wb_club_avg_orders_per_day",
+            "title", "subject_id", "tags", "past_json", "comparison_json",
         ]
 
         def _row(r):
@@ -344,10 +473,13 @@ def api_funnel(
     rows = snapshot_rows(from_, to_)
     if not rows and latest_win is not None and (from_, to_) != (latest_win[0], latest_win[1]):
         rows = snapshot_rows(latest_win[0], latest_win[1])
+    for r in rows:
+        funnel_service.flatten_past_dy(r)
     return {"rows": rows, "count": len(rows),
-            "date_from": str(from_), "date_to": str(to_),
-            "snapshot_to": str(snapshot or ""),
-            "snapshot_from": str(latest_win[0]) if latest_win else "",
+            "date_from": str(requested[0]) if requested else str(from_),
+            "date_to": str(requested[1]) if requested else str(to_),
+            "snapshot_from": str(from_), "snapshot_to": str(to_),
+            "matched": bool(requested) and (from_, to_) == (requested[0], requested[1]),
             "totals": _df_totals(pd.DataFrame(rows)) if rows else {}}
 
 
@@ -876,7 +1008,74 @@ def _eff_net_cost(article, raw_cost, prefix_map) -> float:
     return float(prefix_map.get(_product_prefix(article), 0) or 0)
 
 
-def _catalog_price_fields(prod, settings, net_cost=None) -> dict:
+def _unit_econ(rows) -> Optional[dict]:
+    """Усреднённая единичная экономика по строкам продаж (как pricing._unit_economics).
+
+    rows — итерируемые записи с полями revenue, commission, logistics, storage,
+    services, qty. Возвращает {"comm_rate", "logistics_unit", "storage_unit",
+    "other_unit"} или None, если данных мало.
+    """
+    revenue = 0.0
+    qty = 0.0
+    commission = 0.0
+    logistics = 0.0
+    storage = 0.0
+    services = 0.0
+    for r in rows:
+        qty += max(float(getattr(r, "qty", 0) or 0), 0)
+        revenue += float(getattr(r, "revenue", 0) or 0)
+        commission += float(getattr(r, "commission", 0) or 0)
+        logistics += float(getattr(r, "logistics", 0) or 0)
+        storage += float(getattr(r, "storage", 0) or 0)
+        services += float(getattr(r, "services", 0) or 0)
+    if revenue <= 0 or qty <= 0:
+        return None
+    comm_rate = min(0.5, abs(commission) / revenue)
+    return {
+        "comm_rate": float(comm_rate),
+        "logistics_unit": abs(logistics) / qty,
+        "storage_unit": abs(storage) / qty,
+        "other_unit": abs(services) / qty,
+    }
+
+
+def _sale_agg_rows(db: Session, days: int):
+    """Агрегированные продажи WB за последние days дней: article -> строка(суммы + qty)."""
+    start = date.today() - timedelta(days=days)
+    q = (
+        select(
+            models.Sale.article,
+            func.sum(models.Sale.quantity - models.Sale.returns_qty).label("qty"),
+            func.sum(models.Sale.revenue).label("revenue"),
+            func.sum(models.Sale.commission).label("commission"),
+            func.sum(models.Sale.logistics).label("logistics"),
+            func.sum(models.Sale.storage).label("storage"),
+            func.sum(models.Sale.services).label("services"),
+        )
+        .where(models.Sale.date >= start)
+        .group_by(models.Sale.article)
+    )
+    return {str(r.article).strip().upper(): r for r in db.execute(q)}
+
+
+def _unit_economics_map(db: Session, days: int = 30) -> tuple:
+    """Карта UPPER(article) -> unit-экономика за окно + глобальное среднее.
+
+    Возвращает (by_article, global_ue): by_article — для артикулов с собственными
+    продажами; global_ue — усреднённое по всем продажам окна (fallback для
+    артикулов без истории или None). Ключи by_article — UPPER(article).
+    """
+    rows = _sale_agg_rows(db, days)
+    by_article: dict = {}
+    for art, r in rows.items():
+        ue = _unit_econ([r])
+        if ue:
+            by_article[art] = ue
+    global_ue = _unit_econ(rows.values())
+    return by_article, global_ue
+
+
+def _catalog_price_fields(prod, settings, net_cost=None, ue=None) -> dict:
     cost = float(prod.net_cost or 0) if net_cost is None else float(net_cost or 0)
     comp = base_price_service.price_components(cost, prod.volume_l, settings)
     return {
@@ -884,6 +1083,11 @@ def _catalog_price_fields(prod, settings, net_cost=None) -> dict:
         "markup": comp["markup"],
         "f_cost": comp["f_cost"],
         "f_vol": comp["f_vol"],
+        "min_price": base_price_service.minimum_price(cost, ue, settings),
+        "ue_comm_rate": round(float(ue.get("comm_rate") or 0), 4) if ue else None,
+        "ue_logistics": round(float(ue.get("logistics_unit") or 0), 2) if ue else None,
+        "ue_storage": round(float(ue.get("storage_unit") or 0), 2) if ue else None,
+        "ue_other": round(float(ue.get("other_unit") or 0), 2) if ue else None,
     }
 
 
@@ -905,6 +1109,11 @@ def api_products(
         select(models.Product).order_by(models.Product.article)
     ).scalars())
     prefix_map = _prefix_avg_cost_map(prods)
+    ue_map, ue_global = _unit_economics_map(db)
+
+    def ue_for(article: str):
+        return ue_map.get((article or "").strip().upper()) or ue_global
+
     if like and like.strip():
         pat = like.strip().lower()
         prods = [p for p in prods if pat in (p.article or "").lower()
@@ -944,7 +1153,7 @@ def api_products(
                     row["own_stock"] = own.get(p.article, 0.0)
                     row["mp_stock"] = wb_size_qty(p.article, s["size"])
                     row["ozon_stock"] = int(ozon_total.get(p.article, 0))
-                row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map)))
+                row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map), ue_for(p.article)))
                 rows.append(row)
     else:
         for p in prods:
@@ -961,7 +1170,7 @@ def api_products(
                 row["own_stock"] = own.get(p.article, 0.0)
                 row["mp_stock"] = mp_total(p.article)
                 row["ozon_stock"] = int(ozon_total.get(p.article, 0))
-            row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map)))
+            row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map), ue_for(p.article)))
             rows.append(row)
     totals = {}
     if with_stock and rows:
@@ -986,28 +1195,43 @@ def products_refresh(overwrite: int = 0, db: Session = Depends(get_db)):
 
 @router.post("/products/preview")
 def products_preview(payload: dict = Body(default={}), db: Session = Depends(get_db)):
-    """Пересчёт рекомендуемой цены с пользовательскими коэффициентами (без записи)."""
+    """Пересчёт рекомендуемой (mode=recommended) или минимальной (mode=min) цены
+    с пользовательскими коэффициентами (без записи)."""
     settings = base_price_service.merge_price_settings(payload.get("price_settings"))
+    mode = str(payload.get("mode") or "recommended").strip().lower()
     like = str(payload.get("like") or "").strip().lower()
-    prefix_map = _prefix_avg_cost_map(list(db.execute(
-        select(models.Product).order_by(models.Product.article)).scalars()))
+    ue_map, ue_global = _unit_economics_map(db)
+    prods = list(db.execute(
+        select(models.Product).order_by(models.Product.article)).scalars())
+    prefix_map = _prefix_avg_cost_map(prods)
+
+    def ue_for(article: str):
+        return ue_map.get((article or "").strip().upper()) or ue_global
+
     rows = []
-    for p in db.execute(select(models.Product).order_by(models.Product.article)).scalars():
+    for p in prods:
         if like and like not in (p.article or "").lower() and like not in (p.name or "").lower():
             continue
         row = {"article": p.article, "name": p.name,
                "net_cost": float(p.net_cost or 0), "volume_l": float(p.volume_l or 0)}
-        row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map)))
+        fields = _catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map), ue_for(p.article))
+        price = float(fields["min_price"] if mode == "min" else fields["recommended_price"])
+        row.update(fields)
+        row["price"] = price
+        row["mode"] = mode
         rows.append(row)
     return {"rows": rows, "count": len(rows), "price_settings": settings}
 
 
 @router.post("/products/prices/apply")
 def products_prices_apply(payload: dict = Body(default={}), db: Session = Depends(get_db)):
-    """Применяет рекомендуемые цены **только к видимым в таблице товарам** и пушит
-    на Wildberries через WB API (v2/upload/task). Артикулы без nm_id (не заведены
-    на WB) пропускаются молча [pushed]."""
+    """Применяет рекомендуемые (mode=recommended) или минимальные (mode=min) цены
+    **только к видимым в таблице товарам** и пушит на Wildberries через WB API
+    (v2/upload/task). Для минимальных цен учитывается порог WB (public API
+    priceLimits.minPrice): итог = max(расчёт, мин. цена WB). Артикулы без nm_id
+    (не заведены на WB) пропускаются молча [pushed]."""
     settings = base_price_service.merge_price_settings(payload.get("price_settings"))
+    mode = str(payload.get("mode") or "recommended").strip().lower()
     like = str(payload.get("like") or "").strip().lower()
     sizes = int(payload.get("sizes") or 0)
     stocks = int(payload.get("stocks") or 0)
@@ -1016,18 +1240,27 @@ def products_prices_apply(payload: dict = Body(default={}), db: Session = Depend
         select(models.Product).order_by(models.Product.article)
     ).scalars())
     prefix_map = _prefix_avg_cost_map(prods)
+    ue_map, ue_global = _unit_economics_map(db)
+
+    def ue_for(article: str):
+        return ue_map.get((article or "").strip().upper()) or ue_global
 
     rows = []
-    for p in db.execute(select(models.Product).order_by(models.Product.article)).scalars():
+    for p in prods:
         if like and like not in (p.article or "").lower() and like not in (p.name or "").lower():
             continue
+        cost = _eff_net_cost(p.article, p.net_cost, prefix_map)
+        if mode == "min":
+            price = float(base_price_service.minimum_price(cost, ue_for(p.article), settings))
+        else:
+            price = float(base_price_service.recommended_price(cost, p.volume_l, settings))
         rows.append({
             "article": p.article,
             "name": p.name,
             "net_cost": float(p.net_cost or 0),
             "volume_l": float(p.volume_l or 0),
-            "recommended_price": float(base_price_service.recommended_price(
-                _eff_net_cost(p.article, p.net_cost, prefix_map), p.volume_l, settings)),
+            "price": price,
+            "mode": mode,
         })
 
     if not rows:
@@ -1043,19 +1276,33 @@ def products_prices_apply(payload: dict = Body(default={}), db: Session = Depend
             continue
         items.append({
             "nmID": int(nm),
-            "price": float(r["recommended_price"] or 0),
-            "discount": 0,
+            "price": float(r["price"] or 0),
         })
     if not items:
         return {"ok": True, "pushed": 0, "skipped": len(skipped),
                 "note": "Ни один из видимых товаров не заведён в WB (нет nm_id)."}
+    prov = provider_factory.get_wb_provider()
+    if mode == "min":
+        wb_min_prices = {}
+        try:
+            wb_min_prices = prov.get_min_prices([it["nmID"] for it in items]) or {}
+        except Exception:  # noqa: BLE001 — тихо, клампинг по WB пропускается
+            wb_min_prices = {}
+        for it in items:
+            wb_min = float(wb_min_prices.get(str(it["nmID"]), 0) or 0)
+            it["price"] = max(float(it["price"] or 0), wb_min)
+    for it in items:
+        it["discount"] = 0
     try:
-        prov = provider_factory.get_wb_provider()
         res = prov.update_prices(items)
     except WbApiError as e:
         return {"ok": False, "pushed": 0, "skipped": len(skipped), "error": str(e)}
 
     notes = [f"Отправлено товаров: {len(items)}"]
+    if mode == "min":
+        notes.append(" по минимальной цене (break-even)")
+    else:
+        notes.append(" по рекомендуемой цене")
     if sizes or stocks:
         notes.append(" с учётом фильтров «с размерами/остатки»")
     if skipped:
@@ -1208,7 +1455,6 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
     prices_df = prov.get_prices()
     rec = pricing_service.recommendations(
         db, settings=payload, prices_df=prices_df,
-        min_prices=pricing_service.fetch_min_prices(prov, prices_df),
     )
     df = pd.DataFrame(rec["rows"])
     if not df.empty:
@@ -1216,7 +1462,8 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         df["replenishable"] = df["replenishable"].map({True: "да", False: "нет"})
     keep = [
         "article", "name", "price", "current_vis", "current_discount", "target_vis",
-        "target_discount", "action", "status", "reason", "doc", "velocity", "trend",
+        "target_discount", "delta_discount", "net_cost", "action", "status", "reason",
+        "doc", "velocity", "trend",
         "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
         "max_discount_item", "margin_pct_at_target", "replenishable",
         "product_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
@@ -1229,6 +1476,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "article": "Артикул", "name": "Наименование", "price": "Цена базовая, руб",
         "current_vis": "Цена сейчас, руб", "current_discount": "Скидка сейчас, %",
         "target_vis": "Целевая цена, руб", "target_discount": "Целевая скидка, %",
+        "delta_discount": "Дельта скидки, п.п.", "net_cost": "Себестоимость, руб",
         "action": "Решение", "status": "Статус", "reason": "Причина",
         "doc": "DOC, дн", "velocity": "Продажи, шт/дн", "trend": "Тренд",
         "conv_pct": "Конверсия, %", "backlog": "В корзине", "stock": "Остаток",
@@ -1770,8 +2018,10 @@ def export_margin_detail(
     if missing_only:
         df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
     df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "name": "Наименование", "sells": "Продано, шт",
+        "article": "Артикул", "nm_id": "Артикул WB", "name": "Наименование", "sells": "Продано, шт",
         "returns_qty": "Возвращено, шт",
+        "stock_qty": "Остаток, шт", "stock_total": "Остаток всего, шт",
+        "stock_in_way": "В пути, шт",
         "revenue": "Выручка, руб", "commission": "Комиссия, руб",
         "logistics": "Логистика, руб", "storage": "Хранение, руб",
         "services": "Услуги, руб", "income": "К перечислению, руб",
@@ -1804,6 +2054,67 @@ def export_margin_detail(
     )
 
 
+@router.get("/export/margin/ozon-detail")
+def export_margin_ozon_detail(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    article_like: Optional[str] = None,
+    missing_only: int = 0,
+    compare: int = 0,
+    cols: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from_, to_ = _parse_window400(date_from, date_to)
+
+    df = margin_service.ozon_margin_detail_dataframe(
+        db, date_from=from_, date_to=to_, article_like=article_like,
+        default_net_cost=settings.default_net_cost,
+    )
+    if compare and date_from and date_to:
+        try:
+            f = date.fromisoformat(date_from)
+            t = date.fromisoformat(date_to)
+            delta = (t - f).days
+            prev_df = margin_service.ozon_margin_detail_dataframe(
+                db, date_from=f - timedelta(days=delta), date_to=f - timedelta(days=1),
+                article_like=article_like, default_net_cost=settings.default_net_cost,
+            )
+            df = margin_service.compare_margin_periods(df, prev_df)
+        except (ValueError, TypeError):
+            pass
+    if missing_only:
+        df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
+    df, ru = excel_io.project_export(df, {
+        "article": "Артикул", "nm_id": "Артикул WB", "name": "Наименование",
+        "sells": "Продано, шт", "returns_qty": "Возвращено, шт",
+        "postings": "Постинги",
+        "revenue": "Выручка, руб", "commission": "Комиссия, руб",
+        "services": "Услуги, руб", "income": "К перечислению, руб",
+        "storage": "Хранение, руб",
+        "net_cost": "Себестоимость, руб", "margin": "Прибыль, руб",
+        "margin_per_one": "Прибыль на ед., руб", "margin_pct": "Прибыль, %",
+        "net_cost_est": "Себестоимость оценка",
+        "amount": "Сумма продажи, руб",
+        "sells_pp": "Пред. период: Продано, шт", "margin_pp": "Пред. период: Прибыль, руб",
+        "delta_ru": "Δ прибыли, руб", "delta_pct": "Δ прибыли, %",
+        "commission_per_one": "Комиссия на ед., руб",
+        "services_per_one": "Услуги на ед., руб",
+        "storage_per_one": "Хранение на ед., руб",
+        "income_per_one": "К перечисл. на ед., руб",
+        "revenue_per_one": "Средняя цена, руб",
+        "return_rate": "Доля возвратов, %",
+    }, cols)
+    df = df.rename(columns=ru)
+    buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
+    fname = (("detail_missing_cost" if missing_only else "margin_ozon_detail")) + f"_{from_}_{to_}.xlsx"
+    if compare:
+        fname = fname.replace(".xlsx", "_compare.xlsx")
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @router.get("/export/margin/funnel")
 def export_margin_funnel(
     date_from: Optional[str] = None,
@@ -1820,11 +2131,36 @@ def export_margin_funnel(
     df, ru = excel_io.project_export(df, {
         "article": "Артикул", "name": "Наименование", "views": "Просмотры",
         "opens": "Открытия карточки", "adds": "В корзину", "orders": "Заказы",
-        "cancelled": "Отмены", "avg_price": "Ср. цена, руб",
+        "cancelled": "Отмены", "buyouts": "Выкупы", "avg_price": "Ср. цена, руб",
         "revenue": "Выручка (оценка), руб",
         "cart_pct": "В корзину, %", "order_pct": "Заказы, %",
         "net_cost": "Себестоимость, руб", "margin": "Маржа (оценка), руб",
-        "margin_pct": "Маржа, %",
+        "margin_pct": "Маржа, %", "storage_est": "Хранение (оц.), руб",
+        "buyout_sum": "Выкуп, руб", "subject_name": "Предмет",
+        "brand_name": "Бренд", "product_rating": "Рейтинг товара",
+        "feedback_rating": "Рейтинг отзывов", "stock_wb": "Остаток WB, шт",
+        "stock_mp": "Остаток МП, шт", "stock_balance_sum": "Остаток (баланс)",
+        "cancel_sum": "Отмены, руб", "avg_orders_per_day": "Заказов в день",
+        "share_order_percent": "Доля заказов, %", "add_to_wishlist": "В избранное",
+        "time_to_ready_min": "До готовности, мин", "localization_percent": "Локализация, %",
+        "conv_to_cart_percent": "В корзину (воронка), %",
+        "conv_cart_to_order_percent": "Корзина→Заказ, %",
+        "conv_buyout_percent": "Выкуп, %",
+        "wb_club_order_count": "WB Клуб: заказы", "wb_club_order_sum": "WB Клуб: заказы, руб",
+        "wb_club_buyout_count": "WB Клуб: выкупы", "wb_club_buyout_sum": "WB Клуб: выкупы, руб",
+        "wb_club_cancel_count": "WB Клуб: отмены", "wb_club_cancel_sum": "WB Клуб: отмены, руб",
+        "wb_club_avg_price": "WB Клуб: ср. цена", "wb_club_buyout_percent": "WB Клуб: выкуп, %",
+        "wb_club_avg_orders_per_day": "WB Клуб: заказов в день",
+        "title": "Название", "subject_id": "ID предмета", "tags": "Теги",
+        "past_views": "Пред. период: просмотры", "past_adds": "Пред. период: в корзину",
+        "past_orders": "Пред. период: заказы", "past_cancelled": "Пред. период: отмены",
+        "past_buyouts": "Пред. период: выкупы", "past_revenue": "Пред. период: выручка",
+        "past_buyout_sum": "Пред. период: выкуп, руб", "past_cancel_sum": "Пред. период: отмены, руб",
+        "past_avg_price": "Пред. период: ср. цена",
+        "dy_views": "Динамика просмотров, %", "dy_adds": "Динамика корзины, %",
+        "dy_orders": "Динамика заказов, %", "dy_cancelled": "Динамика отмен, %",
+        "dy_buyouts": "Динамика выкупов, %", "dy_revenue": "Динамика выручки, %",
+        "dy_avg_price": "Динамика ср. цены, %",
     }, cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Воронка")
@@ -2441,12 +2777,14 @@ def ozon_realization(date_from: Optional[str] = None, date_to: Optional[str] = N
 
 @router.post("/ozon/cashflow")
 def ozon_cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None,
-                  write_db: int = 1, db: Session = Depends(get_db)):
+                  excel: int = 1, write_db: int = 1, db: Session = Depends(get_db)):
     from_, to_ = _parse_window400(date_from, date_to)
     try:
         res = refresh_service.pull_oz_cashflow(db, from_, to_, write_db=bool(write_db))
     except Exception as e:  # noqa: BLE001
         refresh_service.oz_error(e)
+    if not int(excel):
+        return _pull_json(res)
     return _xlsx_response(res["df"], f"ozon_cashflow_{from_}_{to_}.xlsx", res["count"])
 
 
@@ -2466,6 +2804,7 @@ OZON_DETAIL_SUMMARY_RU_COLUMNS = {
     "commission": "Комиссия, руб", "services": "Услуги, руб",
     "income": "К перечислению, руб", "ops_count": "Операций",
     "buyout_sum": "Сумма выкупов, руб", "buyout_percent": "Выкуп, %",
+    "storage": "Хранение, руб",
 }
 
 OZON_BUYOUT_RU_COLUMNS = {
@@ -2504,6 +2843,28 @@ def ozon_buyout(date_from: Optional[str] = None, date_to: Optional[str] = None,
     df = res["df"]
     export = df.rename(columns=OZON_BUYOUT_RU_COLUMNS) if not df.empty else df
     return _xlsx_response(export, f"ozon_buyout_{from_}_{to_}.xlsx", res["count"])
+
+
+OZON_PLACEMENT_RU_COLUMNS = {
+    "date": "Дата", "sku": "SKU", "offer_id": "Артикул",
+    "warehouse": "Склад", "paid_quantity": "Платных экз.",
+    "paid_volume": "Платный объём, мл", "storage": "Начислено, руб",
+}
+
+
+@router.post("/ozon/placement")
+def ozon_placement(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                   write_db: int = 1, excel: int = 1, db: Session = Depends(get_db)):
+    from_, to_ = _parse_window400(date_from, date_to)
+    try:
+        res = refresh_service.pull_oz_placements(db, from_, to_, write_db=bool(write_db))
+    except Exception as e:  # noqa: BLE001
+        refresh_service.oz_error(e)
+    if not int(excel):
+        return _pull_json(res)
+    df = res["df"]
+    export = df.rename(columns=OZON_PLACEMENT_RU_COLUMNS) if not df.empty else df
+    return _xlsx_response(export, f"ozon_placement_{from_}_{to_}.xlsx", res["count"])
 
 
 @router.get("/ozon/detail-rows")

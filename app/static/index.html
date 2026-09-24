@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=22">
+<link rel="stylesheet" href="/static/style.css?v=31">
 </head>
 <body>
 <nav class="navbar">
@@ -135,6 +135,7 @@
         <button type="button" class="btn" id="uploadMarginFunnel">Загрузить на диск</button>
       </span>
     </div>
+    <p class="notice" id="marginFunnelPeriodWarn" style="display:none"></p>
     <div class="table-wrap" id="marginFunnelTable"></div>
   </section>
 
@@ -419,7 +420,7 @@
       <input id="wbFunnelLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="wbFunnelExpanded"> Расширенный вид</label>
       <span class="msg" id="wbMsg-funnel-table"></span>
-      <span class="tip hidden" id="wbFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Срез воронки из базы за выбранный период. «Расширенный вид» включает все поля отчёта WB: предмет, бренд, рейтинги, остатки, конверсии, WB Клуб, время доставки.<span class="tip-note hidden" id="wbFunnelTipNote"></span></span></span>
+      <span class="tip hidden" id="wbFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Срез воронки из базы за выбранный период. «Расширенный вид» включает все поля отчёта WB: предмет, бренд, название (API), теги, рейтинги, остатки, конверсии, WB Клуб, время доставки, а также предыдущий период (…пред. период) и динамику к нему (Динамика …, %).<span class="tip-note hidden" id="wbFunnelTipNote"></span></span></span>
       <span class="toolbar-right">
         <span id="wbFunnelTablePager"></span>
         <div class="view-menu" id="wbFunnelViewMenu">
@@ -430,6 +431,7 @@
         <button id="btnDiskWbFunnel" class="btn">Загрузить на диск</button>
       </span>
     </div>
+    <p class="notice" id="wbFunnelPeriodWarn" style="display:none"></p>
     <p class="notice" id="wbFunnelBuyoutNote" style="display:none">Выкупы: WB не отдаёт эти данные с текущим ключом (нужен доступ «Статистика», метод v1/main). Доступны только Просмотры/Корзина/Заказы/Отмены. При наличии доступа колонки заполнятся после нового скачивания воронки.</p>
     <div class="table-wrap" id="wbFunnelTable"></div>
   </section>
@@ -717,7 +719,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=22"></script></script></script>
+<script src="/static/app.js?v=33"></script>
 </body>
 </html>
 

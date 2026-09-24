@@ -125,6 +125,9 @@ FUNNEL_COL_MAP = {
 FUNNEL_EXTRA_COL_MAP = {
     "subject_name": ["product.subjectName", "subjectName"],
     "brand_name": ["product.brandName", "brandName"],
+    "title": ["product.title", "title"],
+    "subject_id": ["product.subjectId", "subjectId"],
+    "tags": ["product.tags", "tags"],
     "product_rating": ["product.productRating", "productRating"],
     "feedback_rating": ["product.feedbackRating", "feedbackRating"],
     "stock_wb": ["product.stocks.wb", "stocks.wb"],
@@ -163,6 +166,57 @@ def _col_str(df: pd.DataFrame, names) -> pd.Series:
     if col is None:
         return pd.Series("", index=df.index)
     return col.astype(str).str.strip().replace("nan", "")
+
+
+def _col_json(df: pd.DataFrame, names) -> pd.Series:
+    """Колонка-список (напр. tags) -> текст ", "-разделитель (иначе "").
+
+    Плоский список строк — люди-читаемые теги; иначе — JSON-дамп значения.
+    """
+    col = _pick_col(df, names)
+    if col is None:
+        return pd.Series("", index=df.index)
+
+    def _d(v):
+        if isinstance(v, list):
+            if not v:
+                return ""
+            if all(isinstance(x, str) and x for x in v):
+                return ", ".join(v)
+            try:
+                return json.dumps(v, ensure_ascii=False, default=str)
+            except Exception:  # noqa: BLE001
+                return ""
+        if v is None or (isinstance(v, float) and v != v):
+            return ""
+        s = str(v).strip()
+        return "" if s in ("", "nan", "None") else s
+
+    return col.map(_d)
+
+
+def _stat_block_json(df: pd.DataFrame, block: str) -> pd.Series:
+    """JSON-строка блока statistic.<block> (selected/past/comparison).
+
+    Для реального ответа читается неуплощённый словарь из df["_raw"];
+    для тестов/моков — сериализуем плоскую строку (те же значения).
+    """
+    rows = list(df["_raw"]) if "_raw" in df.columns else df.to_dict("records")
+    vals = []
+    for r in rows:
+        if not isinstance(r, dict):
+            vals.append("")
+            continue
+        st = r.get("statistic") if isinstance(r, dict) else None
+        bl = st.get(block) if isinstance(st, dict) else None
+        if not isinstance(bl, dict) or not bl:
+            vals.append("")
+            continue
+        try:
+            vals.append(json.dumps(bl, ensure_ascii=False, default=str))
+        except Exception:  # noqa: BLE001
+            vals.append("")
+    return pd.Series(vals, index=df.index)
 
 
 def _funnel_to_db(df: pd.DataFrame, from_, to_) -> pd.DataFrame:
@@ -210,8 +264,11 @@ def _funnel_to_db(df: pd.DataFrame, from_, to_) -> pd.DataFrame:
     t_hours = _col_num(df, FUNNEL_TIME_TO_READY["hours"])
     t_mins = _col_num(df, FUNNEL_TIME_TO_READY["mins"])
     out["time_to_ready_min"] = (t_days * 1440 + t_hours * 60 + t_mins).fillna(0)
-    for key in ("subject_name", "brand_name"):
+    for key in ("subject_name", "brand_name", "title", "subject_id"):
         out[key] = _col_str(df, FUNNEL_EXTRA_COL_MAP[key])
+    out["tags"] = _col_json(df, FUNNEL_EXTRA_COL_MAP["tags"])
+    out["past_json"] = _stat_block_json(df, "past")
+    out["comparison_json"] = _stat_block_json(df, "comparison")
     out["raw_json"] = _raw_json(df)
     return pd.DataFrame(out)
 
@@ -501,11 +558,15 @@ def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = 
             "Артикул": "article", "Offer ID": "article",
             "Название товара": "name", "Name": "name",
             "Бренд": "brand", "Category": "brand",
-            "Штрихкод (Серийный номер / EAN)": "barcode", "Barcode": "barcode",
-            "SKU": "barcode",
+            "Штрихкод (Серийный номер / EAN)": "barcode", "Штрихкод": "barcode",
+            "Barcode": "barcode",
         })
+        if "barcode" not in pdf.columns and "SKU" in pdf.columns:
+            pdf = pdf.rename(columns={"SKU": "barcode"})
         n = sync_service.upsert_products(db, pdf)
         mdf = sync_service.normalize_oz_cards(df)
+        if mdf is not None and write_db:
+            mdf = sync_service.enrich_oz_cards_with_wb_nm(db, mdf)
         n_sk = sync_service.upsert_marketplace_cards(db, mdf, "ozon") if mdf is not None else 0
     total_db = n + n_sk
     sync_service.record_api_pull(db, "ozon", "cards", len(df), total_db, "")
@@ -533,7 +594,7 @@ def _oz_marketplace_cards(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         "brand": series("Бренд", "Category").fillna("").astype(str).str.strip(),
         "subject": series("Category", "Бренд").fillna("").astype(str).str.strip(),
         "size": "",
-        "barcode": series("SKU", "Штрихкод", "Barcode").map(sync_service._first_barcode),
+        "barcode": series("Штрихкод (Серийный номер / EAN)", "Штрихкод", "Barcode", "SKU").map(sync_service._first_barcode),
         "volume_l": 0.0,
         "composition": "",
         "name": series("Name", "Название товара").fillna("").astype(str).str.strip(),
@@ -569,6 +630,7 @@ def pull_catalog(db, overwrite: bool = False, write_db: bool = True,
         if oz_rows:
             mdf = _oz_marketplace_cards(oz_df)
             if mdf is not None:
+                mdf = sync_service.enrich_oz_cards_with_wb_nm(db, mdf)
                 sync_service.upsert_marketplace_cards(db, mdf, "ozon")
         wc = sync_service.normalize_catalog_card(wb_df, "wb")
         oc = sync_service.normalize_catalog_card(oz_df, "ozon")
@@ -579,6 +641,39 @@ def pull_catalog(db, overwrite: bool = False, write_db: bool = True,
                                      int(report["rows"]), "сегодня")
     return {"rows": wb_rows + oz_rows, "wb_rows": wb_rows, "oz_rows": oz_rows,
             "db_rows": int(report["rows"]) if report else 0, "report": report}
+
+
+def _enrich_oz_stock_barcode(db, sdf: pd.DataFrame):
+    """Проставляет правильный штрихкод и размер остаткам Ozon из карточек.
+
+    API остатков Ozon не возвращает штрихкод/размер, поэтому берём их из
+    marketplace_cards (ozon) по совпадению vendor_code (артикул). Если у артикула
+    несколько карточек — берём первую попавшуюся (все SKU-размеры обычно имеют
+    одинаковый EAN артикула).
+    """
+    if sdf is None or sdf.empty:
+        return
+    mp_id = sync_service.marketplace_id(db, "ozon")
+    rows = db.execute(
+        select(models.MarketplaceCard.vendor_code, models.MarketplaceCard.size,
+               models.MarketplaceCard.barcode)
+        .where(models.MarketplaceCard.marketplace_id == mp_id,
+               models.MarketplaceCard.barcode != "")
+    ).all()
+    info = {}
+    for vc, size, bc in rows:
+        if not vc:
+            continue
+        cur = info.setdefault(str(vc).strip().lower(), (size or "", bc or ""))
+    if not info:
+        return
+    keys = sdf["article"].astype(str).str.strip().str.lower()
+    sizes = keys.map(lambda k: info.get(k, (None, None))[0])
+    barcodes = keys.map(lambda k: info.get(k, (None, None))[1])
+    sdf["size"] = sizes.fillna("")
+    sdf["barcode"] = barcodes.fillna("")
+    logger.info("[ozon stock] штрихкод/размер проставлены %d строкам из %d",
+                int((keys.isin(info.keys())).sum()), len(sdf))
 
 
 def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
@@ -603,6 +698,7 @@ def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = 
             "quantity_full": free + reserved + promised,
             "in_way": promised,
         })
+        _enrich_oz_stock_barcode(db, sdf)
         n = sync_service.upsert_stocks(db, sdf, "ozon")
     sync_service.record_api_pull(db, "ozon", "stock", len(df), n, "сегодня")
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": "сегодня"}
@@ -671,9 +767,14 @@ def pull_oz_cashflow(db, from_, to_, provider: Optional[OzonProvider] = None,
                      write_db: bool = True) -> dict:
     prov = provider or _oz_provider()
     df = prov.get_cash_flow(from_, to_)
+    n = 0
+    if write_db and not df.empty:
+        rdf = sync_service.normalize_ozon_cashflow(df)
+        if rdf is not None and not rdf.empty:
+            n = sync_service.upsert_ozon_cashflows(db, rdf)
     window = f"{from_.isoformat()} — {to_.isoformat()}"
-    sync_service.record_api_pull(db, "ozon", "cashflow", len(df), 0, window)
-    return {"df": df, "count": len(df), "db_rows": 0, "rows": len(df), "window": window}
+    sync_service.record_api_pull(db, "ozon", "cashflow", len(df), n, window)
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
 
 
 def pull_oz_detail(db, from_, to_, provider: Optional[OzonProvider] = None,
@@ -706,6 +807,21 @@ def pull_oz_buyout(db, from_, to_, provider: Optional[OzonProvider] = None,
             "rows": len(df), "window": window}
 
 
+def pull_oz_placements(db, from_, to_, provider: Optional[OzonProvider] = None,
+                       write_db: bool = True) -> dict:
+    prov = provider or _oz_provider()
+    df = prov.get_placement(from_, to_)
+    n = 0
+    if write_db and not df.empty:
+        rdf = sync_service.normalize_ozon_placement(df)
+        if rdf is not None and not rdf.empty:
+            n = sync_service.upsert_ozon_placements(db, rdf)
+    window = f"{from_.isoformat()} — {to_.isoformat()}"
+    sync_service.record_api_pull(db, "ozon", "placement", len(df), n, window)
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": window}
+
+
 # ------------------------------------------------------------------ планы обновления
 _KIND_LABELS = {
     "wb": [
@@ -717,6 +833,7 @@ _KIND_LABELS = {
         ("cards", "Карточки товара"), ("stock", "Остатки"),
         ("prices", "Цены"), ("realization", "Реализация"),
         ("cashflow", "Движение средств"),
+        ("placement", "Размещение (хранение)"),
     ],
 }
 
@@ -740,6 +857,8 @@ def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None):
                 fn = lambda db: pull_oz_realizations(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
             elif kind == "cashflow":
                 fn = lambda db: pull_oz_cashflow(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
+            elif kind == "placement":
+                fn = lambda db: pull_oz_placements(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
             else:
                 fn = (lambda k: lambda db: _BULK_PULLS["ozon"][k](db, provider=_BULK_PROV["ozon"]))(kind)
         steps.append((kind, label, fn))

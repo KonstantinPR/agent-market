@@ -51,7 +51,7 @@ def test_refresh_ozon_success(api_client):
     body = r.json()
     st = _wait_done(api_client, body["job_id"])
     assert st["status"] == "done"
-    assert st["ok"] == 5
+    assert st["ok"] == 6
     assert st["failed"] == 0
     sales = api_client.get(
         "/api/sales", params={"marketplace": "ozon",

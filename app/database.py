@@ -68,6 +68,11 @@ def ensure_schema(seed: bool = True) -> None:
             "wb_club_avg_price NUMERIC(14, 2) NOT NULL DEFAULT 0",
             "wb_club_buyout_percent NUMERIC(8, 3) NOT NULL DEFAULT 0",
             "wb_club_avg_orders_per_day NUMERIC(10, 3) NOT NULL DEFAULT 0",
+            "title VARCHAR(250) NOT NULL DEFAULT ''",
+            "subject_id VARCHAR(40) NOT NULL DEFAULT ''",
+            "tags TEXT NOT NULL DEFAULT ''",
+            "past_json TEXT",
+            "comparison_json TEXT",
             "raw_json TEXT",
         ]:
             conn.execute(text(

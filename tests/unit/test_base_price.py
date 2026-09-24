@@ -12,6 +12,7 @@ from app.services.base_price import (
     _interp_factor,
     _round_nice,
     merge_price_settings,
+    minimum_price,
     recommended_price,
 )
 
@@ -126,3 +127,44 @@ def test_merge_round_nice_bool_variants():
 def test_merge_price_settings_requires_two_anchors():
     merged = merge_price_settings({"cost_anchors": [[100, 10]]})
     assert merged["cost_anchors"] == PRICE_DEFAULTS["cost_anchors"]
+
+
+def test_merge_min_margin_pct_float():
+    assert merge_price_settings({})["min_margin_pct"] == pytest.approx(10.0)
+    assert merge_price_settings({"min_margin_pct": 0})["min_margin_pct"] == pytest.approx(0.0)
+    assert merge_price_settings({"min_margin_pct": 15.5})["min_margin_pct"] == pytest.approx(15.5)
+    # отрицательные → кламп к 0 (как frontend min=0), мусор → дефолт
+    assert merge_price_settings({"min_margin_pct": -5})["min_margin_pct"] == pytest.approx(0.0)
+    assert merge_price_settings({"min_margin_pct": "abc"})["min_margin_pct"] == pytest.approx(10.0)
+
+
+def test_minimum_price_no_ue_returns_cost():
+    assert minimum_price(120.0) == pytest.approx(120.0)
+    assert minimum_price(120.0, None, {"min_margin_pct": 0}) == pytest.approx(120.0)
+
+
+def test_minimum_price_break_even_formula():
+    # себестоимость 100, логистика 20, хранение 5, услуги 5, комиссия 15%, маржа 10%
+    ue = {"comm_rate": 0.15, "logistics_unit": 20.0, "storage_unit": 5.0, "other_unit": 5.0}
+    expect = (100 + 20 + 5 + 5) / (1 - 0.15 - 0.10)
+    assert minimum_price(100.0, ue) == pytest.approx(expect, abs=0.005)
+
+
+def test_minimum_price_zero_margin_is_break_even():
+    ue = {"comm_rate": 0.2, "logistics_unit": 30.0, "storage_unit": 0.0, "other_unit": 0.0}
+    # маржа 0 → цена = (себестоимость + расходы) / (1 − комиссия)
+    expect = (100 + 30) / (1 - 0.2)
+    assert minimum_price(100.0, ue, {"min_margin_pct": 0}) == pytest.approx(expect, abs=0.005)
+
+
+def test_minimum_price_never_below_cost():
+    ue = {"comm_rate": 0.0, "logistics_unit": 0.0, "storage_unit": 0.0, "other_unit": 0.0}
+    for cost in (10, 100, 500, 2000):
+        assert minimum_price(cost, ue, {"min_margin_pct": 0}) >= cost - 1e-9
+
+
+def test_minimum_price_large_margin_dampens():
+    # суммарные отчисления 90%+ → знаменатель упирается в 0.05, цена не взрывается
+    ue = {"comm_rate": 0.8, "logistics_unit": 1.0, "storage_unit": 1.0, "other_unit": 1.0}
+    assert minimum_price(10.0, ue, {"min_margin_pct": 50}) < 1e6
+    assert minimum_price(10.0, ue, {"min_margin_pct": 50}) >= 10.0

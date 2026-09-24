@@ -20,10 +20,10 @@ def test_plan_wb_detail_appended_on_flag():
 
 def test_plan_ozon_has_detail_and_buyout_on_flag():
     kinds = [s[0] for s in r._plan_steps("ozon", include_detail=False)]
-    assert kinds == ["cards", "stock", "prices", "realization", "cashflow"]
+    assert kinds == ["cards", "stock", "prices", "realization", "cashflow", "placement"]
     kinds2 = [s[0] for s in r._plan_steps("ozon", include_detail=True)]
     assert kinds2 == ["cards", "stock", "prices", "realization", "cashflow",
-                      "detail", "buyout"]
+                      "placement", "detail", "buyout"]
 
 
 def test_plan_respects_date_window():
