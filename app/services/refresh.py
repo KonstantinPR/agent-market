@@ -520,6 +520,32 @@ def pull_wb_storage(db, days: int = 7, provider: Optional[WbProvider] = None,
             "rows": len(df), "window": f"{days} дней"}
 
 
+def pull_wb_promotions(db, provider: Optional[WbProvider] = None,
+                       write_db: bool = True) -> dict:
+    """Акции WB (Календарь акций): окно [−30 дн, +90 дн], доступные для участия.
+
+    Строки и details пишутся в wb_promotions; лог в api_pulls (kind=promotions).
+    """
+    prov = provider or _wb_provider()
+    from_ = date.today() - timedelta(days=30)
+    to_ = date.today() + timedelta(days=90)
+    df = prov.get_promotions(from_, to_, all_promo=False)
+    n = 0
+    if write_db and not df.empty:
+        ids = [
+            int(i) for i in pd.to_numeric(
+                df["id"] if "id" in df.columns else [], errors="coerce"
+            ).dropna().tolist()
+            if int(i) > 0
+        ]
+        det = prov.get_promotion_details(ids) if ids else pd.DataFrame()
+        n = sync_service.upsert_promotions(db, df, det)
+    window = f"{from_.isoformat()} — {to_.isoformat()}"
+    sync_service.record_api_pull(db, "wb", "promotions", len(df), n, window)
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": window}
+
+
 def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None,
                   write_db: bool = True) -> dict:
     prov = provider or _wb_provider()
@@ -822,12 +848,48 @@ def pull_oz_placements(db, from_, to_, provider: Optional[OzonProvider] = None,
             "rows": len(df), "window": window}
 
 
+def pull_oz_accrual(db, from_, to_, provider: Optional[OzonProvider] = None,
+                    write_db: bool = True) -> dict:
+    """Начисления по товарам (аккруалы) за окно: /v1/finance/accrual/by-day.
+
+    offer_id дорезолвивается в два прохода: сначала по детализации (SKU продаж),
+    затем для оставшихся SKU — картой SKU → Offer ID из /v3/product/info/list
+    (нужна для начислений по товарам без продаж в загруженной детализации).
+    """
+    prov = provider or _oz_provider()
+    df = prov.get_accrual(from_, to_)
+    n = 0
+    if write_db and not df.empty:
+        rdf = sync_service.normalize_ozon_accrual(df)
+        if rdf is not None and not rdf.empty:
+            missing = rdf[(rdf["offer_id"] == "") & (rdf["sku"] != "")]
+            if not missing.empty:
+                try:
+                    smap = prov.get_sku_map()
+                except Exception:  # noqa: BLE001 — карта справочная
+                    smap = None
+                if smap is not None and not smap.empty:
+                    pairs = {str(r["sku"]).strip(): str(r["offer_id"]).strip()
+                             for r in smap.to_dict("records")
+                             if str(r.get("offer_id") or "").strip()}
+                    if pairs:
+                        keys = rdf["sku"].astype(str).str.strip()
+                        filled = rdf["offer_id"].replace("", pd.NA).fillna(keys.map(pairs)).fillna("")
+                        rdf["offer_id"] = filled
+            n = sync_service.upsert_ozon_accruals(db, rdf)
+    window = f"{from_.isoformat()} — {to_.isoformat()}"
+    sync_service.record_api_pull(db, "ozon", "accrual", len(df), n, window)
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": window}
+
+
 # ------------------------------------------------------------------ планы обновления
 _KIND_LABELS = {
     "wb": [
         ("cards", "Карточки товара"), ("stock", "Остатки"),
         ("funnel", "Воронка продаж"), ("sales", "Продажи"),
         ("prices", "Цены"), ("storage", "Хранение"),
+        ("promotions", "Акции (календарь)"),
     ],
     "ozon": [
         ("cards", "Карточки товара"), ("stock", "Остатки"),
@@ -871,11 +933,14 @@ def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None):
                           lambda db: pull_oz_detail(db, from_, to_, provider=_BULK_PROV["ozon"])))
             steps.append(("buyout", "Выкупы",
                           lambda db: pull_oz_buyout(db, from_, to_, provider=_BULK_PROV["ozon"])))
+            steps.append(("accrual", "Начисления (аккруалы)",
+                          lambda db: pull_oz_accrual(db, from_, to_, provider=_BULK_PROV["ozon"])))
     return steps
 
 
 _BULK_PULLS = {
-    "wb": {"cards": pull_wb_cards, "stock": pull_wb_stock, "prices": pull_wb_prices},
+    "wb": {"cards": pull_wb_cards, "stock": pull_wb_stock, "prices": pull_wb_prices,
+           "promotions": pull_wb_promotions},
     "ozon": {"cards": pull_oz_cards, "stock": pull_oz_stock, "prices": pull_oz_prices},
 }
 

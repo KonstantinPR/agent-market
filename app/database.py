@@ -42,6 +42,42 @@ def ensure_schema(seed: bool = True) -> None:
             conn.execute(text(
                 f"ALTER TABLE {col} ADD COLUMN IF NOT EXISTS {ddl}"
             ))
+        # Группировка артикулов Ozon: базовый артикул (товар) + размер.
+        # Артикул Ozon = артикул товара + размер через последний «-»,
+        # см. app/services/ozon_article.py. Заполняется при синке и бэкфилле
+        # (scripts/backfill_ozon_articles.py).
+        for tbl, base_type in (
+            ("ozon_detail_rows", "varchar(100)"),
+            ("ozon_accruals", "varchar(100)"),
+            ("ozon_placements", "varchar(100)"),
+            ("ozon_buyouts", "varchar(100)"),
+            ("marketplace_cards", "varchar(200)"),
+            ("stocks", "varchar(100)"),
+            ("price_snapshots", "varchar(100)"),
+        ):
+            conn.execute(text(
+                f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS base_article {base_type} DEFAULT ''"
+            ))
+            conn.execute(text(
+                f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS size varchar(50) DEFAULT ''"
+            ))
+        for ddl in [
+            "CREATE INDEX IF NOT EXISTS ix_ozon_detail_base_article "
+            "ON ozon_detail_rows (base_article)",
+            "CREATE INDEX IF NOT EXISTS ix_ozon_accrual_base_article "
+            "ON ozon_accruals (base_article)",
+            "CREATE INDEX IF NOT EXISTS ix_ozon_placement_base_article "
+            "ON ozon_placements (base_article)",
+            "CREATE INDEX IF NOT EXISTS ix_ozon_buyout_base_article "
+            "ON ozon_buyouts (base_article)",
+            "CREATE INDEX IF NOT EXISTS ix_mp_cards_base_article "
+            "ON marketplace_cards (base_article)",
+            "CREATE INDEX IF NOT EXISTS ix_stocks_base_article "
+            "ON stocks (base_article)",
+            "CREATE INDEX IF NOT EXISTS ix_price_snap_base_article "
+            "ON price_snapshots (base_article)",
+        ]:
+            conn.execute(text(ddl))
         for ddl in [
             "subject_name VARCHAR(80) NOT NULL DEFAULT ''",
             "brand_name VARCHAR(120) NOT NULL DEFAULT ''",

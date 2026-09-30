@@ -125,12 +125,14 @@ class Stock(Base):
             "marketplace_id", "date", "article", "warehouse", "chrt_id",
             name="uq_stocks_market_date_article_wh_chrt",
         ),
+        Index("ix_stocks_base_article", "base_article"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     marketplace_id: Mapped[int] = mapped_column(ForeignKey("marketplaces.id"), nullable=False)
     date: Mapped[date_type] = mapped_column(Date, nullable=False)
     article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    base_article: Mapped[str] = mapped_column(String(100), default="")
     warehouse: Mapped[str] = mapped_column(String(200), default="Все")
     chrt_id: Mapped[str] = mapped_column(String(40), default="", index=True)
     size: Mapped[str] = mapped_column(String(50), default="")
@@ -218,6 +220,7 @@ class MarketplaceCard(Base):
         UniqueConstraint("marketplace_id", "chrt_id", name="uq_mp_cards_marketplace_chrt"),
         Index("ix_mp_cards_barcode", "barcode"),
         Index("ix_mp_cards_vendor", "vendor_code"),
+        Index("ix_mp_cards_base_article", "base_article"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -225,6 +228,7 @@ class MarketplaceCard(Base):
     chrt_id: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     nm_id: Mapped[str] = mapped_column(String(40), default="")
     vendor_code: Mapped[str] = mapped_column(String(200), default="")
+    base_article: Mapped[str] = mapped_column(String(200), default="")
     brand: Mapped[str] = mapped_column(String(200), default="")
     subject: Mapped[str] = mapped_column(String(200), default="")
     size: Mapped[str] = mapped_column(String(50), default="")
@@ -262,6 +266,36 @@ class PriceChange(Base):
     reason: Mapped[str] = mapped_column(String(500), default="")
 
 
+class Promotion(Base):
+    """Акции WB «Календарь акций» (dp-calendar-api): участие, потолок и уровни ranging.
+
+    starts_at/ends_at — наивный UTC datetime (в БД хранится как есть, сравнение
+    с datetime.utcnow()). participation_percent — доля наших товаров в акции,
+    %; ranging_json — уровни [{participationRate, boost, condition}].
+    """
+
+    __tablename__ = "wb_promotions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    promo_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(300), default="")
+    adv_type: Mapped[str] = mapped_column(String(30), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    advantages: Mapped[str] = mapped_column(Text, default="")
+    starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, index=True)
+    participation_percent: Mapped[float] = mapped_column(Numeric(6, 2), nullable=True)
+    in_promo_total: Mapped[int] = mapped_column(Integer, default=0)
+    in_promo_leftovers: Mapped[int] = mapped_column(Integer, default=0)
+    not_in_promo_total: Mapped[int] = mapped_column(Integer, default=0)
+    not_in_promo_leftovers: Mapped[int] = mapped_column(Integer, default=0)
+    exception_count: Mapped[int] = mapped_column(Integer, default=0)
+    ranging_json: Mapped[str] = mapped_column(Text, default="")
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
 class ApiPull(Base):
     """Лог последних успешных загрузок из API маркетплейсов (по api+kind)."""
 
@@ -297,11 +331,13 @@ class PriceSnapshot(Base):
     __tablename__ = "price_snapshots"
     __table_args__ = (
         UniqueConstraint("article", "size", name="uq_price_snap_article_size"),
+        Index("ix_price_snap_base_article", "base_article"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     marketplace: Mapped[str] = mapped_column(String(10), default="wb", index=True)
     article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    base_article: Mapped[str] = mapped_column(String(100), default="")
     nm_id: Mapped[str] = mapped_column(String(40), default="")
     size: Mapped[str] = mapped_column(String(50), default="")
     price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
@@ -472,6 +508,7 @@ class OzonDetailRow(Base):
         UniqueConstraint("op_key", name="uq_ozon_detail_op_key"),
         Index("ix_ozon_detail_dates", "date"),
         Index("ix_ozon_detail_offer_id", "offer_id"),
+        Index("ix_ozon_detail_base_article", "base_article"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -480,6 +517,8 @@ class OzonDetailRow(Base):
     date: Mapped[date_type] = mapped_column(Date, nullable=True)
     posting_number: Mapped[str] = mapped_column(String(40), default="")
     offer_id: Mapped[str] = mapped_column(String(100), default="")
+    base_article: Mapped[str] = mapped_column(String(100), default="")
+    size: Mapped[str] = mapped_column(String(50), default="")
     name: Mapped[str] = mapped_column(String(500), default="")
     sku: Mapped[str] = mapped_column(String(40), default="")
     barcode: Mapped[str] = mapped_column(String(100), default="")
@@ -510,6 +549,7 @@ class OzonPlacement(Base):
         UniqueConstraint("op_key", name="uq_ozon_placement_op_key"),
         Index("ix_ozon_placement_dates", "date"),
         Index("ix_ozon_placement_offer_id", "offer_id"),
+        Index("ix_ozon_placement_base_article", "base_article"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -517,6 +557,8 @@ class OzonPlacement(Base):
     date: Mapped[date_type] = mapped_column(Date, nullable=True)
     sku: Mapped[str] = mapped_column(String(40), default="")
     offer_id: Mapped[str] = mapped_column(String(100), default="")
+    base_article: Mapped[str] = mapped_column(String(100), default="")
+    size: Mapped[str] = mapped_column(String(50), default="")
     warehouse: Mapped[str] = mapped_column(String(200), default="")
     paid_quantity: Mapped[int] = mapped_column(Integer, default=0)  # платных экз.
     paid_volume: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # платный объём, мл
@@ -555,6 +597,45 @@ class OzonCashFlow(Base):
     )
 
 
+class OzonAccrual(Base):
+    """Начисления (аккруалы) Ozon (/v1/finance/accrual/by-day) по SKU и типам.
+
+    Каждая строка — одна смысловая начисленная сумма по товару за день:
+    продажа (bucket=sale, положительная), комиссия (bucket=commission),
+    логистика/доставка (bucket=logistics), услуги (bucket=services) и
+    непривязанные к товару начисления (bucket=other, sku пуст).
+    Ключ op_key — date|accrual_id|sku|bucket|type_id|seq — идемпотентно
+    перезаписывается при повторных загрузках того же дня.
+    """
+
+    __tablename__ = "ozon_accruals"
+    __table_args__ = (
+        UniqueConstraint("op_key", name="uq_ozon_accrual_op_key"),
+        Index("ix_ozon_accrual_dates", "date"),
+        Index("ix_ozon_accrual_offer_id", "offer_id"),
+        Index("ix_ozon_accrual_base_article", "base_article"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    op_key: Mapped[str] = mapped_column(String(220), nullable=False)
+    date: Mapped[date_type] = mapped_column(Date, nullable=True)
+    accrual_id: Mapped[str] = mapped_column(String(40), default="")
+    bucket: Mapped[str] = mapped_column(String(20), default="")  # sale|commission|logistics|services|other
+    type_id: Mapped[int] = mapped_column(Integer, default=0)
+    sku: Mapped[str] = mapped_column(String(40), default="")
+    offer_id: Mapped[str] = mapped_column(String(100), default="")
+    base_article: Mapped[str] = mapped_column(String(100), default="")
+    size: Mapped[str] = mapped_column(String(50), default="")
+    unit_number: Mapped[str] = mapped_column(String(40), default="")  # постинг
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # начисленная сумма (в минус — расход)
+    seller_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # цена продавца за шт (для продажи)
+    sale_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)  # цена покупателя (для продажи)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
 class OzonBuyout(Base):
     """Выкупы Ozon (/v1/finance/products/buyout) по артикулам.
 
@@ -568,12 +649,17 @@ class OzonBuyout(Base):
     __table_args__ = (
         UniqueConstraint("op_key", name="uq_ozon_buyout_op_key"),
         Index("ix_ozon_buyout_offer_id", "offer_id"),
+        Index("ix_ozon_buyout_base_article", "base_article"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     op_key: Mapped[str] = mapped_column(String(220), nullable=False)
     posting_number: Mapped[str] = mapped_column(String(40), default="")
     offer_id: Mapped[str] = mapped_column(String(100), default="")
+    # артикул товара (база) и размер — заполняются резолвером ozon_article,
+    # нужны для группировки выкупов и поиска по базовому артикулу
+    base_article: Mapped[str] = mapped_column(String(100), default="")
+    size: Mapped[str] = mapped_column(String(50), default="")
     name: Mapped[str] = mapped_column(String(500), default="")
     sku: Mapped[str] = mapped_column(String(40), default="")
     quantity: Mapped[int] = mapped_column(Integer, default=0)  # кол-во выкупов

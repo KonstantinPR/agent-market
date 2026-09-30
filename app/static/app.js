@@ -1,11 +1,12 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
-const MP_LABELS = { wb: "Wildberries", ozon: "Ozon" };
+const MP_LABELS = { wb: "Wildberries", ozon: "Ozon", yandex: "Яндекс.Маркет" };
+const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "33";
+const UI_VERSION = "56";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -64,6 +65,56 @@ function initWriteDb() {
   });
 }
 
+// «в разрезе размеров» OZON: по умолчанию отчёты сворачивают размеры в строку
+// товара (базовый артикул). Переключатель стоит в тулбаре каждого раздела, где
+// есть свод, и у каждого раздела своё состояние: маржа может быть по размерам,
+// а размещение — по товарам. Сырые строки («Строками») всегда по карточкам,
+// поэтому в этом режиме переключатель приглушается.
+const OZ_BY_SIZE = {
+  "margin-ozon-detail": "marginOzBySize",
+  "oz-detail": "ozDetailBySize",
+  "oz-placement": "ozPlacementBySize",
+};
+const ozBySizeKey = (tab) => "ozBySize:" + tab;
+function ozBySize(tab) {
+  return localStorage.getItem(ozBySizeKey(tab)) === "1";
+}
+function setOzBySize(tab, on) {
+  localStorage.setItem(ozBySizeKey(tab), on ? "1" : "0");
+}
+// Добавляет by_size=1 к строке запроса, если у раздела включён режим по размерам.
+function ozBySizeParam(tab, p) {
+  return ozBySize(tab) ? (p ? p + "&by_size=1" : "?by_size=1") : p;
+}
+// Переключатель не действует в режиме «Строками» — гасим его вместе с label.
+const OZ_BY_SIZE_RAW = {
+  "oz-detail": "ozDetailRaw",
+  "oz-placement": "ozPlacementRaw",
+};
+function syncOzBySizeDisabled() {
+  document.querySelectorAll("[data-oz-size-for]").forEach((label) => {
+    const tab = label.dataset.ozSizeFor;
+    const el = document.getElementById(OZ_BY_SIZE[tab]);
+    if (!el) return;
+    const rawEl = document.getElementById(OZ_BY_SIZE_RAW[tab] || "");
+    const off = !!(rawEl && rawEl.checked);
+    el.disabled = off;
+    label.classList.toggle("off", off);
+  });
+}
+function initOzBySize() {
+  Object.keys(OZ_BY_SIZE).forEach((tab) => {
+    const el = document.getElementById(OZ_BY_SIZE[tab]);
+    if (!el) return;
+    el.checked = ozBySize(tab);
+    el.addEventListener("change", () => {
+      setOzBySize(tab, el.checked);
+      if (currentTab === tab) loadTab(tab);
+    });
+  });
+  syncOzBySizeDisabled();
+}
+
 function filters() {
   return {
     marketplace: $("#fMarketplace").value,
@@ -119,8 +170,9 @@ function table(headers, rows, sort, footers) {
   for (const c of headers) {
     let arrow = "";
     if (sort && sort.k === c.k) arrow = sort.dir === "asc" ? " \u25B2" : " \u25BC";
+    const tip = c.tip ? ' data-tip="' + escapeHtml(c.tip) + '"' : "";
     h += '<th data-k="' + c.k + '" class="' + (c.num ? "num sortable" : "sortable") +
-      '" title="' + (c.tip ? c.tip : "Сортировать") + '">' + c.label + arrow + "</th>";
+      '"' + tip + (c.tip ? "" : ' title="Сортировать"') + ">" + c.label + arrow + "</th>";
   }
   h += "</tr>";
   if (footers) {
@@ -147,20 +199,27 @@ function table(headers, rows, sort, footers) {
   return "<table>" + h + "</tbody></table>";
 }
 
-// Ячейка строки «Итого»: v — число (сумма) или {avg: n} (среднее по видимым строкам).
+// Ячейка строки «Итого»: v — число (сумма) или {avg: n, dp: decimals} (среднее;
+// dp — знаков после запятой, если рендер колонки кастомный и fmtFloat не ясен).
 function totCell(c, v) {
   const avg = v && typeof v === "object" && typeof v.avg === "number" ? v.avg : null;
+  const dp = v && typeof v === "object" && typeof v.dp === "number" ? v.dp : null;
   const n = avg !== null ? avg : v;
   const cls = "num totals" + (avg !== null ? " avg" : "");
-  const attr = avg !== null ? ' title="Среднее по видимым строкам"' : "";
+  const attr = avg !== null ? ' title="Среднее по видимым строкам (по строкам, где значение есть)"' : "";
   const pre = avg !== null ? "≈ " : "";
   let s;
   if (c.render === cellFmts.money) s = fmtMoney(n);
+  else if (c.render === cellFmts.moneyCls) s = fmtMoney(n);
   else if (c.render === cellFmts.moneyZero) s = n ? fmtMoney(n) : "—";
+  else if (c.render === cellFmts.money2) s = fmtMoney2(n);
+  else if (c.render === cellFmts.money4) s = fmtMoney4(n);
   else if (c.render === cellFmts.int) s = fmt(Math.round(n));
   else if (c.render === cellFmts.intZero) s = n ? fmt(Math.round(n)) : "—";
   else if (c.render === cellFmts.pct) s = fmtPct(n);
-  else s = n == null ? "—" : fmt(Math.round(Number(n)));
+  else if (v && typeof v === "object" && v.pct) s = fmtPct(n);
+  else if (dp == null) s = n == null ? "—" : fmt(Math.round(Number(n)));
+  else s = n == null ? "—" : dp === 0 ? fmt(Math.round(n)) : fmtFloat(n, dp);
   return '<th class="' + cls + '"' + attr + '><b>' + pre + s + "</b></th>";
 }
 
@@ -211,6 +270,9 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
     });
   }
   const paint = () => {
+    // Сохраняем позицию прокрутки (горизонт. и вертик.), чтобы после
+    // сортировки/перерисовки таблица не «улетала» в начало.
+    const prevSc = container._pt && container._pt._sc ? container._pt._sc : { left: 0, top: 0 };
     container.innerHTML = "";
     const pagerHost = st.pagerSel ? document.querySelector(st.pagerSel) : null;
     if (pagerHost) pagerHost.innerHTML = "";
@@ -284,6 +346,12 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
       tr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
     }
     applyStickyCols(wrap, st.headers, st.pinned);
+    // Возвращаем позицию прокрутки после пересборки DOM (до mountXBar,
+    // чтобы нижний скроллбар синхронизировался с восстановленной позицией).
+    const tsc = container.querySelector(".tscroll");
+    if (tsc && prevSc.left) tsc.scrollLeft = prevSc.left;
+    if (prevSc.top) container.scrollTop = prevSc.top;
+    container._pt._sc = { left: tsc ? tsc.scrollLeft : 0, top: container.scrollTop };
     mountXBar(container, tscroll);
   };
   paint();
@@ -338,6 +406,48 @@ function tabLike(id) {
   return $("#" + id) ? $("#" + id).value.trim() : "";
 }
 
+let _hdrTipEl = null, _hdrTipTimer = null, _hdrTipNode = null;
+function initHeaderTip() {
+  document.addEventListener("mouseover", (ev) => {
+    const n = ev.target.closest && ev.target.closest("[data-tip]");
+    if (!n) { hideHeaderTip(); return; }
+    if (_hdrTipNode === n) return;
+    _hdrTipNode = n;
+    clearTimeout(_hdrTipTimer);
+    const txt = n.dataset.tip || "";
+    if (!txt.trim()) return;
+    _hdrTipTimer = setTimeout(() => {
+      if (!_hdrTipEl) {
+        _hdrTipEl = document.createElement("div");
+        _hdrTipEl.id = "hdrTip";
+        document.body.appendChild(_hdrTipEl);
+      }
+      _hdrTipEl.textContent = txt;
+      _hdrTipEl.style.display = "block";
+      const r = n.getBoundingClientRect();
+      const iw = _hdrTipEl.offsetWidth || 360;
+      const ih = _hdrTipEl.offsetHeight || 40;
+      let x = r.left + r.width / 2 - iw / 2;
+      x = Math.max(8, Math.min(x, window.innerWidth - iw - 8));
+      let y = r.bottom + 6;
+      if (y + ih > window.innerHeight - 8) y = r.top - ih - 6;
+      _hdrTipEl.style.left = x + "px";
+      _hdrTipEl.style.top = Math.max(8, y) + "px";
+    }, 260);
+  });
+  document.addEventListener("mouseout", (ev) => {
+    const n = ev.target.closest && ev.target.closest("[data-tip]");
+    if (n && n === _hdrTipNode) hideHeaderTip();
+  });
+  document.addEventListener("scroll", () => hideHeaderTip(), true);
+  window.addEventListener("resize", () => hideHeaderTip());
+}
+function hideHeaderTip() {
+  clearTimeout(_hdrTipTimer);
+  _hdrTipNode = null;
+  if (_hdrTipEl) _hdrTipEl.style.display = "none";
+}
+
 async function loadTab(name) {
   const f = filters();
   await busyRun(() => loadTabInner(name, f));
@@ -345,6 +455,10 @@ async function loadTab(name) {
 
 async function loadTabInner(name, f) {
 
+  if (name !== "replenish") {
+    const pm = $("#replenishMsg");
+    if (pm) { pm.textContent = ""; delete pm.dataset.tip; }
+  }
   try {
     if (name === "dashboard") await renderDashboard(qs(f));
     else if (name === "margin") {
@@ -366,6 +480,7 @@ async function loadTabInner(name, f) {
     else if (name === "wh-shipment") await renderWhDocs("shipment", "whSTable", "whSMsg", "whSDetail");
     else if (name === "wh-stock") await renderWhStock();
     else if (name === "wh-turnover") await renderWhTurnover();
+    else if (name === "replenish") await renderReplenish();
     else if (name === "pricing") await renderPricing(false);
     else if (name === "wb-cards" || name === "oz-cards") await renderCards(name);
     else if (name === "wb-funnel") await renderWbFunnel();
@@ -378,6 +493,9 @@ async function loadTabInner(name, f) {
     else if (name === "oz-prices") await renderOzPrices();
     else if (name === "oz-realization") await renderOzSales();
     else if (name === "oz-detail") await renderOzDetail();
+    else if (name === "oz-placement") await renderOzPlacement();
+    else if (name === "oz-cashflow") await renderOzCashflow();
+    else if (name === "oz-accrual") await renderOzAccrual();
     else if (name === "yandex") await renderYandexFiles();
     else if (name === "tickets") await renderTickets();
   } catch (err) {
@@ -390,63 +508,429 @@ function setChart(id, cfg) {
   charts[id] = new Chart($("#" + id), cfg);
 }
 
-async function renderDashboard(p) {
-  const d = await api("/dashboard" + p);
-  let html = "";
-  const total = { mp: "Итого", ...d.total };
-  const cards = [total, ...d.per_marketplace];
-  for (const c of cards) {
-    html += `
-      <div class="kpi ${c.marketplace || "total"}">
-        <div class="title">${c.marketplace ? MP_LABELS[c.marketplace] : "Итого"}</div>
-        <div class="lines">
-          <div class="line"><span>Выручка</span><span class="kvalue">${fmtMoney(c.revenue)}</span></div>
-          <div class="line"><span>К перечислению</span><span class="kvalue">${fmtMoney(c.income)}</span></div>
-          <div class="line"><span>Продано, шт</span><span class="kvalue">${fmt(c.sells)}</span></div>
-        </div>
-      </div>`;
-  }
-  $("#kpi").innerHTML = html;
+let dashData = null;
 
-  const labels = d.per_marketplace.map((m) => MP_LABELS[m.marketplace] || m.marketplace);
-  const values = d.per_marketplace.map((m) => m.income);
-  setChart("chartDoughnut", {
-    type: "doughnut",
-    data: {
-      labels,
-      datasets: [{ data: values, backgroundColor: ["#3b6cff", "#6f4bff"], borderWidth: 0 }],
-    },
-    options: { plugins: { legend: { position: "bottom" } } },
+function dashQuery() {
+  const from = $("#dashFrom") && $("#dashFrom").value
+    ? $("#dashFrom").value : $("#fFrom").value;
+  const to = $("#dashTo") && $("#dashTo").value
+    ? $("#dashTo").value : $("#fTo").value;
+  const q = { date_from: from, date_to: to };
+  const mp = $("#dashMarketplace").value;
+  if (mp) q.marketplace = mp;
+  if ($("#dashCompare").checked) q.compare = 1;
+  return q;
+}
+
+const DASH_COLLAPSED_KEY = "dash-collapsed";
+const DASH_ORDER_KEY = "dash-order";
+
+function dashCollapsedIds() {
+  try {
+    return (localStorage.getItem(DASH_COLLAPSED_KEY) || "").split(",").filter(Boolean);
+  } catch (e) { return []; }
+}
+
+function initDashCollapse() {
+  const saved = dashCollapsedIds();
+  document.querySelectorAll("[data-csec]").forEach((sec) => {
+    const on = saved.includes(sec.dataset.csec);
+    sec.classList.toggle("collapsed", on);
+    const head = sec.querySelector(".dash-sec-title");
+    if (head) head.setAttribute("aria-expanded", on ? "false" : "true");
   });
+  restoreDashOrder();
+}
 
-  setChart("chartDaily", {
+function toggleDashSection(sec) {
+  const id = sec.dataset.csec;
+  const collapsed = !sec.classList.contains("collapsed");
+  sec.classList.toggle("collapsed", collapsed);
+  const head = sec.querySelector(".dash-sec-title");
+  if (head) head.setAttribute("aria-expanded", String(!collapsed));
+  let saved = dashCollapsedIds();
+  if (collapsed) {
+    if (!saved.includes(id)) saved.push(id);
+  } else {
+    saved = saved.filter((x) => x !== id);
+  }
+  try { localStorage.setItem(DASH_COLLAPSED_KEY, saved.join(",")); } catch (e) {}
+}
+
+function dashOrderIds() {
+  try {
+    return (localStorage.getItem(DASH_ORDER_KEY) || "").split(",").filter(Boolean);
+  } catch (e) { return []; }
+}
+
+function saveDashOrder() {
+  const order = Array.from(document.querySelectorAll("#tab-dashboard [data-csec]"))
+    .map((s) => s.dataset.csec);
+  try { localStorage.setItem(DASH_ORDER_KEY, order.join(",")); } catch (e) {}
+}
+
+function restoreDashOrder() {
+  const want = dashOrderIds();
+  if (!want.length) return;
+  const pane = document.querySelector("#tab-dashboard");
+  if (!pane) return;
+  const secs = Array.from(pane.querySelectorAll("[data-csec]"));
+  const by = {};
+  secs.forEach((s) => { by[s.dataset.csec] = s; });
+  let prev = document.querySelector("#tab-dashboard .dash-hero") || null;
+  for (const id of want) {
+    if (!by[id]) continue;
+    pane.insertBefore(by[id], prev ? prev.nextSibling : pane.firstChild);
+    prev = by[id];
+  }
+}
+
+function initDashDrag() {
+  const pane = document.querySelector("#tab-dashboard");
+  if (!pane) return;
+  let dragged = null;
+  pane.addEventListener("dragstart", (ev) => {
+    const h = ev.target.closest(".dash-drag");
+    if (!h) return;
+    const sec = h.closest("[data-csec]");
+    if (!sec) return;
+    dragged = sec;
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", sec.dataset.csec || "");
+    sec.classList.add("dragging");
+  });
+  pane.addEventListener("dragend", () => {
+    if (dragged) dragged.classList.remove("dragging");
+    dragged = null;
+    pane.querySelectorAll("[data-csec]").forEach((s) => s.classList.remove("drag-over"));
+  });
+  pane.addEventListener("dragover", (ev) => {
+    if (!dragged) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    const target = ev.target.closest("[data-csec]");
+    if (target && target !== dragged) target.classList.add("drag-over");
+  });
+  pane.addEventListener("drop", (ev) => {
+    if (!dragged) return;
+    ev.preventDefault();
+    const target = ev.target.closest("[data-csec]");
+    if (target && target !== dragged) {
+      const rect = target.getBoundingClientRect();
+      const before = ev.clientY < rect.top + rect.height / 2;
+      pane.insertBefore(dragged, before ? target : target.nextSibling);
+      saveDashOrder();
+    }
+    dragged.classList.remove("dragging");
+    dragged = null;
+    pane.querySelectorAll("[data-csec]").forEach((s) => s.classList.remove("drag-over"));
+  });
+}
+
+const dashTag = (v) => (v == null || v === "")
+  ? "—"
+  : `<span class="tag">${String(v).split(",").map((x) => MP_LABELS[x.trim()] || x.trim()).join(" + ")}</span>`;
+const dashSigned = (v) => v == null ? "—"
+  : `<span class="${cls(v)}">${v > 0 ? "+" : ""}${fmtMoney(v)}</span>`;
+const dashSignedPct = (v) => v == null || v === "" || isNaN(Number(v)) ? "—"
+  : `<span class="${cls(v)}">${v > 0 ? "+" : ""}${fmtPct(v)}</span>`;
+
+const dashHeaders = {
+  tops: [
+    { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика. Строка = артикул по всем выбранным МП сразу: если товар продавался и на WB, и на Ozon, будет одна строка."},
+    { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров; если оно пустое — берётся из строки детализации продаж."},
+    { k: "marketplace", label: "МП", num: true, render: dashTag , tip: "Список маркетплейсов, где артикул продавался в периоде. У Ozon строка — это товар, артикулы размеров свёрнуты в один."},
+    { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Количество проданных за период. WB — за вычетом возвратов (со знаком минус), Ozon — гросс-продажи, возвраты здесь не вычтены."},
+    { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма реализации за период: WB — retailAmount, Ozon — цена продавца × количество. Возвраты вычитаются со знаком минус."},
+    { k: "income", label: "Доход", num: true, render: cellFmts.money , tip: "К перечислению от маркетплейса. У WB это forPay, у Ozon — income: у Ozon комиссия и услуги уже вычтены, у WB нет."},
+    { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Прибыль = к перечислению − расходы МП (логистика, хранение, услуги) − себестоимость × продано. Сумма по всем МП артикула."},
+    { k: "margin_per_one", label: "Прибыль/шт", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ проданное количество, ₽/шт. Если продаж не было — 0."},
+    { k: "margin_pct", label: "Рентаб., %", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ к перечислению × 100. База — доход, а не выручка (отличается от детализации WB)."},
+  ],
+  price: [
+    { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика. Сравниваются только те артикулы, которые продавались и в текущем, и в предыдущем окне."},
+    { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование товара из детализации текущего периода."},
+    { k: "avg", label: "Цена сейчас, ₽", num: true, render: cellFmts.money2 , tip: "Средняя цена продажи за текущее окно: сумма реализации ÷ количество проданных. У Ozon считается по базовому артикулу товара."},
+    { k: "avg_prev", label: "Цена прош. пер., ₽", num: true, render: cellFmts.money2 , tip: "Та же средняя цена, но за предыдущее окно той же длительности."},
+    { k: "delta_ru", label: "Δ, ₽", num: true, render: dashSigned , tip: "Текущая средняя цена минус прошлая, ₽. Плюс — подорожал, минус — подешевел."},
+    { k: "delta_pct", label: "Δ, %", num: true, render: dashSignedPct , tip: "Изменение цены к прошлому окну в процентах. По этой величине формируются оба топа: подорожавшие и подешевевшие."},
+    { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Прибыль артикула за текущий период из детализации: показывает, что даёт новая цена. Пусто, если артикула нет в сводке."},
+  ],
+  prefix: [
+    { k: "prefix", label: "Группа", render: cellFmts.text , tip: "Группа товара по карте префиксов артикулов (SHK→SH, SOHO-FRNT отдельно от SOHO и т.п.). Без совпадения — «остальные»."},
+    { k: "articles", label: "Товаров", num: true, render: cellFmts.int , tip: "Сколько артикулов попало в группу. Товары без продаж в периоде в подсчёт не идут."},
+    { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Сумма проданных единиц по всем артикулам группы за период."},
+    { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма реализации по артикулам группы за период."},
+    { k: "income", label: "Доход", num: true, render: cellFmts.money , tip: "Сумма «к перечислению» по артикулам группы."},
+    { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Суммарная прибыль группы. Группы отсортированы по ней по убыванию."},
+    { k: "margin_per_one", label: "Прибыль/шт", num: true, render: cellFmts.moneyCls , tip: "Прибыль группы ÷ проданное количество, ₽/шт."},
+    { k: "margin_pct", label: "Рентаб., %", num: true, render: cellFmts.pct , tip: "Рентабельность группы: прибыль ÷ к перечислению × 100."},
+  ],
+};
+
+function dashTotals(rows) {
+  if (!rows || !rows.length) return null;
+  const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const sells = sum("sells");
+  const income = sum("income");
+  const margin = sum("margin");
+  const t = {
+    sells,
+    returns_qty: sum("returns_qty"),
+    revenue: sum("revenue"),
+    income,
+    margin,
+    articles: sum("articles"),
+    margin_per_one: sells ? { avg: margin / sells } : null,
+    margin_pct: income ? { avg: margin / income * 100 } : null,
+  };
+  Object.keys(t).forEach((k) => { if (t[k] == null) delete t[k]; });
+  return t;
+}
+
+function paintDashColviewTable(containerId, baseHeaders, rows, count, tab, showTotals) {
+  const headers = colViewHeaders(tab, baseHeaders);
+  const footers = showTotals === false ? null : dashTotals(rows);
+  pagedTable($("#" + containerId), headers, rows, footers, null, colViewPinKeys(tab));
+  const cnt = $("#" + containerId + "Count");
+  if (cnt) cnt.textContent = count ? "· " + fmt(count) : "";
+}
+
+function paintDashKpis(k) {
+  const showCompare = $("#dashCompare").checked && k.compare;
+  const cards = [k.total, ...k.per_mp];
+  $("#dashKpis").innerHTML = cards.map((c) => {
+    const mpc = c.marketplace || "";
+    const label = mpc ? MP_LABELS[mpc] : "Итого";
+    const ret = c.returns_qty || 0;
+    const retRate = (ret + (c.sells || 0)) > 0
+      ? Math.round(ret / (ret + (c.sells || 0)) * 1000) / 10 : 0;
+    const cell = (lbl, val, extraCls, valCls) => `
+      <div class="kpi-cell">
+        <div class="kpi-label">${lbl}</div>
+        <div class="kpi-val ${extraCls || ""} ${valCls || ""}">${val}</div>
+      </div>`;
+    let html = `
+      <div class="kpi-card ${mpc}" ${mpc ? `style="border-left-color:${MP_COLORS[mpc]}"` : ""}>
+        <div class="kpi-card-title">${label}</div>
+        <div class="kpi-card-grid">
+          ${cell("Выручка", fmtMoney(c.revenue))}
+          ${cell("Доход", fmtMoney(c.income))}
+          ${cell("Прибыль", fmtMoney(c.margin), cls(c.margin))}
+          ${cell("Рентабельность", fmtPct(c.margin_pct), cls(c.margin_pct))}
+          ${cell("Маржа до себестоимости", fmtMoney(c.margin_gross != null ? c.margin_gross : 0))}
+          ${cell("Прибыль / шт", fmtMoney(c.margin_per_one), cls(c.margin_per_one), "small")}
+          ${cell("Продано, шт", fmt(c.sells))}
+          ${cell("Возвраты", ret ? `${fmt(ret)} (${fmtPct(retRate)})` : "0")}
+          ${cell("Товаров", fmt(c.articles))}
+        </div>`;
+    if (showCompare && !mpc) {
+      const cmp = k.compare;
+      html += `<div class="kpi-delta">
+        <span class="kpi-delta-label">Δ к прошл. периоду</span>
+        <span class="kvalue ${cls(cmp.delta_ru)}">${dashSigned(cmp.delta_ru)}</span>
+        <span class="kvalue ${cls(cmp.delta_pct)}">${cmp.delta_pct == null ? "" : "(" + (cmp.delta_pct > 0 ? "+" : "") + fmtPct(cmp.delta_pct) + ")"}</span>
+      </div>`;
+    }
+    return html + `</div>`;
+  }).join("");
+}
+
+const DASH_METRICS = {
+  revenue: { label: "Выручка", color: "#3b6cff" },
+  income: { label: "Доход", color: "#1fae64" },
+  profit: { label: "Прибыль", color: "#d18f00" },
+};
+
+// График А «Показатели»: разрез × показатель. Списки расширяемы — новые
+// опции добавляются этим словарям, ничего в коде рендера менять не нужно.
+const DASH_A_METRICS = {
+  income: { label: "Доход", color: "#1fae64" },
+  margin: { label: "Прибыль", color: "#6f4bff" },
+  margin_gross: { label: "Маржа до себестоимости", color: "#d18f00" },
+};
+
+const DASH_PREFIX_COLORS = [
+  "#6f4bff", "#3b6cff", "#1fae64", "#d18f00", "#e05cb6", "#00a5b8",
+  "#8a5a2b", "#7f7f7f", "#b59a3e", "#e05252", "#2e7d32", "#1565c0",
+];
+
+function dashChartA() {
+  const dim = $("#chartADim") ? $("#chartADim").value : "mp";
+  const metric = $("#chartAMetric") ? $("#chartAMetric").value : "income";
+  const m = DASH_A_METRICS[metric] || DASH_A_METRICS.income;
+  if (dim === "prefix") {
+    const rows = (dashData && dashData.prefixes
+      ? dashData.prefixes.rows : []).slice();
+    const labels = rows.map((r) => r.prefix);
+    const values = rows.map((r) => r[metric] || 0);
+    const colors = rows.map((_, i) =>
+      DASH_PREFIX_COLORS[i % DASH_PREFIX_COLORS.length]);
+    return { labels, values, colors, m };
+  }
+  const rows = dashData && dashData.kpis ? dashData.kpis.per_mp : [];
+  const labels = rows.map((x) => MP_LABELS[x.marketplace] || x.marketplace);
+  const values = rows.map((x) => x[metric] || 0);
+  const colors = rows.map((x) => MP_COLORS[x.marketplace] || "#999");
+  return { labels, values, colors, m };
+}
+
+function paintDashChartA() {
+  const a = dashChartA();
+  setChart("chartMpIncome", {
     type: "bar",
     data: {
-      labels: d.daily.map((x) => x.date.slice(5)),
-      datasets: [
-        { label: "Выручка", data: d.daily.map((x) => x.revenue), backgroundColor: "#3b6cff" },
-        { label: "Доход", data: d.daily.map((x) => x.income), backgroundColor: "#1fae64" },
-      ],
+      labels: a.labels,
+      datasets: [{
+        label: a.m.label,
+        data: a.values,
+        backgroundColor: a.colors,
+        maxBarThickness: 56,
+      }],
     },
+    options: chartOpts(a, a.labels.length > 6),
+  });
+  const cap = $("#dashChartACap");
+  if (cap) cap.textContent =
+    a.m.label + ($("#chartADim") && $("#chartADim").value === "prefix"
+      ? " по группам товаров" : " по маркетплейсам");
+}
+
+function chartOpts(a, horizontal) {
+  const opts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { autoSkip: false, maxRotation: horizontal ? 30 : 45 } },
+      y: { ticks: { callback: (v) => fmtMoney(v) } },
+    },
+  };
+  if (horizontal) {
+    opts.indexAxis = "y";
+    opts.scales.y.ticks.callback = undefined;
+    opts.scales.x.ticks.callback = (v) => fmtMoney(v);
+  }
+  return opts;
+}
+
+function paintDashDailyChart(d) {
+  const metric = $("#chartMetric") ? $("#chartMetric").value : "revenue";
+  const gran = $("#chartGran") ? $("#chartGran").value : "day";
+  const chartType = $("#chartType") ? $("#chartType").value : "bar";
+  const m = DASH_METRICS[metric] || DASH_METRICS.revenue;
+  const rows = bucketDaily(d.daily, gran);
+  const data = rows.map((x) => x[metric] || 0);
+  const dataset = chartType === "line"
+    ? { label: m.label, data, borderColor: m.color, backgroundColor: m.color, fill: false, tension: 0.25, pointRadius: 2 }
+    : { label: m.label, data, backgroundColor: m.color, maxBarThickness: 32 };
+  setChart("chartDaily", {
+    type: chartType,
+    data: { labels: rows.map((r) => dashBucketLabel(r.date, gran)), datasets: [dataset] },
     options: {
-      plugins: { legend: { position: "bottom" } },
-      scales: { x: { ticks: { maxTicksLimit: 12 } } },
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 14 } },
+        y: { ticks: { callback: (v) => fmtMoney(v) } },
+      },
     },
   });
 }
 
+function dashWeekKey(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const day = (d.getDay() + 6) % 7;
+  const m = new Date(d);
+  m.setDate(d.getDate() - day);
+  return m.getFullYear() + "-" + String(m.getMonth() + 1).padStart(2, "0")
+    + "-" + String(m.getDate()).padStart(2, "0");
+}
+
+function dashBucketLabel(key, gran) {
+  const p = key.split("-");
+  return gran === "week" ? Number(p[2]) + "." + p[1] : p[1] + "." + p[0];
+}
+
+function bucketDaily(rows, gran) {
+  if (gran === "day") return rows;
+  const map = new Map();
+  for (const r of rows) {
+    const key = gran === "week" ? dashWeekKey(r.date) : r.date.slice(0, 7);
+    const b = map.get(key) || { date: key, revenue: 0, income: 0, sells: 0, profit: 0 };
+    b.revenue += r.revenue;
+    b.income += r.income;
+    b.sells += r.sells;
+    b.profit += r.profit;
+    map.set(key, b);
+  }
+  return Array.from(map.values())
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+function paintDashCharts(d) {
+  paintDashChartA();
+  paintDashDailyChart(d);
+}
+
+function repaintDashCharts() {
+  if (dashData) paintDashCharts(dashData);
+}
+
+function paintDashStocks(s) {
+  const codes = Object.keys(s);
+  $("#dashStocks").innerHTML = codes.map((code) => {
+    const st = s[code];
+    return `
+      <div class="kpi ${code}" style="border-left-color:${MP_COLORS[code]}">
+        <div class="title">${MP_LABELS[code] || code}</div>
+        <div class="lines">
+          <div class="line"><span>Остаток, шт</span><span class="kvalue">${fmt(st.quantity_full)}</span></div>
+          <div class="line"><span>В пути, шт</span><span class="kvalue">${fmt(st.in_way)}</span></div>
+          <div class="line"><span>Оценка, ₽</span><span class="kvalue">${fmtMoney(st.value)}</span></div>
+          <div class="line"><span>Срез</span><span class="kvalue">${st.date || "—"}</span></div>
+        </div>
+      </div>`;
+  }).join("") || '<div class="empty">Остатков нет за период</div>';
+}
+
+function paintDashFreshness(rows) {
+  $("#dashFresh").innerHTML = rows.length ? rows.map((r) => `
+    <div class="fresh-row">
+      <span class="tag ${r.api}">${MP_LABELS[r.api] || r.api}</span>
+      <span class="fresh-kind">${r.kind}</span>
+      <span class="fresh-time">${r.last_success_at ? r.last_success_at.slice(0, 16) : "—"}</span>
+    </div>`).join("") : '<div class="empty">Загрузок не было</div>';
+}
+
+async function renderDashboard() {
+  dashData = await api("/dashboard" + qs(dashQuery()));
+  paintDashKpis(dashData.kpis);
+  paintDashCharts(dashData);
+  paintDashColviewTable("dashProfit", dashHeaders.tops, dashData.tops.profit.rows, dashData.tops.profit.count, "dash-profit");
+  paintDashColviewTable("dashLoss", dashHeaders.tops, dashData.tops.loss.rows, dashData.tops.loss.count, "dash-loss");
+  paintDashColviewTable("dashPriceUp", dashHeaders.price, dashData.price.up.rows, dashData.price.up.count, "dash-price", false);
+  paintDashColviewTable("dashPriceDown", dashHeaders.price, dashData.price.down.rows, dashData.price.down.count, "dash-price", false);
+  paintDashColviewTable("dashPrefix", dashHeaders.prefix, dashData.prefixes.rows, dashData.prefixes.count, "dash-prefix");
+  paintDashStocks(dashData.stocks);
+  paintDashFreshness(dashData.freshness);
+  const exp = $("#exportDashboard");
+  if (exp) exp.href = "/api/export/dashboard" + qs(dashQuery());
+}
+
 const marginTableHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money },
-  { k: "logistics", label: "Логистика", num: true, render: cellFmts.money },
-  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-  { k: "margin", label: "Маржа", num: true, render: cellFmts.moneyCls },
-  { k: "margin_per_one", label: "Маржа на ед.", num: true, render: cellFmts.moneyCls },
-  { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика. Сводка строится по таблице продаж (weekly/stat-отчёты), а не по детализации."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров по этому артикулу."},
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Сумма quantity за период по всем строкам продаж. Возвраты в quantity идут со знаком минус, поэтому учитываются автоматически."},
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма выручки (реализации) по артикулу за выбранный период."},
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money , tip: "Комиссия маркетплейса (КВВ) за период, суммой по товару. Справочно: в «к перечислению» она уже учтена."},
+  { k: "logistics", label: "Логистика", num: true, render: cellFmts.money , tip: "Логистика за период суммой (доставка покупателям и возвраты)."},
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money , tip: "Сумма, которую маркетплейс перечислит за товар (forPay): уже за вычетом комиссии, логистики, хранения и услуг."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога товаров. Ноль означает, что себестоимость не заведена, и прибыль в строке будет завышена."},
+  { k: "margin", label: "Маржа", num: true, render: cellFmts.moneyCls , tip: "Прибыль = к перечислению − себестоимость × продано. Логистика, хранение и услуги второй раз не вычитаются — они уже в перечислении."},
+  { k: "margin_per_one", label: "Маржа на ед.", num: true, render: cellFmts.moneyCls , tip: "Маржа ÷ проданное количество, ₽/шт."},
+  { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct , tip: "Рентабельность: маржа ÷ к перечислению × 100."},
 ];
 async function renderMargin(p) {
   const data = await api("/margin" + p);
@@ -462,36 +946,36 @@ async function renderMargin(p) {
 }
 
 const marginHeaders = [
-{ k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int },
-  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
+{ k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика (vendorCode) из строк детализации продаж WB. Артикулы разных размеров агрегируются в одну строку."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB (nmId) из строки детализации — по нему товар ищется в каталогах WB."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров; при пустом каталоге — из строки детализации."},
+  { k: "sells",   label: "Продано, шт", num: true, render: cellFmts.int , tip: "Количество проданных за период. Возвраты вычитаются со знаком минус, поэтому значение может быть нулём или отрицательным."},
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int , tip: "Единиц, возвращённых покупателями: строки детализации с типом документа «Возврат». Уже учтено в «Продано» со знаком минус."},
   { k: "stock_qty", label: "Остаток, шт", num: true, render: cellFmts.int, tip: "По последнему срезу стоков на конец периода (≤ date_to)" },
   { k: "stock_total", label: "Остаток всего, шт", num: true, render: cellFmts.int, tip: "Всего на складах WB по последнему срезу стоков" },
   { k: "stock_in_way", label: "В пути, шт", num: true, render: cellFmts.int, tip: "Ожидается поставкой по последнему срезу стоков" },
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
-  { k: "logistics", label: "Логистика", num: true, render: cellFmts.moneyCls },
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Реализация (retailAmount) за период. Возвраты вычитаются со знаком минус, поэтому возвращённый товар уменьшает выручку."},
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls , tip: "Комиссия КВВ за период с учётом знака возврата. Справочно: из прибыли не вычитается — уже сидит в «к перечислению»."},
+  { k: "logistics", label: "Логистика", num: true, render: cellFmts.moneyCls , tip: "Логистика целиком (туда + обратно). Расход остаётся расходом даже по возвращённому товару."},
   { k: "logistics_out", label: "Логистика туда", num: true, render: cellFmts.moneyCls, tip: "Доставка покупателю (строки Продажа)" },
   { k: "logistics_in", label: "Логистика обратно", num: true, render: cellFmts.moneyCls, tip: "Обратная доставка (строки Возврат)" },
   { k: "storage", label: "Хранение (оц)", num: true, render: cellFmts.moneyCls, tip: "Безартикульные платы WB разнесены по «объём × тариф × остаток»" },
-  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
-  { k: "income",  label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-  { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.moneyCls },
-  { k: "margin",  label: "Прибыль", num: true, render: cellFmts.moneyCls },
-  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls },
-  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct },
-  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls },
-  { k: "logistics_per_one", label: "Логистика/ед.", num: true, render: cellFmts.moneyCls },
-  { k: "logistics_out_per_one", label: "Логистика туда/ед.", num: true, render: cellFmts.moneyCls },
-  { k: "logistics_in_per_one", label: "Логистика обратно/ед.", num: true, render: cellFmts.moneyCls },
-  { k: "storage_per_one", label: "Хранение/ед.", num: true, render: cellFmts.moneyCls },
-  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls },
-  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls },
-  { k: "margin_gross_per_one", label: "Маржа до себест./ед.", num: true, render: cellFmts.moneyCls },
-  { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct },
+  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Прочие удержания WB: штрафы, удержания, доплаты и перерасчёт логистики. В безартикульных строках разносятся по весу статьи."},
+  { k: "income",  label: "К перечислению", num: true, render: cellFmts.money , tip: "forPay за период с учётом знака возвратов: сколько WB перечислит за товар после всех удержаний."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога: сначала по артикулу, иначе по баркоду строки детализации. Нет в каталоге — значение по умолчанию, строка помечается как оценка."},
+  { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.moneyCls , tip: "К перечислению − логистика − хранение − услуги. Показывает прибыль до списания себестоимости проданного."},
+  { k: "margin",  label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Маржа до себестоимости − себестоимость × проданное. Себестоимость списывается только за проданное, за возвращённое — нет."},
+  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ проданное количество, ₽/шт."},
+  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ выручка (реализация) × 100. База — выручка, а в дашборде — к перечислению."},
+  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls , tip: "Комиссия КВВ, делённая на количество проданных, ₽/шт."},
+  { k: "logistics_per_one", label: "Логистика/ед.", num: true, render: cellFmts.moneyCls , tip: "Вся логистика (туда + обратно) ÷ проданное количество, ₽/шт."},
+  { k: "logistics_out_per_one", label: "Логистика туда/ед.", num: true, render: cellFmts.moneyCls , tip: "Логистика туда ÷ проданное количество, ₽/шт."},
+  { k: "logistics_in_per_one", label: "Логистика обратно/ед.", num: true, render: cellFmts.moneyCls , tip: "Логистика обратно ÷ проданное количество, ₽/шт. Высокая доля — сигнал о проблемах с качеством или размерной сеткой."},
+  { k: "storage_per_one", label: "Хранение/ед.", num: true, render: cellFmts.moneyCls , tip: "Хранение (включая оценку безартикульных плат) ÷ проданное количество, ₽/шт."},
+  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls , tip: "К перечислению ÷ проданное количество, ₽/шт — фактическая цена продажи, которая достанется продавцу."},
+  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls , tip: "Выручка ÷ проданное количество — средняя цена продажи, ₽/шт."},
+  { k: "margin_gross_per_one", label: "Маржа до себест./ед.", num: true, render: cellFmts.moneyCls , tip: "Маржа до себестоимости (перечисление − расходы) ÷ проданное количество, ₽/шт."},
+  { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct , tip: "Возвраты ÷ (продажи + возвраты) × 100. Показывает качество товара и размерную сетку."},
 ];
 const MARGIN_DETAIL_OPTIONAL = [
   { k: "nm_id", label: "Артикул WB" },
@@ -520,30 +1004,45 @@ const _OLD_OPTIONAL = new Set(["storage", "services", "net_cost", "margin_gross"
 // ----------------------------------------------------- «Анализ Продаж OZON» — при
 // ----------------------------------------------------- маржинальности от детализации Ozon
 const ozonMarginHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
-  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
-  { k: "postings", label: "Постинги", num: true, render: cellFmts.int },
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-  { k: "amount", label: "Сумма продажи", num: true, render: cellFmts.money },
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
-  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
-  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "storage", label: "Хранение", num: true, render: cellFmts.moneyCls },
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-  { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls },
-  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls },
-  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct },
-  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls },
-  { k: "services_per_one", label: "Услуги/ед.", num: true, render: cellFmts.moneyCls },
-  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls },
-  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls },
-  { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Базовый артикул товара Ozon: артикулы отдельных размеров свёрнуты в одну строку по умолчанию."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер, выделенный из артикула Ozon. Заполняется только в режиме «в разрезе размеров»."},
+  { k: "sizes_count", label: "Размеров", num: true, render: cellFmts.int , tip: "Сколько разных размеров свёрнуто в строку товара. 1 — артикул без размера (безразмерный товар)."},
+  { k: "offers_count", label: "Артикулов", num: true, render: cellFmts.int , tip: "Сколько карточек Ozon (offer_id) попало в строку товара."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB, подтянутый из карточек Ozon по совпадению vendor_code с offer_id. Пусто, если карточка не найдена."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров по базовому артикулу; при пустом — из строки детализации Ozon."},
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Гросс-продажи (quantity из детализации). Возвраты здесь НЕ вычитаются — смотрите отдельную колонку."},
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int , tip: "Возвраты (returnQty) за период. Их деньги уже учтены в «К перечислению» со знаком минус."},
+  { k: "postings", label: "Постинги", num: true, render: cellFmts.int , tip: "Сколько уникальных постингов (отгрузок) было у товара за период — косвенный признак частоты поставок."},
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Цена продавца × количество (sellerPrice × quantity), суммой по товару за период."},
+  { k: "amount", label: "Сумма продажи", num: true, render: cellFmts.money , tip: "Поле amount отчёта Ozon: своя база начислений, может отличаться от выручки. Расхождение — признак разной учётной базы Ozon."},
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls , tip: "Комиссия Ozon, в отчёте идёт со знаком минус. Справочно: уже вычтена из «к перечислению», в прибыли не вычитается повторно."},
+  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Прочие услуги Ozon (standardFee), знак минус. Также справочно: уже учтены в «к перечислению»."},
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money , tip: "Чистая сумма к перечислению Ozon с учётом возвратов. В расчёте прибыли берётся как есть — это база Ozon."},
+  { k: "cashflow_est", label: "На р/с (оценка)", num: true, render: cellFmts.money , tip: "Доля фактически поступивших средств за окно, распределённая пропорционально «к перечислению». Показывает задержки выплат Ozon."},
+  { k: "accrued_sale", label: "Начисл.: продажа", num: true, render: cellFmts.money , tip: "Начисления Ozon по корзине «sale» из отчёта начислений за окно: сколько начислено именно за продажу."},
+  { k: "accrued_commission", label: "Начисл.: комиссия", num: true, render: cellFmts.moneyCls , tip: "Начисления «commission» — комиссия Ozon (отрицательное значение = удержание)."},
+  { k: "accrued_logistics", label: "Начисл.: логистика", num: true, render: cellFmts.moneyCls , tip: "Начисления «logistics» — логистика Ozon за окно, знак минус."},
+  { k: "accrued_services", label: "Начисл.: услуги", num: true, render: cellFmts.moneyCls , tip: "Начисления «services» — услуги Ozon (в том числе хранение/размещение), знак минус."},
+  { k: "accrued_other", label: "Начисл.: прочее", num: true, render: cellFmts.moneyCls , tip: "Начисления «other» (NON_ITEM) — расходы без привязки к карточке товара, целиком на строку."},
+  { k: "accrued_net", label: "На р/с (нач.)", num: true, render: cellFmts.money , tip: "Сумма всех начислений по артикулу: столько Ozon реально перечислит. Считается точнее, чем детализация продаж."},
+  { k: "accrued_diff", label: "Δ нач. vs дет.", num: true, render: cellFmts.moneyCls , tip: "Начисления минус (к перечислению + услуги). Ненулевое расхождение = детализация за период неполная."},
+  { k: "margin_accrued", label: "Прибыль (нач.)", num: true, render: cellFmts.moneyCls , tip: "Прибыль по начислениям = начисления на р/с − себестоимость × продано. Пусто, если по артикулу начислений не было."},
+  { k: "has_detail", label: "Детализация", render: (v) => v ? "да" : "нет" , tip: "Есть ли строки детализации продаж по товару за окно. «нет» — доверять можно только начислениям."},
+  { k: "storage", label: "Хранение", num: true, render: cellFmts.moneyCls , tip: "Стоимость размещения за период по отчёту Ozon, хранится со знаком минус. В прибыли прибавляется, то есть уменьшает её как расход."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы: ищем по базовому артикулу, затем по артикулу размера, затем по баркоду строки. Нет в каталоге — значение по умолчанию, строка помечена как оценка."},
+  { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "К перечислению + хранение (минус) − себестоимость × продано. Себестоимость списывается за гросс-продажи, возвраты уже в перечислении."},
+  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ гросс-продажи, ₽/шт. При возвратах завышает реальную прибыль с выкупленного товара."},
+  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ выручка (цена продавца × количество) × 100."},
+  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls , tip: "Комиссия Ozon ÷ гросс-продажи, ₽/шт."},
+  { k: "services_per_one", label: "Услуги/ед.", num: true, render: cellFmts.moneyCls , tip: "Услуги Ozon ÷ гросс-продажи, ₽/шт."},
+  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls , tip: "К перечислению ÷ гросс-продажи, ₽/шт."},
+  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls , tip: "Выручка ÷ гросс-продажи, ₽/шт."},
+  { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct , tip: "Возвраты ÷ (продажи + возвраты) × 100 за период."},
 ];
 const OZON_MARGIN_DETAIL_OPTIONAL = [
   { k: "nm_id", label: "Артикул WB" },
+  { k: "size", label: "Размер" },
+  { k: "offers_count", label: "Артикулов" },
   { k: "returns_qty", label: "Возвращено, шт" },
   { k: "postings", label: "Постинги" },
   { k: "amount", label: "Сумма продажи" },
@@ -556,6 +1055,13 @@ const OZON_MARGIN_DETAIL_OPTIONAL = [
   { k: "income_per_one", label: "К перечисл./ед." },
   { k: "revenue_per_one", label: "Средняя цена" },
   { k: "return_rate", label: "Доля возвратов, %" },
+  { k: "accrued_sale", label: "Начисл.: продажа" },
+  { k: "accrued_commission", label: "Начисл.: комиссия" },
+  { k: "accrued_logistics", label: "Начисл.: логистика" },
+  { k: "accrued_services", label: "Начисл.: услуги" },
+  { k: "accrued_other", label: "Начисл.: прочее" },
+  { k: "accrued_net", label: "На р/с (нач.)" },
+  { k: "accrued_diff", label: "Δ нач. vs дет." },
 ];
 // ----------------------------------------------------- «Вид таблицы» — единый механизм
 // Для каждого таба регистрируется набор настраиваемых колонок. Состояние живёт в
@@ -593,7 +1099,7 @@ function colViewState(tab) {
   for (const o of set.optional) st[o.k] = (o.k in saved) ? !!saved[o.k] : !!o.def;
   st.pin = Array.isArray(saved.pin)
     ? saved.pin.filter((k) => set.headers.some((h) => h.k === k))
-    : [];
+    : set.headers.filter((h) => h.pinned).map((h) => h.k);
   st.order = Array.isArray(saved.order)
     ? saved.order.filter((k) => set.headers.some((h) => h.k === k))
     : [];
@@ -661,7 +1167,11 @@ function buildColViewMenu(tab) {
   const st = colViewState(tab);
   const pinSet = new Set(st.pin || []);
   const base = set.headers.filter((h) => !set.optional.some((o) => o.k === h.k));
-  const onToggle = () => { if (currentTab === tab) loadTab(tab); buildColViewMenu(tab); };
+  const onToggle = () => {
+    const reload = c.reloadTab || tab;
+    if (currentTab === reload) loadTab(reload);
+    buildColViewMenu(tab);
+  };
   const dragMode = COLVIEW_REORDER === "drag";
   const orderFor = (keys) => {
     const ord = (st.order || []).filter((k) => keys.includes(k));
@@ -699,7 +1209,7 @@ function buildColViewMenu(tab) {
         s2.order = o;
         colViewSave(tab, s2);
         buildColViewMenu(tab);
-        if (currentTab === tab) loadTab(tab);
+        if (currentTab === (c.reloadTab || tab)) loadTab(c.reloadTab || tab);
       });
       return b;
     };
@@ -749,7 +1259,7 @@ function buildColViewMenu(tab) {
       s2.order = o;
       colViewSave(tab, s2);
       buildColViewMenu(tab);
-      if (currentTab === tab) loadTab(tab);
+      if (currentTab === (c.reloadTab || tab)) loadTab(c.reloadTab || tab);
     });
     row.appendChild(h);
   };
@@ -824,7 +1334,7 @@ function buildColViewMenu(tab) {
     } catch (err) { /* ignore */ }
     cbReset.checked = false;
     buildColViewMenu(tab);
-    if (currentTab === tab) loadTab(tab);
+    if (currentTab === (c.reloadTab || tab)) loadTab(c.reloadTab || tab);
   });
   lblReset.appendChild(cbReset);
   lblReset.appendChild(document.createTextNode(" По умолчанию"));
@@ -941,71 +1451,109 @@ document.addEventListener("click", () => {
 });
 
 const wbDetailRowHeaders = [
-  { k: "date", label: "Дата", num: true, render: cellFmts.text },
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "title", label: "Наименование", render: cellFmts.text },
-  { k: "doc_type", label: "Тип документа", render: cellFmts.text },
-  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
-  { k: "retail_amount", label: "Реализовано", num: true, render: cellFmts.money },
-  { k: "commission", label: "КВВ", num: true, render: cellFmts.money },
-  { k: "for_pay", label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "logistics", label: "Доставка", num: true, render: cellFmts.money },
-  { k: "storage", label: "Хранение", num: true, render: cellFmts.money },
-  { k: "office", label: "Склад", render: cellFmts.text },
-  { k: "source", label: "Источник", render: cellFmts.tag },
+  { k: "date", label: "Дата", num: true, render: cellFmts.text , tip: "Дата продажи (saleDt) строки операции WB. Список отсортирован от новых к старым."},
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца (vendorCode) операции. У служебных строк (логистика, хранение, возмещение) артикул пустой."},
+  { k: "title", label: "Наименование", render: cellFmts.text , tip: "Название товара из этой строки отчёта WB (поле title)."},
+  { k: "doc_type", label: "Тип документа", render: cellFmts.text , tip: "Тип операции. Берётся «Обоснование для оплаты», если оно заполнено, иначе «Тип документа» отчёта."},
+  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int , tip: "Количество единиц в строке. У свёрнутых служебных строк (логистика/хранение) всегда 0."},
+  { k: "retail_amount", label: "Реализовано", num: true, render: cellFmts.money , tip: "«Вайлдберриз реализовал Товар (Пр)» — сумма реализации строки; у строк-возвратов отрицательная."},
+  { k: "commission", label: "КВВ", num: true, render: cellFmts.money , tip: "Комиссия WB (КВВ): «Вознаграждение с продаж» до вычета услуг ПВЗ, без НДС. Хранится со знаком минус."},
+  { k: "for_pay", label: "К перечислению", num: true, render: cellFmts.money , tip: "«К перечислению Продавцу за реализованный Товар» — сумма к выплате WB по этой строке."},
+  { k: "logistics", label: "Доставка", num: true, render: cellFmts.money , tip: "Плата за доставку покупателю (КВВ) по строке, в минус; часто приходит отдельной служебной строкой."},
+  { k: "storage", label: "Хранение", num: true, render: cellFmts.money , tip: "Платёж за хранение по строке, в минус. В детализации WB такие платы идут без артикула, у товарных строк обычно 0."},
+  { k: "office", label: "Склад", render: cellFmts.text , tip: "Склад WB (officeName) из строки отчёта; у служебных строк часто пусто."},
+  { k: "source", label: "Источник", render: cellFmts.tag , tip: "Источник строки: excel — файл ЛК, api — finance-API WB."},
 ];
 
 const wbDetailSummaryHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "title", label: "Наименование", render: cellFmts.text },
-  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
-  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
-  { k: "revenue", label: "Реализовано", num: true, render: cellFmts.money },
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money },
-  { k: "for_pay", label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "logistics", label: "Доставка", num: true, render: cellFmts.money },
-  { k: "delivery_count", label: "Доставок", num: true, render: cellFmts.int },
-  { k: "return_delivery_count", label: "Возврат доставок", num: true, render: cellFmts.int },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца из детализации. Безартикульные строки (платы без товара) в свод не попадают."},
+  { k: "title", label: "Наименование", render: cellFmts.text , tip: "Название товара из строк детализации — первое непустое по артикулу за окно."},
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Нетто в штуках: товарные строки «Продажа» минус строки «Возврат». Служебные строки (логистика, хранение) не считаются."},
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int , tip: "Сумма количества по строкам, у которых тип операции — возврат (поиск подстроки «возврат»/«return»)."},
+  { k: "revenue", label: "Реализовано", num: true, render: cellFmts.money , tip: "Σ «Вайлдберриз реализовал Товар (Пр)» по строкам артикула; строки-возвраты вычитаются обратным знаком."},
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money , tip: "Σ комиссии WB (КВВ, ppvzSalesCommission) по артикулу; возвраты вычитаются. В базе значения отрицательные."},
+  { k: "for_pay", label: "К перечислению", num: true, render: cellFmts.money , tip: "Σ «К перечислению» по строкам артикула, возвраты вычитаются. Свод отсортирован по этой сумме (по убыванию)."},
+  { k: "logistics", label: "Доставка", num: true, render: cellFmts.money , tip: "Платы за доставку. Безартикульные строки разнесены по весу «доставки + возврат доставки», иначе по модулю продаж."},
+  { k: "delivery_count", label: "Доставок", num: true, render: cellFmts.int , tip: "Счётчик «Количество доставок» из отчёта; безартикульные строки разносятся целыми числами по тому же весу."},
+  { k: "return_delivery_count", label: "Возврат доставок", num: true, render: cellFmts.int , tip: "Счётчик «Количество возврата» (обратных доставок) из отчёта, с тем же распределением по артикулам."},
   { k: "storage", label: "Хранение (оц)", num: true, render: cellFmts.money, tip: "Оценка: безартикульные платы WB разнесены по «объём × тариф × остаток»" },
-  { k: "pvz_compensation", label: "ПВЗ-компенсации", num: true, render: cellFmts.money },
-  { k: "payment_services", label: "Платёжные услуги", num: true, render: cellFmts.money },
-  { k: "services", label: "Услуги/штрафы", num: true, render: cellFmts.money },
-  { k: "ops_count", label: "Операций", num: true, render: cellFmts.int },
-  { k: "sources", label: "Источник", render: cellFmts.tag },
+  { k: "pvz_compensation", label: "ПВЗ-компенсации", num: true, render: cellFmts.money , tip: "Σ «Возмещение за выдачу и возврат товаров на ПВЗ»; безартикульные строки разнесены по весу доставок."},
+  { k: "payment_services", label: "Платёжные услуги", num: true, render: cellFmts.money , tip: "Σ комиссии за интеграцию платёжных сервисов (paymentServices); безартикульные строки разнесены по весу доставок."},
+  { k: "services", label: "Услуги/штрафы", num: true, render: cellFmts.money , tip: "Σ штрафов, удержаний, корректировок ВВ и возмещения логистики; безартикульные строки разнесены по весу доставок."},
+  { k: "ops_count", label: "Операций", num: true, render: cellFmts.int , tip: "Число строк детализации (операций), попавших на артикул за окно."},
+  { k: "sources", label: "Источник", render: cellFmts.tag , tip: "Источники строк свода: excel — файлы ЛК, api — finance-API WB. Перечисляются через запятую."},
 ];
 
 const ozDetailRowHeaders = [
-  { k: "date", label: "Дата", num: true, render: cellFmts.text },
-  { k: "posting_number", label: "Постинг", render: cellFmts.text },
-  { k: "offer_id", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "sku", label: "SKU", render: cellFmts.text },
-  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
-  { k: "seller_price", label: "Цена", num: true, render: cellFmts.money },
-  { k: "amount", label: "Сумма", num: true, render: cellFmts.money },
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
-  { k: "standard_fee", label: "Услуги", num: true, render: cellFmts.moneyCls },
-  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "return_qty", label: "Возврат, шт", num: true, render: cellFmts.int },
-  { k: "return_total", label: "Возврат, руб", num: true, render: cellFmts.money },
-  { k: "source", label: "Источник", render: cellFmts.tag },
+  { k: "date", label: "Дата", num: true, render: cellFmts.text , tip: "Дата операции — дата создания постинга (order.created_date) из отчёта Ozon."},
+  { k: "posting_number", label: "Постинг", render: cellFmts.text , tip: "Номер постинга (отправления) Ozon. В своде по нему считаются уникальные «Постинги»."},
+  { k: "offer_id", label: "Артикул", render: cellFmts.text , tip: "Ваш артикул Ozon (Offer ID), размер зашит в конец артикула. В своде артикул размера сворачивается в базовый."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название товара из строки отчёта Ozon (item.name)."},
+  { k: "sku", label: "SKU", render: cellFmts.text , tip: "SKU Ozon — идентификатор товара в системе Ozon; вместе с датой и постингом — ключ строки детализации."},
+  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int , tip: "Количество единиц в строке. У строки-возврата без продажи берётся количество возврата."},
+  { k: "seller_price", label: "Цена", num: true, render: cellFmts.money , tip: "Цена продавца за единицу × количество строки (seller_price_per_instance × кол-во), без скидок Ozon."},
+  { k: "amount", label: "Сумма", num: true, render: cellFmts.money , tip: "Сумма продажи строки (delivery_commission.amount) — база, от которой Ozon считает комиссию."},
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls , tip: "Комиссия Ozon, всегда в минус: берётся standard_fee, а если он пуст — «к перечислению × commission_ratio»."},
+  { k: "standard_fee", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Стандартные услуги Ozon по строке (standard_fee) — расход, хранится в минус."},
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money , tip: "Итог постинга по продаже (delivery_commission.total) минус сумма возврата этого же постинга."},
+  { k: "return_qty", label: "Возврат, шт", num: true, render: cellFmts.int , tip: "Количество возвратов в строке (return_commission.quantity). В своде считается отдельно от «Продано»."},
+  { k: "return_total", label: "Возврат, руб", num: true, render: cellFmts.money , tip: "Сумма возврата по строке (return_commission.total) — именно она вычитается из «К перечислению»."},
+  { k: "source", label: "Источник", render: cellFmts.tag , tip: "Источник строки: api — прямой метод /v1/finance/realization/posting, report — фолбэк-отчёт /v1/report/realization/posting."},
 ];
 
 const ozDetailSummaryHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int },
-  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int },
-  { k: "postings", label: "Постингов", num: true, render: cellFmts.int },
-  { k: "seller_total", label: "Продажи (цена×кол-во)", num: true, render: cellFmts.money },
-  { k: "amount", label: "Реализовано", num: true, render: cellFmts.money },
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls },
-  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls },
-  { k: "storage", label: "Хранение", num: true, render: cellFmts.moneyCls },
-  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
-  { k: "ops_count", label: "Операций", num: true, render: cellFmts.int },
-  { k: "buyout_sum", label: "Сумма выкупов", num: true, render: cellFmts.money },
-  { k: "buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Базовый артикул товара: артикулы размеров свёрнуты в один товар. В режиме «по размерам» — артикул размера."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер, выделенный из артикула Ozon. Заполняется только в режиме «в разрезе размеров»."},
+  { k: "sizes_count", label: "Размеров", num: true, render: cellFmts.int , tip: "Сколько разных размеров свёрнуто в строку товара. 1 — артикул без размера (безразмерный товар)."},
+  { k: "offers_count", label: "Артикулов", num: true, render: cellFmts.int , tip: "Сколько карточек Ozon (offer_id) попало в строку товара."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название товара из строк детализации Ozon — первое непустое по группе за окно."},
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Σ количества по строкам детализации, шт. Продажи гроссом, возвраты вынесены в отдельную колонку."},
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int , tip: "Σ return_qty по строкам детализации, шт — возвраты не уменьшают «Продано»."},
+  { k: "postings", label: "Постингов", num: true, render: cellFmts.int , tip: "Число уникальных номеров постингов среди строк артикула за окно."},
+  { k: "seller_total", label: "Продажи (цена×кол-во)", num: true, render: cellFmts.money , tip: "Σ «цена продавца × количество» по строкам детализации, руб — без скидок Ozon."},
+  { k: "amount", label: "Реализовано", num: true, render: cellFmts.money , tip: "Σ суммы продажи (delivery_commission.amount) — база, из которой Ozon считает комиссию."},
+  { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls , tip: "Σ комиссии Ozon по строкам детализации. Хранится в минус, поэтому в таблице красная."},
+  { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Σ standard_fee (стандартных услуг) по строкам детализации, в минус."},
+  { k: "storage", label: "Хранение", num: true, render: cellFmts.moneyCls , tip: "Стоимость размещения на складах Ozon за окно из отчёта placement/by-products. Начисления хранятся в минус."},
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money , tip: "Σ «к перечислению» по строкам детализации; возвраты по постингам уже вычтены. Свод отсортирован по этой сумме."},
+  { k: "ops_count", label: "Операций", num: true, render: cellFmts.int , tip: "Число строк детализации (операций), попавших на артикул за окно."},
+  { k: "buyout_sum", label: "Сумма выкупов", num: true, render: cellFmts.money , tip: "Σ сумм выкупов из отчёта /v1/finance/products/buyout. Даты у выкупов нет — суммируется вся таблица."},
+  { k: "buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct , tip: "Выкуп, %: сумма выкупов ÷ «цена × количество» (колонка «Продажи (цена×кол-во)») × 100."},
+];
+
+const ozPlacementRowHeaders = [
+  { k: "date", label: "Дата", num: true, render: cellFmts.text , tip: "Дата начисления из отчёта «Стоимость размещения» (/v1/report/placement/by-products). Одна строка = один SKU на одном складе в этот день."},
+  { k: "offer_id", label: "Артикул", render: cellFmts.text , tip: "Ваш артикул (offer_id) из отчёта Ozon, обычно с размером. В сводной таблице такие артикулы сворачиваются в базовый."},
+  { k: "sku", label: "SKU", render: cellFmts.text , tip: "SKU Ozon — идентификатор товара в базе Ozon, не штрихкод. Связан с артикулом через детализацию продаж."},
+  { k: "warehouse", label: "Склад", render: cellFmts.text , tip: "Склад из отчёта (например, «Павловская Слобода (доставка)»). Входит в ключ строки: тот же SKU на другом складе — другая строка."},
+  { k: "paid_quantity", label: "Платных экз.", num: true, render: cellFmts.int , tip: "«Кол-во платных экземпляров»: объём сверх бесплатных лимитов Ozon, за который платит склад. Не всё количество товара на складе."},
+  { k: "paid_volume", label: "Платный объём, мл", num: true, render: cellFmts.num , tip: "«Платный объём в миллилитрах» из отчёта. В сводной таблице по артикулу складывается по всем SKU, складам и дням."},
+  { k: "storage", label: "Начислено", num: true, render: cellFmts.moneyCls , tip: "«Начисленная стоимость размещения» за день. Хранится со знаком минус (расход), поэтому суммы отрицательные и красные."},
+];
+
+const ozPlacementSummaryHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Базовый артикул: артикулы разных размеров свёрнуты в одну строку. В режиме «по размерам» — полный артикул."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер, выделенный из артикула Ozon. Заполняется только в режиме «в разрезе размеров»."},
+  { k: "sizes_count", label: "Размеров", num: true, render: cellFmts.int , tip: "Сколько разных размеров свёрнуто в строку товара. 1 — артикул без размера (безразмерный товар)."},
+  { k: "offers_count", label: "Артикулов", num: true, render: cellFmts.int , tip: "Сколько карточек Ozon (offer_id) попало в строку товара."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Первый попавшийся полный артикул группы (обычно с размером) — служебное поле группировки, не название товара из ЛК."},
+  { k: "days", label: "Дней хранения", num: true, render: cellFmts.int , tip: "Сколько уникальных дней были начисления по артикулу за окно. Не сумма дней по складам и не длина окна."},
+  { k: "paid_quantity", label: "Платных экз.", num: true, render: cellFmts.int , tip: "Сумма платных экземпляров по всем SKU, складам и дням окна. В строке итогов суммируется."},
+  { k: "paid_volume", label: "Платный объём, мл", num: true, render: cellFmts.num , tip: "Сумма платного объёма (мл) по всем SKU, складам и дням окна."},
+  { k: "storage", label: "Начислено", num: true, render: cellFmts.moneyCls , tip: "Сумма начислений за размещение по группе, руб. Знак минус (расход). Строки отсортированы по возрастанию: больше расход — выше."},
+  { k: "ops_count", label: "Операций", num: true, render: cellFmts.int , tip: "Число строк отчёта в группе = дата × SKU × склад. В строке итогов не суммируется."},
+];
+
+const ozCashflowHeaders = [
+  { k: "period_begin", label: "Период с", render: cellFmts.text , tip: "Начало расчётного периода из отчёта «Движение средств» (/v1/finance/cash-flow-statement/list). Это ключ строки в базе: повторная загрузка перезаписывает период."},
+  { k: "period_end", label: "Период по", render: cellFmts.text , tip: "Конец того же периода. В выборку попадают и периоды, пересекающиеся с окном: period_end ≥ дата с, period_begin ≤ дата по."},
+  { k: "begin_balance", label: "Баланс на начало", num: true, render: cellFmts.money , tip: "Остаток на начало периода (begin_balance_amount) по данным Ozon. В строке итогов не суммируется — сумма остатков бессмысленна."},
+  { k: "payments_amount", label: "Выплаты на р/с", num: true, render: cellFmts.moneyCls , tip: "Сумма первой выплаты из массива payments (payments[0].payment). Хранится отрицательной: «фактически получено» в шапке = −сумма колонки."},
+  { k: "delivery_total", label: "Логистика", num: true, render: cellFmts.money , tip: "Итог блока delivery отчёта за период (delivery.total), без разбивки по услугам. Знак берётся из отчёта Ozon без пересчёта."},
+  { k: "return_total", label: "Возвраты", num: true, render: cellFmts.moneyCls , tip: "Итог блока return (return.total) — возвраты покупателей за период, сумма возвратов покупателю."},
+  { k: "services_total", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Итог блока services (services.total): агрегированная сумма платных услуг Ozon за период, детализация по видам услуг здесь отсутствует."},
+  { k: "others_total", label: "Прочее", num: true, render: cellFmts.moneyCls , tip: "Итог блока others (others.total) — прочие операции и удержания, не попавшие в доставку, возвраты и услуги."},
+  { k: "end_balance", label: "Баланс на конец", num: true, render: cellFmts.money , tip: "Остаток на конец периода (end_balance_amount). Не суммируется в итогах и не участвует в расчёте «фактически получено»."},
 ];
 
 // Колонки маржинальной воронки. Порядок = порядок по умолчанию: первые 16 —
@@ -1014,68 +1562,68 @@ const FUNNEL_DEFAULT_KEYS = ["article", "name", "views", "opens", "adds", "order
   "cancelled", "buyouts", "cart_pct", "order_pct", "avg_price", "revenue",
   "net_cost", "margin", "margin_pct", "storage_est"];
 const funnelHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "views", label: "Просмотры", num: true, render: cellFmts.int },
-  { k: "opens", label: "Открытия", num: true, render: cellFmts.int },
-  { k: "adds", label: "В корзину", num: true, render: cellFmts.int },
-  { k: "orders", label: "Заказы", num: true, render: cellFmts.int },
-  { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int },
-  { k: "buyouts", label: "Выкупы", num: true, render: cellFmts.int },
-  { k: "cart_pct", label: "В корзину, %", num: true, render: cellFmts.pct },
-  { k: "order_pct", label: "Заказы, %", num: true, render: cellFmts.pct },
-  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money },
-  { k: "revenue", label: "Выручка (оценка)", num: true, render: cellFmts.money },
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-  { k: "margin", label: "Маржа (оц.)", num: true, render: cellFmts.moneyCls },
-  { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct },
-  { k: "storage_est", label: "Хранение (оц.)", num: true, render: cellFmts.money },
-  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
-  { k: "title", label: "Название из воронки", render: cellFmts.text },
-  { k: "subject_id", label: "ID предмета", render: cellFmts.text },
-  { k: "subject_name", label: "Предмет", render: cellFmts.text },
-  { k: "brand_name", label: "Бренд", render: cellFmts.text },
-  { k: "tags", label: "Теги", render: cellFmts.text },
-  { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int },
-  { k: "avg_orders_per_day", label: "Заказов в день", num: true, render: numDec(2) },
-  { k: "cancel_sum", label: "Отмены, руб", num: true, render: cellFmts.money },
-  { k: "buyout_sum", label: "Сумма выкупов, руб", num: true, render: cellFmts.money },
-  { k: "share_order_percent", label: "Доля заказов, %", num: true, render: cellFmts.pct },
-  { k: "conv_to_cart_percent", label: "В корзину (воронка WB), %", num: true, render: cellFmts.pct },
-  { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct },
-  { k: "conv_buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct },
-  { k: "localization_percent", label: "Локализация, %", num: true, render: cellFmts.pct },
-  { k: "stock_wb", label: "Остаток WB, шт", num: true, render: cellFmts.int },
-  { k: "stock_mp", label: "Остаток МП, шт", num: true, render: cellFmts.int },
-  { k: "stock_balance_sum", label: "Остаток (баланс), руб", num: true, render: cellFmts.money },
-  { k: "product_rating", label: "Рейтинг товара", num: true, render: numDec(1) },
-  { k: "feedback_rating", label: "Рейтинг отзывов", num: true, render: numDec(2) },
-  { k: "time_to_ready_min", label: "До готовности, мин", num: true, render: cellFmts.int },
-  { k: "wb_club_order_count", label: "WB Клуб: заказы", num: true, render: cellFmts.int },
-  { k: "wb_club_order_sum", label: "WB Клуб: заказы, руб", num: true, render: cellFmts.money },
-  { k: "wb_club_buyout_count", label: "WB Клуб: выкупы", num: true, render: cellFmts.int },
-  { k: "wb_club_buyout_sum", label: "WB Клуб: выкупы, руб", num: true, render: cellFmts.money },
-  { k: "wb_club_cancel_count", label: "WB Клуб: отмены", num: true, render: cellFmts.int },
-  { k: "wb_club_cancel_sum", label: "WB Клуб: отмены, руб", num: true, render: cellFmts.money },
-  { k: "wb_club_avg_price", label: "WB Клуб: ср. цена", num: true, render: cellFmts.money },
-  { k: "wb_club_buyout_percent", label: "WB Клуб: выкуп, %", num: true, render: cellFmts.pct },
-  { k: "wb_club_avg_orders_per_day", label: "WB Клуб: заказов в день", num: true, render: numDec(2) },
-  { k: "past_views", label: "Пред. период: просмотры", num: true, render: cellFmts.int },
-  { k: "past_adds", label: "Пред. период: в корзину", num: true, render: cellFmts.int },
-  { k: "past_orders", label: "Пред. период: заказы", num: true, render: cellFmts.int },
-  { k: "past_cancelled", label: "Пред. период: отмены", num: true, render: cellFmts.int },
-  { k: "past_buyouts", label: "Пред. период: выкупы", num: true, render: cellFmts.int },
-  { k: "past_revenue", label: "Пред. период: выручка", num: true, render: cellFmts.money },
-  { k: "past_buyout_sum", label: "Пред. период: выкуп, руб", num: true, render: cellFmts.money },
-  { k: "past_cancel_sum", label: "Пред. период: отмены, руб", num: true, render: cellFmts.money },
-  { k: "past_avg_price", label: "Пред. период: ср. цена", num: true, render: cellFmts.money },
-  { k: "dy_views", label: "Динамика просмотров, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_adds", label: "Динамика корзины, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_orders", label: "Динамика заказов, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_cancelled", label: "Динамика отмен, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_buyouts", label: "Динамика выкупов, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_revenue", label: "Динамика выручки, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_avg_price", label: "Динамика ср. цены, %", num: true, render: cellFmts.signedPct },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика в срезе воронки продаж WB. Один товар — одна строка, независимо от числа размеров."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Берётся из воронки (поле title), при отсутствии — из каталога товаров. Смотрите также колонку «Название из воронки»."},
+  { k: "views", label: "Просмотры", num: true, render: cellFmts.int , tip: "Просмотры карточки за срез воронки (openCount). Знаменатель всех наших конверсий в этой таблице."},
+  { k: "opens", label: "Открытия", num: true, render: cellFmts.int , tip: "Открытия карточки (openCardCount) — метрика WB, может отличаться от просмотров."},
+  { k: "adds", label: "В корзину", num: true, render: cellFmts.int , tip: "Добавления в корзину (cartCount) за срез. Товар в корзине, но не заказанный — потенциальный спрос."},
+  { k: "orders", label: "Заказы", num: true, render: cellFmts.int , tip: "Заказы покупателей (orderCount), включая те, что позже отменили. Факт выкупа — отдельная колонка."},
+  { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int , tip: "Отменённые заказы (cancelCount). Высокая доля к заказам — признак мыльного спроса или проблем с описанием."},
+  { k: "buyouts", label: "Выкупы", num: true, render: cellFmts.int , tip: "Выкупы (buyoutCount): заказы, которые покупатель забрал. Это фактические продажи по воронке."},
+  { k: "cart_pct", label: "В корзину, %", num: true, render: cellFmts.pct , tip: "Наш расчёт: добавления в корзину ÷ просмотры × 100 за срез."},
+  { k: "order_pct", label: "Заказы, %", num: true, render: cellFmts.pct , tip: "Наш расчёт: заказы ÷ просмотры × 100. Не путать с конверсией, посчитанной WB в колонках conv_*."},
+  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money , tip: "Средняя цена заказа из воронки (avgPrice). Если выручка пустая, она же используется для оценки выручки."},
+  { k: "revenue", label: "Выручка (оценка)", num: true, render: cellFmts.money , tip: "Сумма заказов из воронки (orderSum). Если она нулевая, берётся ср. цена × заказы. Расходов WB в воронке нет."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога товаров по этому артикулу."},
+  { k: "margin", label: "Маржа (оц.)", num: true, render: cellFmts.moneyCls , tip: "Оценка ДО расходов WB: выручка (или ср. цена × заказы) − себестоимость × заказы. Комиссия, логистика и хранение здесь не учтены."},
+  { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct , tip: "Оценочная маржа ÷ выручка × 100. Из-за отсутствия расходов WB завышает реальную рентабельность."},
+  { k: "storage_est", label: "Хранение (оц.)", num: true, render: cellFmts.money , tip: "Оценка платы за хранение по этому артикулу: безартикульные платы WB разносятся по «объём × тариф × остаток». В маржу не входит."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB (nmId) из среза воронки — по нему WB отдаёт метрики."},
+  { k: "title", label: "Название из воронки", render: cellFmts.text , tip: "Название карточки так, как оно загружено на WB. Отличие от «Наименования» = карточка переименована или каталог устарел."},
+  { k: "subject_id", label: "ID предмета", render: cellFmts.text , tip: "Идентификатор предмета WB. Одинаковый subject_id у товаров одной категории — полезно для группировки."},
+  { k: "subject_name", label: "Предмет", render: cellFmts.text , tip: "Предмет WB (например «Носки») — категория карточки."},
+  { k: "brand_name", label: "Бренд", render: cellFmts.text , tip: "Бренд по данным карточки WB в срезе воронки."},
+  { k: "tags", label: "Теги", render: cellFmts.text , tip: "Теги карточки, которые WB отдаёт в срезе воронки. Пусто, если продавец теги не проставил."},
+  { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int , tip: "Добавления в избранное/закладки за срез (addToWishlist). Метрика интереса без заказа."},
+  { k: "avg_orders_per_day", label: "Заказов в день", num: true, render: numDec(2) , tip: "Среднее число заказов в день по карточке за срез, метрика WB."},
+  { k: "cancel_sum", label: "Отмены, руб", num: true, render: cellFmts.money , tip: "Сумма отменённых заказов в рублях (cancelSum) за срез."},
+  { k: "buyout_sum", label: "Сумма выкупов, руб", num: true, render: cellFmts.money , tip: "Сумма выкупленных заказов в рублях (buyoutSum) — фактические деньги воронки."},
+  { k: "share_order_percent", label: "Доля заказов, %", num: true, render: cellFmts.pct , tip: "Доля заказов карточки в заказах её категории, метрика WB. Показывает позицию среди конкурентов."},
+  { k: "conv_to_cart_percent", label: "В корзину (воронка WB), %", num: true, render: cellFmts.pct , tip: "Конверсия в корзину, посчитанная WB (addToCartPercent). Отличается от нашей «В корзину, %» из-за другой базы знаменателя."},
+  { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct , tip: "Конверсия корзина→заказ по расчёту WB (cartToOrderPercent). Низкая — обычно вопрос цены или описания."},
+  { k: "conv_buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct , tip: "Доля выкупов среди заказов по расчёту WB (buyoutPercent). Главный сигнал качества спроса."},
+  { k: "localization_percent", label: "Локализация, %", num: true, render: cellFmts.pct , tip: "Доля локализованного товара, метрика WB. Выше — лучше позиции в выдаче."},
+  { k: "stock_wb", label: "Остаток WB, шт", num: true, render: cellFmts.int , tip: "Остаток на складах WB на момент среза воронки (product.stocks.wb). Может отличаться от данных «ВБ Остатки»."},
+  { k: "stock_mp", label: "Остаток МП, шт", num: true, render: cellFmts.int , tip: "Остаток, который WB отдаёт по карточке (product.stocks.mp) — снимок на дату среза."},
+  { k: "stock_balance_sum", label: "Остаток (баланс), руб", num: true, render: cellFmts.money , tip: "Оценка стоимости остатка в рублях, которую WB рассчитывает по своим тарифам (stocks.balanceSum). Не равна нашей себестоимости."},
+  { k: "product_rating", label: "Рейтинг товара", num: true, render: numDec(1) , tip: "Рейтинг карточки WB по шкале 1..5 — в основном по качеству и поставкам. 0 = данных нет."},
+  { k: "feedback_rating", label: "Рейтинг отзывов", num: true, render: numDec(2) , tip: "Средняя оценка по отзывам покупателей 1..5 из воронки. Используется автопилотом: ценный товар не скидываем."},
+  { k: "time_to_ready_min", label: "До готовности, мин", num: true, render: cellFmts.int , tip: "Срок сборки заказа на складе WB, переведённый в минуты (дни×1440 + часы×60 + минуты). Показывает скорость отгрузок."},
+  { k: "wb_club_order_count", label: "WB Клуб: заказы", num: true, render: cellFmts.int , tip: "Заказы, оформленные с подпиской WB Клуб (блок wbClub воронки). Обычно дороже и стабильнее."},
+  { k: "wb_club_order_sum", label: "WB Клуб: заказы, руб", num: true, render: cellFmts.money , tip: "Сумма заказов WB Клуб в рублях за срез."},
+  { k: "wb_club_buyout_count", label: "WB Клуб: выкупы", num: true, render: cellFmts.int , tip: "Выкупы среди заказов WB Клуб. Разница с заказами — отмены и невыкупы."},
+  { k: "wb_club_buyout_sum", label: "WB Клуб: выкупы, руб", num: true, render: cellFmts.money , tip: "Сумма выкупов WB Клуб в рублях за срез."},
+  { k: "wb_club_cancel_count", label: "WB Клуб: отмены", num: true, render: cellFmts.int , tip: "Отменённые заказы WB Клуб за срез."},
+  { k: "wb_club_cancel_sum", label: "WB Клуб: отмены, руб", num: true, render: cellFmts.money , tip: "Сумма отменённых заказов WB Клуб в рублях."},
+  { k: "wb_club_avg_price", label: "WB Клуб: ср. цена", num: true, render: cellFmts.money , tip: "Средняя цена заказа у подписчиков WB Клуб — обычно выше, чем у остальных."},
+  { k: "wb_club_buyout_percent", label: "WB Клуб: выкуп, %", num: true, render: cellFmts.pct , tip: "Доля выкупов среди заказов WB Клуб. Обычно выше общей конверсии — качественная аудитория."},
+  { k: "wb_club_avg_orders_per_day", label: "WB Клуб: заказов в день", num: true, render: numDec(2) , tip: "Среднее число заказов в день у подписчиков WB Клуб."},
+  { k: "past_views", label: "Пред. период: просмотры", num: true, render: cellFmts.int , tip: "Просмотры за предыдущий период по данным WB (statistic.past), а не пересчёт по нашей базе."},
+  { k: "past_adds", label: "Пред. период: в корзину", num: true, render: cellFmts.int , tip: "Добавления в корзину за предыдущий период по данным WB."},
+  { k: "past_orders", label: "Пред. период: заказы", num: true, render: cellFmts.int , tip: "Заказы за предыдущий период по данным WB."},
+  { k: "past_cancelled", label: "Пред. период: отмены", num: true, render: cellFmts.int , tip: "Отмены за предыдущий период по данным WB."},
+  { k: "past_buyouts", label: "Пред. период: выкупы", num: true, render: cellFmts.int , tip: "Выкупы за предыдущий период по данным WB."},
+  { k: "past_revenue", label: "Пред. период: выручка", num: true, render: cellFmts.money , tip: "Сумма заказов за предыдущий период по данным WB."},
+  { k: "past_buyout_sum", label: "Пред. период: выкуп, руб", num: true, render: cellFmts.money , tip: "Сумма выкупов за предыдущий период по данным WB."},
+  { k: "past_cancel_sum", label: "Пред. период: отмены, руб", num: true, render: cellFmts.money , tip: "Сумма отмен за предыдущий период по данным WB."},
+  { k: "past_avg_price", label: "Пред. период: ср. цена", num: true, render: cellFmts.money , tip: "Средняя цена заказа за предыдущий период по данным WB."},
+  { k: "dy_views", label: "Динамика просмотров, %", num: true, render: cellFmts.signedPct , tip: "Изменение просмотров к предыдущему периоду в процентах — метрика WB, плюс = рост."},
+  { k: "dy_adds", label: "Динамика корзины, %", num: true, render: cellFmts.signedPct , tip: "Изменение добавлений в корзину к предыдущему периоду, % — метрика WB."},
+  { k: "dy_orders", label: "Динамика заказов, %", num: true, render: cellFmts.signedPct , tip: "Изменение числа заказов к предыдущему периоду, % — метрика WB."},
+  { k: "dy_cancelled", label: "Динамика отмен, %", num: true, render: cellFmts.signedPct , tip: "Изменение числа отмен к предыдущему периоду, % — метрика WB."},
+  { k: "dy_buyouts", label: "Динамика выкупов, %", num: true, render: cellFmts.signedPct , tip: "Изменение числа выкупов к предыдущему периоду, % — метрика WB."},
+  { k: "dy_revenue", label: "Динамика выручки, %", num: true, render: cellFmts.signedPct , tip: "Изменение суммы заказов к предыдущему периоду, % — метрика WB."},
+  { k: "dy_avg_price", label: "Динамика ср. цены, %", num: true, render: cellFmts.signedPct , tip: "Изменение средней цены заказа к предыдущему периоду, % — метрика WB."},
 ];
 
 async function renderMarginFunnel(p) {
@@ -1141,7 +1689,8 @@ async function renderMarginDetail(p) {
 
 async function renderMarginOzonDetail(p) {
   const compare = /compare=1/.test(p || "");
-  const data = await api("/margin/ozon-detail" + p);
+  const bySize = ozBySize("margin-ozon-detail");
+  const data = await api("/margin/ozon-detail" + ozBySizeParam("margin-ozon-detail", p));
   let headers = colViewHeaders("margin-ozon-detail", ozonMarginHeaders);
   if (compare) {
     headers = headers.concat([
@@ -1155,7 +1704,8 @@ async function renderMarginOzonDetail(p) {
   const exportBtn = $("#exportMarginOzonDetail");
   if (exportBtn) {
     const cp = colViewParam("margin-ozon-detail", compare ? ["sells_pp", "margin_pp", "delta_ru", "delta_pct"] : null);
-    exportBtn.dataset.url = "/api/export/margin/ozon-detail" + p + (cp ? (p ? "&" : "?") + cp : "");
+    const ep = ozBySizeParam("margin-ozon-detail", p);
+    exportBtn.dataset.url = "/api/export/margin/ozon-detail" + ep + (cp ? (ep ? "&" : "?") + cp : "");
   }
   const msg = $("#marginOzonDetailMsg");
   const cmpMsg = $("#marginOzonDetailCompareMsg");
@@ -1168,8 +1718,27 @@ async function renderMarginOzonDetail(p) {
     msg.textContent =
       "Нет данных. OZON API ▸ Детализация продаж — период с данными: 2026-02-21 … 2026-08-30. Обновите детализацию за нужный период, чтобы раздел наполнился.";
   } else {
-    msg.textContent = "Строк: " + fmt((data.rows || []).length) +
+    let m = "Строк: " + fmt((data.rows || []).length) +
+      (bySize ? " (в разрезе размеров)" : " (по товарам)") +
       (data.estimated ? " (оценка себестоимости: " + data.estimated + ")" : "");
+    if (data.cashflow_received != null) {
+      m += " · на р/с фактически получено: " + fmtMoney(data.cashflow_received) +
+        " (движение средств, " + fmt(data.cashflow_periods || 0) + " пер.)";
+      if (data.cashflow_ratio != null) {
+        m += " · от начислений: " + fmt(data.cashflow_ratio) + "%";
+      }
+    }
+    if (data.accrued_total != null) {
+      m += " · по начислениям: " + fmtMoney(data.accrued_total) +
+        " (артикулов с данными: " + fmt(data.accrued_rows || 0) + ")";
+      const un = (data.accrued_other || 0) + (data.accrued_unmapped || 0);
+      if (un) {
+        m += " · нераспределено: " + fmtMoney(un) +
+          " (прочее: " + fmtMoney(data.accrued_other || 0) +
+          ", без артикула: " + fmtMoney(data.accrued_unmapped || 0) + ")";
+      }
+    }
+    msg.textContent = m;
   }
 }
 
@@ -1223,11 +1792,11 @@ async function renderOurs() {
 let whCpLabels = {};
 
 const whCpHeaders = [
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "ctype", label: "Тип", render: (v) => v == null ? "—" : (whCpLabels[v] || v) },
-  { k: "inn", label: "ИНН", render: cellFmts.text },
-  { k: "phone", label: "Телефон", render: cellFmts.text },
-  { k: "note", label: "Примечание", render: cellFmts.text },
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Контрагент из справочника «Наш склад». Служит ключом при импорте: при совпадении названия существующий контрагент обновляется, а не создаётся заново."},
+  { k: "ctype", label: "Тип", render: (v) => v == null ? "—" : (whCpLabels[v] || v) , tip: "Тип контрагента: поставщик, покупатель, маркетплейс, перевозчик, другое. WB и Ozon заведены как «маркетплейс» — отгрузка в их сторону это передача товара на склад."},
+  { k: "inn", label: "ИНН", render: cellFmts.text , tip: "ИНН контрагента, подтягивается из Excel при импорте справочника. Поле необязательное, служит для сверки."},
+  { k: "phone", label: "Телефон", render: cellFmts.text , tip: "Контактный телефон контрагента из справочника."},
+  { k: "note", label: "Примечание", render: cellFmts.text , tip: "Произвольный комментарий из справочника (например, условия поставки). В расчётах не участвует."},
 ];
 
 async function renderWhCp() {
@@ -1244,21 +1813,21 @@ async function renderWhCp() {
 }
 
 const whDocHeaders = [
-  { k: "date", label: "Дата", render: cellFmts.text },
-  { k: "doc_num", label: "№ документа", render: cellFmts.text },
-  { k: "counterparty", label: "Контрагент", render: cellFmts.text },
-  { k: "total", label: "Сумма", num: true, render: cellFmts.money },
-  { k: "items_count", label: "Строк", num: true, render: cellFmts.int },
-  { k: "source", label: "Источник", render: cellFmts.text },
-  { k: "_d", label: "", render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "" },
+  { k: "date", label: "Дата", render: cellFmts.text , tip: "Дата документа из шапки Excel-файла (при отсутствии — дата импорта). Документы сортируются по дате по убыванию."},
+  { k: "doc_num", label: "№ документа", render: cellFmts.text , tip: "Номер документа. Строки Excel группируются в один документ по связке «дата + № + контрагент»."},
+  { k: "counterparty", label: "Контрагент", render: cellFmts.text , tip: "Название контрагента из справочника. Пусто, если в файле колонка контрагента не заполнена (для отгрузок это допустимо)."},
+  { k: "total", label: "Сумма", num: true, render: cellFmts.money , tip: "Сумма документа = Σ (количество × цена) по его строкам. Пересчитывается при каждом импорте и редактировании."},
+  { k: "items_count", label: "Строк", num: true, render: cellFmts.int , tip: "Сколько товарных позиций в документе. При повторном импорте строки заменяются целиком."},
+  { k: "source", label: "Источник", render: cellFmts.text , tip: "Откуда создан документ: excel (импорт файла), ui (создан в интерфейсе), disk (с Яндекс.Диска)."},
+  { k: "_d", label: "", render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "" , tip: "Кнопка открывает товарные позиции документа. Изменение строк здесь меняет остатки и пересчитывает себестоимость."},
 ];
 
 const whDocItemHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "quantity", label: "Кол-во", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
-  { k: "price", label: "Цена", num: true, render: cellFmts.money2 },
-  { k: "amount", label: "Сумма", num: true, render: cellFmts.money2 },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул товара. Именно по нему накапливаются приходы и отгрузки, от него считается себестоимость."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование подставляется из каталога товаров на момент импорта. Если товара нет в каталоге — остаётся пустым."},
+  { k: "quantity", label: "Кол-во", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Количество единиц в строке. Может быть дробным (например, для сборных комплектов); строки с нулевым количеством при импорте отбрасываются."},
+  { k: "price", label: "Цена", num: true, render: cellFmts.money2 , tip: "Цена за единицу из документа. Приход — закупочная, отгрузка — заложенная в расчёт себестоимости."},
+  { k: "amount", label: "Сумма", num: true, render: cellFmts.money2 , tip: "Количество × цена, ₽. Суммы строк дают итог документа в колонке «Сумма»."},
 ];
 
 async function renderWhDocs(type, boxId, msgId, detailId) {
@@ -1278,14 +1847,14 @@ async function renderWhDocs(type, boxId, msgId, detailId) {
 }
 
 const whStockHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "start_qty", label: "Начальный", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
-  { k: "received", label: "Приход", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
-  { k: "shipped", label: "Отгрузка", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
-  { k: "balance", label: "Остаток", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) },
-  { k: "avg_cost", label: "Себестоимость ед.", num: true, render: cellFmts.money2 },
-  { k: "stock_value", label: "Стоимость остатков", num: true, render: cellFmts.money },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул из документов «Нашего склада». Строка появляется, если по артикулу был хоть один приход или отгрузка."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров на момент формирования выборки."},
+  { k: "start_qty", label: "Начальный", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Входящий остаток из справочника «Наш склад → Остатки» (custom_stock) — то, что было до первого прихода."},
+  { k: "received", label: "Приход", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Сумма количеств по всем документам типа «Приход» за всю историю, а не за период."},
+  { k: "shipped", label: "Отгрузка", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Сумма количеств по всем документам типа «Отгрузка» за всю историю, не за период."},
+  { k: "balance", label: "Остаток", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Начальный + приход − отгрузка, шт. Строки отсортированы по убыванию остатка."},
+  { k: "avg_cost", label: "Себестоимость ед.", num: true, render: cellFmts.money2 , tip: "Средневзвешенная по приходам: (начальный остаток × его цена + Σ приход × цена) ÷ (начальный + приход). Эта же цифра пишется в каталог товаров."},
+  { k: "stock_value", label: "Стоимость остатков", num: true, render: cellFmts.money , tip: "Остаток × средневзвешенная себестоимость, ₽ — сколько денег «заморожено» в этом товаре."},
 ];
 
 async function renderWhStock() {
@@ -1302,11 +1871,11 @@ async function renderWhStock() {
 }
 
 const whTurnoverHeaders = [
-  { k: "counterparty", label: "Контрагент", render: cellFmts.text },
-  { k: "in_n", label: "Приход, док.", num: true, render: cellFmts.int },
-  { k: "in_sum", label: "Приход, сумма", num: true, render: cellFmts.money },
-  { k: "out_n", label: "Отгрузка, док.", num: true, render: cellFmts.int },
-  { k: "out_sum", label: "Отгрузка, сумма", num: true, render: cellFmts.money },
+  { k: "counterparty", label: "Контрагент", render: cellFmts.text , tip: "Контрагент из справочника. Прочерк означает документ без привязанного контрагента (обычно отгрузка без указания получателя)."},
+  { k: "in_n", label: "Приход, док.", num: true, render: cellFmts.int , tip: "Сколько документов типа «Приход» заведено на этого контрагента за всю историю."},
+  { k: "in_sum", label: "Приход, сумма", num: true, render: cellFmts.money , tip: "Сумма всех приходных документов контрагента, ₽ (Σ итогов документов). Это закупки, а не выручка."},
+  { k: "out_n", label: "Отгрузка, док.", num: true, render: cellFmts.int , tip: "Сколько документов типа «Отгрузка» заведено на этого контрагента за всю историю."},
+  { k: "out_sum", label: "Отгрузка, сумма", num: true, render: cellFmts.money , tip: "Сумма всех отгрузочных документов контрагента, ₽. Строки отсортированы по сумме прихода и отгрузки вместе."},
 ];
 
 async function renderWhTurnover() {
@@ -1321,33 +1890,214 @@ async function renderWhTurnover() {
   pagedTable(box, whTurnoverHeaders, data.rows || []);
 }
 
+const replenishHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text, pinned: true, tip: "Артикул товара из каталога «Наш склад → Товары»." },
+  { k: "name", label: "Наименование", render: (v) => (v == null || v === "") ? "—" : v, tip: "Название товара из каталога (или из детализации)." },
+  { k: "actual_mp", label: "Карточка", render: (v) => (v == null || v === "") ? "—"
+    : v.split(",").map((x) => MP_LABELS[x] || x).join(" / "), tip: "На каком маркетплейсе есть карточка товара. Сверка по артикулу и штрихкоду; без карточки товар неактуален." },
+  { k: "status", label: "Статус", render: (v, r) => `<span class="tag st-${r.status}">${r.status_label}</span>`, tip: "Срочно — есть дефицит или нужен докуп; Нет нигде — продажи есть, а остатков нет; Норма — запаса хватает; Неактуальный — нет карточки на WB/Ozon." },
+  { k: "demand", label: "Спрос, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж: (продажи − возвраты) за выбранное окно, штук в день." },
+  { k: "demand_wb", label: "WB, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж только по WB за окно, штук в день (продажи − возвраты)." },
+  { k: "demand_oz", label: "Ozon, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж только по Ozon за окно, штук в день (продажи − возвраты)." },
+  { k: "return_rate", label: "Возвраты, %", num: true, render: (v) => v == null ? "—" : fmtPct(v), tip: "Доля возвратов: возвраты ÷ (продажи + возвраты) за окно, %." },
+  { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе: начальный + приход − отгрузка по документам." },
+  { k: "our_cost", label: "Себест-ть", num: true, render: cellFmts.money, tip: "Себестоимость из каталога товаров; если не задана — оценка по умолчанию." },
+  { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB: остатки на складах (quantity_full) + в пути." },
+  { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады WB (уже отгружен со склада WB-поставщика или в поставке)." },
+  { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на WB в днях: доступно ÷ спрос в день. Идеал — целевой запас (по умолчанию 30 дн)." },
+  { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит WB до целевого запаса: целевые дни × спрос в день − доступно. Что нужно довезти на WB." },
+  { k: "oz_avail", label: "Ozon доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на Ozon: остатки на складах + в пути." },
+  { k: "oz_in_way", label: "Ozon в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады Ozon." },
+  { k: "oz_doc", label: "Ozon, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на Ozon в днях: доступно ÷ спрос в день. Идеал — целевой запас." },
+  { k: "oz_def", label: "Ozon дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит Ozon до целевого запаса: целевые дни × спрос в день − доступно." },
+  { k: "ship_wb", label: "Отгрузить WB", num: true, render: (v) => (v || 0) > 0 ? `<b>${fmt(v)}</b>` : "—", tip: "Сколько отгрузить с нашего склада на WB: покрытие дефицита WB. Приоритет — товару с самым низким запасом в днях, при равенстве — более маржинальному." },
+  { k: "ship_oz", label: "Отгрузить Ozon", num: true, render: (v) => (v || 0) > 0 ? `<b>${fmt(v)}</b>` : "—", tip: "Сколько отгрузить с нашего склада на Ozon: покрытие дефицита Ozon (по той же логике приоритета, что и WB)." },
+  { k: "need_buy", label: "Купить у поставщика", num: true, render: (v) => (v || 0) > 0 ? `<b>${fmt(v)}</b>` : "—", tip: "Сколько докупить у поставщика, чтобы общий запас (наш склад + WB + Ozon) покрывал целевой запас в днях продаж." },
+  { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа (после себестоимости и расходов маркетплейса) в расчёте на одну проданную штуку." },
+  { k: "margin_pct", label: "Рент-сть, %", num: true, render: cellFmts.pct, tip: "Рентабельность: маржа ÷ сумма к перечислению, %." },
+  { k: "margin", label: "Маржа, руб", num: true, render: cellFmts.money, tip: "Маржа за окно по артикулу: к перечислению − расходы маркетплейса − себестоимость проданного." },
+];
+
+const replenishSizeHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text, pinned: true, tip: "Артикул товара из каталога." },
+  { k: "size", label: "Размер", render: (v) => (v == null || v === "") ? "—" : v, tip: "Технологический размер. Разрез по размерам доступен для продаж WB (tech_size) и остатков складов; у Ozon размера в продажах нет — Ozon-спрос только по артикулу." },
+  { k: "barcode", label: "Штрихкод", render: cellFmts.text, tip: "Штрихкод размера: из каталога размеров («Наш склад → Товары»), отчёта WB или остатков складов маркетплейсов." },
+  { k: "name", label: "Наименование", render: (v) => (v == null || v === "") ? "—" : v, tip: "Название товара из каталога (или из детализации)." },
+  { k: "actual_mp", label: "Карточка", render: (v) => (v == null || v === "") ? "—"
+    : v.split(",").map((x) => MP_LABELS[x] || x).join(" / "), tip: "Где есть карточка (сверка по артикулу/штрихкоду); без карточки товар неактуален." },
+  { k: "status", label: "Статус", render: (v, r) => `<span class="tag st-${r.status}">${r.status_label}</span>`, tip: "Статус по размеру (по WB-спросу и остаткам размера; «Нет нигде» — продажи есть, остатков по размеру и на нашем складе нет)." },
+  { k: "wb_sells", label: "Продано WB", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Продано на WB по этому размеру за окно, шт (нетто: продажи − возвраты)." },
+  { k: "wb_vel", label: "Спрос WB, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Спрос по размеру на WB: продажи (без возвратов) за окно ÷ дни, шт/день." },
+  { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB по этому размеру: остаток (quantity_full) + в пути." },
+  { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "В пути на склады WB по этому размеру." },
+  { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас этого размера на WB в днях: доступно ÷ спрос в день." },
+  { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит размера на WB до целевого запаса: целевые дни × спрос в день − доступно." },
+  { k: "ship_wb", label: "Отгрузить WB", num: true, render: (v) => (v || 0) > 0 ? `<b>${fmt(v)}</b>` : "—", tip: "Сколько отгрузить этого размера с нашего склада на WB: покрытие дефицита размера; приоритет — самому низкому запасу в днях." },
+  { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе — по всему артикулу (по размерам склад не ведётся)." },
+  { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа/шт по артикулу целиком (по размерам не раскладывается)." },
+  { k: "margin_pct", label: "Рент-сть, %", num: true, render: cellFmts.pct, tip: "Рентабельность по артикулу целиком, %." },
+];
+
+function replenishView() {
+  const el = $("#replenishView");
+  return (el && el.value) || "article";
+}
+
+function _footSum(rows, k) { return rows.reduce((a, r) => a + (Number(r[k]) || 0), 0); }
+
+function _footAvg(rows, k, dp) {
+  let s = 0, c = 0;
+  for (const r of rows) {
+    const n = Number(r[k]);
+    if (r[k] != null && r[k] !== "" && isFinite(n)) { s += n; c++; }
+  }
+  if (!c) return null;
+  const o = { avg: s / c };
+  if (dp === "pct") o.pct = true; else if (dp != null) o.dp = dp;
+  return o;
+}
+
+// Итоги вида «По артикулам»: сумма — для остатков/дефицитов/отгрузок/докупки,
+// среднее (≈) — для скоростей, дней запаса, долей возвратов и маржи/шт.
+function replenishFooters(rows) {
+  if (!rows || !rows.length) return null;
+  const t = {
+    our_stock: _footSum(rows, "our_stock"),
+    wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
+    wb_def: _footSum(rows, "wb_def"),
+    oz_avail: _footSum(rows, "oz_avail"), oz_in_way: _footSum(rows, "oz_in_way"),
+    oz_def: _footSum(rows, "oz_def"),
+    ship_wb: _footSum(rows, "ship_wb"), ship_oz: _footSum(rows, "ship_oz"),
+    need_buy: _footSum(rows, "need_buy"), margin: _footSum(rows, "margin"),
+    demand: _footAvg(rows, "demand", 2),
+    demand_wb: _footAvg(rows, "demand_wb", 2), demand_oz: _footAvg(rows, "demand_oz", 2),
+    return_rate: _footAvg(rows, "return_rate", "pct"),
+    wb_doc: _footAvg(rows, "wb_doc", 1), oz_doc: _footAvg(rows, "oz_doc", 1),
+    margin_per_one: _footAvg(rows, "margin_per_one", 2),
+    margin_pct: _footAvg(rows, "margin_pct", "pct"),
+  };
+  Object.keys(t).forEach((k) => { if (t[k] == null) delete t[k]; });
+  return t;
+}
+
+// Итоги вида «По размерам»: те же принципы — сумма/среднее.
+function replenishSizeFooters(rows) {
+  if (!rows || !rows.length) return null;
+  const t = {
+    wb_sells: _footSum(rows, "wb_sells"),
+    wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
+    wb_def: _footSum(rows, "wb_def"),
+    ship_wb: _footSum(rows, "ship_wb"), our_stock: _footSum(rows, "our_stock"),
+    margin: _footSum(rows, "margin"),
+    wb_vel: _footAvg(rows, "wb_vel", 2), wb_doc: _footAvg(rows, "wb_doc", 1),
+    margin_per_one: _footAvg(rows, "margin_per_one", 2),
+    margin_pct: _footAvg(rows, "margin_pct", "pct"),
+  };
+  Object.keys(t).forEach((k) => { if (t[k] == null) delete t[k]; });
+  return t;
+}
+
+function replenishQs(f) {
+  const win = Math.max(1, parseInt(($("#replenishWindow") || {}).value, 10) || 30);
+  const tgt = Math.max(1, parseInt(($("#replenishTarget") || {}).value, 10) || 30);
+  const sortEl = $("#replenishSort");
+  const fromEl = $("#fFrom");
+  const toEl = $("#fTo");
+  const now = new Date();
+  let to = toEl && toEl.value ? toEl.value : now.toISOString().slice(0, 10);
+  let from = fromEl && fromEl.value ? fromEl.value : "";
+  if (!from) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - (win - 1));
+    from = d.toISOString().slice(0, 10);
+  }
+  const q = {
+    date_from: from, date_to: to, window_days: win, target_days: tgt,
+    sort: (sortEl && sortEl.value) || "urgency",
+    view: replenishView(),
+    show_inactive: $("#replenishShowInactive") && $("#replenishShowInactive").checked ? 1 : undefined,
+  };
+  if (f.marketplace) q.marketplace = f.marketplace;
+  const like = tabLike("replenishLike");
+  if (like) q.article_like = like;
+  return qs(q);
+}
+
+async function renderReplenish() {
+  const box = $("#replenishTable");
+  let f = {};
+  try { f = filters(); } catch (e) { /* пустой объект */ }
+  const p = replenishQs(f);
+  const exp = $("#exportReplenish");
+  if (exp) {
+    const cp = colViewParam("replenish");
+    exp.href = "/api/export/replenish" + p + (cp ? "&" + cp : "");
+  }
+  let data;
+  try {
+    data = await api("/replenish" + p);
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить потребность: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const isSize = replenishView() === "sizes";
+  const msg = $("#replenishMsg");
+  if (msg) {
+    const m = data.meta || {};
+    const parts = [
+      "Окно: " + (data.date_from || "—") + " … " + (data.date_to || "—"),
+      "Запас: " + m.target_days + " дн",
+      (isSize ? "Размеров: " : "Строк: ") + fmt(m.count),
+      "срочно: " + (m.urgent || 0),
+      "нет нигде: " + (m.nostock || 0),
+      "норма: " + (m.normal || 0),
+      "неактуальные (скрыты): " + (m.inactive_total || 0),
+    ];
+    if (!isSize) {
+      parts.push("Докупить: " + fmt(m.need_total) + " шт");
+    }
+    parts.push(isSize ? "Отгрузить на WB: " + fmt(m.ship_total) + " шт" : "Отгрузить: " + fmt(m.ship_total) + " шт");
+    const full = parts.join(" · ");
+    if (full.length > 150) {
+      msg.textContent = full.slice(0, 150) + "…";
+      msg.dataset.tip = full;
+    } else {
+      msg.textContent = full;
+      delete msg.dataset.tip;
+    }
+  }
+  const headers = colViewHeaders("replenish", isSize ? replenishSizeHeaders : replenishHeaders);
+  const footers = isSize ? replenishSizeFooters(data.rows || []) : replenishFooters(data.rows || []);
+  pagedTable(box, headers, data.rows || [], footers, null, colViewPinKeys("replenish"));
+}
+
 const productsBaseHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "brand", label: "Бренд", render: cellFmts.text },
-  { k: "barcode", label: "Баркод", render: cellFmts.text },
-  { k: "sizes_count", label: "Размеров", num: true, render: cellFmts.int },
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-  { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money },
-  { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money },
-  { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) },
-  { k: "replenishable", label: "Докупаемый", render: replenishableCell },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул единого каталога. Он же служит ключом строк размеров, документов склада и продаж."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из карточек WB и Ozon (каталог обновляется кнопкой «Обновить каталог»)."},
+  { k: "brand", label: "Бренд", render: cellFmts.text , tip: "Бренд из карточки маркетплейса. Пусто, если бренд в карточке не заполнен."},
+  { k: "barcode", label: "Баркод", render: cellFmts.text , tip: "В агрегированном режиме — штрихкод первого размера по алфавиту. Включите «По размерам», чтобы увидеть штрихкод каждого размера."},
+  { k: "sizes_count", label: "Размеров", num: true, render: cellFmts.int , tip: "Сколько размеров заведено в каталоге для артикула. 0 = размеры не выгружались, остатки по размерам не покажутся."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога. Пересчитывается как средневзвешенная по приходам «Нашего склада» и используется в расчёте прибыли."},
+  { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money , tip: "Базовая цена WB = себестоимость × f(себестоимость) × f(объём), округление вверх до «…9». Якоря настраиваются в «Установить цены»."},
+  { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money , tip: "Цена безубыточности: (себестоимость + хранение + логистика + услуги) ÷ (1 − комиссия% − мин. прибыль%). Ниже не опускаемся, не ниже себестоимости."},
+  { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) , tip: "Итоговый множитель наценки f(себестоимость) × f(объём), показанный в процентах (значение ×100). Рекомендуемая цена = себестоимость × этот множитель до округления."},
+  { k: "replenishable", label: "Докупаемый", render: replenishableCell , tip: "Чекбокс: докупаем ли товар. Флаг влияет на решения автопилота — дефицитный докупаемый товар он не спешит удорожать. Сохраняется в каталог."},
 ];
 const productsSizeHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "size", label: "Размер", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "brand", label: "Бренд", render: cellFmts.text },
-  { k: "barcode", label: "Баркод", render: cellFmts.text },
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-  { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money },
-  { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money },
-  { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) },
-  { k: "replenishable", label: "Докупаемый", render: replenishableCell },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул единого каталога, к которому относится размер."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер из карточки (product_sizes). Выгрузка размеров нужна, чтобы вести остатки по размеру."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование товара из карточки маркетплейса — одинаковое для всех его размеров."},
+  { k: "brand", label: "Бренд", render: cellFmts.text , tip: "Бренд из карточки маркетплейса."},
+  { k: "barcode", label: "Баркод", render: cellFmts.text , tip: "Штрихкод именно этого размера. По нему WB различает карточки, а сопоставление с детализацией продаж идёт по SKU."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога — общая для всех размеров товара. Делить на размер не нужно: расчёт на единицу."},
+  { k: "recommended_price", label: "Рекомендуемая цена", num: true, render: cellFmts.money , tip: "Базовая цена = себестоимость × f(себестоимость) × f(объём) с округлением вверх до «…9». Одинакова для всех размеров товара."},
+  { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money , tip: "Цена безубыточности единицы по unit-экономике товара (комиссия, логистика, хранение, услуги за 30 дней). Не ниже себестоимости."},
+  { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) , tip: "Множитель наценки f(себестоимость) × f(объём) в процентах (значение ×100). Работает от себестоимости и объёма, размер на него не влияет."},
+  { k: "replenishable", label: "Докупаемый", render: replenishableCell , tip: "Чекбокс «докупаемый» — общий флаг на товар, одинаков для всех размеров. Используется автопилотом скидок и в отчёте о пополнении."},
 ];
 const productsStockHeaders = [
-  { k: "own_stock", label: "Остаток свой", num: true, render: (v) => v == null ? "—" : (Number.isInteger(Number(v)) ? fmt(v) : fmtFloat(Number(v), 1)) },
-  { k: "mp_stock", label: "Остаток МП", num: true, render: cellFmts.int },
+  { k: "own_stock", label: "Остаток свой", num: true, render: (v) => v == null ? "—" : (Number.isInteger(Number(v)) ? fmt(v) : fmtFloat(Number(v), 1)) , tip: "Наш склад: баланс по документам (начальный + приход − отгрузка) без разбивки по размерам. Тот же источник, что и вкладка «Остатки»."},
+  { k: "mp_stock", label: "Остаток МП", num: true, render: cellFmts.int , tip: "Остаток на маркетплейсах по последнему срезу стоков: WB + Ozon, суммой по всем складам. В режиме «По размерам» — только WB по этому размеру."},
 ];
 
 function productsQs() {
@@ -2100,16 +2850,16 @@ function initTicketsTab() {
 
 // ----------------------------------------------------- карточки маркетплейса (Excel)
 const cardsHeaders = [
-  { k: "chrt_id", label: "Код размера", render: cellFmts.text },
-  { k: "vendor_code", label: "Артикул продавца", render: cellFmts.text },
-  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
-  { k: "brand", label: "Бренд", render: cellFmts.text },
-  { k: "subject", label: "Предмет", render: cellFmts.text },
-  { k: "size", label: "Размер", render: cellFmts.text },
-  { k: "barcode", label: "Баркод", render: cellFmts.text },
-  { k: "volume_l", label: "Объём, л.", num: true, render: (v) => v == null || v === 0 ? "—" : fmt(v) },
-  { k: "composition", label: "Состав", render: (v) => cellFmts.text(String(v || "").slice(0, 60)) },
-  { k: "name", label: "Название", render: cellFmts.text },
+  { k: "chrt_id", label: "Код размера", render: cellFmts.text , tip: "Идентификатор размера: у WB — chrtId из выгрузки ЛК, у Ozon — Ozon Product ID. Строка = один размер/SKU."},
+  { k: "vendor_code", label: "Артикул продавца", render: cellFmts.text , tip: "Ваш артикул: у WB — vendorCode из ЛК, у Ozon — Offer ID из отчёта о товарах."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Артикул WB (nmID). Для карточек Ozon подставляется при загрузке из API: сначала по штрихкоду, иначе по артикулу без хвостовых сегментов (размера)."},
+  { k: "brand", label: "Бренд", render: cellFmts.text , tip: "Бренд из карточки товара; у Ozon берётся «Бренд», а если его нет — «Категория»."},
+  { k: "subject", label: "Предмет", render: cellFmts.text , tip: "Предмет WB из выгрузки ЛК. У карточек Ozon поле всегда пустое — Ozon предмета не отдаёт."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер (techSize) из ЛК WB. У Ozon пусто: размер зашит в конец артикула Offer ID."},
+  { k: "barcode", label: "Баркод", render: cellFmts.text , tip: "Штрихкод размера: ШК WB или «Штрихкод (Серийный номер / EAN)» у Ozon. По нему карточки WB и Ozon сопоставляются."},
+  { k: "volume_l", label: "Объём, л.", num: true, render: (v) => v == null || v === 0 ? "—" : fmt(v) , tip: "Объём товара в литрах из ЛК WB — по нему считается стоимость хранения. У карточек Ozon всегда 0."},
+  { k: "composition", label: "Состав", render: (v) => cellFmts.text(String(v || "").slice(0, 60)) , tip: "Состав из выгрузки ЛК WB; в таблице обрезается до 60 символов. У карточек Ozon пусто."},
+  { k: "name", label: "Название", render: cellFmts.text , tip: "Название товара: у WB — «Название товара» из ЛК, у Ozon — «Name» из отчёта о товарах."},
 ];
 
 function cardIds(name) {
@@ -2142,6 +2892,8 @@ async function renderCards(name) {
   box._st = st;
 
   const paint = () => {
+    const prevCol = box._sc ? box._sc.col : 0;
+    const prevTop = box._sc ? box._sc.top : 0;
     box.innerHTML = "";
     if (!st.total && !st.loading) {
       box.innerHTML = '<div class="empty">Нет загруженных карточек</div>';
@@ -2179,6 +2931,10 @@ async function renderCards(name) {
       tr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
     }
     applyStickyCols(wrap, headers, colViewPinKeys(name));
+    const cs = box.querySelector(".tscroll");
+    if (cs && prevCol) cs.scrollLeft = prevCol;
+    if (prevTop) box.scrollTop = prevTop;
+    box._sc = { col: cs ? cs.scrollLeft : 0, top: box.scrollTop };
     mountXBar(box, tscroll);
   };
 
@@ -2224,72 +2980,72 @@ function fmtMinutes(v) {
 }
 
 const wbFunnelCompact = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Название", render: cellFmts.text },
-  { k: "orders", label: "Заказы", num: true, render: cellFmts.int },
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца (vendorCode) из отчёта WB; если поле не пришло — из таблицы соответствия nmId → артикул."},
+  { k: "name", label: "Название", render: cellFmts.text , tip: "Название из локального каталога товаров по этому артикулу, а не из отчёта WB. Пусто, если товара нет в каталоге."},
+  { k: "orders", label: "Заказы", num: true, render: cellFmts.int , tip: "Заказы за срез (WB orderCount) — оформленные заказы, включая отменённые и возвращённые."},
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма заказов за срез (orderSum), ₽. Включает отменённые; фактические деньги — в колонке «Сумма выкупа»."},
+  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.money , tip: "Средняя цена заказа в отчёте WB (avgPrice), ₽: сумма заказов ÷ число заказов за срез."},
 ];
 
 const wbFunnelHeaders = [
-  { k: "date_from", label: "С", render: cellFmts.text },
-  { k: "date_to", label: "По", render: cellFmts.text },
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
-  { k: "name", label: "Название", render: cellFmts.text },
-  { k: "title", label: "Название (API)", render: cellFmts.text },
-  { k: "subject_name", label: "Предмет", render: cellFmts.text },
-  { k: "subject_id", label: "ID предмета", render: cellFmts.text },
-  { k: "brand_name", label: "Бренд", render: cellFmts.text },
-  { k: "tags", label: "Теги", render: cellFmts.text },
-  { k: "product_rating", label: "Рейтинг карточки", num: true, render: numDec(1) },
-  { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: numDec(2) },
-  { k: "stock_wb", label: "Остатки WB", num: true, render: cellFmts.intZero },
-  { k: "stock_mp", label: "Остатки свой склад", num: true, render: cellFmts.intZero },
-  { k: "stock_balance_sum", label: "Сумма остатков", num: true, render: cellFmts.moneyZero },
-  { k: "views", label: "Просмотры", num: true, render: cellFmts.int },
-  { k: "opens", label: "Открытия", num: true, render: cellFmts.intZero },
-  { k: "adds", label: "В корзину", num: true, render: cellFmts.int },
-  { k: "orders", label: "Заказы", num: true, render: cellFmts.int },
-  { k: "buyouts", label: "Выкупы", num: true, render: cellFmts.intZero },
-  { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int },
-  { k: "cancel_sum", label: "Сумма отмен", num: true, render: cellFmts.moneyZero },
-  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.moneyZero },
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-  { k: "buyout_sum", label: "Сумма выкупа", num: true, render: cellFmts.moneyZero },
-  { k: "avg_orders_per_day", label: "Заказов в день", num: true, render: numDec(2) },
-  { k: "share_order_percent", label: "Доля в выручке, %", num: true, render: cellFmts.pct },
-  { k: "add_to_wishlist", label: "В отложенные", num: true, render: cellFmts.intZero },
-  { k: "time_to_ready_min", label: "Доставка, средн.", num: true, render: fmtMinutes },
-  { k: "localization_percent", label: "Локальные, %", num: true, render: cellFmts.pct },
-  { k: "conv_to_cart_percent", label: "Просмотр→Корзина, %", num: true, render: cellFmts.pct },
-  { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct },
-  { k: "conv_buyout_percent", label: "Заказ→Выкуп, %", num: true, render: cellFmts.pct },
-  { k: "past_views", label: "Просмотры (пред. период)", num: true, render: cellFmts.int },
-  { k: "past_adds", label: "В корзину (пред. период)", num: true, render: cellFmts.int },
-  { k: "past_orders", label: "Заказы (пред. период)", num: true, render: cellFmts.int },
-  { k: "past_cancelled", label: "Отмены (пред. период)", num: true, render: cellFmts.int },
-  { k: "past_buyouts", label: "Выкупы (пред. период)", num: true, render: cellFmts.int },
-  { k: "past_revenue", label: "Выручка (пред. период)", num: true, render: cellFmts.money },
-  { k: "past_buyout_sum", label: "Сумма выкупа (пред. период)", num: true, render: cellFmts.money },
-  { k: "past_cancel_sum", label: "Сумма отмен (пред. период)", num: true, render: cellFmts.money },
-  { k: "past_avg_price", label: "Ср. цена (пред. период)", num: true, render: cellFmts.money },
-  { k: "dy_views", label: "Динамика просмотров, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_adds", label: "Динамика «в корзину», %", num: true, render: cellFmts.signedPct },
-  { k: "dy_orders", label: "Динамика заказов, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_cancelled", label: "Динамика отмен, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_buyouts", label: "Динамика выкупов, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_revenue", label: "Динамика выручки, %", num: true, render: cellFmts.signedPct },
-  { k: "dy_avg_price", label: "Динамика ср. цены, %", num: true, render: cellFmts.signedPct },
-  { k: "wb_club_order_count", label: "WB Клуб: заказы", num: true, render: cellFmts.intZero },
-  { k: "wb_club_order_sum", label: "WB Клуб: заказы, ₽", num: true, render: cellFmts.moneyZero },
-  { k: "wb_club_buyout_count", label: "WB Клуб: выкупы", num: true, render: cellFmts.intZero },
-  { k: "wb_club_buyout_sum", label: "WB Клуб: выкупы, ₽", num: true, render: cellFmts.moneyZero },
-  { k: "wb_club_cancel_count", label: "WB Клуб: отмены", num: true, render: cellFmts.intZero },
-  { k: "wb_club_cancel_sum", label: "WB Клуб: отмены, ₽", num: true, render: cellFmts.moneyZero },
-  { k: "wb_club_avg_price", label: "WB Клуб: ср. цена", num: true, render: cellFmts.moneyZero },
-  { k: "wb_club_buyout_percent", label: "WB Клуб: % выкупа", num: true, render: cellFmts.pct },
-  { k: "wb_club_avg_orders_per_day", label: "WB Клуб: заказов/день", num: true, render: numDec(2) },
+  { k: "date_from", label: "С", render: cellFmts.text , tip: "Начало окна среза, который реально лежит в базе. Может отличаться от запрошенного периода — тогда итоги считаются за этот срез."},
+  { k: "date_to", label: "По", render: cellFmts.text , tip: "Конец окна среза из базы. Если точного среза за выбранный период нет, здесь показан другой доступный диапазон."},
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца (vendorCode) из отчёта WB; если поле не пришло — из таблицы соответствия nmId → артикул."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Артикул WB (product.nmID) — внутренний идентификатор карточки на маркетплейсе, не путать с артикулом продавца."},
+  { k: "name", label: "Название", render: cellFmts.text , tip: "Название из локального каталога товаров по этому артикулу, а не из отчёта WB. Пусто, если товара нет в каталоге."},
+  { k: "title", label: "Название (API)", render: cellFmts.text , tip: "Название карточки из самого отчёта WB (product.title). Колонка «Название» берётся из локального каталога, значения могут расходиться."},
+  { k: "subject_name", label: "Предмет", render: cellFmts.text , tip: "Предмет товара по классификатору WB (product.subjectName) — категория карточки из отчёта."},
+  { k: "subject_id", label: "ID предмета", render: cellFmts.text , tip: "Числовой ID предмета в классификаторе WB (product.subjectId); используется в фильтрах отчёта воронки."},
+  { k: "brand_name", label: "Бренд", render: cellFmts.text , tip: "Бренд из карточки отчёта воронки (product.brandName)."},
+  { k: "tags", label: "Теги", render: cellFmts.text , tip: "Теги карточки из product.tags: список склеивается через запятую, иначе выводится строкой JSON."},
+  { k: "product_rating", label: "Рейтинг карточки", num: true, render: numDec(1) , tip: "Рейтинг товара по оценкам покупателей (product.productRating), шкала 0–10. Приходит вместе со срезом воронки."},
+  { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: numDec(2) , tip: "Средняя оценка по отзывам (product.feedbackRating), шкала 0–5. Это не то же самое, что рейтинг товара."},
+  { k: "stock_wb", label: "Остатки WB", num: true, render: cellFmts.intZero , tip: "Остаток на складах WB из карточки отчёта (product.stocks.wb), шт — на момент среза воронки, а не на сегодня."},
+  { k: "stock_mp", label: "Остатки свой склад", num: true, render: cellFmts.intZero , tip: "Второе поле блока остатков карточки в отчёте (product.stocks.mp), шт. Часто приходит 0 — тогда ориентируйтесь на остаток WB."},
+  { k: "stock_balance_sum", label: "Сумма остатков", num: true, render: cellFmts.moneyZero , tip: "Сумма баланса остатков карточки (product.stocks.balanceSum), ₽ — приходит из отчёта воронки, у нас не пересчитывается."},
+  { k: "views", label: "Просмотры", num: true, render: cellFmts.int , tip: "Просмотры карточки за срез (openCount) — сколько раз карточку открывали в каталоге и поиске WB."},
+  { k: "opens", label: "Открытия", num: true, render: cellFmts.intZero , tip: "Открытия карточки (openCardCount). Поле есть не во всех ответах WB, при его отсутствии сохраняется 0."},
+  { k: "adds", label: "В корзину", num: true, render: cellFmts.int , tip: "Добавления в корзину за срез (cartCount), шт."},
+  { k: "orders", label: "Заказы", num: true, render: cellFmts.int , tip: "Заказы за срез (WB orderCount) — оформленные заказы, включая отменённые и возвращённые."},
+  { k: "buyouts", label: "Выкупы", num: true, render: cellFmts.intZero , tip: "Выкупы — заказы, полученные покупателем (buyoutCount). С текущим ключом WB их не отдаёт, поэтому обычно 0."},
+  { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int , tip: "Отменённые заказы за срез (cancelCount), шт — включая возвраты покупателем."},
+  { k: "cancel_sum", label: "Сумма отмен", num: true, render: cellFmts.moneyZero , tip: "Сумма отменённых заказов (cancelSum), ₽ за срез."},
+  { k: "avg_price", label: "Ср. цена", num: true, render: cellFmts.moneyZero , tip: "Средняя цена заказа из отчёта WB (avgPrice), ₽: сумма заказов ÷ число заказов за срез."},
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма заказов за срез (orderSum), ₽. Включает отменённые; фактические поступления — в колонке «Сумма выкупа»."},
+  { k: "buyout_sum", label: "Сумма выкупа", num: true, render: cellFmts.moneyZero , tip: "Сумма выкупленных заказов (buyoutSum), ₽ — реальные деньги по товару. Обычно 0: у ключа нет доступа к выкупам."},
+  { k: "avg_orders_per_day", label: "Заказов в день", num: true, render: numDec(2) , tip: "Среднее число заказов в день (avgOrdersCountPerDay) — метрика WB, посчитанная ими по выбранному периоду."},
+  { k: "share_order_percent", label: "Доля в выручке, %", num: true, render: cellFmts.pct , tip: "Доля заказов этой карточки в заказах магазина за период (shareOrderPercent), % — метрика WB."},
+  { k: "add_to_wishlist", label: "В отложенные", num: true, render: cellFmts.intZero , tip: "Добавления в избранное и ожидание (addToWishlist) за срез, шт — отложенные покупки покупателя."},
+  { k: "time_to_ready_min", label: "Доставка, средн.", num: true, render: fmtMinutes , tip: "Срок, отведённый WB на поставку товара на склад (timeToReady): дни × 1440 + часы × 60 + минуты."},
+  { k: "localization_percent", label: "Локальные, %", num: true, render: cellFmts.pct , tip: "Доля локальных заказов (localizationPercent), % — метрика WB, а не наш расчёт по складам."},
+  { k: "conv_to_cart_percent", label: "Просмотр→Корзина, %", num: true, render: cellFmts.pct , tip: "Конверсия «просмотр → корзина» (conversions.addToCartPercent), % — метрика WB: корзина ÷ просмотры."},
+  { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct , tip: "Конверсия «корзина → заказ» (conversions.cartToOrderPercent), %: заказы ÷ добавления в корзину."},
+  { k: "conv_buyout_percent", label: "Заказ→Выкуп, %", num: true, render: cellFmts.pct , tip: "Конверсия «заказ → выкуп» (conversions.buyoutPercent), %: выкупы ÷ заказы. Обычно 0 — у ключа нет выкупов."},
+  { k: "past_views", label: "Просмотры (пред. период)", num: true, render: cellFmts.int , tip: "Просмотры за предыдущий период сравнения (statistic.past.openCount), шт."},
+  { k: "past_adds", label: "В корзину (пред. период)", num: true, render: cellFmts.int , tip: "Добавления в корзину за предыдущий период (statistic.past.cartCount), шт."},
+  { k: "past_orders", label: "Заказы (пред. период)", num: true, render: cellFmts.int , tip: "Заказы за предыдущий период (statistic.past.orderCount), шт."},
+  { k: "past_cancelled", label: "Отмены (пред. период)", num: true, render: cellFmts.int , tip: "Отмены за предыдущий период (statistic.past.cancelCount), шт."},
+  { k: "past_buyouts", label: "Выкупы (пред. период)", num: true, render: cellFmts.int , tip: "Выкупы за предыдущий период (statistic.past.buyoutCount), шт. Обычно 0 — у ключа нет выкупов."},
+  { k: "past_revenue", label: "Выручка (пред. период)", num: true, render: cellFmts.money , tip: "Сумма заказов за предыдущий период (statistic.past.orderSum), ₽."},
+  { k: "past_buyout_sum", label: "Сумма выкупа (пред. период)", num: true, render: cellFmts.money , tip: "Сумма выкупа за предыдущий период (statistic.past.buyoutSum), ₽. Обычно 0 — нет доступа к выкупам."},
+  { k: "past_cancel_sum", label: "Сумма отмен (пред. период)", num: true, render: cellFmts.money , tip: "Сумма отмен за предыдущий период (statistic.past.cancelSum), ₽."},
+  { k: "past_avg_price", label: "Ср. цена (пред. период)", num: true, render: cellFmts.money , tip: "Средняя цена заказа за предыдущий период (statistic.past.avgPrice), ₽."},
+  { k: "dy_views", label: "Динамика просмотров, %", num: true, render: cellFmts.signedPct , tip: "Динамика просмотров к предыдущему периоду, % (comparison.openCountDynamic)."},
+  { k: "dy_adds", label: "Динамика «в корзину», %", num: true, render: cellFmts.signedPct , tip: "Динамика добавлений в корзину, % (comparison.cartCountDynamic)."},
+  { k: "dy_orders", label: "Динамика заказов, %", num: true, render: cellFmts.signedPct , tip: "Динамика заказов, % (comparison.orderCountDynamic)."},
+  { k: "dy_cancelled", label: "Динамика отмен, %", num: true, render: cellFmts.signedPct , tip: "Динамика отмен, % (comparison.cancelCountDynamic)."},
+  { k: "dy_buyouts", label: "Динамика выкупов, %", num: true, render: cellFmts.signedPct , tip: "Динамика выкупов, % (comparison.buyoutCountDynamic). Обычно 0 — выкупов в отчёте нет."},
+  { k: "dy_revenue", label: "Динамика выручки, %", num: true, render: cellFmts.signedPct , tip: "Динамика суммы заказов, % (comparison.orderSumDynamic)."},
+  { k: "dy_avg_price", label: "Динамика ср. цены, %", num: true, render: cellFmts.signedPct , tip: "Динамика средней цены заказа, % (comparison.avgPriceDynamic)."},
+  { k: "wb_club_order_count", label: "WB Клуб: заказы", num: true, render: cellFmts.intZero , tip: "Заказы участников WB Клуба (wbClub.orderCount), шт — подмножество общих заказов."},
+  { k: "wb_club_order_sum", label: "WB Клуб: заказы, ₽", num: true, render: cellFmts.moneyZero , tip: "Сумма заказов участников WB Клуба (wbClub.orderSum), ₽."},
+  { k: "wb_club_buyout_count", label: "WB Клуб: выкупы", num: true, render: cellFmts.intZero , tip: "Выкупы участников WB Клуба (wbClub.buyoutCount), шт. Обычно 0 — у ключа нет выкупов."},
+  { k: "wb_club_buyout_sum", label: "WB Клуб: выкупы, ₽", num: true, render: cellFmts.moneyZero , tip: "Сумма выкупленных заказов участников WB Клуба (wbClub.buyoutSum), ₽."},
+  { k: "wb_club_cancel_count", label: "WB Клуб: отмены", num: true, render: cellFmts.intZero , tip: "Отмены среди заказов участников WB Клуба (wbClub.cancelCount), шт."},
+  { k: "wb_club_cancel_sum", label: "WB Клуб: отмены, ₽", num: true, render: cellFmts.moneyZero , tip: "Сумма отмен среди заказов участников WB Клуба (wbClub.cancelSum), ₽."},
+  { k: "wb_club_avg_price", label: "WB Клуб: ср. цена", num: true, render: cellFmts.moneyZero , tip: "Средняя цена заказа участника WB Клуба (wbClub.avgPrice), ₽."},
+  { k: "wb_club_buyout_percent", label: "WB Клуб: % выкупа", num: true, render: cellFmts.pct , tip: "Доля выкупов среди заказов WB Клуба (wbClub.buyoutPercent), %. Обычно 0."},
+  { k: "wb_club_avg_orders_per_day", label: "WB Клуб: заказов/день", num: true, render: numDec(2) , tip: "Среднее число заказов в день от участников WB Клуба (wbClub.avgOrderCountPerDay)."},
 ];
 
 function paneDates() {
@@ -2386,24 +3142,24 @@ function stockSummary(rows, date, label) {
 }
 
 const wbStockHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "chrt_id", label: "Код размера", render: cellFmts.text },
-  { k: "size", label: "Размер", render: cellFmts.text },
-  { k: "barcode", label: "Баркод", render: cellFmts.text },
-  { k: "warehouse", label: "Склад", render: cellFmts.text },
-  { k: "quantity", label: "Доступно", num: true, render: cellFmts.int },
-  { k: "quantity_full", label: "Всего на складах", num: true, render: cellFmts.int },
-  { k: "in_way", label: "В пути", num: true, render: cellFmts.int },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца: vendorCode на WB, offer_id на Ozon. На Ozon он может включать размер."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название из локального каталога товаров по артикулу (таблица products), не из отчёта маркетплейса."},
+  { k: "chrt_id", label: "Код размера", render: cellFmts.text , tip: "Код размера WB (chrtId) из отчёта об остатках. На Ozon всегда пусто — там размер определяется по offer_id."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер: на WB подставляется из карточек по chrtId, на Ozon — из offer_id. Может остаться пустым."},
+  { k: "barcode", label: "Баркод", render: cellFmts.text , tip: "Баркод размера: на WB берётся из карточек WB по chrtId, на Ozon — из данных Ozon. Пусто, если размер не распознан."},
+  { k: "warehouse", label: "Склад", render: cellFmts.text , tip: "Склад из отчёта об остатках. Строка — одна на пару «артикул + размер + склад», они же ключ записи."},
+  { k: "quantity", label: "Доступно", num: true, render: cellFmts.int , tip: "Доступно к продаже: на WB — quantity из отчёта об остатках, на Ozon — свободный остаток free_to_sell_amount."},
+  { k: "quantity_full", label: "Всего на складах", num: true, render: cellFmts.int , tip: "Всего на складах: на WB — quantityFull, на Ozon — свободный + зарезервированный + обещанный остаток."},
+  { k: "in_way", label: "В пути", num: true, render: cellFmts.int , tip: "В пути: на WB — inWayToClient + inWayFromClient, на Ozon — обещанное количество promised_amount."},
 ];
 
 const wbStockAggHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "warehouse", label: "Склад", render: cellFmts.text },
-  { k: "quantity", label: "Доступно", num: true, render: cellFmts.int },
-  { k: "quantity_full", label: "Всего на складах", num: true, render: cellFmts.int },
-  { k: "in_way", label: "В пути", num: true, render: cellFmts.int },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул, по которому свёрнуты остатки: WB — vendorCode, Ozon — offer_id."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название из локального каталога товаров по артикулу."},
+  { k: "warehouse", label: "Склад", render: cellFmts.text , tip: "Склад, по которому сгруппированы остатки. В свёрнутом виде суммируются все размеры артикула на складе."},
+  { k: "quantity", label: "Доступно", num: true, render: cellFmts.int , tip: "Сумма доступного к продаже по всем размерам артикула на складе; свёртка считается в браузере."},
+  { k: "quantity_full", label: "Всего на складах", num: true, render: cellFmts.int , tip: "Сумма «всего на складах» по всем размерам артикула на складе; свёртка считается в браузере."},
+  { k: "in_way", label: "В пути", num: true, render: cellFmts.int , tip: "Сумма «в пути» по всем размерам артикула на складе; свёртка считается в браузере."},
 ];
 
 async function renderWbStocks() {
@@ -2464,21 +3220,21 @@ function rangeLabel(mn, mx, fmtFn) {
 }
 
 const wbPricesHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "size", label: "Размер", render: cellFmts.text },
-  { k: "discounted_price", label: "Цена со скид.", num: true, render: cellFmts.money },
-  { k: "price", label: "Цена без скид.", num: true, render: cellFmts.money },
-  { k: "discount", label: "Скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v, 1) + "%" },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца: vendorCode на WB, offer_id на Ozon."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название из локального каталога товаров по артикулу (products), не из прайса маркетплейса."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер из прайса: на WB — techSize, на Ozon — восстанавливается из offer_id. Снимок хранит пару «артикул + размер»."},
+  { k: "discounted_price", label: "Цена со скид.", num: true, render: cellFmts.money , tip: "Цена со скидкой: на WB — discountedPrice из discounts-prices-api. На Ozon поле равно текущей цене."},
+  { k: "price", label: "Цена без скид.", num: true, render: cellFmts.money , tip: "Цена без скидки: на WB — price из discounts-prices-api, на Ozon — текущая цена price_price."},
+  { k: "discount", label: "Скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v, 1) + "%" , tip: "Скидка в %: WB — (price − discounted_price) ÷ price × 100; Ozon — (1 − цена ÷ зачёркнутая цена) × 100."},
 ];
 
 const wbPricesAggHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "sizes", label: "Размеров", num: true, render: cellFmts.int },
-  { k: "disc_min", label: "Цена со скид.", num: true, render: (v, r) => rangeLabel(r.disc_min, r.disc_max, fmtMoney) },
-  { k: "price_min", label: "Цена без скид.", num: true, render: (v, r) => rangeLabel(r.price_min, r.price_max, fmtMoney) },
-  { k: "disc_min_p", label: "Скидка, %", num: true, render: (v, r) => rangeLabel(r.disc_min_p, r.disc_max_p, (x) => fmt(x, 1) + "%") },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул, по которому свёрнуты цены по всем размерам."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название из локального каталога товаров по артикулу."},
+  { k: "sizes", label: "Размеров", num: true, render: cellFmts.int , tip: "Сколько строк (размеров) свёрнуто в артикул; считается в браузере по позициям снимка цен."},
+  { k: "disc_min", label: "Цена со скид.", num: true, render: (v, r) => rangeLabel(r.disc_min, r.disc_max, fmtMoney) , tip: "Минимальная цена со скидкой по размерам артикула. Если значения разные, ячейка показывает диапазон min–max."},
+  { k: "price_min", label: "Цена без скид.", num: true, render: (v, r) => rangeLabel(r.price_min, r.price_max, fmtMoney) , tip: "Минимальная цена без скидки по размерам артикула. Если значения разные, ячейка показывает диапазон min–max."},
+  { k: "disc_min_p", label: "Скидка, %", num: true, render: (v, r) => rangeLabel(r.disc_min_p, r.disc_max_p, (x) => fmt(x, 1) + "%") , tip: "Минимальная скидка в % по размерам артикула. Если значения разные, ячейка показывает диапазон min–max."},
 ];
 
 async function renderWbPrices() {
@@ -2579,12 +3335,12 @@ async function renderOzSales() {
 }
 
 const wbStorageHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "barcodes_count", label: "Баркодов", num: true, render: cellFmts.int },
-  { k: "volume", label: "Объём, л", num: true, render: (v) => v == null ? "—" : fmtVol(v) },
-  { k: "storage_price", label: "Хранение за баркод", num: true, render: cellFmts.money4 },
-  { k: "warehouse_price", label: "Сумма хранения", num: true, render: cellFmts.money4 },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца (vendorCode) из отчёта по платному хранению WB."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название из локального каталога товаров по артикулу (products)."},
+  { k: "barcodes_count", label: "Баркодов", num: true, render: cellFmts.int , tip: "Число баркодов артикула в отчёте paid_storage, усреднённое по складам и дням отчёта."},
+  { k: "volume", label: "Объём, л", num: true, render: (v) => v == null ? "—" : fmtVol(v) , tip: "Объём товара по данным WB, л. Тоже среднее по складам и дням отчёта — по умолчанию за 7 дней."},
+  { k: "storage_price", label: "Хранение за баркод", num: true, render: cellFmts.money4 , tip: "Хранение за один баркод, ₽: warehousePrice ÷ barcodesCount. Метрика WB за 7 дней, за баркод, не за литр."},
+  { k: "warehouse_price", label: "Сумма хранения", num: true, render: cellFmts.money4 , tip: "Сумма хранения warehousePrice, ₽ за отчётный период (7 дней), усреднённая по складам и сохранённая по nm_id."},
 ];
 
 async function renderWbStorage() {
@@ -2607,13 +3363,13 @@ async function renderWbStorage() {
 }
 
 const salesHeaders = [
-  { k: "date", label: "Дата", render: cellFmts.text },
-  { k: "marketplace", label: "Маркетплейс", render: cellFmts.tag },
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "quantity", label: "Продано, шт", num: true, render: cellFmts.int },
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
-  { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
+  { k: "date", label: "Дата", render: cellFmts.text , tip: "WB — дата продажи из отчёта о реализации, Ozon — дата конца месяца отчёта. Строка = дата + маркетплейс + артикул; строки из детализации (source=detail) исключены."},
+  { k: "marketplace", label: "Маркетплейс", render: cellFmts.tag , tip: "Код маркетплейса строки: wb или ozon."},
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца из отчёта (vendorCode / Offer ID), по нему суммируются все строки за дату."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Название из каталога товаров по артикулу. Строки, у которых артикула нет в каталоге, в выборку не попадают."},
+  { k: "quantity", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Сумма количества за дату и артикул: у WB количество нетто (отчёт уже вычитал возвраты), у Ozon — количество проданных единиц."},
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма по дню и артикулу: WB — «Вайлдберриз реализовал (Пр)», Ozon — цена продавца × количество (без скидок Ozon)."},
+  { k: "income", label: "К перечислению", num: true, render: cellFmts.money , tip: "Сумма к перечислению: WB — «К перечислению» (forPay), Ozon — «К перечислению» минус сумма возвратов по строке."},
 ];
 
 async function renderWbSales() {
@@ -2781,14 +3537,21 @@ async function renderOzDetail() {
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
       pagedTable(box, colViewHeaders("oz-detail", ozDetailRowHeaders), rows, null, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     } else {
-      const data = await api("/ozon/detail-summary" + qs({
+      const data = await api("/ozon/detail-summary" + ozBySizeParam("oz-detail", qs({
         date_from: f.date_from || undefined,
         date_to: f.date_to || undefined,
         article_like: q || undefined,
-      }));
+      })));
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
-      if (msg) msg.textContent = "По артикулам: " + fmt(data.count || 0);
+      if (msg) {
+        let m = (ozBySize("oz-detail") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
+        if (data.cashflow_received != null) {
+          m += " · на р/с фактически получено: " + fmtMoney(data.cashflow_received) +
+            " (движение средств, " + fmt(data.cashflow_periods || 0) + " пер.)";
+        }
+        msg.textContent = m;
+      }
       pagedTable(box, colViewHeaders("oz-detail", ozDetailSummaryHeaders), rows, data.totals, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     }
   } catch (err) {
@@ -2803,11 +3566,13 @@ function ozDetailExportUrl() {
   const raw = rawEl ? rawEl.checked : false;
   const q = likeEl ? likeEl.value.trim() : "";
   const path = raw ? "/api/export/ozon/detail-rows" : "/api/export/ozon/detail-summary";
-  const p = qs({
+  // режим группировки касается только свода; построчные данные всегда по карточкам
+  const base = qs({
     date_from: f.date_from || undefined,
     date_to: f.date_to || undefined,
     article_like: q || undefined,
   });
+  const p = raw ? base : ozBySizeParam("oz-detail", base);
   const cp = colViewParam("oz-detail");
   return path + p + (cp ? (p ? "&" : "?") + cp : "");
 }
@@ -2854,6 +3619,203 @@ async function uploadOzDetailToDisk() {
     const j = await up.json();
     if (!up.ok) throw new Error(j.detail || up.status);
     msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function renderOzPlacement() {
+  const box = document.getElementById("ozPlacementTable");
+  const likeEl = document.getElementById("ozPlacementLike");
+  const rawEl = document.getElementById("ozPlacementRaw");
+  const p = paneDates();
+  const f = filters();
+  const date_from = p.date_from || f.date_from;
+  const date_to = p.date_to || f.date_to;
+  const q = likeEl ? likeEl.value.trim() : "";
+  const raw = rawEl ? rawEl.checked : false;
+  const msg = document.querySelector("#ozMsg-placement-table");
+  try {
+    if (raw) {
+      const data = await api("/ozon/placement-rows" + qs({
+        date_from: date_from || undefined,
+        date_to: date_to || undefined,
+        article_like: q || undefined,
+        limit: 500,
+      }));
+      const rows = data.rows || [];
+      if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
+        (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
+      pagedTable(box, colViewHeaders("oz-placement", ozPlacementRowHeaders), rows, data.totals, "#ozPlacementTablePager", colViewPinKeys("oz-placement"));
+    } else {
+      const data = await api("/ozon/placement-summary" + ozBySizeParam("oz-placement", qs({
+        date_from: date_from || undefined,
+        date_to: date_to || undefined,
+        article_like: q || undefined,
+      })));
+      const rows = data.rows || [];
+      if (msg) msg.textContent = (ozBySize("oz-placement") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
+      pagedTable(box, colViewHeaders("oz-placement", ozPlacementSummaryHeaders), rows, data.totals, "#ozPlacementTablePager", colViewPinKeys("oz-placement"));
+    }
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить размещение Ozon: ' + escapeHtml(err.message) + "</div>";
+  }
+}
+
+function ozPlacementExportUrl() {
+  const rawEl = document.getElementById("ozPlacementRaw");
+  const likeEl = document.getElementById("ozPlacementLike");
+  const raw = rawEl ? rawEl.checked : false;
+  const q = likeEl ? likeEl.value.trim() : "";
+  const p = paneDates();
+  const f = filters();
+  const path = raw ? "/api/export/ozon/placement-rows" : "/api/export/ozon/placement-summary";
+  // режим группировки касается только свода; построчные данные всегда по карточкам
+  const base = qs({
+    date_from: (p.date_from || f.date_from) || undefined,
+    date_to: (p.date_to || f.date_to) || undefined,
+    article_like: q || undefined,
+  });
+  const p2 = raw ? base : ozBySizeParam("oz-placement", base);
+  const cp = colViewParam("oz-placement");
+  return path + p2 + (cp ? (p2 ? "&" : "?") + cp : "");
+}
+
+async function downloadOzPlacementExcel() {
+  const msg = document.querySelector("#ozMsg-placement-table");
+  msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch(ozPlacementExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition"));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Excel выгружен" + (count != null ? " · строк: " + fmt(count) : "");
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function uploadOzPlacementToDisk() {
+  const msg = document.querySelector("#ozMsg-placement-table");
+  msg.textContent = "Формирую файл…";
+  try {
+    const resp = await fetch(ozPlacementExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
+    const f = filters();
+    const kind = (document.getElementById("ozPlacementRaw") || {}).checked ? "rows" : "summary";
+    const name = "oz_placement_" + kind + "_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + stamp + ".xlsx";
+    const fd = new FormData();
+    fd.append("file", blob, name);
+    msg.textContent = "Загружаю на Яндекс.Диск (" + name + ")…";
+    const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
+    const j = await up.json();
+    if (!up.ok) throw new Error(j.detail || up.status);
+    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+async function renderOzCashflow() {
+  const box = document.getElementById("ozCashflowTable");
+  const p = paneDates();
+  const f = filters();
+  const date_from = p.date_from || f.date_from;
+  const date_to = p.date_to || f.date_to;
+  const msg = document.querySelector("#ozMsg-cashflow");
+  try {
+    const data = await api("/ozon/cashflow-rows" + qs({
+      date_from: date_from || undefined,
+      date_to: date_to || undefined,
+    }));
+    const rows = data.rows || [];
+    let m = "Периодов: " + fmt(data.count || 0);
+    if (data.received != null && data.received) {
+      m += " · фактически получено: " + fmtMoney(data.received);
+    }
+    if (msg) msg.textContent = m;
+    pagedTable(box, colViewHeaders("oz-cashflow", ozCashflowHeaders), rows, data.totals, null, colViewPinKeys("oz-cashflow"));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить движение средств: ' + escapeHtml(err.message) + "</div>";
+  }
+}
+
+const ozAccrualHeaders = [
+  { k: "date", label: "Дата", render: cellFmts.text , tip: "День начисления из /v1/finance/accrual/by-day. Отчёт запрашивается по одному дню; в строке хранится дата операции."},
+  { k: "bucket", label: "Корзина", render: cellFmts.tag , tip: "Тип начисления, разложенный при загрузке: sale — продажа, commission — комиссия, logistics — доставка, services — услуги/эквайринг, other — без привязки к товару."},
+  { k: "sku", label: "SKU", render: cellFmts.text , tip: "SKU Ozon из позиции постинга или услуги. У корзины other (страховка, размещение и пр.) SKU пустой."},
+  { k: "offer_id", label: "Артикул", render: cellFmts.text , tip: "Ваш артикул: Ozon его не отдаёт, он подставляется по SKU из загруженной детализации. Нет SKU в детализации — артикул пустой."},
+  { k: "unit_number", label: "Постинг", render: cellFmts.text , tip: "Номер постинга (unit_number) из отчёта. У начислений без постинга (услуги, прочее) поле пустое."},
+  { k: "type_id", label: "Тип", num: true, render: cellFmts.int , tip: "Код типа начисления Ozon: 0 — продажа, 69 — комиссия с продаж, далее коды услуг доставки, платных услуг и прочих начислений."},
+  { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int , tip: "Количество единиц, к которым относится начисление (из позиции постинга или услуги). У корзины other всегда 0."},
+  { k: "amount", label: "Сумма", num: true, render: cellFmts.moneyCls , tip: "Начисленная сумма (accrued) со знаком: продажа — плюс, комиссия, логистика, услуги, прочее — минус. В итоге строки они складываются."},
+  { k: "seller_price", label: "Цена", num: true, render: cellFmts.money , tip: "Цена продавца за штуку (seller_price) из позиции постинга. У корзин services и other — 0."},
+  { k: "sale_price", label: "Цена покуп.", num: true, render: cellFmts.money , tip: "Цена покупателя за штуку (sale_price). У комиссии и логистики — цена той же позиции, у услуг и прочего — 0."},
+  { k: "accrual_id", label: "ID начисления", render: cellFmts.text , tip: "accrual_id из отчёта Ozon. Входит в ключ идемпотентности вместе с датой, корзиной, типом и SKU: перезагрузка дня перезаписывает строки."},
+];
+
+async function renderOzAccrual() {
+  const box = document.getElementById("ozAccrualTable");
+  const p = paneDates();
+  const f = filters();
+  const date_from = p.date_from || f.date_from;
+  const date_to = p.date_to || f.date_to;
+  const msg = document.querySelector("#ozMsg-accrual-table");
+  try {
+    const data = await api("/ozon/accrual-rows" + qs({
+      date_from: date_from || undefined,
+      date_to: date_to || undefined,
+    }));
+    const rows = data.rows || [];
+    if (msg) {
+      let m = "Строк: " + fmt(data.count || 0);
+      const s = data.totals && data.totals.amount;
+      if (s != null) m += " · итог: " + fmtMoney(s);
+      msg.textContent = m;
+    }
+    pagedTable(box, colViewHeaders("oz-accrual", ozAccrualHeaders), rows, data.totals, "#ozAccrualTablePager", colViewPinKeys("oz-accrual"));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить начисления: ' + escapeHtml(err.message) + "</div>";
+  }
+}
+
+function ozAccrualExportUrl() {
+  const p = paneDates();
+  const f = filters();
+  const date_from = p.date_from || f.date_from;
+  const date_to = p.date_to || f.date_to;
+  const q = qs({ date_from: date_from || undefined, date_to: date_to || undefined });
+  const cp = colViewParam("oz-accrual");
+  return "/api/export/ozon/accrual-rows" + q + (cp ? (q ? "&" : "?") + cp : "");
+}
+
+async function downloadOzAccrualExcel() {
+  const msg = document.querySelector("#ozMsg-accrual-table");
+  msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch(ozAccrualExportUrl());
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const count = resp.headers.get("X-Count");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition"));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    msg.textContent = "Excel выгружен" + (count != null ? " · строк: " + fmt(count) : "");
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -3441,6 +4403,9 @@ const PRICING_LABELS = {
   use_quality: "Качество: рейтинг, выкупы, отмены, возвраты",
   use_reviews: "Рейтинг по отзывам (ценность товара)",
   use_returns: "Возвраты/отмены: защита от мыльного спроса",
+  promo_enabled: "Учитывать акции WB в автопилоте",
+  promo_push_pct: "Добор участия в акции, п.п.",
+  promo_max_beyond_floor_pp: "Скидка ниже пола при акции, ≤ п.п.",
 };
 
 const PRICING_HINTS = {
@@ -3486,6 +4451,9 @@ const PRICING_HINTS = {
   use_quality: "Качество спроса: рейтинг магазина, конверсия выкупа, доля отмен и возвратов из детализации. Плохие показатели блокируют повышение цены; ≥2 сильных сигналов — «качество» добавляет uplift к росту. Выключено — качество не ограничивает повышение (по умолчанию выкл.).",
   use_returns: "Защита от «мыльного» спроса: когда доля возвратов/отмен превышает порог, продажи считаются шумными и товар не трогаем (повышение/снижение замораживается). Выключено — эта защита не действует (по умолчанию выкл.).",
   use_reviews: "Рейтинг по отзывам из воронки продаж (1..5): высокий рейтинг = ценный товар, скидку при снижении не раздаём (см. «Спрос и воронка» → «Рейтинг по отзывам ≥»). Выключено — рейтинг не ограничивает скидку.",
+  promo_enabled: "Календарь акций WB: подтягивать целевую скидку до ближайшего уровня (ranging) активных акций у кандидатов с запасом маржи, чтобы товар попал в тир с большим бустом продаж. Без галки автопилот лишь показывает инфо об акциях в таблице, но скидку не трогает.",
+  promo_push_pct: "Шаг добора: на сколько процентных пунктов поднимать целевую скидку кандидату (до 2 п.п. по умолчанию), чтобы добраться до следующего тира акции. Добор идёт только до достижения порога тира; лишняя скидка не даётся.",
+  promo_max_beyond_floor_pp: "Сколько процентных пунктов целевой скидке разрешено опуститься ниже порога безубыточности ради акции (по умолчанию 5). Потолок «максимальная скидка» при этом сохраняется — глубже него добор не идёт.",
 };
 
 const PRICING_ACTION = {
@@ -3559,39 +4527,46 @@ function profitCell(v, r) {
 }
 
 const pricingHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text },
-  { k: "nm_id", label: "Артикул WB", render: cellFmts.text },
-  { k: "target_discount", label: "Целевая скидка, %", num: true, render: targetDiscCell },
-  { k: "current_discount", label: "Скидка сейчас, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" },
-  { k: "delta_discount", label: "Дельта скидки", num: true, render: deltaDiscCell },
-  { k: "target_vis", label: "Целевая цена, руб", num: true, render: targetVisCell },
-  { k: "margin_per_one", label: "Прибыль/шт, руб", num: true, render: profitCell },
-  { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money },
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.moneyZero },
-  { k: "avg_price", label: "Ср. цена факт, руб", num: true, render: cellFmts.money },
-  { k: "stock", label: "Остаток", num: true, render: cellFmts.int },
-  { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int },
-  { k: "backlog", label: "В корзине", num: true, render: cellFmts.int },
-  { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct },
-  { k: "margin_pct", label: "Маржа факт, % от выручки", num: true, render: cellFmts.pct },
-  { k: "product_rating", label: "Рейтинг товара", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) },
-  { k: "action", label: "Решение", render: actionCell },
-  { k: "reason", label: "Причина", render: cellFmts.text },
-  { k: "name", label: "Наименование", render: cellFmts.text },
-  { k: "stock_wb", label: "Остаток WB", num: true, render: cellFmts.int },
-  { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) },
-  { k: "velocity", label: "v, шт/дн", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) },
-  { k: "trend", label: "Тренд", num: true, render: (v) => v == null ? "—" : (v && v > 1 ? "<span class='pos'>▲ " : v && v < 1 ? "<span class='neg'>▼ " : "<span>") + (v || 0).toFixed(2) + "</span>" },
-  { k: "conv_buyout_percent", label: "Конв. выкупа, %", num: true, render: cellFmts.pct },
-  { k: "cancel_sum", label: "Отмены, руб", num: true, render: cellFmts.money },
-  { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int },
-  { k: "return_rate", label: "Возвраты, %", num: true, render: cellFmts.pct },
-  { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct },
-  { k: "revenue_per_one", label: "Ср. чек, руб", num: true, render: cellFmts.money },
-  { k: "income_per_one", label: "К переч./шт, руб", num: true, render: cellFmts.money },
-  { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money },
-  { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money },
-  { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money },
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул каталога в верхнем регистре. В расчёт попадают только товары с карточкой WB (есть nmID) и с хоть каким-то сигналом жизни."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB. Именно по нему автопилот меняет скидку через WB API; базовая цена не трогается."},
+  { k: "target_discount", label: "Целевая скидка, %", num: true, render: targetDiscCell , tip: "Рекомендуемая скидка по правилам R1-R10: зависит от покрытия остатка (DOC), спроса, конверсии, рейтинга и рентабельности. Ограничена ценой безубыточности и потолком скидки."},
+  { k: "current_discount", label: "Скидка сейчас, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Текущая скидка в карточке WB (поле discount из прайса). Если скидка не задана, берётся из расчёта цены со скидкой."},
+  { k: "delta_discount", label: "Дельта скидки", num: true, render: deltaDiscCell , tip: "Целевая минус текущая, п.п.: плюс = автопилот хочет увеличить скидку (снизить цену), минус = поднять цену. Пусто, если решения нет."},
+  { k: "target_vis", label: "Целевая цена, руб", num: true, render: targetVisCell , tip: "Цена для покупателя при целевой скидке = базовая цена × (1 − скидка/100). Ниже точки безубыточности автопилот не опускает."},
+  { k: "margin_per_one", label: "Прибыль/шт, руб", num: true, render: profitCell , tip: "Фактическая прибыль с единицы по детализации продаж WB за окно: прибыль ÷ проданные штуки. Рядом в скобках — рентабельность от выручки."},
+  { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money , tip: "Действующая цена покупателя = базовая цена WB × (1 − текущая скидка/100). Сравните с целевой ценой, чтобы увидеть эффект решения."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.moneyZero , tip: "Себестоимость единицы из каталога. Ноль = не заведена: тогда пол безубыточности считается от нуля и решение принимается вслепую."},
+  { k: "avg_price", label: "Ср. цена факт, руб", num: true, render: cellFmts.money , tip: "Средняя цена заказа из воронки продаж WB за срез. Если воронки нет, в расчётах она заменяется витринной ценой, и защита «цена ниже себестоимости» ослабевает."},
+  { k: "stock", label: "Остаток", num: true, render: cellFmts.int , tip: "Остаток WB по последнему срезу стоков: quantity + в пути. Нет данных об остатках = автопилот пропускает товар (SKIP)."},
+  { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int , tip: "Выкупы за срез воронки продаж: заказы, которые покупатель забрал. Отличаются от заказов из-за отмен и невыкупов."},
+  { k: "backlog", label: "В корзине", num: true, render: cellFmts.int , tip: "Добавления в корзину минус заказы, не меньше нуля: спрос есть, а сделки нет. Используется как сигнал «много в корзинах, но не покупают»."},
+  { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct , tip: "Заказы ÷ просмотры × 100 по воронке. Ниже 0,7% автопилот не увеличивает скидку, при большом «в корзине» — пропускает товар."},
+  { k: "margin_pct", label: "Маржа факт, % от выручки", num: true, render: cellFmts.pct , tip: "Рентабельность за окно по детализации: прибыль ÷ выручка × 100. Проверяйте согласованность с полем прибыли на единицу."},
+  { k: "product_rating", label: "Рейтинг товара", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) , tip: "Рейтинг карточки WB 1..5 из воронки. Ниже порога качества автопилот не поднимает цену, даже при дефиците."},
+  { k: "action", label: "Решение", render: actionCell , tip: "Итоговое действие: RAISE — снизить скидку (поднять цену), LOWER — увеличить скидку, HALVE — пополам для мёртвых товаров, HOLD — не менять, SKIP — пропустить (нет данных, кулдаун, отказы по качеству)."},
+  { k: "reason", label: "Причина", render: cellFmts.text , tip: "Текстовое объяснение решения: покрытие остатка (DOC), конверсия, корзины, рейтинг, отказы качества, кулдаун после прошлой правки."},
+  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование товара из каталога products."},
+  { k: "stock_wb", label: "Остаток WB", num: true, render: cellFmts.int , tip: "Остаток WB из воронки продаж (product.stocks.wb) — снимок на дату среза. Может отличаться от колонки «Остаток», взятой из последнего среза стоков."},
+  { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) , tip: "Покрытие остатка продажами: остаток ÷ скорость (шт/дн). Ниже нижней границы — дефицит, выше верхней — перезапас, вокруг целевого — шаг в любую сторону."},
+  { k: "velocity", label: "v, шт/дн", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) , tip: "Скорость продаж за окно: (продажи − возвраты) ÷ число дней окна. Ноль = продаж нет, автопилот считает товар мёртвым."},
+  { k: "trend", label: "Тренд", num: true, render: (v) => v == null ? "—" : (v && v > 1 ? "<span class='pos'>▲ " : v && v < 1 ? "<span class='neg'>▼ " : "<span>") + (v || 0).toFixed(2) + "</span>" , tip: "Скорость текущего окна ÷ скорость предыдущего. Больше 1 — рост, меньше 1 — спад. Используется в сезонной поправке прогноза скорости."},
+  { k: "conv_buyout_percent", label: "Конв. выкупа, %", num: true, render: cellFmts.pct , tip: "Конверсия выкупа из воронки WB: доля выкупов среди заказов. Ниже 40% автопилот не поднимает цену — спрос ненадёжный."},
+  { k: "cancel_sum", label: "Отмены, руб", num: true, render: cellFmts.money , tip: "Сумма отменённых заказов из воронки, ₽. Рост вместе с заказами — сигнал мыльного спроса."},
+  { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int , tip: "Добавления в избранное и закладки за срез воронки. Интерес без заказа — повод не давать лишнюю скидку."},
+  { k: "return_rate", label: "Возвраты, %", num: true, render: cellFmts.pct , tip: "Доля возвратов по детализации: возвраты ÷ (продажи + возвраты) × 100. Выше порога автопилот блокирует повышение цены как брак/неликвид."},
+  { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct , tip: "Прогноз прибыли с единицы при целевой цене, %: (цена × (1 − комиссия) − логистика − хранение − услуги − себестоимость) ÷ цена. Пусто, если нет unit-экономики."},
+  { k: "promo_count", label: "Акций WB", num: true, render: (v) => v == null || !v ? "—" : fmt(v) , tip: "Сколько действующих акций WB (Календарь акций) открыто для участия на этот период. Если 0 — промо-инфо в таблице пустая, добор участия не срабатывает."},
+  { k: "promo_names", label: "Акции WB", render: cellFmts.text , tip: "Названия активных акций (до трёх, дальше — многоточие). Справочная информация о том, на какие активности WB опирается правило добора."},
+  { k: "promo_part_pct", label: "Участие в акции, %", num: true, render: (v) => v == null || !v ? "—" : fmt(v) + "%" , tip: "Наибольшее участие среди активных акций WB, % — агрегат WB по товарам акции, а не по вашему артикулу (per-product участия в API WB нет). Товар попадает в акцию, когда его скидка достигает уровня (ranging) ниже."},
+  { k: "promo_tier_pct", label: "Следующий тир, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Скидка следующего уровня (ranging) лучшей акции WB. Ниже этой скидки товар в следующий тир не попадает; правило R11 добирает до порога."},
+  { k: "promo_tier_boost", label: "Буст уровня", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Во сколько раз акция WB обещает поднять продажи товара в следующем тире участия (ranging boost). Справочно: крупный буст — весомый повод для добора."},
+  { k: "promo_cap_pct", label: "Потолок промо, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки самой акции из описания WB («промо-скидка не более N%»). Это ограничение WB поверх нашей цели, а не потолок автопилота."},
+  { k: "promo_push_applied", label: "Добор в акцию", render: (v) => v ? "<span class='pos'>да</span>" : "—" , tip: "Правило R11 применило добор: целевая скидка поднята до участия в следующем тире акции, действие стало LOWER с причиной «акция WB»."},
+  { k: "revenue_per_one", label: "Ср. чек, руб", num: true, render: cellFmts.money , tip: "Фактическая цена продажи по детализации WB: выручка ÷ проданные штуки, ₽."},
+  { k: "income_per_one", label: "К переч./шт, руб", num: true, render: cellFmts.money , tip: "К перечислению на единицу по детализации WB: сколько денег за одну проданную штуку получает продавец."},
+  { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money , tip: "Комиссия КВВ на единицу по детализации WB. Учтена в расчёте пола безубыточности через долю комиссии в выручке."},
+  { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money , tip: "Логистика (туда и обратно) на единицу по детализации WB. Входит в формулу минимальной цены."},
+  { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money , tip: "Хранение на единицу по детализации WB, включая оценку безартикульных плат. Тоже входит в формулу минимальной цены."},
 ];
 
 // ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
@@ -3657,6 +4632,16 @@ registerColView("oz-prices", {
   },
 });
 registerColView("oz-realization", { storageKey: "ozRealCols", pinnable: true, headers: salesHeaders, optional: mkOpt(salesHeaders) });
+registerColView("oz-cashflow", { storageKey: "ozCashflowCols", pinnable: true, headers: ozCashflowHeaders, optional: mkOpt(ozCashflowHeaders) });
+registerColView("oz-accrual", { storageKey: "ozAccrualCols", pinnable: true, headers: ozAccrualHeaders, optional: mkOpt(ozAccrualHeaders) });
+registerColView("oz-placement", {
+  storageKey: "ozPlacementCols", pinnable: true,
+  mode: () => { const rawEl = document.getElementById("ozPlacementRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
+  sets: {
+    rows: { headers: ozPlacementRowHeaders, optional: mkOpt(ozPlacementRowHeaders) },
+    summary: { headers: ozPlacementSummaryHeaders, optional: mkOpt(ozPlacementSummaryHeaders) },
+  },
+});
 registerColView("products", {
   storageKey: "productsCols", pinnable: true,
   mode: () => { const s = document.getElementById("productsSizes"); return s && s.checked ? "sizes" : "agg"; },
@@ -3666,6 +4651,10 @@ registerColView("products", {
   },
 });
 registerColView("margin", { storageKey: "marginCols", pinnable: true, headers: marginTableHeaders, optional: mkOpt(marginTableHeaders) });
+registerColView("dash-profit", { storageKey: "dashProfitCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops, optional: mkOpt(dashHeaders.tops) });
+registerColView("dash-loss", { storageKey: "dashLossCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops, optional: mkOpt(dashHeaders.tops) });
+registerColView("dash-price", { storageKey: "dashPriceCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.price, optional: mkOpt(dashHeaders.price) });
+registerColView("dash-prefix", { storageKey: "dashPrefixCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.prefix, optional: mkOpt(dashHeaders.prefix) });
 registerColView("margin-funnel", {
   storageKey: "marginFunnelCols", pinnable: true,
   headers: funnelHeaders,
@@ -3682,13 +4671,30 @@ registerColView("margin-detail", {
       || h.k === "stock_qty" || h.k === "stock_total" || h.k === "stock_in_way",
   })),
 });
+// Колонки маржи Ozon по умолчанию; в режиме «в разрезе размеров» строка — карточка,
+// поэтому показываем «Размер» и прячем счётчики свёртки (там всегда 1).
+const ozonMarginOptional = (bySize) => ozonMarginHeaders.map((h) => {
+  const def = !OZON_MARGIN_DETAIL_OPTIONAL.some((c) => c.k === h.k) || h.k === "nm_id";
+  if (!bySize) return { k: h.k, label: h.label, def };
+  if (h.k === "size") return { k: h.k, label: h.label, def: true };
+  if (h.k === "sizes_count" || h.k === "offers_count") return { k: h.k, label: h.label, def: false };
+  return { k: h.k, label: h.label, def };
+});
 registerColView("margin-ozon-detail", {
   storageKey: "marginOzonDetailCols", pinnable: true,
-  headers: ozonMarginHeaders,
-  optional: ozonMarginHeaders.map((h) => ({
-    k: h.k, label: h.label,
-    def: !OZON_MARGIN_DETAIL_OPTIONAL.some((c) => c.k === h.k) || h.k === "nm_id",
-  })),
+  mode: () => (ozBySize("margin-ozon-detail") ? "size" : "base"),
+  sets: {
+    base: { headers: ozonMarginHeaders, optional: ozonMarginOptional(false) },
+    size: { headers: ozonMarginHeaders, optional: ozonMarginOptional(true) },
+  },
+});
+registerColView("replenish", {
+  storageKey: "replenishCols", pinnable: true,
+  mode: replenishView,
+  sets: {
+    article: { headers: replenishHeaders, optional: mkOpt(replenishHeaders) },
+    sizes: { headers: replenishSizeHeaders, optional: mkOpt(replenishSizeHeaders) },
+  },
 });
 // Необязательные колонки автопилота. Порядок = порядок колонок в таблице.
 // По умолчанию видимы только 18 основных (см. def: true) — остальные скрыты и
@@ -3727,6 +4733,13 @@ const PRICING_OPTIONAL = [
   { k: "commission_per_one", label: "Комиссия/шт, руб", def: false },
   { k: "logistics_per_one", label: "Логистика/шт, руб", def: false },
   { k: "storage_per_one", label: "Хранение/шт, руб", def: false },
+  { k: "promo_count", label: "Акций WB", def: false },
+  { k: "promo_names", label: "Акции WB", def: false },
+  { k: "promo_part_pct", label: "Участие в акции, %", def: false },
+  { k: "promo_tier_pct", label: "Следующий тир, %", def: false },
+  { k: "promo_tier_boost", label: "Буст уровня", def: false },
+  { k: "promo_cap_pct", label: "Потолок промо, %", def: false },
+  { k: "promo_push_applied", label: "Добор в акцию", def: false },
 ];
 // Группы колонок для «Вид таблицы» — раскрывать сразу по смыслу.
 const PRICING_COLGROUPS = [
@@ -3735,6 +4748,7 @@ const PRICING_COLGROUPS = [
   { title: "Запасы и продажи", keys: ["stock", "stock_wb", "doc", "velocity", "trend", "buyouts", "conv_buyout_percent", "cancel_sum", "add_to_wishlist", "return_rate"] },
   { title: "Воронка и конверсия", keys: ["backlog", "conv_pct"] },
   { title: "Экономика на единицу", keys: ["margin_pct", "net_cost", "revenue_per_one", "income_per_one", "commission_per_one", "logistics_per_one", "storage_per_one"] },
+  { title: "Акции WB", keys: ["promo_count", "promo_names", "promo_part_pct", "promo_tier_pct", "promo_tier_boost", "promo_cap_pct", "promo_push_applied"] },
   { title: "Решение", keys: ["action", "reason"] },
 ];
 registerColView("pricing", {
@@ -4062,6 +5076,9 @@ const PRICING_GROUPS = [
       "use_replenishable", "use_season", "use_reviews", "use_quality",
       "use_returns",
   ] },
+  { title: "Акции WB", col: 2, keys: [
+      "promo_enabled", "promo_push_pct", "promo_max_beyond_floor_pp",
+  ] },
   { title: "Окно и скорость", col: 1, keys: [
       "window_days", "season_adj", "season_damp", "min_days_with_sales",
       "fallback_window_days",
@@ -4131,7 +5148,8 @@ function pricingParamRow(key, cur) {
   } else {
     input.type = "number";
     input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias"
-      || key === "min_rating_reviews") ? "0.1" : "1";
+      || key === "min_rating_reviews" || key === "promo_push_pct"
+      || key === "promo_max_beyond_floor_pp") ? "0.1" : "1";
     input.value = cur;
   }
   lbl.appendChild(input);
@@ -4286,6 +5304,7 @@ const PRICING_FOOT = {
   margin_pct_at_target: "avg", conv_buyout_percent: "avg", return_rate: "avg", conv_pct: "avg",
   revenue_per_one: "avg", income_per_one: "avg", commission_per_one: "avg",
   logistics_per_one: "avg", storage_per_one: "avg", doc: "avg", velocity: "avg", trend: "avg",
+  promo_count: "sum", promo_part_pct: "avg", promo_tier_pct: "avg", promo_tier_boost: "avg", promo_cap_pct: "avg",
 };
 function pricingFooters(rows) {
   const accum = {};
@@ -4396,6 +5415,28 @@ async function applyPricing() {
     await renderPricing(false);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+// Календарь акций WB → wb_promotions, затем пересчёт рекомендаций.
+async function refreshPricingPromos() {
+  const msg = $("#pricingMsg");
+  const btn = $("#pricingPromoRefresh");
+  const prev = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Обновляю акции…"; }
+  msg.textContent = "Загружаю календарь акций WB…";
+  try {
+    const resp = await fetch("/api/promo/refresh", { method: "POST" });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error((j.detail || resp.status) || "не удалось обновить акции");
+    msg.textContent = "Акции WB: " + fmt(j.count || 0) + " записей"
+      + (j.window ? " (" + j.window + ")" : "") + " — пересчитываю…";
+    await renderPricing(false);
+    msg.textContent = "Акции WB обновлены: " + fmt(j.count || 0) + " записей";
+  } catch (err) {
+    msg.textContent = "Ошибка обновления акций: " + err.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev || "Обновить акции WB"; }
   }
 }
 
@@ -4554,6 +5595,7 @@ async function uploadPricingToDisk() {
 document.addEventListener("DOMContentLoaded", () => {
   initDates();
   initWriteDb();
+  initOzBySize();
   initHelp();
   initYandexTab();
   updateCrumb("dashboard");
@@ -4625,7 +5667,41 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnDiskOzDetail = document.getElementById("btnDiskOzDetail");
   if (btnDiskOzDetail) btnDiskOzDetail.addEventListener("click", () => busyRun(uploadOzDetailToDisk));
   const ozDetailRawEl = document.getElementById("ozDetailRaw");
-  if (ozDetailRawEl) ozDetailRawEl.addEventListener("change", () => loadTab("oz-detail"));
+  if (ozDetailRawEl) ozDetailRawEl.addEventListener("change", () => {
+    syncOzBySizeDisabled();
+    loadTab("oz-detail");
+  });
+  const btnExportOzPlacement = document.getElementById("btnExportOzPlacement");
+  if (btnExportOzPlacement) btnExportOzPlacement.addEventListener("click", () => busyRun(downloadOzPlacementExcel));
+  const btnDiskOzPlacement = document.getElementById("btnDiskOzPlacement");
+  if (btnDiskOzPlacement) btnDiskOzPlacement.addEventListener("click", () => busyRun(uploadOzPlacementToDisk));
+  const btnOzPlacementPull = document.getElementById("btnOzPlacementPull");
+  if (btnOzPlacementPull) btnOzPlacementPull.addEventListener("click", () => busyRun(() => {
+    const spec = apiPullByTab["oz-placement"];
+    if (!spec) return Promise.resolve();
+    return apiDownload(spec[0], spec[1], spec[2], true);
+  }));
+  const ozPlacementRawEl = document.getElementById("ozPlacementRaw");
+  if (ozPlacementRawEl) ozPlacementRawEl.addEventListener("change", () => {
+    syncOzBySizeDisabled();
+    loadTab("oz-placement");
+  });
+  const ozPlacementLike = $("#ozPlacementLike");
+  if (ozPlacementLike) {
+    let timer;
+    ozPlacementLike.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === "oz-placement") loadTab(currentTab); }, 400);
+    });
+  }
+  const btnOzAccrualPull = document.getElementById("btnOzAccrualPull");
+  if (btnOzAccrualPull) btnOzAccrualPull.addEventListener("click", () => busyRun(() => {
+    const spec = apiPullByTab["oz-accrual"];
+    if (!spec) return Promise.resolve();
+    return apiDownload(spec[0], spec[1], spec[2], true);
+  }));
+  const btnExportOzAccrual = document.getElementById("btnExportOzAccrual");
+  if (btnExportOzAccrual) btnExportOzAccrual.addEventListener("click", () => busyRun(downloadOzAccrualExcel));
   [["wb-cards", "Cards"], ["wb-stock", "Stock"], ["wb-funnel", "Funnel"], ["wb-sales", "Sales"], ["wb-prices", "Prices"], ["wb-storage", "Storage"]].forEach(([tab, pfx]) => {
     const ex = document.getElementById("btnExportWb" + pfx);
     if (ex) ex.addEventListener("click", () => busyRun(() => { currentTab = tab; return downloadViewExcel(); }));
@@ -4652,6 +5728,8 @@ document.addEventListener("DOMContentLoaded", () => {
     "oz-prices": ["ozon", "prices", "#ozMsg-prices-table"],
     "oz-realization": ["ozon", "realization", "#ozMsg-realization-table"],
     "oz-detail": ["ozon", "detail", "#ozMsg-detail-table"],
+    "oz-placement": ["ozon", "placement", "#ozMsg-placement-table"],
+    "oz-accrual": ["ozon", "accrual", "#ozMsg-accrual-table"],
     "oz-cashflow": ["ozon", "cashflow", "#ozMsg-cashflow"],
     "products": ["products", "refresh", "#productsMsg"],
   };
@@ -4664,6 +5742,32 @@ document.addEventListener("DOMContentLoaded", () => {
   const funnelExp = document.getElementById("wbFunnelExpanded");
   if (funnelExp) funnelExp.addEventListener("change", () => loadTab("wb-funnel"));
   $("#btnApply").addEventListener("click", () => loadTab(currentTab));
+
+  const dashMp = $("#dashMarketplace");
+  if (dashMp) dashMp.addEventListener("change", () => loadTab("dashboard"));
+  const dashCmp = $("#dashCompare");
+  if (dashCmp) dashCmp.addEventListener("change", () => loadTab("dashboard"));
+  ["dashFrom", "dashTo"].forEach((id) => {
+    const el = $("#" + id);
+    if (el) el.addEventListener("change", () => loadTab("dashboard"));
+  });
+  document.addEventListener("click", (ev) => {
+    const title = ev.target.closest(".dash-sec-title");
+    if (title) {
+      const sec = title.closest("[data-csec]");
+      if (sec) toggleDashSection(sec);
+    }
+  });
+  ["chartMetric", "chartGran", "chartType"].forEach((id) => {
+    const el = $("#" + id);
+    if (el) el.addEventListener("change", repaintDashCharts);
+  });
+  ["chartADim", "chartAMetric"].forEach((id) => {
+    const el = $("#" + id);
+    if (el) el.addEventListener("change", repaintDashCharts);
+  });
+  initDashCollapse();
+  initDashDrag();
   $("#magicRefreshWb").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("wb"); });
   $("#magicRefreshOz").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("ozon"); });
   $("#magicRefreshAll").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh(["wb", "ozon"]); });
@@ -4699,6 +5803,21 @@ document.addEventListener("DOMContentLoaded", () => {
   if (marginOzonDetailCompare) {
     marginOzonDetailCompare.addEventListener("change", () => {
       if (currentTab === "margin-ozon-detail") loadTab(currentTab);
+    });
+  }
+  ["replenishWindow", "replenishTarget", "replenishSort", "replenishShowInactive", "replenishView"].forEach((id) => {
+    const el = $("#" + id);
+    if (!el) return;
+    el.addEventListener("change", () => {
+      if (currentTab === "replenish") loadTab(currentTab);
+    });
+  });
+  const replenishLike = $("#replenishLike");
+  if (replenishLike) {
+    let timer;
+    replenishLike.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (currentTab === "replenish") loadTab(currentTab); }, 400);
     });
   }
   const funnelLike = $("#wbFunnelLike");
@@ -4854,6 +5973,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (pricingExport) pricingExport.addEventListener("click", () => exportPricing());
   const pricingApply = $("#pricingApply");
   if (pricingApply) pricingApply.addEventListener("click", () => applyPricing());
+  const pricingPromoRefresh = $("#pricingPromoRefresh");
+  if (pricingPromoRefresh) pricingPromoRefresh.addEventListener("click", () => refreshPricingPromos());
   const pricingLike = $("#pricingLike");
   if (pricingLike) {
     let pricingLikeTimer;
@@ -4917,5 +6038,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const pricingUpload = $("#pricingUpload");
   if (pricingUpload) pricingUpload.addEventListener("click", () => uploadPricingToDisk());
   initTicketsTab();
+  initHeaderTip();
   loadTab(currentTab);
 });

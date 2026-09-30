@@ -877,10 +877,19 @@ def test_ozon_detail_fills_rows_and_summary(api_client):
 
     summ = api_client.get("/api/ozon/detail-summary",
                           params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
-    assert summ["count"] == 2
-    o1 = next(rr for rr in summ["rows"] if rr["article"] == "OZ-1")
-    assert o1["sells"] == 2
-    assert o1["income"] == 2280.0
+    # по умолчанию свёрнуто по товару: OZ-1 и OZ-2 — размеры 1 и 2 артикула OZ
+    assert summ["count"] == 1
+    o1 = summ["rows"][0]
+    assert o1["article"] == "OZ"
+    assert o1["sells"] == 3
+    assert o1["income"] == 2980.0
+    assert o1["sizes_count"] == 2
+    assert o1["offers_count"] == 2
+    # «в разрезе размеров» — каждая карточка отдельной строкой
+    by_size = api_client.get("/api/ozon/detail-summary", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "by_size": 1}).json()
+    assert by_size["count"] == 2
+    assert {r["article"]: r["size"] for r in by_size["rows"]} == {"OZ-1": "1", "OZ-2": "2"}
 
     pulls = api_client.get("/api/pulls").json()
     assert any(p["api"] == "ozon" and p["kind"] == "detail" for p in pulls)
@@ -909,7 +918,10 @@ def test_ozon_detail_excel_zero_only_updates_db(api_client):
     data = r.json()
     assert data["ok"] is True
     assert data["rows"] == 2
-    assert api_client.get("/api/ozon/detail-summary").json()["count"] == 2
+    # свод по умолчанию — одна строка на товар (OZ-1 и OZ-2 = размеры 1 и 2)
+    assert api_client.get("/api/ozon/detail-summary").json()["count"] == 1
+    assert api_client.get(
+        "/api/ozon/detail-summary", params={"by_size": 1}).json()["count"] == 2
 
 
 def test_export_ozon_detail_summary_and_rows(api_client):
@@ -919,8 +931,15 @@ def test_export_ozon_detail_summary_and_rows(api_client):
                        params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
     assert r.status_code == 200
     df = _read_xlsx(r)
-    assert set(df["Артикул"]) == {"OZ-1", "OZ-2"}
+    assert set(df["Артикул"]) == {"OZ"}
     assert "К перечислению, руб" in df.columns
+
+    r = api_client.get("/api/export/ozon/detail-summary",
+                       params={"date_from": "2026-09-01", "date_to": "2026-09-10",
+                               "by_size": 1})
+    df_bs = _read_xlsx(r)
+    assert set(df_bs["Артикул"]) == {"OZ-1", "OZ-2"}
+    assert dict(zip(df_bs["Артикул"], df_bs["Размер"].astype(str))) == {"OZ-1": "1", "OZ-2": "2"}
 
     r = api_client.get("/api/export/ozon/detail-rows",
                        params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
@@ -928,6 +947,41 @@ def test_export_ozon_detail_summary_and_rows(api_client):
     df2 = _read_xlsx(r)
     assert len(df2) == 2
     assert df2["Постинг"].tolist() == ["PZ-1", "PZ-2"]
+
+
+def test_ozon_accrual_pull_rows_and_export(api_client):
+    """Pull начислений через API, чтение строк, экспорт в Excel."""
+    api_client.post("/api/ozon/cards")
+    api_client.post("/api/ozon/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10", "excel": 0})
+    r = api_client.post("/api/ozon/accrual",
+                        params={"date_from": "2026-09-01", "date_to": "2026-09-10",
+                                "excel": 0})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["rows"] == 8  # 8 фиктивных начислений за D1
+
+    rows = api_client.get("/api/ozon/accrual-rows",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert rows["count"] == 8
+    # offer_id дорезолвился по детализации (sku 3001/3002 → OZ-1/OZ-2);
+    # «other» (NON_ITEM) сквозной мок имеет пустой sku — без привязки к товару
+    nonempty = {x["sku"] for x in rows["rows"] if x["sku"]}
+    assert nonempty == {"3001", "3002"}
+
+    buckets = {x["bucket"] for x in rows["rows"]}
+    assert buckets == {"sale", "commission", "logistics", "services", "other"}
+    sale = next(x for x in rows["rows"] if x["bucket"] == "sale")
+    assert sale["quantity"] == 2
+    assert sale["amount"] == 2560.0
+
+    r = api_client.get("/api/export/ozon/accrual-rows",
+                       params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    out = _read_xlsx(r)
+    assert len(out) == 8
+    assert "Сумма, руб" in out.columns
 
 
 def test_margin_ozon_detail_view(api_client):
@@ -938,17 +992,88 @@ def test_margin_ozon_detail_view(api_client):
     view = api_client.get("/api/margin/ozon-detail",
                           params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
     by = {x["article"]: x for x in view["rows"]}
-    o1 = by["OZ-1"]
-    # фикстура: OZ-1 ×2 шт, seller_price 1300 → доход 2280; себестоимость дефолт 500
-    assert o1["sells"] == 2
-    assert o1["revenue"] == 2600.0
-    assert o1["commission"] == -281.6
-    assert o1["services"] == -38.4
-    assert o1["income"] == 2280.0
-    assert o1["margin"] == pytest.approx(2280.0 - 2 * 500.0)
-    assert o1["margin_pct"] == pytest.approx((2280.0 - 1000.0) / 2600.0 * 100.0)
-    assert view["estimated"] == 2  # оба без себестоимости в product
+    # по умолчанию одна строка на товар: OZ-1 (2 шт) и OZ-2 (1 шт) → база OZ
+    o1 = by["OZ"]
+    assert o1["sizes_count"] == 2 and o1["offers_count"] == 2
+    assert o1["sells"] == 3
+    assert o1["revenue"] == 3500.0
+    assert o1["commission"] == -361.6
+    assert o1["services"] == -58.4
+    assert o1["income"] == 2980.0
+    assert o1["margin"] == pytest.approx(2980.0 - 3 * 500.0)
+    assert o1["margin_pct"] == pytest.approx((2980.0 - 1500.0) / 3500.0 * 100.0)
+    assert view["estimated"] == 1  # строка одна, без себестоимости в product
     assert "totals" in view and view["totals"].get("income") == pytest.approx(2980.0)
+    # движение средств в тестовой БД пусто → фактически получено 0, оценка колонки → 0
+    assert view["cashflow_received"] == 0.0
+    assert view["cashflow_ratio"] == 0.0
+    assert o1["cashflow_est"] == 0.0
+    assert view["totals"].get("cashflow_est") == pytest.approx(0.0)
+    # начислений в тестовой БД нет → неточные колонки нулевые, артикулов 0
+    assert view["accrued_total"] == 0.0
+    assert view["accrued_rows"] == 0
+    assert view["accrued_other"] == 0.0
+    assert view["accrued_unmapped"] == 0.0
+    assert o1["accrued_net"] == 0.0
+    assert o1["accrued_coverage"] == 0
+    assert o1["margin_accrued"] in (None, "")  # нет начислений → пусто
+
+
+def test_margin_ozon_detail_by_size_view(api_client):
+    """by_size=1 — прежнее поведение: строка на артикул конкретного размера."""
+    api_client.post("/api/ozon/cards")
+    api_client.post("/api/ozon/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10", "excel": 0})
+    view = api_client.get("/api/margin/ozon-detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "by_size": 1}).json()
+    by = {x["article"]: x for x in view["rows"]}
+    assert set(by) == {"OZ-1", "OZ-2"}
+    assert by["OZ-1"]["size"] == "1"
+    assert by["OZ-1"]["sells"] == 2
+    assert by["OZ-1"]["income"] == 2280.0
+    assert by["OZ-1"]["margin"] == pytest.approx(2280.0 - 2 * 500.0)
+    assert view["estimated"] == 2
+
+
+def test_margin_ozon_detail_accrual_reconciliation(api_client, db):
+    """Сверка начислений: сумма по артикулам + нераспределённые = итог за окно."""
+    from datetime import date
+    from app import models
+    api_client.post("/api/ozon/cards")
+    api_client.post("/api/ozon/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10", "excel": 0})
+    api_client.post("/api/ozon/accrual",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10", "excel": 0})
+    # прочие (NON_ITEM, без sku) и строка со sku, но без артикула
+    db.add(models.OzonAccrual(
+        op_key="extra-other", date=date(2026, 9, 2), accrual_id="x1", bucket="other",
+        type_id=76, sku="", offer_id="", quantity=0, amount=-7.0,
+        seller_price=0.0, sale_price=0.0))
+    db.add(models.OzonAccrual(
+        op_key="extra-unmapped", date=date(2026, 9, 2), accrual_id="x2", bucket="logistics",
+        type_id=32, sku="777777", offer_id="", quantity=1, amount=-13.0,
+        seller_price=0.0, sale_price=0.0))
+    db.commit()
+    view = api_client.get("/api/margin/ozon-detail",
+                          params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
+    assert view["accrued_rows"] == 1            # начисления двух размеров → один товар OZ
+    assert view["accrued_other"] == -18.45  # -11.45 из фикстуры + -7.0 добавленный
+    assert view["accrued_unmapped"] == -13.0
+    # сумма по артикулам (2176.0 + 680.0) + нераспределённые = все начисления окна
+    total_all = view["accrued_total"] + view["accrued_other"] + view["accrued_unmapped"]
+    assert total_all == pytest.approx(2176.0 + 680.0 - 18.45 - 13.0, abs=0.01)
+    # по умолчанию начисления обоих размеров свёрнуты в строку товара OZ
+    o1 = next(x for x in view["rows"] if x["article"] == "OZ")
+    assert o1["accrued_net"] == pytest.approx(
+        2560.0 - 281.6 - 64.0 - 38.4 + 800.0 - 80.0 - 40.0)
+    assert o1["margin_accrued"] == pytest.approx(o1["accrued_net"] - 3 * 500.0)
+    # в режиме «в разрезе размеров» начисления остаются у своих артикулов
+    bs = api_client.get("/api/margin/ozon-detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "by_size": 1}).json()
+    b1 = next(x for x in bs["rows"] if x["article"] == "OZ-1")
+    assert bs["accrued_rows"] == 2
+    assert b1["accrued_net"] == pytest.approx(2560.0 - 281.6 - 64.0 - 38.4)
+    assert b1["margin_accrued"] == pytest.approx(b1["accrued_net"] - 2 * 500.0)
 
 
 def test_margin_ozon_detail_compare(api_client, db):
@@ -999,4 +1124,180 @@ def test_export_margin_ozon_detail(api_client):
     assert r.status_code == 200
     out = pd.read_excel(io.BytesIO(r.content))
     assert {"Артикул", "Прибыль, руб", "К перечислению, руб"}.issubset(set(out.columns))
-    assert set(out["Артикул"]) == {"OZ-1", "OZ-2"}
+    assert set(out["Артикул"]) == {"OZ"}
+    assert set(out["Размеров"]) == {2}
+    r = api_client.get("/api/export/margin/ozon-detail",
+                       params={"date_from": "2026-09-01", "date_to": "2026-09-10",
+                               "by_size": 1})
+    out_bs = pd.read_excel(io.BytesIO(r.content))
+    assert set(out_bs["Артикул"]) == {"OZ-1", "OZ-2"}
+
+
+# ------------------------------------------------------------------ Дашборд (Обзор)
+def _seed_dashboard(db):
+    from datetime import date, timedelta
+    from app import models as m
+    from app.services.sync import marketplace_id
+
+    db.add(m.Product(article="JBG-1", name="Джинсы", net_cost=100.0))
+    db.add(m.Product(article="TIE-1", name="Галстук", net_cost=100.0))
+    db.add(m.Product(article="OZ-1", name="Озон товар", net_cost=300.0))
+
+    def wb(op_key, article, day, qty, amount, for_pay):
+        return m.WbDetailRow(op_key=op_key, source="excel", article=article,
+                             doc_type_name="Продажа", sale_dt=day, quantity=qty,
+                             retail_amount=amount, for_pay=for_pay)
+
+    def oz(op_key, article, day, price, income):
+        return m.OzonDetailRow(op_key=op_key, source="api", date=day,
+                               posting_number="p" + op_key, offer_id=article,
+                               name="Товар " + article, sku="", barcode="",
+                               quantity=1, seller_price=price, amount=price,
+                               commission_ratio=0, commission=-100, standard_fee=-50,
+                               income=income, return_qty=0, return_total=0)
+
+    day = date(2026, 9, 20)
+    db.add_all([
+        # текущее окно 13..20
+        wb("w1", "JBG-1", day - timedelta(days=5), 1, 1000.0, 900.0),
+        wb("w2", "TIE-1", day - timedelta(days=4), 2, 2000.0, 1800.0),
+        wb("w3", "SHK-1", day - timedelta(days=3), 1, 500.0, 400.0),    # без себест. →-100
+        wb("w4", "X-1", day - timedelta(days=2), 1, 300.0, 250.0),       #     → -250
+        oz("o1", "OZ-1", day - timedelta(days=5), 1000.0, 850.0),
+        # предыдущее окно 05..12
+        wb("p1", "JBG-1", day - timedelta(days=10), 1, 500.0, 450.0),
+        wb("p2", "X-1", day - timedelta(days=9), 1, 600.0, 500.0),
+        oz("o0", "OZ-1", day - timedelta(days=10), 800.0, 700.0),
+    ])
+    db.commit()
+    wb_id = marketplace_id(db, "wb")
+    oz_id = marketplace_id(db, "ozon")
+    db.add_all([
+        m.Stock(marketplace_id=wb_id, date=day, article="JBG-1", warehouse="Все",
+                chrt_id="", quantity=2, quantity_full=2, in_way=1),
+        m.Stock(marketplace_id=oz_id, date=day - timedelta(days=1), article="OZ-1",
+                warehouse="Все", chrt_id="", quantity=3, quantity_full=3, in_way=0),
+    ])
+    db.add(m.ApiPull(api="wb", kind="detail", last_success_at=day, rows=10, db_rows=8,
+                     window="сегодня"))
+    # строки Продажи (source != detail) для обратной совместимости per_marketplace
+    db.add_all([
+        m.Sale(marketplace_id=wb_id, date=day - timedelta(days=5), article="JBG-1",
+               quantity=4, revenue=2000.0, income=1800.0, commission=-200.0,
+               logistics=-100.0, storage=-10.0, source="api"),
+        m.Sale(marketplace_id=oz_id, date=day - timedelta(days=4), article="OZ-1",
+               quantity=2, revenue=1200.0, income=1000.0, commission=-120.0,
+               logistics=0.0, storage=0.0, source="api"),
+    ])
+    db.commit()
+
+
+def test_dashboard_blocks_full(api_client, db):
+    """Дашборд: KPI по детализациям, топы, группы, дельты цены, склад, свежесть."""
+    _seed_dashboard(db)
+    r = api_client.get("/api/dashboard", params={
+        "date_from": "2026-09-13", "date_to": "2026-09-20", "compare": 1, "top": 10,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    # старый срез (обеспечивает обратную совместимость)
+    assert body["per_marketplace"] and body["total"]["sells"] == 6
+
+    k = body["kpis"]
+    assert k["total"]["margin"] == pytest.approx(2600.0)          # 800+1600-100-250+550
+    assert k["total"]["income"] == pytest.approx(4200.0)
+    assert k["total"]["margin_pct"] == pytest.approx(61.9, abs=0.1)
+    assert k["total"]["sells"] == 6
+    assert k["total"]["articles"] == 5
+    by_mp = {m_["marketplace"]: m_ for m_ in k["per_mp"]}
+    assert by_mp["wb"]["margin"] == pytest.approx(2050.0)
+    assert by_mp["ozon"]["margin"] == pytest.approx(550.0)
+    assert k["compare"]["delta_ru"] == pytest.approx(1850.0)      # 2600 - (350+0+400)
+    assert k["compare"]["delta_pct"] == pytest.approx(246.7, abs=0.1)
+
+    tops = body["tops"]
+    assert tops["profit"]["rows"][0]["article"] == "TIE-1"
+    assert tops["profit"]["count"] >= 5
+    assert tops["loss"]["rows"][0]["article"] == "X-1"
+
+    pref = {p["prefix"]: p["margin"] for p in body["prefixes"]["rows"]}
+    assert pref["TIE"] == pytest.approx(1600.0)
+    assert pref["J"] == pytest.approx(800.0)
+    assert pref["остальные"] == pytest.approx(-250.0 + 550.0)
+    assert pref["SH"] == pytest.approx(-100.0)
+
+    up = {pp["article"]: pp for pp in body["price"]["up"]["rows"]}
+    assert up["JBG-1"]["delta_pct"] == 100.0
+    assert round(up["OZ-1"]["delta_pct"], 2) == 25.0
+    down = {pp["article"]: pp for pp in body["price"]["down"]["rows"]}
+    assert down["X-1"]["delta_pct"] == -50.0
+
+    assert body["stocks"]["wb"]["quantity_full"] == 2
+    assert body["stocks"]["wb"]["value"] == pytest.approx(200.0)
+    assert body["stocks"]["ozon"]["value"] == pytest.approx(900.0)
+    assert any(f["api"] == "wb" and f["kind"] == "detail" for f in body["freshness"])
+
+
+def test_dashboard_marketplace_filter(api_client, db):
+    """marketplace=wb фильтрует и детализационные KPI, и продажи, и топы."""
+    _seed_dashboard(db)
+    r = api_client.get("/api/dashboard", params={
+        "date_from": "2026-09-13", "date_to": "2026-09-20",
+        "marketplace": "wb", "compare": 1,
+    })
+    body = r.json()
+    assert all(mp["marketplace"] == "wb" for mp in body["per_marketplace"])
+    assert [mp["marketplace"] for mp in body["kpis"]["per_mp"]] == ["wb"]
+    assert list(body["stocks"]) == ["wb"]
+    assert body["kpis"]["compare"]["delta_pct"] is not None
+    for arts in (body["tops"]["profit"]["rows"], body["tops"]["loss"]["rows"]):
+        assert all("OZ-1" != a["article"] for a in arts)
+    assert all(r_["article"] != "OZ-1" for r_ in body["price"]["down"]["rows"])
+
+
+def test_dashboard_no_params_ok(api_client, db):
+    """Дашборд без параметров (стартовая вкладка) отвечает старой структурой."""
+    _seed_dashboard(db)
+    body = api_client.get("/api/dashboard").json()
+    assert set(["per_marketplace", "total", "daily", "kpis", "tops",
+                "price", "prefixes", "stocks", "freshness"]).issubset(body.keys())
+    assert body["kpis"]["compare"] is None
+
+
+def test_dashboard_daily_has_profit(api_client, db):
+    """daily по таблице Продажи обогащён операционной прибылью (income−комиссии−логистика−хранение)."""
+    _seed_dashboard(db)
+    body = api_client.get("/api/dashboard", params={
+        "date_from": "2026-09-13", "date_to": "2026-09-20",
+    }).json()
+    by_date = {d["date"]: d for d in body["daily"]}
+    assert by_date
+    for d in body["daily"]:
+        assert "profit" in d
+    # WB-продажа 2026-09-15: income 1800 − комиссия 200 − логистика 100 − хранение 10
+    key = "2026-09-15"
+    assert key in by_date
+    assert by_date[key]["profit"] == pytest.approx(1490.0)
+    # Ozon 2026-09-16: income 1000 − комиссия 120
+    assert by_date["2026-09-16"]["profit"] == pytest.approx(880.0)
+
+
+def test_dashboard_export_xlsx_multi_sheet(api_client, db):
+    """Экспорт дашборда — один xlsx с листами KPI/топы/цены/группы."""
+    _seed_dashboard(db)
+    r = api_client.get("/api/export/dashboard", params={
+        "date_from": "2026-09-13", "date_to": "2026-09-20",
+    })
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    sheets = pd.read_excel(io.BytesIO(r.content), sheet_name=None)
+    assert set(sheets.keys()) >= {
+        "KPI", "Прибыльные", "Убыточные", "Рост цены", "Снижение цены", "Группы",
+    }
+    kpi = sheets["KPI"]
+    итого = kpi[kpi["Показатель"] == "Итого"].iloc[0]
+    assert итого["Прибыль, руб"] == pytest.approx(2600.0)
+    groups = sheets["Группы"]
+    assert groups[groups["Группа"] == "TIE"].iloc[0]["Прибыль, руб"] == pytest.approx(1600.0)
+    assert len(sheets["Прибыльные"]) >= 5

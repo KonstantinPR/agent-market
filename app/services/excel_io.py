@@ -39,6 +39,20 @@ def df_to_excel_stream(df: pd.DataFrame, sheet_name: str = "Данные") -> By
     return buf
 
 
+def dfs_to_excel_stream(sheets: dict[str, pd.DataFrame]) -> BytesIO:
+    """Несколько листов одним файлом Excel (имена листов должны быть уникальны)."""
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for name, df in sheets.items():
+            out = df.copy()
+            for col in out.columns:
+                if out[col].dtype == object:
+                    out[col] = out[col].map(_sanitize_value)
+            out.to_excel(writer, sheet_name=name[:31], index=False)
+    buf.seek(0)
+    return buf
+
+
 def project_export(df: pd.DataFrame, rename: dict, cols: str | None):
     """Ограничивает экспорт до видимых колонок.
 

@@ -333,6 +333,197 @@ class OzonProvider(BaseProvider):
                 })
         return pd.DataFrame(rows)
 
+    # ------------------------------------------------------------ начисления
+    def get_accrual(self, date_from, date_to) -> pd.DataFrame:
+        """Начисления Ozon по товарам за период: /v1/finance/accrual/by-day.
+
+        Ответ по дням состоит из трёх категорий записей (accrued_category):
+        - POSTING — по постингу: продажа (commission.sale_amount) и комиссия
+          (commission.sale_commission), доставка (delivery.services по типам);
+        - ITEM — услуги/эквайринг по SKU (item_fees.fees);
+        - NON_ITEM — начисления без привязки к товару (страховка, размещение и пр.).
+
+        Раскладывается в плоские строки по корзинам: sale / commission /
+        logistics / services / other. op_key = date|accrual_id|корзина|тип|sku|seq —
+        повторные загрузки того же дня идемпотентно перезаписывают строки.
+        """
+        if self.testing:
+            rng = np.random.default_rng(29)
+            n = int(rng.integers(3, 8))
+            rows = []
+            start = pd.Timestamp(date_from).date()
+            for i in range(n):
+                d = start + pd.Timedelta(days=int(rng.integers(0, 7))).to_pytimedelta()
+                sku = f"1{f'{int(rng.integers(100, 99999)):06d}'}"
+                qty = int(rng.integers(1, 3))
+                seller_p = float(rng.uniform(300, 1500))
+                sale = qty * seller_p
+                sale_p = float(rng.uniform(350, 1600))
+                unit = f"{int(rng.integers(10**10, 10**11))}-0001-1"
+                aid = str(int(rng.integers(10**10, 10**11)))
+                rows.append({
+                    "op_key": f"{d}|{aid}|sale|0|{sku}|0",
+                    "date": d, "accrual_id": aid, "unit_number": unit,
+                    "bucket": "sale", "type_id": 0, "sku": sku,
+                    "quantity": qty, "amount": round(sale, 2),
+                    "seller_price": round(seller_p, 2), "sale_price": round(sale_p, 2),
+                })
+                rows.append({
+                    "op_key": f"{d}|{aid}|commission|69|{sku}|0",
+                    "date": d, "accrual_id": aid, "unit_number": unit,
+                    "bucket": "commission", "type_id": 69, "sku": sku,
+                    "quantity": qty, "amount": round(-sale * 0.11, 2),
+                    "seller_price": round(seller_p, 2), "sale_price": round(sale_p, 2),
+                })
+                rows.append({
+                    "op_key": f"{d}|{aid}|logistics|32|{sku}|0",
+                    "date": d, "accrual_id": aid, "unit_number": unit,
+                    "bucket": "logistics", "type_id": 32, "sku": sku,
+                    "quantity": qty, "amount": round(float(rng.uniform(-150, -30)), 2),
+                    "seller_price": 0.0, "sale_price": 0.0,
+                })
+            out = pd.DataFrame(rows)
+            out["offer_id"] = ""
+            return out
+
+        start_d = pd.Timestamp(date_from).date()
+        end_d = pd.Timestamp(date_to).date()
+
+        def _iter_days():
+            d = start_d
+            while d <= end_d:
+                yield d
+                d += pd.Timedelta(days=1).to_pytimedelta()
+
+        def _f_amount(x):
+            try:
+                return float((x or {}).get("amount") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        out = []
+        for d in _iter_days():
+            page = 1
+            while True:
+                resp = self._post(f"{OZON_API}/v1/finance/accrual/by-day", {
+                    "date": d.isoformat(), "page": page, "page_size": 100,
+                }, num_retries=2)
+                body = resp.json()
+                accruals = body.get("accruals") or []
+                for a in accruals:
+                    cat = a.get("accrued_category") or ""
+                    aid = str(a.get("accrual_id") or "")
+                    unit = str(a.get("unit_number") or "")
+                    if cat == "POSTING":
+                        posting = a.get("posting") or {}
+                        for p in posting.get("products") or []:
+                            sku = str(p.get("sku") or "")
+                            qty = int(p.get("quantity") or 0)
+                            cm = p.get("commission") or {}
+                            sale = _f_amount(cm.get("sale_amount") or cm.get("seller_price"))
+                            seller_p = _f_amount(cm.get("seller_price"))
+                            sale_p = _f_amount(cm.get("sale_price"))
+                            if sale:
+                                out.append({"op_key": f"{d}|{aid}|sale|0|{sku}|0",
+                                            "date": d, "accrual_id": aid, "unit_number": unit,
+                                            "bucket": "sale", "type_id": 0, "sku": sku,
+                                            "quantity": qty,
+                                            "amount": round(sale, 2),
+                                            "seller_price": round(seller_p, 2),
+                                            "sale_price": round(sale_p, 2)})
+                            comm = _f_amount(cm.get("commission") or cm.get("sale_commission"))
+                            if comm:
+                                out.append({"op_key": f"{d}|{aid}|commission|69|{sku}|0",
+                                            "date": d, "accrual_id": aid, "unit_number": unit,
+                                            "bucket": "commission",
+                                            "type_id": 69, "sku": sku, "quantity": qty,
+                                            "amount": round(comm, 2),
+                                            "seller_price": round(seller_p, 2),
+                                            "sale_price": round(sale_p, 2)})
+                            for svc in (p.get("delivery") or {}).get("services") or []:
+                                amt = _f_amount(svc.get("accrued"))
+                                if amt:
+                                    out.append({"op_key": f"{d}|{aid}|logistics|{svc.get('type_id')}|{sku}|0",
+                                                "date": d, "accrual_id": aid,
+                                                "unit_number": unit, "bucket": "logistics",
+                                                "type_id": int(svc.get("type_id") or 0), "sku": sku,
+                                                "quantity": qty, "amount": round(amt, 2),
+                                                "seller_price": round(seller_p, 2),
+                                                "sale_price": round(sale_p, 2)})
+                    elif cat == "ITEM":
+                        for f in (a.get("item_fees") or {}).get("fees") or []:
+                            sku = str(f.get("sku") or "")
+                            qty = int(f.get("quantity") or 0)
+                            for fee in f.get("fees") or []:
+                                amt = _f_amount(fee.get("accrued"))
+                                if amt:
+                                    out.append({"op_key": f"{d}|{aid}|services|{fee.get('type_id')}|{sku}|0",
+                                                "date": d, "accrual_id": aid,
+                                                "unit_number": unit, "bucket": "services",
+                                                "type_id": int(fee.get("type_id") or 0), "sku": sku,
+                                                "quantity": qty, "amount": round(amt, 2),
+                                                "seller_price": 0.0, "sale_price": 0.0})
+                    elif cat == "NON_ITEM":
+                        nf = a.get("non_item_fee") or {}
+                        amt = _f_amount(nf.get("accrued"))
+                        if amt:
+                            out.append({"op_key": f"{d}|{aid}|other|{nf.get('type_id')}||0",
+                                        "date": d, "accrual_id": aid, "unit_number": unit,
+                                        "bucket": "other",
+                                        "type_id": int(nf.get("type_id") or 0), "sku": "",
+                                        "quantity": 0, "amount": round(amt, 2),
+                                        "seller_price": 0.0, "sale_price": 0.0})
+                if len(accruals) < 100:
+                    break
+                page += 1
+        df = pd.DataFrame(out, columns=["op_key", "date", "accrual_id", "unit_number",
+                                        "bucket", "type_id", "sku", "quantity", "amount",
+                                        "seller_price", "sale_price"])
+        # резолв offer_id по SKU делается при записи в БД (sync), т.к. API его не отдаёт
+        df["offer_id"] = ""
+        return df
+
+    def get_sku_map(self) -> pd.DataFrame:
+        """Карта SKU → Offer ID/артикул: /v3/product/info/list.
+
+        Нужна для начислений по SKU, у которых нет продаж в загруженной
+        детализации (только логистика/услуги/возвраты) — детализация даёт
+        sku → offer_id лишь для проданных позиций. При ошибке API (например,
+        лимит 429) возвращает пустой фрейм: начисления просто останутся без
+        артикула, загрузка не падает.
+        """
+        cols = ["sku", "offer_id", "barcode", "name"]
+        if self.testing:
+            return pd.DataFrame([{"sku": "100001", "offer_id": "OZ-1", "barcode": "4601",
+                                  "name": "Ozon 1"},
+                                 {"sku": "100002", "offer_id": "OZ-2", "barcode": "4602",
+                                  "name": "Ozon 2"}], columns=cols)
+        rows = []
+        page = 0
+        try:
+            for _ in range(20):  # предохранитель от бесконечной пагинации
+                resp = self._post(f"{OZON_API}/v3/product/info/list",
+                                  {"page": page, "page_size": 1000}, num_retries=1)
+                body = resp.json()
+                items = body.get("items") or body.get("result") or []
+                for it in items:
+                    sku = it.get("sku")
+                    if sku in (None, ""):
+                        continue
+                    rows.append({
+                        "sku": str(sku).strip(),
+                        "offer_id": str(it.get("offer_id") or "").strip(),
+                        "barcode": str(it.get("barcode") or "").strip(),
+                        "name": str(it.get("name") or "").strip(),
+                    })
+                if len(items) < 1000:
+                    break
+                page += 1
+        except Exception:  # noqa: BLE001 — карта справочная, её отсутствие не критично
+            if not rows:
+                return pd.DataFrame(columns=cols)
+        return pd.DataFrame(rows, columns=cols)
+
     # ---------------------------------------------- детализация по постингам
     def _parse_realization_posting_rows(self, data, day: date) -> pd.DataFrame:
         """Строки /v1/finance/realization/posting -> плоский датафрейм.

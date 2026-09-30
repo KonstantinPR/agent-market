@@ -600,6 +600,197 @@ class WbProvider(BaseProvider):
                 task_id = data.get("uploadId")
         return {"body": body, "task_id": task_id}
 
+    # -------------------------------------------------------- акции (календарь)
+    # Документация: dp-calendar-api /api/v1/calendar/*, токен категории
+    # «Цены и скидки» (тот же WB_API_KEY). Лимит: 10 запросов / 6 сек,
+    # всплеск 5 → между запросами делаем паузу 0.7с.
+    _PROMO_URL = "https://dp-calendar-api.wildberries.ru/api/v1/calendar"
+
+    @staticmethod
+    def _promo_window(start_date, end_date) -> str:
+        """Дата в формате WB: YYYY-MM-DDTHH:MM:SSZ (UTC-полдень)."""
+        from datetime import timezone
+
+        def _iso(d, hour=12):
+            dt = d if isinstance(d, datetime) else datetime.combine(d, datetime.min.time())
+            return dt.replace(tzinfo=timezone.utc, hour=hour, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return _iso(pd.Timestamp(start_date).date()), _iso(pd.Timestamp(end_date).date())
+
+    @staticmethod
+    def _table_page(data, key):
+        """Список записей из ответа акций: явный ключ, любой list-ключ или сам data.
+
+        Схемы ответов календаря акций менялись; для `nomenclatures` WB не
+        документирует обёртку, поэтому ищем первый list в data (иначе None).
+        """
+        if isinstance(data, list):
+            return data
+        if not isinstance(data, dict):
+            return None
+        if key is not None and isinstance(data.get(key), list):
+            return data[key]
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+        return None
+
+    def _promo_paginate(self, path: str, key: str, params: dict, chunk: int = 1000):
+        """GET-страницы календаря акций с паузой под rate-limit. Возвращает list."""
+        items, offset = [], 0
+        while True:
+            p = dict(params)
+            p["limit"] = chunk
+            p["offset"] = offset
+            resp = self._session_get(self._PROMO_URL + path, params=p)
+            page = self._table_page(resp.json().get("data"), key)
+            if not isinstance(page, list) or not page:
+                break
+            items += page
+            offset += len(page)
+            if len(page) < chunk:
+                break
+            time.sleep(0.7)
+        return items
+
+    def _mock_promotions(self):
+        today = date.today()
+        return [
+            {
+                "id": 1, "name": "ХИТЫ ГОДА",
+                "startDateTime": (today - timedelta(days=2)).isoformat() + "T12:00:00Z",
+                "endDateTime": (today + timedelta(days=5)).isoformat() + "T23:59:59Z",
+                "type": "auto",
+            },
+            {
+                "id": 2, "name": "Скидки выходного дня",
+                "startDateTime": (today - timedelta(days=1)).isoformat() + "T00:00:00Z",
+                "endDateTime": (today + timedelta(days=30)).isoformat() + "T23:59:59Z",
+                "type": "auto",
+            },
+            {
+                "id": 3, "name": "Распродажа категории",
+                "startDateTime": (today + timedelta(days=3)).isoformat() + "T00:00:00Z",
+                "endDateTime": (today + timedelta(days=14)).isoformat() + "T23:59:59Z",
+                "type": "regular",
+            },
+        ]
+
+    def _mock_promotion_details(self, promo_ids):
+        base = {p["id"]: p for p in self._mock_promotions()}
+        rng = np.random.default_rng(41)
+        out = []
+        for pid in promo_ids:
+            promo = base.get(int(pid), base.get(1))
+            in_total = int(rng.integers(5, 40))
+            not_total = int(rng.integers(0, 20))
+            in_left = int(in_total * rng.uniform(0.5, 0.9))
+            not_left = int(not_total * rng.uniform(0.3, 0.9))
+            out.append({
+                "id": promo["id"], "name": promo["name"],
+                "description": "Мок-акция для тестов автопилота",
+                "advantages": ["Плашка", "Баннер"],
+                "startDateTime": promo["startDateTime"], "endDateTime": promo["endDateTime"],
+                "inPromoActionLeftovers": in_left, "inPromoActionTotal": in_total,
+                "notInPromoActionLeftovers": not_left, "notInPromoActionTotal": not_total,
+                "participationPercentage": round(in_total / max(in_total + not_total, 1) * 100, 1),
+                "type": promo["type"], "exceptionProductsCount": int(rng.integers(0, 5)),
+                "ranging": [
+                    {"condition": "productsInPromotion", "participationRate": 10, "boost": 7},
+                    {"condition": "calculateProducts", "participationRate": 20, "boost": 17},
+                    {"condition": "allProducts", "participationRate": 35, "boost": 30},
+                ],
+            })
+        return out
+
+    def _mock_promotion_nomenclatures(self, promo_id, in_action):
+        arts = self._mock_articles()
+        rng = np.random.default_rng(42 + int(promo_id) % 100)
+        rows = []
+        for i, a in enumerate(arts):
+            in_a = bool(rng.integers(0, 2)) == bool(in_action)
+            rows.append({
+                "nmID": 530000 + i, "vendorCode": a, "brandName": f"Бренд {chr(65 + i % 3)}",
+                "title": f"Товар {a}", "inAction": in_a,
+                "discount": round(float(rng.uniform(5.0, 25.0)), 1) if in_a else 0.0,
+                "price": round(float(rng.uniform(500, 4000)), 2),
+            })
+        return rows
+
+    def get_promotions(self, start_date=None, end_date=None, all_promo: bool = False) -> pd.DataFrame:
+        """Список акций WB (/api/v1/calendar/promotions).
+
+        all_promo=False — акции, доступные для участия; True — все акции.
+        Возвращает колонки: id, name, startDateTime, endDateTime, type.
+        """
+        start = start_date or date.today() - timedelta(days=30)
+        end = end_date or date.today() + timedelta(days=30)
+        if self.testing:
+            return pd.DataFrame(self._mock_promotions())
+        from_dt, to_dt = self._promo_window(start, end)
+        items = self._promo_paginate(
+            "/promotions", "promotions",
+            {"startDateTime": from_dt, "endDateTime": to_dt, "allPromo": str(bool(all_promo)).lower()},
+        )
+        if not items:
+            return pd.DataFrame()
+        return pd.DataFrame(items)
+
+    def get_promotion_details(self, promo_ids) -> pd.DataFrame:
+        """Детальная информация об акциях (/api/v1/calendar/promotions/details).
+
+        Батчами по ≤100 ID, колонки: id, name, description, advantages,
+        startDateTime, endDateTime, inPromoActionLeftovers/Total,
+        notInPromoActionLeftovers/Total, participationPercentage, type,
+        exceptionProductsCount, ranging (JSON-строка).
+        """
+        ids = [int(p) for p in promo_ids if p is not None and str(p).strip().lstrip("-").isdigit()]
+        if not ids:
+            return pd.DataFrame()
+        if self.testing:
+            return pd.DataFrame(self._mock_promotion_details(ids))
+        items = []
+        for i in range(0, len(ids), 100):
+            chunk = ids[i:i + 100]
+            resp = self._session_get(
+                self._PROMO_URL + "/promotions/details",
+                params=[("promotionIDs", str(p)) for p in chunk],
+            )
+            data = resp.json().get("data") or {}
+            page = data.get("promotions") if isinstance(data, dict) else data
+            if isinstance(page, list):
+                items += page
+            if i + 100 < len(ids):
+                time.sleep(0.7)
+        if not items:
+            return pd.DataFrame()
+        df = pd.json_normalize(items, errors="ignore")
+        if "ranging" in df.columns:
+            df["ranging"] = df["ranging"].apply(
+                lambda v: (__import__("json").dumps(v, ensure_ascii=False, default=str)
+                           if isinstance(v, list) else "")
+            )
+        return df
+
+    def get_promotion_nomenclatures(self, promo_id, in_action: bool = False) -> pd.DataFrame:
+        """Товары для участия в акции (/api/v1/calendar/promotions/nomenclatures).
+
+        Неприменим для автоакций. in_action=True — уже участвуют, False — кандидаты.
+        Возвращаемые колонки зависят от WB; ключи нормализуются к нижнему регистру.
+        """
+        if promo_id is None:
+            return pd.DataFrame()
+        if self.testing:
+            return pd.DataFrame(self._mock_promotion_nomenclatures(promo_id, in_action))
+        items = self._promo_paginate(
+            "/promotions/nomenclatures", None,
+            {"promotionID": int(promo_id), "inAction": str(bool(in_action)).lower()},
+        )
+        if not items:
+            return pd.DataFrame()
+        df = pd.json_normalize(items, errors="ignore")
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        return df
+
     def get_min_prices(self, nm_ids) -> dict:
         """Минимальные витринные цены WB (публичный API v1/info/price).
 

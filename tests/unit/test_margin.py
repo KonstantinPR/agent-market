@@ -610,17 +610,17 @@ def _oz_detail(op_key, article, qty=1, ret_qty=0, price=1000.0, amount=1000.0,
 
 
 def test_ozon_margin_detail_matches_product_and_nm(db):
-    """Ozon-аналитика: себестоимость по UPPER(offer_id), артикул WB из карточек."""
+    """Ozon-аналитика: себестоимость по UPPER(артикул), артикул WB из карточек."""
     mp_oz = db.execute(
         select(models.Marketplace.id).where(models.Marketplace.code == "ozon")).scalar_one()
-    db.add(models.Product(article="OZ-1", name="Озон-товар", net_cost=300.0))
+    db.add(models.Product(article="OZ-ONE", name="Озон-товар", net_cost=300.0))
     db.add(models.MarketplaceCard(marketplace_id=mp_oz, chrt_id="c1",
-                                  vendor_code="oz-1", nm_id="777888"))
-    db.add(_oz_detail("k1", "oz-1"))
+                                  vendor_code="oz-one", nm_id="777888"))
+    db.add(_oz_detail("k1", "oz-one"))
     db.commit()
     out = ozon_margin_detail_dataframe(db)
     row = out.iloc[0]
-    assert row["article"] == "oz-1"
+    assert row["article"] == "oz-one"
     assert row["nm_id"] == "777888"
     assert row["name"] == "Озон-товар"
     assert row["sells"] == 1
@@ -628,6 +628,76 @@ def test_ozon_margin_detail_matches_product_and_nm(db):
     assert row["net_cost_est"] == False
     assert row["income"] == 850.0
     assert row["margin"] == 850.0 - 300.0  # income − себестоимость×продано
+    # безразмерный товар: размеров нет, артикул один
+    assert row["sizes_count"] == 0
+    assert row["offers_count"] == 1
+
+
+def test_ozon_margin_detail_groups_sizes_into_base_by_default(db):
+    """По умолчанию артикулы размеров свёрнуты в базовый артикул товара."""
+    db.add(models.Product(article="TIE-RED", name="Галстук", net_cost=300.0))
+    db.add(_oz_detail("k1", "TIE-RED-42", qty=1, amount=1000.0, income=800.0))
+    db.add(_oz_detail("k2", "TIE-RED-43", qty=2, amount=2000.0, income=1500.0))
+    db.commit()
+    out = ozon_margin_detail_dataframe(db)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["article"] == "TIE-RED"
+    assert row["name"] == "Галстук"
+    assert row["sells"] == 3
+    assert row["sizes_count"] == 2
+    assert row["offers_count"] == 2
+    # себестоимость берётся у базового артикула и умножается на все продажи
+    assert row["net_cost"] == 300.0
+    assert row["margin"] == 800.0 + 1500.0 - 300.0 * 3
+
+
+def test_ozon_margin_detail_by_size_keeps_full_offer(db):
+    """Режим «в разрезе размеров»: строка — полный артикул, размер виден."""
+    db.add(_oz_detail("k1", "TIE-RED-42", qty=1, amount=1000.0, income=800.0))
+    db.add(_oz_detail("k2", "TIE-RED-43", qty=2, amount=2000.0, income=1500.0))
+    db.commit()
+    out = ozon_margin_detail_dataframe(db, by_size=True)
+    assert sorted(out["article"]) == ["TIE-RED-42", "TIE-RED-43"]
+    assert sorted(out["size"]) == ["42", "43"]
+    assert out["sizes_count"].tolist() == [1, 1]
+    assert out["offers_count"].tolist() == [1, 1]
+
+
+def test_ozon_margin_detail_rolls_up_storage_and_accruals_to_base(db):
+    """Хранение и начисления размеров суммируются в строку базового артикула."""
+    db.add(_oz_detail("k1", "TIE-RED-42", qty=1, amount=1000.0, income=800.0))
+    db.add(_oz_detail("k2", "TIE-RED-43", qty=1, amount=1000.0, income=700.0))
+    db.add(models.OzonPlacement(
+        op_key="2026-08-01|110001|T1", date=date(2026, 8, 1), sku="110001",
+        offer_id="TIE-RED-42", warehouse="Т1", paid_quantity=1, paid_volume=0.1,
+        storage=-30.0))
+    db.add(models.OzonPlacement(
+        op_key="2026-08-01|110002|T1", date=date(2026, 8, 1), sku="110002",
+        offer_id="TIE-RED-43", warehouse="Т1", paid_quantity=1, paid_volume=0.1,
+        storage=-12.0))
+    db.add(models.OzonAccrual(
+        op_key="2026-08-01|a1|sale|0|110001|0", date=date(2026, 8, 1),
+        accrual_id="a1", bucket="sale", type_id=0, sku="110001",
+        offer_id="TIE-RED-42", quantity=1, amount=1000.0,
+        seller_price=1000.0, sale_price=1200.0))
+    db.add(models.OzonAccrual(
+        op_key="2026-08-01|a1|sale|0|110002|0", date=date(2026, 8, 1),
+        accrual_id="a1", bucket="sale", type_id=0, sku="110002",
+        offer_id="TIE-RED-43", quantity=1, amount=900.0,
+        seller_price=1000.0, sale_price=1200.0))
+    db.commit()
+    out = ozon_margin_detail_dataframe(db)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["article"] == "TIE-RED"
+    assert row["storage"] == -42.0
+    assert row["accrued_sale"] == 1900.0
+    assert row["accrued_coverage"] == 1
+    # income 800+700, services -50-50, начисления 1900 → accrued_diff = 0
+    assert row["accrued_net"] == 1900.0
+    # accrued_diff = начисления − income − services = 1900 − 1500 − (−100)
+    assert row["accrued_diff"] == 500.0
 
 
 def test_ozon_margin_detail_commissions_reference_not_double_subtracted(db):
@@ -682,6 +752,86 @@ def test_ozon_margin_detail_no_product_estimate(db):
     out = ozon_margin_detail_dataframe(db, default_net_cost=250.0)
     row = out.iloc[0]
     assert row["net_cost"] == 250.0
+
+
+def test_ozon_margin_detail_accrued_buckets(db):
+    """Точные начисления из ozon_accruals: корзины продажа/комиссия/логистика/
+    услуги приходят в маржу без повторного вычитания; accrued_net = сумма;"""
+    db.add(_oz_detail("k1", "oz-acc", qty=1, amount=1000.0, income=850.0,
+                      commission=-100.0, standard_fee=-50.0))
+    db.commit()
+    db.add(models.OzonAccrual(
+        op_key="2026-08-01|a1|sale|0|110001|0", date=date(2026, 8, 1),
+        accrual_id="a1", bucket="sale", type_id=0, sku="110001",
+        offer_id="oz-acc", quantity=1, amount=1000.0,
+        seller_price=1000.0, sale_price=1200.0))
+    db.add(models.OzonAccrual(
+        op_key="2026-08-01|a1|commission|69|110001|0", date=date(2026, 8, 1),
+        accrual_id="a1", bucket="commission", type_id=69, sku="110001",
+        offer_id="oz-acc", quantity=1, amount=-100.0,
+        seller_price=1000.0, sale_price=1200.0))
+    db.add(models.OzonAccrual(
+        op_key="2026-08-01|a1|logistics|32|110001|0", date=date(2026, 8, 1),
+        accrual_id="a1", bucket="logistics", type_id=32, sku="110001",
+        offer_id="oz-acc", quantity=1, amount=-30.0,
+        seller_price=0.0, sale_price=0.0))
+    db.add(models.OzonAccrual(
+        op_key="2026-08-01|a2|services|5|110001|0", date=date(2026, 8, 1),
+        accrual_id="a2", bucket="services", type_id=5, sku="110001",
+        offer_id="oz-acc", quantity=1, amount=-20.0,
+        seller_price=0.0, sale_price=0.0))
+    db.add(models.OzonAccrual(
+        op_key="2026-08-01|a3|other|76||0", date=date(2026, 8, 1),
+        accrual_id="a3", bucket="other", type_id=76, sku="",
+        offer_id="", quantity=0, amount=-5.0,
+        seller_price=0.0, sale_price=0.0))
+    db.commit()
+    out = ozon_margin_detail_dataframe(db)
+    row = out.iloc[0]
+    assert row["accrued_sale"] == 1000.0
+    assert row["accrued_commission"] == -100.0
+    assert row["accrued_logistics"] == -30.0
+    assert row["accrued_services"] == -20.0
+    assert row["accrued_other"] == 0.0  # NON_ITEM без артикула не привязывается
+    assert row["accrued_net"] == 850.0  # 1000 − 100 − 30 − 20
+    assert row["accrued_coverage"] == 1
+    assert row["has_detail"] == 1
+    # маржа и раньше считалась по income (комиссия/услуги уже вычтены):
+    # начисления их подтверждают, а не вычитают повторно.
+    assert row["margin"] == row["income"]
+    # прибыль по начислениям: точная «на р/с» минус себестоимость×продано
+    assert row["margin_accrued"] == 850.0
+
+
+def test_ozon_margin_detail_accrual_only_article_without_detail(db):
+    """Артикул с начислениями, но без строк детализации, попадает в отчёт."""
+    db.add(_oz_detail("k1", "oz-with", qty=1, income=500.0))
+    db.add(models.OzonAccrual(
+        op_key="a1", date=date(2026, 8, 1), accrual_id="a1", bucket="logistics",
+        type_id=32, sku="999", offer_id="oz-only", quantity=1, amount=-120.0,
+        seller_price=0.0, sale_price=0.0))
+    db.commit()
+    out = ozon_margin_detail_dataframe(db)
+    rec = {r["article"]: r for r in out.to_dict("records")}
+    assert "oz-only" in rec
+    only = rec["oz-only"]
+    assert only["sells"] == 0
+    assert only["has_detail"] == 0
+    assert only["accrued_logistics"] == -120.0
+    assert only["accrued_net"] == -120.0
+    assert only["accrued_coverage"] == 1
+    assert only["margin_accrued"] == -120.0
+
+
+def test_ozon_margin_detail_accrued_fields_empty_without_accruals(db):
+    """Без начислений: accrued_* нулевые, margin_accrued пусто (None)."""
+    db.add(_oz_detail("k1", "oz-none"))
+    db.commit()
+    out = ozon_margin_detail_dataframe(db)
+    row = out.iloc[0]
+    assert row["accrued_net"] == 0.0
+    assert row["accrued_coverage"] == 0
+    assert row["margin_accrued"] is None
     assert row["net_cost_est"] == True
 
 

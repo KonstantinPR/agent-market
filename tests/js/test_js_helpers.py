@@ -65,6 +65,21 @@ assert.strictEqual(
 );
 assert.strictEqual(qs({}), "", "qs empty");
 
+// «в разрезе размеров» OZON: переключатель в тулбаре каждого раздела, состояние
+// своё у каждого (ключ localStorage «ozBySize:<tab>»), по умолчанию выключено.
+const { ozBySize, setOzBySize, ozBySizeParam } = sandbox;
+assert.strictEqual(ozBySize("oz-detail"), false, "по умолчанию свёрнуто по товарам");
+assert.strictEqual(ozBySizeParam("oz-detail", "?a=1"), "?a=1", "by_size не добавляется");
+assert.strictEqual(ozBySizeParam("oz-detail", ""), "", "пустой запрос остаётся пустым");
+setOzBySize("oz-detail", true);
+assert.strictEqual(ozBySize("oz-detail"), true, "режим по размерам включён");
+assert.strictEqual(ozBySizeParam("oz-detail", "?a=1"), "?a=1&by_size=1", "by_size добавлен");
+assert.strictEqual(ozBySizeParam("oz-detail", ""), "?by_size=1", "by_size без других параметров");
+assert.strictEqual(ozBySize("oz-placement"), false, "состояние разделов независимо");
+assert.strictEqual(ozBySizeParam("oz-placement", "?a=1"), "?a=1", "соседний раздел не затронут");
+setOzBySize("oz-detail", false);
+assert.strictEqual(ozBySize("oz-detail"), false, "режим по размерам выключен обратно");
+
 assert.strictEqual(writeDbStorage("wb", "cards"), true, "write-db default true");
 setWriteDbStorage("wb", "cards", false);
 assert.strictEqual(writeDbStorage("wb", "cards"), false, "write-db off persisted");
@@ -111,6 +126,25 @@ for (const [, id, body] of ozPanes) {
     assert.ok(!hasDl, "в " + id + " не должно быть wb-dl-кнопок (эталон: без дублей тулбара)");
   }
 }
+
+// Переключатель «в разрезе размеров» OZON: по одному в тулбаре каждого раздела,
+// где есть свод по товару. Общего переключателя в меню больше нет.
+for (const [tab, id] of [["margin-ozon-detail", "marginOzBySize"],
+                          ["oz-detail", "ozDetailBySize"],
+                          ["oz-placement", "ozPlacementBySize"]]) {
+  assert.ok(htmlSrc.includes('id="' + id + '"'), "в index.html нет переключателя " + id);
+  assert.ok(htmlSrc.includes('data-oz-size-for="' + tab + '"'),
+            "нет переключателя по размерам для " + tab);
+  assert.ok(jsSrc.includes('"' + tab + '": "' + id + '"'), "нет таба " + tab + " в OZ_BY_SIZE");
+  assert.ok(jsSrc.includes('ozBySizeParam("' + tab + '"'),
+            "ozBySizeParam должен получать tab: " + tab);
+}
+assert.ok(!htmlSrc.includes('id="ozBySize"'), "галочка #ozBySize должна быть убрана из меню OZON");
+assert.ok(!jsSrc.includes('#ozBySize'), "js не должен ссылаться на #ozBySize");
+assert.ok(jsSrc.includes('mode: () => (ozBySize("margin-ozon-detail")'),
+          "набор колонок маржи должен зависеть от режима «в разрезе размеров»");
+assert.ok(jsSrc.includes('function syncOzBySizeDisabled()'),
+          "нет приглушения переключателя в режиме «Строками»");
 
 // Раздел «Наш склад → Товары» (T-21): каталог, фильтры, «Вид таблицы», экспорт и цены.
 assert.ok(jsSrc.includes("async function renderProducts"), "нет renderProducts");

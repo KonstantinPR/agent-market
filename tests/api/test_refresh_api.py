@@ -22,9 +22,11 @@ def test_refresh_wb_success(api_client):
 
     st = _wait_done(api_client, body["job_id"])
     assert st["status"] == "done"
-    assert st["ok"] == 6
+    assert st["ok"] == 7
     assert st["failed"] == 0
-    assert {s["kind"] for s in st["steps"]} == {"cards", "stock", "funnel", "sales", "prices", "storage"}
+    assert {s["kind"] for s in st["steps"]} == {
+        "cards", "stock", "funnel", "sales", "prices", "storage", "promotions",
+    }
     assert all(s["status"] == "ok" for s in st["steps"])
 
     pulls = api_client.get("/api/pulls").json()
@@ -41,7 +43,7 @@ def test_refresh_wb_with_detail_has_seven_steps(api_client):
     st = _wait_done(api_client, body["job_id"])
     kinds = [s["kind"] for s in st["steps"]]
     assert kinds[-1] == "detail"
-    assert len(kinds) == 7
+    assert len(kinds) == 8
 
 
 def test_refresh_ozon_success(api_client):
@@ -66,7 +68,7 @@ def test_refresh_isolates_failed_step(api_client, stub_wb):
     body = r.json()
     st = _wait_done(api_client, body["job_id"])
     assert st["status"] == "done"
-    assert st["ok"] == 5
+    assert st["ok"] == 6
     assert st["failed"] == 1
     failed = next(s for s in st["steps"] if s["status"] == "failed")
     assert failed["kind"] == "prices"
@@ -98,8 +100,8 @@ def test_refresh_queues_second_job(api_client, stub_wb):
 
     st1 = _wait_done(api_client, r1["job_id"])
     st2 = _wait_done(api_client, r2["job_id"])
-    assert st1["ok"] == 6
-    assert st2["ok"] == 6
+    assert st1["ok"] == 7
+    assert st2["ok"] == 7
     assert st1["status"] == "done" and st2["status"] == "done"
 
 
@@ -121,7 +123,7 @@ def test_refresh_worker_fatal_error_releases_queue(api_client, monkeypatch):
     monkeypatch.setattr(provider_factory, "get_wb_provider", orig)
     r2 = api_client.post("/api/refresh", params={"api": "wb"}).json()
     st2 = _wait_done(api_client, r2["job_id"])
-    assert st2["ok"] == 6
+    assert st2["ok"] == 7
 
 
 def test_refresh_state_missing_returns_404(api_client):

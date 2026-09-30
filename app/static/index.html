@@ -4,13 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=31">
+<link rel="stylesheet" href="/static/style.css?v=37">
 </head>
 <body>
 <nav class="navbar">
   <span class="brand">Agent Market</span>
   <button class="menu-btn" id="menuBtn" aria-label="Меню">&#9776;</button>
   <div class="links" id="navLinks">
+    <a class="nav-link" data-tab="dashboard" href="#">Обзор</a>
     <div class="dropdown" id="oursDropdown">
       <button class="dropbtn" id="oursMenuBtn">Наш склад &#9662;</button>
       <div class="dropdown-menu" id="oursMenu">
@@ -21,6 +22,7 @@
         <a class="nav-link" data-tab="wh-shipment" href="#">Отгрузка</a>
         <a class="nav-link" data-tab="wh-stock" href="#">Остатки</a>
         <a class="nav-link" data-tab="wh-turnover" href="#">Обороты</a>
+        <a class="nav-link" data-tab="replenish" href="#">Потребность в товаре</a>
       </div>
     </div>
     <div class="dropdown" id="profitDropdown">
@@ -53,6 +55,8 @@
         <a class="nav-link" data-tab="oz-prices" href="#">Цены</a>
         <a class="nav-link" data-tab="oz-realization" href="#">Реализация</a>
         <a class="nav-link" data-tab="oz-detail" href="#">Детализация продаж</a>
+        <a class="nav-link" data-tab="oz-placement" href="#">Размещение (хранение)</a>
+        <a class="nav-link" data-tab="oz-accrual" href="#">Начисления</a>
         <a class="nav-link" data-tab="oz-cashflow" href="#">Движение средств</a>
       </div>
     </div>
@@ -87,16 +91,168 @@
   <label>С <input type="date" id="fFrom"></label>
   <label>По <input type="date" id="fTo"></label>
   <button id="btnApply">Применить</button>
+  <span class="msg header-msg" id="replenishMsg"></span>
   <button id="btnUpdateWbDetail" class="hidden">Обновить базу</button>
   <span class="spinner hidden" id="busySpinner"></span>
 </header>
 <main>
   <section id="tab-dashboard" class="pane active">
-    <div class="kpis" id="kpi"></div>
-    <div class="charts">
-      <div class="chart-box"><h3>К перечислению по маркетплейсам</h3><canvas id="chartDoughnut" height="220"></canvas></div>
-      <div class="chart-box"><h3>Выручка и доход по дням</h3><canvas id="chartDaily" height="220"></canvas></div>
+    <div class="dash-filters">
+      <span class="dash-filters-title">Дашборд</span>
+      <label>Маркетплейс
+        <select id="dashMarketplace">
+          <option value="">Все маркетплейсы</option>
+          <option value="wb">Wildberries</option>
+          <option value="ozon">Ozon</option>
+          <option value="yandex" disabled>Яндекс.Маркет</option>
+        </select>
+      </label>
+      <label class="dash-range" title="Период дашборда (пусто — как в верхних фильтрах)">
+        С <input type="date" id="dashFrom">
+        по <input type="date" id="dashTo">
+      </label>
+      <label class="chk" title="Показывает показатели рядом по маркетплейсам и дельту к предыдущему периоду"><input type="checkbox" id="dashCompare"> Сравнить с другими маркетплейсами</label>
+      <span class="dash-filters-right">
+        <a id="exportDashboard" class="btn" href="#" target="_blank">Экспорт в Excel</a>
+      </span>
     </div>
+    <div class="charts">
+      <div class="chart-box">
+        <div class="chart-cap" id="dashChartACap">Показатели</div>
+        <div class="chart-cfg">
+          <select id="chartADim" title="Разрез">
+            <option value="mp">По маркетплейсам</option>
+            <option value="prefix">По группам товаров</option>
+          </select>
+          <select id="chartAMetric" title="Показатель">
+            <option value="income">Доход</option>
+            <option value="margin">Прибыль</option>
+            <option value="margin_gross">Маржа до себестоимости</option>
+          </select>
+        </div>
+        <div class="chart-sm"><canvas id="chartMpIncome"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <div class="chart-cap">Динамика за период</div>
+        <div class="chart-cfg">
+          <select id="chartMetric" title="Показатель">
+            <option value="revenue">Выручка</option>
+            <option value="income">Доход</option>
+            <option value="profit">Прибыль</option>
+          </select>
+          <select id="chartGran" title="Группировка">
+            <option value="day">По дням</option>
+            <option value="week">По неделям</option>
+            <option value="month">По месяцам</option>
+          </select>
+          <select id="chartType" title="Вид графика">
+            <option value="bar">Столбцы</option>
+            <option value="line">Линия</option>
+          </select>
+        </div>
+        <div class="bar-wrap"><canvas id="chartDaily"></canvas></div>
+      </div>
+    </div>
+    <div class="dash-hero">
+      <div class="dash-kpis" id="dashKpis"></div>
+    </div>
+    <section class="dash-sec" data-csec="profit">
+      <div class="dash-sec-head">
+        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
+        <button type="button" class="dash-sec-title" aria-expanded="true">
+          <h3>Топ прибыльных товаров <span class="dash-count" id="dashProfitCount"></span></h3>
+          <span class="dash-chev" aria-hidden="true"></span>
+        </button>
+        <div class="view-menu" id="dashProfitViewMenu">
+          <button type="button" class="btn" id="btndashProfitView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="dashProfitViewPanel"></div>
+        </div>
+      </div>
+      <div class="dash-sec-body">
+        <div class="table-wrap" id="dashProfit"></div>
+        <span id="dashProfitPager"></span>
+      </div>
+    </section>
+    <section class="dash-sec" data-csec="loss">
+      <div class="dash-sec-head">
+        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
+        <button type="button" class="dash-sec-title" aria-expanded="true">
+          <h3>Топ убыточных товаров <span class="dash-count" id="dashLossCount"></span></h3>
+          <span class="dash-chev" aria-hidden="true"></span>
+        </button>
+        <div class="view-menu" id="dashLossViewMenu">
+          <button type="button" class="btn" id="btndashLossView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="dashLossViewPanel"></div>
+        </div>
+      </div>
+      <div class="dash-sec-body">
+        <div class="table-wrap" id="dashLoss"></div>
+        <span id="dashLossPager"></span>
+      </div>
+    </section>
+    <section class="dash-sec" data-csec="price">
+      <div class="dash-sec-head">
+        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
+        <button type="button" class="dash-sec-title" aria-expanded="true">
+          <h3>Изменение цены за период</h3>
+          <span class="dash-chev" aria-hidden="true"></span>
+        </button>
+        <div class="view-menu" id="dashPriceViewMenu">
+          <button type="button" class="btn" id="btndashPriceView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="dashPriceViewPanel"></div>
+        </div>
+      </div>
+      <div class="dash-sec-body">
+        <div class="dash-sub">
+          <h4>Рост цены <span class="dash-count" id="dashPriceUpCount"></span></h4>
+          <div class="table-wrap" id="dashPriceUp"></div>
+          <span id="dashPriceUpPager"></span>
+        </div>
+        <div class="dash-sub">
+          <h4>Снижение цены <span class="dash-count" id="dashPriceDownCount"></span></h4>
+          <div class="table-wrap" id="dashPriceDown"></div>
+          <span id="dashPriceDownPager"></span>
+        </div>
+      </div>
+    </section>
+    <section class="dash-sec" data-csec="prefix">
+      <div class="dash-sec-head">
+        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
+        <button type="button" class="dash-sec-title" aria-expanded="true">
+          <h3>Прибыльность по группам <span class="dash-count" id="dashPrefixCount"></span></h3>
+          <span class="dash-chev" aria-hidden="true"></span>
+        </button>
+        <div class="view-menu" id="dashPrefixViewMenu">
+          <button type="button" class="btn" id="btndashPrefixView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="dashPrefixViewPanel"></div>
+        </div>
+      </div>
+      <div class="dash-sec-body">
+        <div class="table-wrap" id="dashPrefix"></div>
+        <span id="dashPrefixPager"></span>
+      </div>
+    </section>
+    <section class="dash-sec" data-csec="stock">
+      <div class="dash-sec-head">
+        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
+        <button type="button" class="dash-sec-title" aria-expanded="true">
+          <h3>Склад и данные</h3>
+          <span class="dash-chev" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="dash-sec-body">
+        <div class="dash-cols">
+          <div class="dash-col">
+            <h4>Остатки на конец периода</h4>
+            <div class="kpis dash-stock" id="dashStocks"></div>
+          </div>
+          <div class="dash-col">
+            <h4>Свежесть данных</h4>
+            <div id="dashFresh"></div>
+          </div>
+        </div>
+      </div>
+    </section>
   </section>
 
   <section id="tab-margin" class="pane">
@@ -142,9 +298,10 @@
   <section id="tab-margin-ozon-detail" class="pane">
     <div class="toolbar">
       <span class="msg" id="marginOzonDetailMsg"></span>
-      <span class="tip" id="marginOzonDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из детализации реализаций OZON. Прибыль = "К перечислению" − себестоимость×продано. Фактические комиссия/услуги OZON уже вычтены из "К перечислению" (они показаны справочными колонками). Рассчитано на ~2 недели ретроспективы, пока детализация не натянута за больший период.</span></span>
+      <span class="tip" id="marginOzonDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из детализации реализаций OZON. Прибыль = "К перечислению" − себестоимость×продано. Фактические комиссия/услуги OZON уже вычтены из "К перечислению" (они показаны справочными колонками). <b>Точные начисления</b> («Начисл.: продажа/комиссия/логистика/услуги», «На р/с (нач.)») загружаются из OZON API (OZON API ▸ Начисления) и дают реальную сумму к зачислению по каждому артикулу — это и есть ответ на вопрос «сколько Ozon перечислит за товар». «Прибыль (нач.)» = «На р/с (нач.)» − себестоимость×продано; пусто, если начислений по артикулу нет. «Δ нач. vs дет.» — расхождение начислений с детализацией: бывает при неполной детализации или возвратах. «На р/с (оценка)» — оценка по движению средств пропорционально доходу; точнее начисления, но начисления зачисляются с задержкой, поэтому за один и тот же месяц суммы отличаются. «Нераспределено» в статусе — начисления без артикула (страховка/размещение и товары без продаж в детализации). Рассчитано на ~2 недели ретроспективы, пока детализация не натянута за больший период.</span></span>
       <input id="marginOzonDetailLike" placeholder="Артикул содержит… (напр. BAND)">
       <label class="chk"><input type="checkbox" id="marginOzonDetailCompare"> Сравнить с пред. периодом</label>
+      <label class="chk" data-oz-size-for="margin-ozon-detail" title="По умолчанию отчёт OZON показывает товар целиком: артикулы разных размеров свёрнуты в одну строку. Включите, чтобы видеть каждую карточку (артикул + размер) отдельной строкой."><input type="checkbox" id="marginOzBySize"> в разрезе размеров</label>
       <span class="msg" id="marginOzonDetailCompareMsg"></span>
       <span class="toolbar-right">
         <span id="marginOzonDetailTablePager"></span>
@@ -191,6 +348,7 @@
         <div class="view-menu-panel hidden" id="pricingShowPanel"></div>
       </div>
       <button id="pricingFiltersBtn" class="btn" title="Фильтры по каждой колонке таблицы">Фильтры</button>
+      <button id="pricingPromoRefresh" class="btn" title="Загрузить календарь акций WB в базу (последние 30 и следующие 90 дней)">Обновить акции WB</button>
       <div class="view-menu" id="pricingSettingsMenu">
         <button type="button" class="btn split-l" id="btnpricingSettings" title="Раскрыть панели настроек">Настройки</button>
         <button type="button" class="btn split-r" id="btnpricingSettingsCaret" title="Действия: обновить расчёт, развернуть всё">▾</button>
@@ -312,6 +470,34 @@
       <span class="toolbar-right"><span id="whTurnoverTablePager"></span></span>
     </div>
     <div class="table-wrap" id="whTurnoverTable"></div>
+  </section>
+
+  <section id="tab-replenish" class="pane">
+    <div class="toolbar">
+      <input id="replenishLike" placeholder="Артикул содержит…">
+      <label title="Окно спроса (дней), за которое считается скорость продаж">Спрос <input type="number" class="tool-input num" id="replenishWindow" min="1" max="365" value="30"> дн.</label>
+      <label title="Целевой запас в днях продаж, до которого пополняем наш склад и маркетплейсы">Запас <input type="number" class="tool-input num" id="replenishTarget" min="1" max="366" value="30"> дн.</label>
+      <select id="replenishView" title="Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)">
+        <option value="article">Вид: артикулы</option>
+        <option value="sizes">Вид: размеры</option>
+      </select>
+      <select id="replenishSort" title="Сортировка списка">
+        <option value="urgency">По срочности</option>
+        <option value="margin">По марже/шт</option>
+        <option value="name">По артикулу</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="replenishShowInactive" title="Показать товары без карточек на WB/Ozon (не участвуют в поставке)"> Неактуальные</label>
+      <span class="toolbar-right">
+        <span id="replenishTablePager"></span>
+        <div class="view-menu" id="replenishViewMenu">
+          <button type="button" class="btn" id="btnreplenishView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="replenishViewPanel"></div>
+        </div>
+        <a class="btn" id="exportReplenish" href="#">Экспорт в Excel</a>
+      </span>
+    </div>
+    <p class="hint">Спрос = продажи − возвраты за окно (шт/день) из детализаций Прибыльности. «Купить у поставщика» — довести общий запас (наш склад + WB/Ozon) до целевого числа дней; «Отгрузить» — из нашего остатка покрыть дефициты маркетплейсов (приоритет худшему остатку в днях). Товары без карточки на WB/Ozon считаются неактуальными и скрыты. Вид «Размеры» — разрез по размерам WB (продажи по размеру и остатки на складах МП по размеру, со штрихкодом); спрос Ozon и «Купить у поставщика» считаются только по артикулу и в этом виде не выводятся.</p>
+    <div class="table-wrap" id="replenishTable"></div>
   </section>
 
   <section id="tab-products" class="pane">
@@ -615,11 +801,12 @@
 
   <section id="tab-oz-detail" class="pane">
     <div class="wb-form">
-      <p class="hint">Детализация реализаций Ozon по постингам: продажи, комиссия, услуги («стандартные»), сумма к перечислению и возвраты; отдельно — выкупы по артикулам (сумма и % выкупа в своде). Нажмите «Обновить базу» в шапке, чтобы вытянуть данные из Ozon API (/v1/finance/realization/posting; при большом объёме — через отчёт), затем «Применить» — перечитает таблицу из базы.</p>
+      <p class="hint">Детализация реализаций Ozon по постингам: продажи, комиссия, услуги («стандартные»), сумма к перечислению и возвраты; отдельно — выкупы по артикулам (сумма и % выкупа в своде). Нажмите «Обновить базу» в шапке, чтобы вытянуть данные из Ozon API (/v1/finance/realization/posting; при большом объёме — через отчёт), затем «Применить» — перечитает таблицу из базы. Свод по умолчанию — по товарам: артикулы разных размеров свёрнуты в строку с колонками «Размеров»/«Артикулов»; режим «в разрезе размеров» включается галочкой «в разрезе размеров» в панели фильтров этого отчёта (состояние своё у каждого отчёта). Поиск работает и по базовому артикулу товара.</p>
     </div>
     <div class="toolbar">
       <input id="ozDetailLike" placeholder="Поиск: артикул, название…">
       <label class="chk"><input type="checkbox" id="ozDetailRaw"> Строками</label>
+      <label class="chk" data-oz-size-for="oz-detail" title="По умолчанию свод OZON показывает товар целиком: артикулы разных размеров свёрнуты в одну строку. Включите, чтобы видеть каждую карточку (артикул + размер) отдельной строкой. В режиме «Строками» переключатель не действует."><input type="checkbox" id="ozDetailBySize"> в разрезе размеров</label>
       <span class="msg" id="ozMsg-detail-table"></span>
       <span class="tip hidden" id="ozDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Сырые деньги операций по постингам Ozon: комиссия и услуги отрицательные, «К перечислению» — итог по строке (с учётом возврата). Свод по артикулам добавляет сумму и % выкупа.</span></span>
       <span class="toolbar-right">
@@ -635,16 +822,68 @@
     <div class="table-wrap" id="ozDetailTable"></div>
   </section>
 
+  <section id="tab-oz-placement" class="pane">
+    <div class="wb-form">
+      <p class="hint">Стоимость размещения (хранение) Ozon по каждому SKU: дата, артикул, склад, платные объём и количество, начисленная стоимость. Отчёт /v1/report/placement/by-products/create собирает ВСЕ SKU (в том числе без продаж в окне). Загружается через «Обновить базу» (шаг «Размещение (хранение)») или кнопкой ниже. Свод по умолчанию — по товарам (размеры свёрнуты), режим «в разрезе размеров» — галочка «в разрезе размеров» рядом с фильтрами этого отчёта.</p>
+    </div>
+    <div class="toolbar">
+      <label>С <input type="date" data-date="from"></label>
+      <label>По <input type="date" data-date="to"></label>
+      <label class="chk"><input type="checkbox" id="ozPlacementRaw"> Строками</label>
+      <label class="chk" data-oz-size-for="oz-placement" title="По умолчанию свод OZON показывает товар целиком: артикулы разных размеров свёрнуты в одну строку. Включите, чтобы видеть каждую карточку (артикул + размер) отдельной строкой. В режиме «Строками» переключатель не действует."><input type="checkbox" id="ozPlacementBySize"> в разрезе размеров</label>
+      <button id="btnOzPlacementPull" class="btn">Загрузить из API</button>
+      <span class="msg" id="ozMsg-placement-table"></span>
+      <span class="toolbar-right">
+        <span id="ozPlacementTablePager"></span>
+        <div class="view-menu" id="ozPlacementViewMenu">
+          <button type="button" class="btn" id="btnozPlacementView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="ozPlacementViewPanel"></div>
+        </div>
+        <button id="btnExportOzPlacement" class="btn">Выгрузить в Excel</button>
+        <button id="btnDiskOzPlacement" class="btn">Загрузить на диск</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="ozPlacementTable"></div>
+  </section>
+
+  <section id="tab-oz-accrual" class="pane">
+    <div class="wb-form">
+      <p class="hint">Начисления Ozon по товарам (/v1/finance/accrual/by-day): продажа, комиссия, логистика и услуги по SKU-строкам; «прочее» (страховка, размещение и пр.) — без привязки к товару. Свод начислений по артикулам виден в «Прибыльность → Анализ Продаж OZON» колонками «Начисл.: …» и «На р/с (нач.)». Загружается через «Обновить базу» (шаг «Начисления») или кнопкой ниже.</p>
+    </div>
+    <div class="toolbar">
+      <label>С <input type="date" data-date="from"></label>
+      <label>По <input type="date" data-date="to"></label>
+      <button id="btnOzAccrualPull" class="btn">Загрузить из API</button>
+      <span class="msg" id="ozMsg-accrual-table"></span>
+      <span class="toolbar-right">
+        <span id="ozAccrualTablePager"></span>
+        <div class="view-menu" id="ozAccrualViewMenu">
+          <button type="button" class="btn" id="btnozAccrualView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="ozAccrualViewPanel"></div>
+        </div>
+        <button id="btnExportOzAccrual" class="btn">Выгрузить в Excel</button>
+      </span>
+    </div>
+    <div class="table-wrap" id="ozAccrualTable"></div>
+  </section>
+
   <section id="tab-oz-cashflow" class="pane">
     <div class="wb-form">
-      <p class="hint">Движение средств по банковским операциям Ozon за период (сводка по дням).</p>
+      <p class="hint">Движение средств по банковским операциям Ozon за период (сводка по периодам из базы). «Фактически получено» = сумма выплат на расчётный счёт за пересекающиеся с окном периоды.</p>
       <div class="toolbar">
         <label>С <input type="date" data-date="from"></label>
         <label>По <input type="date" data-date="to"></label>
         <button class="btn wb-dl" data-api="ozon" data-kind="cashflow">Скачать Excel</button>
         <span class="msg" id="ozMsg-cashflow"></span>
+        <span class="toolbar-right">
+          <div class="view-menu" id="ozCashflowViewMenu">
+            <button type="button" class="btn" id="btnozCashflowView">Вид таблицы &#9662;</button>
+            <div class="view-menu-panel hidden" id="ozCashflowViewPanel"></div>
+          </div>
+        </span>
       </div>
     </div>
+    <div class="table-wrap" id="ozCashflowTable"></div>
   </section>
 
   <section id="tab-yandex" class="pane">
@@ -719,7 +958,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=33"></script>
+<script src="/static/app.js?v=56"></script>
 </body>
 </html>
 

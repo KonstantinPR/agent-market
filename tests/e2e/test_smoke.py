@@ -37,7 +37,9 @@ def test_full_panel_and_refresh_cycle(api_client):
         st = _wait_done(api_client, body["job_id"])
         assert st["status"] == "done"
         assert st["failed"] == 0
-        assert st["ok"] in (5, 6)
+        # все шаги плана должны пройти (состав плана меняется вместе с pulls)
+        assert st["ok"] == len(st["steps"]), f"{api}: ok={st['ok']} из {len(st['steps'])}"
+        assert st["ok"] >= 5, f"{api}: слишком мало шагов — {st['ok']}"
 
     # история запусков привязана к БД
     runs = api_client.get("/api/refresh/history").json()["runs"]

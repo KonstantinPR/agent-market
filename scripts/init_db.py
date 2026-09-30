@@ -47,6 +47,32 @@ def create_tables():
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS barcode varchar(100) DEFAULT ''"))
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS quantity_full integer DEFAULT 0"))
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS in_way integer DEFAULT 0"))
+        # Группировка артикулов Ozon: база (товар без размера) + размер.
+        # Артикул Ozon = артикул товара + размер через последний «-»,
+        # см. app/services/ozon_article.py. Позволяет считать отчёты «по артикулам».
+        for _tbl, _base in (
+            ("ozon_detail_rows", "varchar(100)"),
+            ("ozon_accruals", "varchar(100)"),
+            ("ozon_placements", "varchar(100)"),
+            ("ozon_buyouts", "varchar(100)"),
+            ("marketplace_cards", "varchar(200)"),
+            ("stocks", "varchar(100)"),
+            ("price_snapshots", "varchar(100)"),
+        ):
+            conn.execute(text(
+                f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS base_article {_base} DEFAULT ''"))
+            conn.execute(text(
+                f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS size varchar(50) DEFAULT ''"))
+        for _idx, _tbl in (
+            ("ix_ozon_detail_base_article", "ozon_detail_rows"),
+            ("ix_ozon_accrual_base_article", "ozon_accruals"),
+            ("ix_ozon_placement_base_article", "ozon_placements"),
+            ("ix_ozon_buyout_base_article", "ozon_buyouts"),
+            ("ix_mp_cards_base_article", "marketplace_cards"),
+            ("ix_stocks_base_article", "stocks"),
+            ("ix_price_snap_base_article", "price_snapshots"),
+        ):
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS {_idx} ON {_tbl} (base_article)"))
         # Фаза A: воронка — выкупы и сумма выкупа
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyouts integer DEFAULT 0"))
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS buyout_sum numeric(14,2) DEFAULT 0"))

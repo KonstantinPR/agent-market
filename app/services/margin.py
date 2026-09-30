@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.services import funnel as funnel_service
+from app.services import ozon_article
 from app.services.sync import _is_goods_row, _redistribute_articleless, storage_split, like_pattern, marketplace_id
 
 
@@ -490,12 +491,17 @@ def margin_detail_dataframe(
 
 
 OZON_DETAIL_MARGIN_COLUMNS = [
-    "article", "nm_id", "name", "sells", "returns_qty", "postings",
+    "article", "nm_id", "name", "size", "sizes_count", "offers_count",
+    "sells", "returns_qty", "postings",
     "revenue", "amount", "commission", "services", "income",
-    "storage",
+    "margin_gross", "storage",
     "net_cost", "net_cost_est", "margin", "margin_per_one", "margin_pct",
     "commission_per_one", "services_per_one", "storage_per_one",
     "income_per_one", "revenue_per_one", "return_rate",
+    "accrued_sale", "accrued_commission", "accrued_logistics",
+    "accrued_services", "accrued_other", "accrued_net",
+    "accrued_diff", "accrued_coverage", "has_detail",
+    "margin_accrued",
 ]
 
 
@@ -505,18 +511,23 @@ def ozon_margin_detail_dataframe(
     date_to=None,
     article_like: Optional[str] = None,
     default_net_cost: float = 0.0,
+    by_size: bool = False,
 ) -> pd.DataFrame:
     """Прибыльность по «Детализации продаж» Ozon из ozon_detail_rows.
 
-    Аналог margin_detail_dataframe для WB: одна строка — операция (постинг/
-    выкуп на артикул), агрегируется по offer_id. Возвраты учитываются отдельно
-    (returns_qty и в деньгах income), продано остаётся гроссом — как в своде
-    oz-detail. income в Ozon уже чистый к перечислению (комиссия и услуги из
-    него вычтены), поэтому маржа-себест. = income − net_cost × продано, а
-    commission/services показываются справочно (`в минус`).
+    Аналог margin_detail_dataframe для WB: строка — операция (постинг/выкуп на
+    артикул). Возвраты учитываются отдельно (returns_qty и в деньгах income),
+    продано остаётся гроссом — как в своде oz-detail. income в Ozon уже чистый к
+    перечислению (комиссия и услуги из него вычтены), поэтому маржа-себест. =
+    income − net_cost × продано, а commission/services показываются справочно.
 
-    Себестоимость: из каталога products — матчинг UPPER(offer_id) по product
-    (товары в верхнем регистре), фолбэк по barcode строки детализации;
+    by_size=False (по умолчанию) — строка это товар: артикулы размеров свёрнуты
+    в базовый артикул (app/services/ozon_article.py), себестоимость берётся у
+    базового артикула, в колонках размеры/артикулы показываются количеством.
+    by_size=True — прежнее поведение: строка это артикул конкретного размера.
+
+    Себестоимость: из каталога products — матчинг UPPER по базовому артикулу,
+    затем по артикулу размера, затем по barcode строки детализации;
     промах → default_net_cost c флагом net_cost_est=True.
 
     Артикул WB (nm_id) подтягивается из marketplace_cards (ozon) по совпадению
@@ -531,7 +542,9 @@ def ozon_margin_detail_dataframe(
     if date_to:
         q = q.where(models.OzonDetailRow.date <= date_to)
     if article_like:
-        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%"))
+        # ищем и по полному артикулу размера, и по базовому артикулу товара
+        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%")
+                    | models.OzonDetailRow.base_article.ilike(f"%{article_like}%"))
     rows = list(db.execute(q).scalars().all())
     if not rows:
         return out
@@ -548,6 +561,24 @@ def ozon_margin_detail_dataframe(
         if not art:
             continue
         storage_by_art[art] = storage_by_art.get(art, 0.0) + float(p.storage or 0)
+
+    # Точные начисления (аккруалы) по артикулам за окно: ozon_accruals.
+    # реализация по корзинам sale/commission/logistics/services/other;
+    # сюда попадают только строки с привязанным offer_id.
+    accrual_by_art: dict = {}
+    aq = select(models.OzonAccrual)
+    if date_from:
+        aq = aq.where(models.OzonAccrual.date >= date_from)
+    if date_to:
+        aq = aq.where(models.OzonAccrual.date <= date_to)
+    for acc in db.execute(aq).scalars().all():
+        art = (acc.offer_id or "").strip()
+        if not art:
+            continue
+        bucket = (acc.bucket or "").strip() or "other"
+        d = accrual_by_art.setdefault(art, {"_cov": False})
+        d["_cov"] = True
+        d[bucket] = d.get(bucket, 0.0) + float(acc.amount or 0)
 
     # Артикул WB: marketplace_cards (ozon): vendor_code (offer_id) -> nm_id.
     mp_oz = db.execute(
@@ -566,9 +597,39 @@ def ozon_margin_detail_dataframe(
             if vc and nm and nm != "0" and vc not in nms:
                 nms[vc] = nm
 
+    # Группировка: базовый артикул (товар) либо полный артикул размера.
+    omap = ozon_article.build_offer_map(
+        db, offers={(r.offer_id or "").strip() for r in rows}
+        | {(r.barcode or "").strip() for r in rows} - {""}
+        | set(storage_by_art) | set(accrual_by_art))
+    group_of: dict = {}
+    for art in set(storage_by_art) | set(accrual_by_art) | {
+            (r.offer_id or "").strip() for r in rows}:
+        group_of[art] = ozon_article.group_key(art, omap, by_size)
+
+    def _roll_up(src: dict) -> dict:
+        """Суммирует словари по артикулам в словари по группам."""
+        out_: dict = {}
+        for art, d in src.items():
+            g = group_of.get(art, art)
+            dst = out_.setdefault(g, {})
+            for k, v in d.items():
+                if k == "_cov":
+                    dst["_cov"] = bool(dst.get("_cov")) or bool(v)
+                else:
+                    dst[k] = dst.get(k, 0.0) + float(v)
+        return out_
+
+    storage_by_key = ({a: round(v, 2) for a, v in storage_by_art.items()} if by_size
+                      else {k: round(d["s"], 2) for k, d in _roll_up(
+                          {a: {"s": v} for a, v in storage_by_art.items()}).items()})
+    accrual_by_key = ({a: d for a, d in accrual_by_art.items()} if by_size
+                      else _roll_up(accrual_by_art))
+
     prods = db.execute(select(models.Product).where(
         func.upper(models.Product.article).in_(
-            {(r.offer_id or "").strip().upper() for r in rows if (r.offer_id or "").strip()})
+            {(r.offer_id or "").strip().upper() for r in rows if (r.offer_id or "").strip()}
+            | {g.upper() for g in group_of.values() if g})
         | func.upper(func.coalesce(models.Product.barcode, "")).in_(
             {(r.barcode or "").strip().upper() for r in rows if (r.barcode or "").strip()})
     )).scalars().all()
@@ -581,10 +642,12 @@ def ozon_margin_detail_dataframe(
         if art and bc and bc in prods_by_barcode:
             art_bcs.setdefault(art.upper(), set()).add(bc)
 
-    def _find_product(art: str):
-        p = prods_by_upper.get(art.strip().upper())
-        if p is not None:
-            return p
+    def _find_product(art: str, group: str = ""):
+        """Себестоимость: сначала базовый артикул, потом артикул размера."""
+        for cand in ([group] if group else []) + [art]:
+            p = prods_by_upper.get(cand.strip().upper())
+            if p is not None:
+                return p
         for bc in art_bcs.get(art.strip().upper(), set()):
             qq = prods_by_barcode.get(bc)
             if qq is not None:
@@ -594,13 +657,18 @@ def ozon_margin_detail_dataframe(
     cells: dict = {}
     titles: dict = {}
     postings: dict = {}
+    detail_ops: dict = {}
+    group_sizes: dict = {}
+    group_offers: dict = {}
+    group_nm: dict = {}
     for r in rows:
         art = (r.offer_id or "").strip()
         if not art or r.date is None:
             continue
-        if art not in cells:
-            cells[art] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        c = cells[art]
+        key = group_of.get(art) or art
+        if key not in cells:
+            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        c = cells[key]
         c[0] += int(r.quantity or 0)                         # sells (гросс)
         c[1] += int(r.return_qty or 0)                       # returns_qty
         c[2] += float(r.seller_price or 0) * int(r.quantity or 0)   # revenue
@@ -608,25 +676,42 @@ def ozon_margin_detail_dataframe(
         c[4] += float(r.standard_fee or 0)                   # services (в минус)
         c[5] += float(r.income or 0)                         # income
         c[6] += float(r.amount or 0)                         # amount (бизнес-база)
-        postings.setdefault(art, set()).add(str(r.posting_number or ""))
+        postings.setdefault(key, set()).add(str(r.posting_number or ""))
+        detail_ops[key] = detail_ops.get(key, 0) + 1
         if (r.name or "").strip():
-            titles.setdefault(art, str(r.name).strip())
+            titles.setdefault(key, str(r.name).strip())
+        _sz = (r.size or "").strip() or ozon_article.size_of(art, omap)
+        if _sz:
+            group_sizes.setdefault(key, set()).add(_sz)
+        group_offers.setdefault(key, set()).add(art)
+        _nm = nms.get(art.upper(), "")
+        if _nm:
+            group_nm.setdefault(key, _nm)
+    # Артикулы, у которых есть начисления, но нет строк детализации в окне
+    # (например, только логистика/услуги по товару без продаж за период) —
+    # показываем отдельной строкой, чтобы итог по начислениям сходился.
+    for key in accrual_by_key:
+        if key not in cells:
+            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     recs = []
-    for art, c in cells.items():
+    for key, c in cells.items():
         (sells, returns_qty, revenue, commission, services, income, amount) = c
-        prod = _find_product(art)
+        offers = sorted(group_offers.get(key) or ([key] if by_size else []))
+        art0 = offers[0] if offers else key
+        prod = _find_product(art0, key)
         name = (prod.name or "") if prod else ""
         if not name:
-            name = titles.get(art, "")
+            name = titles.get(key, "")
         net_cost = float(prod.net_cost or 0) if prod else 0.0
         if net_cost <= 0:
             net_cost = default_net_cost
             est = True
         else:
             est = False
-        storage = round(storage_by_art.get(art, 0.0), 2)
+        storage = round(storage_by_key.get(key, 0.0), 2)
         margin = round(income - net_cost * max(0, sells) + storage, 2)
+        margin_gross = round(income + storage, 2)   # до себестоимости: margin + net_cost * sells
         margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
         margin_pct = margin / revenue * 100 if revenue > 0 and sells > 0 else 0.0
         _s = sells if sells > 0 else 0
@@ -637,14 +722,18 @@ def ozon_margin_detail_dataframe(
         revenue_per_one = round(revenue / _s, 2) if _s else 0.0
         denom = sells + returns_qty
         return_rate = round(returns_qty / denom * 100, 1) if denom > 0 else 0.0
+        _acc = accrual_by_key.get(key, {})
         recs.append({
-            "article": art, "nm_id": nms.get(art.upper(), ""), "name": name,
+            "article": key, "nm_id": group_nm.get(key, ""), "name": name,
+            "size": (ozon_article.size_of(art0, omap) if by_size else ""),
+            "sizes_count": len(group_sizes.get(key) or ()),
+            "offers_count": len(offers) or 1,
             "sells": sells, "returns_qty": returns_qty,
-            "postings": len(postings.get(art, set())),
+            "postings": len(postings.get(key, set())),
             "revenue": round(revenue, 2), "amount": round(amount, 2),
             "commission": round(commission, 2),
             "services": round(services, 2), "income": round(income, 2),
-            "storage": storage,
+            "margin_gross": margin_gross, "storage": storage,
             "net_cost": round(net_cost, 2), "net_cost_est": est,
             "margin": margin, "margin_per_one": margin_per_one,
             "margin_pct": margin_pct,
@@ -654,8 +743,32 @@ def ozon_margin_detail_dataframe(
             "income_per_one": income_per_one,
             "revenue_per_one": revenue_per_one,
             "return_rate": return_rate,
+            "accrued_sale": round(_acc.get("sale", 0.0), 2),
+            "accrued_commission": round(_acc.get("commission", 0.0), 2),
+            "accrued_logistics": round(_acc.get("logistics", 0.0), 2),
+            "accrued_services": round(_acc.get("services", 0.0), 2),
+            "accrued_other": round(_acc.get("other", 0.0), 2),
+            "has_detail": 1 if detail_ops.get(key) else 0,
         })
-    out = pd.DataFrame(recs).sort_values("margin", ascending=False).reset_index(drop=True)
+    out = pd.DataFrame(recs)
+    # Итоговый выигрыш от начислений и его сверка с детализацией.
+    out["accrued_net"] = (out["accrued_sale"] + out["accrued_commission"]
+                          + out["accrued_logistics"] + out["accrued_services"]
+                          + out["accrued_other"]).round(2)
+    out["accrued_diff"] = (out["accrued_net"] - out["income"] - out["services"]).round(2)
+    out["accrued_coverage"] = [
+        1 if accrual_by_key.get(a.strip() if a else "", {}).get("_cov") else 0
+        for a in out["article"]
+    ]
+    # Прибыль по начислениям: точная сумма «на р/с» минус себестоимость проданного.
+    # Заполняется только там, где по артикулу есть начисления за окно (coverage=1).
+    _acc_net = out["accrued_net"] - out["net_cost"] * out["sells"].clip(lower=0)
+    out["margin_accrued"] = [
+        round(float(v), 2) if cov else None
+        for v, cov in zip(_acc_net, out["accrued_coverage"])
+    ]
+    out = out[OZON_DETAIL_MARGIN_COLUMNS].sort_values(
+        "margin", ascending=False).reset_index(drop=True)
     return out
 
 

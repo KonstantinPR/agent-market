@@ -8,7 +8,9 @@
 
 Цена никогда не опускается ниже floor_price (break-even по unit-экономике).
 """
+import json
 import math
+import re
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -75,6 +77,14 @@ PRICING_DEFAULTS = {
     # старой эвристики из finance/price_module (НЕ рекомендуется, только для
     # сравнения результатов; общие стражи безопасности действуют в обеих).
     "mode": "new",
+    # T-31: акции WB (Календарь акций). promo_enabled = «учитывать акции» в
+    # автопилоте: при недоходе до следующего ranging-тира лучшей акции «добираем»
+    # K товаров (наименее рентабельные → больший остаток → медленнее оборот →
+    # объёмные), поднимая целевую скидку на promo_push_pct. Вниз хуже безубытка
+    # разрешено до promo_max_beyond_floor_pp п.п. (акция важнее пола цены).
+    "promo_enabled": False,
+    "promo_push_pct": 2.0,
+    "promo_max_beyond_floor_pp": 5.0,
 }
 
 
@@ -428,15 +438,19 @@ def recommendations(
             art_to_nm[art] = nm
 
     products = {}
+    volume_by_article: dict = {}
     for r in db.execute(select(
             models.Product.article, models.Product.name,
             models.Product.net_cost, models.Product.replenishable,
+            models.Product.volume_l,
     ).order_by(models.Product.article)):
-        products[str(r.article).strip().upper()] = {
+        art = str(r.article).strip().upper()
+        products[art] = {
             "name": r.name or "",
             "net_cost": _num(r.net_cost),
             "replenishable": bool(r.replenishable),
         }
+        volume_by_article[art] = _num(r.volume_l)
 
     now_df = rows_df[(rows_df["date"] >= now_from)] if not rows_df.empty else rows_df
     prev_df = rows_df[(rows_df["date"] >= prev_from) & (rows_df["date"] <= prev_to)] if not rows_df.empty else rows_df
@@ -575,6 +589,9 @@ def recommendations(
         else:
             r["delta_discount"] = None
 
+    # T-31: акции WB — инфо-поля по каждой строке + R11 «добор участия».
+    _promo_pass(out_rows, _active_promotions(db), s, volume_by_article)
+
     return {
         "rows": out_rows,
         "settings": s,
@@ -662,6 +679,9 @@ def _base_row(f: dict) -> dict:
         "stock": f["stock"], "velocity": f["velocity"], "v_proj": f["v_proj"],
         "doc": None, "conv_pct": None, "backlog": 0, "net_cost": f["net_cost"],
         "comm_rate": f["comm_rate"], "floor_price": f["floor_price"],
+        "logistics_unit": _num(f.get("logistics_unit")),
+        "storage_unit": _num(f.get("storage_unit")),
+        "other_unit": _num(f.get("other_unit")),
         "max_discount_item": None, "trend": round(f["trend"], 2),
         "action": "HOLD", "status": "hold", "reason": "",
         "target_discount": None, "target_vis": None, "margin_pct_at_target": None,
@@ -706,6 +726,198 @@ def _raise_boost(f: dict, s: dict) -> float:
     if f.get("detail_known") and f.get("margin_pct", 0) >= _num(s["strong_margin_pct"]):
         strong += 1
     return (1 + _num(s["raise_boost_pct"]) / 100) if strong >= 2 else 1.0
+
+
+def _promo_cap_pct(description) -> Optional[float]:
+    """Потолок промо-скидки WB из описания акции («промо-скидка не более N%») → N.
+
+    Возвращает None, если потолок не указан. Это скидка WB поверх цели, а не
+    наша собственная — используется как справочная цифра в UI.
+    """
+    desc = description or ""
+    m = re.search(r"не более\s*(\d+(?:[.,]\d+)?)\s*%", desc, re.I)
+    if m:
+        return float(m.group(1).replace(",", "."))
+    m = re.search(r"до\s*(\d+(?:[.,]\d+)?)\s*%", desc, re.I)
+    if m:
+        return float(m.group(1).replace(",", "."))
+    return None
+
+
+def _parse_ranging(raw) -> list:
+    """ranging_json (строка JSON или list) → [{'rate': %, 'boost': %, 'condition': str}]."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    tiers = []
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            rate = _num(item.get("participationRate"))
+            if rate <= 0:
+                continue
+            tiers.append({
+                "rate": rate,
+                "boost": _num(item.get("boost")),
+                "condition": str(item.get("condition") or "").strip(),
+            })
+    return sorted(tiers, key=lambda t: t["rate"])
+
+
+def _active_promotions(db: Session) -> list:
+    """Текущие активные акции WB (доступные для участия = по умолчанию)."""
+    now = datetime.utcnow()
+    rows = db.execute(
+        select(models.Promotion)
+        .where(models.Promotion.starts_at <= now,
+               models.Promotion.ends_at >= now)
+        .order_by(models.Promotion.ends_at.asc())
+    ).scalars().all()
+    out = []
+    for p in rows:
+        cap = _promo_cap_pct(p.description)
+        out.append({
+            "id": p.promo_id,
+            "name": p.name or "",
+            "participation": _num(p.participation_percent),
+            "cap": round(cap, 1) if cap is not None else None,
+            "tiers": _parse_ranging(p.ranging_json),
+        })
+    return out
+
+
+def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> None:
+    """R11: акции WB в рекомендациях.
+
+    Всегда добавляет инфо-поля строк (кол-во/названия акций, максимум участия,
+    ближайший ranging-тир + его буст, потолок промо-скидки). При promo_enabled —
+    «добор участия»: поднимает целевую скидку на promo_push_pct у первых K
+    кандидатов (наименее рентабельные → больший остаток → медленнее оборот →
+    объёмные), чтобы добраться до следующего тира лучшей акции. Технически
+    скидка может уйти ниже безубытка — до promo_max_beyond_floor_pp п.п.
+    """
+    empty_info = {
+        "promo_count": 0, "promo_names": "", "promo_part_pct": 0,
+        "promo_tier_pct": None, "promo_tier_boost": None,
+        "promo_cap_pct": None, "promo_push_applied": False,
+    }
+    if not promos:
+        for r in rows:
+            r.update(empty_info)
+        return
+
+    # Названия: WB отдаёт несколько promo_id на одно действие («Осенние скидки»
+    # по карточкам/цвету), поэтому дубли схлопываем — иначе колонка врёт.
+    uniq, seen = [], set()
+    for p in promos:
+        nm = p["name"].strip()
+        if not nm or nm in seen:
+            continue
+        seen.add(nm)
+        uniq.append(nm)
+    names = ", ".join(uniq[:3])
+    if len(uniq) > 3:
+        names += "…"
+    max_part = max((p["participation"] for p in promos), default=0.0)
+    cap = max((p["cap"] for p in promos if p["cap"] is not None), default=None)
+
+    # Лучшая акция для добора: ближайший достижимый ranging-тир.
+    best, best_next = None, None
+    for p in promos:
+        nxt = next((t for t in p["tiers"] if t["rate"] > p["participation"]), None)
+        if nxt is None:
+            continue
+        if best_next is None or nxt["rate"] < best_next["rate"]:
+            best, best_next = p, nxt
+
+    for r in rows:
+        r.update({
+            "promo_count": len(promos), "promo_names": names,
+            "promo_part_pct": round(max_part, 1), "promo_cap_pct": cap,
+            "promo_tier_pct": best_next["rate"] if best_next else None,
+            "promo_tier_boost": best_next["boost"] if best_next else None,
+            "promo_push_applied": False,
+        })
+
+    if not s.get("promo_enabled") or best_next is None or best is None or not rows:
+        return
+
+    push = _num(s.get("promo_push_pct"))
+    beyond = _num(s.get("promo_max_beyond_floor_pp"))
+    max_disc = _num(s.get("max_discount_pct"), 100.0)
+    min_delta = _num(s.get("min_delta_pp"))
+
+    candidates = []
+    for r in rows:
+        if r.get("action") not in ("HOLD", "LOWER") or not r.get("nm_id"):
+            continue
+        if _num(r.get("stock")) == 0:
+            continue
+        price = _num(r.get("price"))
+        cur = _num(r.get("current_discount"))
+        if price <= 0 or cur < 0:
+            continue
+        lo = _num(r.get("floor_price"))
+        floor_disc = (1 - lo / price) * 100 if lo > 0 else None
+        cap_disc = min(max_disc, 99.0)
+        if floor_disc is not None:
+            cap_disc = min(cap_disc, floor_disc + beyond)
+        base_t = _num(r.get("target_discount"), cur)
+        if not (cur <= base_t and base_t < cap_disc - 1e-9):
+            continue
+        candidates.append((r, cur, base_t, cap_disc))
+    if not candidates:
+        return
+
+    # Сколько товаров нужно, чтобы покрыть разрыв до тира лучшей акции.
+    gap = best_next["rate"] - best["participation"]
+    needed = int(math.ceil(max(0.0, gap) / 100 * max(1, len(rows))))
+    needed = min(max(needed, 1), len(candidates))
+
+    def margin_key(r):
+        m = r.get("margin_per_one")
+        return 1e9 if m is None else _num(m)
+
+    def stock_key(r):
+        st = r.get("stock")
+        return 0.0 if st is None else _num(st)
+
+    def doc_key(r):
+        d = r.get("doc")
+        return float("inf") if d is None else _num(d)
+
+    def vol_key(r):
+        return _num(volume_by_article.get(r.get("article")))
+
+    candidates.sort(key=lambda c: (margin_key(c[0]), -stock_key(c[0]),
+                                   -doc_key(c[0]), -vol_key(c[0])))
+
+    for r, cur, base_t, cap_disc in candidates[:needed]:
+        new_t = min(cap_disc, base_t + push)
+        if new_t - cur < min_delta - 1e-9:
+            continue
+        if r["action"] == "HOLD":
+            r["action"] = "LOWER"
+            r["status"] = "suggested"
+            r["reason"] = (f"акция WB: добор участия до {best_next['rate']:.0f}%"
+                           f" (акция «{best['name']}»)")
+        else:
+            r["status"] = "suggested"
+            reason = (r.get("reason") or "").rstrip(".")
+            r["reason"] = ((reason + ". ") if reason else "") + \
+                          (f"акция WB: добор участия до {best_next['rate']:.0f}%"
+                           f" (+{push:.1f}%)")
+        r["target_discount"] = round(new_t, 1)
+        r["target_vis"] = round(_num(r["price"]) * (1 - new_t / 100), 2)
+        r["delta_discount"] = round(new_t - cur, 1)
+        if all(k in r for k in ("comm_rate", "logistics_unit", "storage_unit",
+                                "other_unit", "net_cost")):
+            r["margin_pct_at_target"] = _margin_pct(r["target_vis"], r)
+        r["promo_push_applied"] = True
 
 
 def _decide_dead(f: dict, s: dict) -> dict:

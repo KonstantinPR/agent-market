@@ -9,18 +9,21 @@ from app.services.sync import (
     normalize_ozon_detail,
     normalize_ozon_placement,
     normalize_ozon_realization,
+    normalize_ozon_accrual,
     normalize_oz_cards,
     normalize_wb_detail,
     normalize_wb_sales,
     oz_detail_summary_dataframe,
     rebuild_sales_from_detail,
     record_api_pull,
+    upsert_ozon_accruals,
     upsert_ozon_buyouts,
     upsert_ozon_detail_rows,
     upsert_ozon_placements,
     upsert_price_snapshots,
     upsert_products,
     upsert_ozon_price_snapshots,
+    upsert_promotions,
     upsert_sales,
     upsert_wb_detail_rows,
 )
@@ -758,14 +761,98 @@ def test_upsert_ozon_buyouts_idempotent_by_op_key(db):
     assert len(rows) == 2
 
 
-def test_oz_detail_summary_dataframe_aggregates_and_buyout(db):
-    day = pd.Timestamp("2026-09-01")
+def _oz_accrual_rows():
+    return pd.DataFrame([
+        {
+            "op_key": "2026-09-01|a1|sale|0|3001|0", "date": "2026-09-01",
+            "accrual_id": "a1", "bucket": "sale", "type_id": 0, "sku": "3001",
+            "unit_number": "PZ-1", "quantity": 2, "amount": 2560.0,
+            "seller_price": 1280.0, "sale_price": 1400.0,
+        },
+        {
+            "op_key": "2026-09-01|a1|commission|69|3001|0", "date": "2026-09-01",
+            "accrual_id": "a1", "bucket": "commission", "type_id": 69, "sku": "3001",
+            "unit_number": "PZ-1", "quantity": 2, "amount": -281.6,
+            "seller_price": 1280.0, "sale_price": 1400.0,
+        },
+        {
+            "op_key": "2026-09-01|a1|logistics|32|3001|0", "date": "2026-09-01",
+            "accrual_id": "a1", "bucket": "logistics", "type_id": 32, "sku": "3001",
+            "unit_number": "PZ-1", "quantity": 2, "amount": -64.0,
+            "seller_price": 0.0, "sale_price": 0.0,
+        },
+        {
+            "op_key": "2026-09-01|a3|other|76||0", "date": "2026-09-01",
+            "accrual_id": "a3", "bucket": "other", "type_id": 76, "sku": "",
+            "unit_number": "", "quantity": 0, "amount": -11.45,
+            "seller_price": 0.0, "sale_price": 0.0,
+        },
+    ])
+
+
+def test_normalize_ozon_accrual_maps_columns():
+    out = normalize_ozon_accrual(_oz_accrual_rows())
+    assert out is not None
+    assert len(out) == 4
+    row = out[out["bucket"] == "commission"].iloc[0]
+    assert str(row["date"]) == "2026-09-01"
+    assert row["type_id"] == 69
+    assert row["sku"] == "3001"
+    assert row["amount"] == -281.6
+
+
+def test_normalize_ozon_accrual_missing_required_returns_none():
+    assert normalize_ozon_accrual(pd.DataFrame({"x": [1]})) is None
+    assert normalize_ozon_accrual(pd.DataFrame()) is None
+    assert normalize_ozon_accrual(None) is None
+
+
+def test_upsert_ozon_accruals_idempotent_by_op_key(db):
+    n1 = upsert_ozon_accruals(db, _oz_accrual_rows())
+    assert n1 == 4
+    df2 = _oz_accrual_rows()
+    df2.iloc[0, df2.columns.get_loc("amount")] = 9999.0
+    n2 = upsert_ozon_accruals(db, df2)
+    assert n2 == 4
+    rows = db.execute(select(models.OzonAccrual)).scalars().all()
+    assert len(rows) == 4
+    by_key = {r.op_key: r for r in rows}
+    assert by_key["2026-09-01|a1|sale|0|3001|0"].amount == 9999.0
+
+
+def test_oz_detail_summary_dataframe_groups_sizes_by_base(db):
+    """По умолчанию свод детализации Ozon сворачивает размеры в базовый артикул."""
     upsert_ozon_detail_rows(db, normalize_ozon_detail(_oz_detail_rows()))
     upsert_ozon_buyouts(db, normalize_ozon_buyout(_oz_buyout_rows()))
     upsert_ozon_placements(db, normalize_ozon_placement(_oz_placement_rows()))
     out = oz_detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-30")
+    assert list(out["article"]) == ["OZ"]
+    o = out.iloc[0]
+    assert o["sells"] == 3 and o["returns_qty"] == 1
+    assert o["postings"] == 2 and o["ops_count"] == 2
+    assert o["seller_total"] == 3500.0
+    assert o["amount"] == 3360.0
+    assert o["commission"] == -361.6
+    assert o["services"] == -58.4
+    assert o["income"] == 2980.0
+    assert o["sizes_count"] == 2 and o["offers_count"] == 2
+    # выкупы обоих размеров: 2500 + 880 = 3380 → 3380/3500 = 96.57%
+    assert o["buyout_sum"] == 3380.0
+    assert abs(o["buyout_percent"] - 96.57) < 0.01
+    # хранение обоих размеров: -25.0 + -7.0
+    assert o["storage"] == -32.0
+
+
+def test_oz_detail_summary_dataframe_by_size_keeps_offers(db):
+    """Режим «в разрезе размеров»: каждая строка — свой артикул (как раньше)."""
+    upsert_ozon_detail_rows(db, normalize_ozon_detail(_oz_detail_rows()))
+    upsert_ozon_buyouts(db, normalize_ozon_buyout(_oz_buyout_rows()))
+    upsert_ozon_placements(db, normalize_ozon_placement(_oz_placement_rows()))
+    out = oz_detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-30",
+                                      by_size=True)
     o1 = out[out["article"] == "OZ-1"].iloc[0]
     o2 = out[out["article"] == "OZ-2"].iloc[0]
+    assert o1["size"] == "1" and o2["size"] == "2"
     assert o1["sells"] == 2 and o1["returns_qty"] == 0
     assert o2["sells"] == 1 and o2["returns_qty"] == 1
     assert o1["seller_total"] == 2600.0
@@ -780,3 +867,70 @@ def test_oz_detail_summary_dataframe_aggregates_and_buyout(db):
     # OZ-1 = 12.5 + 12.5 → (после normalize со знаком минус) -25.0, OZ-2 = -7.0
     assert o1["storage"] == -25.0
     assert o2["storage"] == -7.0
+
+
+# ------------------------------------------------------------ акции WB (T-31)
+
+_PROMO_LIST = pd.DataFrame([
+    {
+        "id": 7001, "name": "ХИТЫ ГОДА", "type": "auto",
+        "startDateTime": "2026-01-01T00:00:00Z",
+        "endDateTime": "2026-12-31T23:59:59Z",
+    },
+])
+
+
+def _promo_details():
+    return pd.DataFrame([
+        {
+            "id": 7001, "name": "ХИТЫ ГОДА", "description": "промо-скидка не более 5%",
+            "advantages": ["трафик", "значок акции"],
+            "participationPercentage": 25.0,
+            "inPromoActionTotal": 100, "inPromoActionLeftovers": 80,
+            "notInPromoActionTotal": 100, "notInPromoActionLeftovers": 90,
+            "exceptionProductsCount": 2,
+            "ranging": '[{"participationRate": 20, "boost": 0}, {"participationRate": 60, "boost": 40}]',
+        },
+    ])
+
+
+def test_upsert_promotions_writes_and_updates(db):
+    n = upsert_promotions(db, _PROMO_LIST, _promo_details())
+    assert n == 1
+    p = db.execute(select(models.Promotion)).scalar_one()
+    assert p.promo_id == 7001
+    assert p.adv_type == "auto"
+    assert float(p.participation_percent) == 25.0 and p.in_promo_total == 100
+    assert "не более 5%" in p.description
+    assert p.advantages == "трафик, значок акции"
+    assert "participationRate" in (p.ranging_json or "")
+    assert p.starts_at is not None and p.ends_at is not None
+    assert p.starts_at.tzinfo is None  # naive UTC
+
+    # повторный запрос с новым участием — upsert, а не дубль
+    again = _promo_details()
+    again["participationPercentage"] = 40.0
+    upsert_promotions(db, _PROMO_LIST, again)
+    db.expire_all()  # сбросить кэш identity-карты сессии
+    rows = db.execute(select(models.Promotion)).scalars().all()
+    assert len(rows) == 1
+    assert float(rows[0].participation_percent) == 40.0
+
+
+def test_upsert_promotions_skips_empty_and_bad_ids(db):
+    assert upsert_promotions(db, pd.DataFrame(), None) == 0
+    bad = pd.DataFrame([{"id": None, "name": "x"}, {"id": "abc", "name": "y"}])
+    assert upsert_promotions(db, bad, None) == 0
+
+
+def test_upsert_promotions_merge_details_by_id(db):
+    extra = pd.DataFrame([
+        {
+            "id": 9999, "name": "ЛИШНЯЯ", "participationPercentage": 10.0,
+        },
+    ])
+    n = upsert_promotions(db, _PROMO_LIST, extra)
+    assert n == 1
+    p = db.execute(select(models.Promotion)).scalar_one()
+    assert p.promo_id == 7001
+    assert p.participation_percent is None  # деталей для 7001 не было

@@ -5,7 +5,7 @@
 номер выдаётся один раз и не переиспользуется, даже если тикет закрыли,
 не начав, или закрыли как неактуальный.
 
-Счётчик: следующая свободная метка — `T-24`.
+Счётчик: следующая свободная метка — `T-26`.
 
 ## Правила
 
@@ -153,12 +153,34 @@
 - [T-16] (medium) Автопилот цен WB: кнопка «Применить скидки в WB»
   > Тело: confirm-диалог + POST /api/pricing/apply (даты+настройки), результат
   > в pricingMsg, журнал/cooldown; обновить подсказку «изменения НЕ вносятся».
+- [T-25] (medium) Акции WB «Календарь акций» → Автопилот цен (правило R11)
+  > Тело: live-рекон WB API: `dp-calendar-api.wildberries.ru/api/v1/calendar`,
+  > `GET /promotions` (startDateTime, endDateTime, allPromo=false, limit, offset)
+  > и `GET /promotions/details` (батчи ≤100 promotionIDs); `/promotions/nomenclatures`
+  > и `/upload` к auto-акциям неприменимы (422). Таблица `wb_promotions`
+  > (app/models.py: Promotion), `upsert_promotions` (app/services/sync.py, ключ `promo_id`),
+  > `pull_wb_promotions` + вид «promotions» в плане (app/services/refresh.py, окно
+  > [−30д, +90д]), API `POST /api/promo/refresh`, `GET /api/promo/list`.
+  > Правило R11 `pricing._promo_pass` (post-pass после расчёта дельты): инфо-поля
+  > строк promo_count/promo_names/promo_part_pct/promo_tier_pct/promo_tier_boost/
+  > promo_cap_pct/promo_push_applied; при promo_enabled — «добор участия» до ближайшего
+  > ranging-тира лучшей акции на promo_push_pct, K = ceil((tier_rate − participation)/100
+  > × len(rows)) кандидатов (сорт: маржа ↑, остаток ↓, doc ↓, объём ↓), потолок
+  > min(max_discount_pct, 99, floor_disc + promo_max_beyond_floor_pp), HOLD→LOWER.
+  > Настройки promo_enabled (False), promo_push_pct (2.0), promo_max_beyond_floor_pp (5.0).
+  > UI: группа настроек «Акции WB», колонки + группа «Акции», кнопка «Обновить акции WB».
+  > **Гэп:** per-product «требуемой скидки по акции» в WB API нет (только наша discount) —
+  > мин/макс колонки не выдуманы, мост = агрегатное правило R11 на ranging-тирах.
+  > «Срезание лишней скидки» при выходе из акции научно невозможно (нет per-product
+  > требований) — реализован только добор.
 
 ## Заблокированные
 
 _(пусто)_
 
 ## Закрытые
+
+- [T-24] (closed) Ozon: своды и маржа по базовому артикулу товара + режим «в разрезе размеров» (резолвер `ozon_article`, `base_article`/`size` в 7 таблицах, бэкфилл 90 821 строка, дашборд/размещение/детализация; переключатель у каждого свода свой, в панели фильтров) — без коммита
 
 - [T-21] (closed) Каталог: UI «Наш склад → Товары» по эталону «Детализация Продаж WB» — commit d13822f
 - [T-19] (closed) Каталог: API-эндпоинты (/api/products, refresh, preview, price-settings, export) — commit `b5ce906`

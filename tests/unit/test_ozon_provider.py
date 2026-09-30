@@ -146,3 +146,51 @@ def test_parse_realization_report_file_unknown_headers_gives_empty():
     raw.to_excel(buf, index=False)
     df = _prov()._parse_realization_report_file(buf.getvalue(), 8, 2026)
     assert df.empty
+
+
+ACC_IN_COLS = {"op_key", "date", "accrual_id", "bucket", "type_id", "sku",
+               "quantity", "amount", "seller_price", "sale_price", "offer_id"}
+
+
+def test_accrual_mock_columns_and_keys():
+    df = _prov().get_accrual(date(2026, 8, 1), date(2026, 8, 31))
+    assert not df.empty
+    assert ACC_IN_COLS.issubset(df.columns)
+    assert (df["op_key"].astype(str).str.strip() != "").all()
+    assert (df["amount"] != 0).all()
+
+
+def test_accrual_mock_buckets():
+    df = _prov().get_accrual(date(2026, 8, 1), date(2026, 8, 31))
+    buckets = set(df["bucket"].unique())
+    assert buckets.issubset({"sale", "commission", "logistics", "services", "other"})
+    # продажа только положительная, расходы (комиссия/логистика/услуги/прочее) — `в минус`
+    sales = df[df["bucket"] == "sale"]
+    assert len(sales) > 0
+    assert (sales["amount"] > 0).all()
+    other = df[df["bucket"] != "sale"]
+    assert (other["amount"] < 0).all()
+
+
+def test_accrual_mock_has_unit_number():
+    df = _prov().get_accrual(date(2026, 8, 1), date(2026, 8, 31))
+    assert "unit_number" in df.columns
+    assert (df["unit_number"].astype(str).str.strip() != "").all()
+
+
+def test_get_sku_map_mock_columns():
+    df = _prov().get_sku_map()
+    assert not df.empty
+    assert {"sku", "offer_id", "barcode", "name"}.issubset(df.columns)
+
+
+def test_get_sku_map_returns_empty_on_api_error():
+    """Лимит/ошибка API не должны ломать загрузку — карта справочная."""
+    prov = OzonProvider(testing_mode=False)
+
+    def _bad_post(url, payload, num_retries=0):
+        raise RuntimeError("429")
+    prov._post = _bad_post
+    df = prov.get_sku_map()
+    assert df.empty
+    assert list(df.columns) == ["sku", "offer_id", "barcode", "name"]

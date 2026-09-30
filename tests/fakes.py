@@ -76,6 +76,32 @@ class FakeWb:
             raise self.prices_error
         return pd.DataFrame({"nmID": ["1001", "1002"], "price": [1100, 990]})
 
+    promo_error = None
+
+    def get_promotions(self, start_date=None, end_date=None, all_promo=False):
+        if self.promo_error:
+            raise self.promo_error
+        return pd.DataFrame([{
+            "id": 7001, "name": "ХИТЫ ГОДА", "type": "auto",
+            "startDateTime": "2026-01-01T00:00:00Z", "endDateTime": "2026-12-31T23:59:59Z",
+        }])
+
+    def get_promotion_details(self, promo_ids):
+        if self.promo_error:
+            raise self.promo_error
+        import json
+        return pd.DataFrame([{
+            "id": 7001, "name": "ХИТЫ ГОДА", "description": "промо-скидка не более 5%",
+            "participationPercentage": 25.0, "inPromoActionTotal": 100,
+            "inPromoActionLeftovers": 80, "notInPromoActionTotal": 100,
+            "notInPromoActionLeftovers": 90, "exceptionProductsCount": 2,
+            "advantages": ["трафик", "значок акции"],
+            "ranging": json.dumps([
+                {"participationRate": 20, "boost": 0},
+                {"participationRate": 60, "boost": 40},
+            ]),
+        }])
+
     prices_min_prices = None
     min_prices_error = None
 
@@ -237,6 +263,41 @@ class FakeOz:
             "return_qty": [0, 0],
             "return_total": [0.0, 0.0],
         })
+
+    accrual_error = None
+
+    def get_accrual(self, date_from, date_to):
+        if self.accrual_error:
+            raise self.accrual_error
+        # Начисления за день D1 на артикулы OZ-1 / OZ-2 (sku 3001/3002):
+        # продажа (sale, +), комиссия (commission, −), логистика (logistics, −),
+        # услуги (services, −) и прочее (other, −, без sku).
+        return pd.DataFrame([
+            {"op_key": str(D1) + "|a1|sale|0|3001|0", "date": str(D1), "accrual_id": "a1",
+             "bucket": "sale", "type_id": 0, "sku": "3001", "quantity": 2,
+             "amount": 2560.0, "seller_price": 1280.0, "sale_price": 1400.0},
+            {"op_key": str(D1) + "|a1|commission|69|3001|0", "date": str(D1), "accrual_id": "a1",
+             "bucket": "commission", "type_id": 69, "sku": "3001", "quantity": 2,
+             "amount": -281.6, "seller_price": 1280.0, "sale_price": 1400.0},
+            {"op_key": str(D1) + "|a1|logistics|32|3001|0", "date": str(D1), "accrual_id": "a1",
+             "bucket": "logistics", "type_id": 32, "sku": "3001", "quantity": 2,
+             "amount": -64.0, "seller_price": 0.0, "sale_price": 0.0},
+            {"op_key": str(D1) + "|a2|sale|0|3002|0", "date": str(D1), "accrual_id": "a2",
+             "bucket": "sale", "type_id": 0, "sku": "3002", "quantity": 1,
+             "amount": 800.0, "seller_price": 800.0, "sale_price": 950.0},
+            {"op_key": str(D1) + "|a2|commission|69|3002|0", "date": str(D1), "accrual_id": "a2",
+             "bucket": "commission", "type_id": 69, "sku": "3002", "quantity": 1,
+             "amount": -80.0, "seller_price": 800.0, "sale_price": 950.0},
+            {"op_key": str(D1) + "|a2|logistics|32|3002|0", "date": str(D1), "accrual_id": "a2",
+             "bucket": "logistics", "type_id": 32, "sku": "3002", "quantity": 1,
+             "amount": -40.0, "seller_price": 0.0, "sale_price": 0.0},
+            {"op_key": str(D1) + "|a3|services|5|3001|0", "date": str(D1), "accrual_id": "a3",
+             "bucket": "services", "type_id": 5, "sku": "3001", "quantity": 2,
+             "amount": -38.4, "seller_price": 0.0, "sale_price": 0.0},
+            {"op_key": str(D1) + "|a4|other|76||0", "date": str(D1), "accrual_id": "a4",
+             "bucket": "other", "type_id": 76, "sku": "", "quantity": 0,
+             "amount": -11.45, "seller_price": 0.0, "sale_price": 0.0},
+        ])
 
     def get_buyout(self, date_from, date_to):
         if self.buyout_error:
