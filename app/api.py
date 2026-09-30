@@ -1677,6 +1677,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "logistics_per_one", "storage_per_one", "detail_sells", "detail_returns_qty",
         "promo_count", "promo_names", "promo_part_pct", "promo_tier_pct",
         "promo_tier_boost", "promo_cap_pct", "promo_push_applied",
+        "promo_delta_discount", "promo_gap_pp", "promo_boost_gain",
     ]
     df = df[[c for c in keep if c in df.columns]]
     df, ru = excel_io.project_export(df, {
@@ -1705,11 +1706,14 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "detail_returns_qty": "Возвращено в детализации, шт",
         "promo_count": "Акций WB (кол-во)",
         "promo_names": "Акции WB",
-        "promo_part_pct": "Участие в акциях, %",
-        "promo_tier_pct": "Следующий тир акции, %",
-        "promo_tier_boost": "Буст уровня",
+        "promo_part_pct": "Участие в акциях, % (агрегат WB)",
+        "promo_tier_pct": "Уровень след. тира акции, %",
+        "promo_tier_boost": "Буст след. уровня, ×",
         "promo_cap_pct": "Потолок промо-скидки, %",
         "promo_push_applied": "Добор в акцию",
+        "promo_delta_discount": "Вклад акции в скидку, п.п.",
+        "promo_gap_pp": "Разрыв до тира, п.п.",
+        "promo_boost_gain": "Буст своего уровня, ×",
     }, cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Автопилот")

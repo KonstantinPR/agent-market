@@ -1,7 +1,9 @@
 """API-тесты автопилота цен WB и флага докупаемости."""
+import io
 import json
 from datetime import date, datetime, timedelta
 
+import pandas as pd
 import pytest
 from sqlalchemy import select
 
@@ -9,6 +11,10 @@ from app import models
 from app.services.pricing import PRICING_DEFAULTS
 
 TODAY = date.today()
+
+
+def _read_xlsx(r):
+    return pd.read_excel(io.BytesIO(r.content))
 
 
 def _seed(db, art, nm, *, stock, sales, funnel=(0, 0, 0, 0, 0), replenishable=False):
@@ -194,6 +200,30 @@ def test_recommendations_promo_fields(db, api_client):
     assert r_off["promo_push_applied"] is False
     assert r_on["promo_push_applied"] is True
     assert r_on["target_discount"] == pytest.approx(r_off["target_discount"] + 2.0, abs=0.1)
+    # вклад акции отделён от общей дельты
+    assert r_off["promo_delta_discount"] == 0.0
+    assert r_on["promo_delta_discount"] == pytest.approx(2.0, abs=0.1)
+    assert r_on["promo_delta_discount"] == pytest.approx(
+        r_on["target_discount"] - r_off["target_discount"], abs=0.1)
+    # разрыв до уровня акции и буст своего уровня — по итоговой скидке
+    assert r_on["promo_gap_pp"] == pytest.approx(
+        50.0 - r_on["target_discount"], abs=0.1)
+    assert r_on["promo_boost_gain"] in (0.0, None)  # уровень 20 не взят
+    assert "+2.0 п.п." in r_on["reason"]
+    assert "добор участия до" not in r_on["reason"]
+
+
+def test_export_contains_promo_columns(db, api_client):
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    _active_promo_db(db)
+    r = api_client.post("/api/pricing/export", json={"promo_enabled": True})
+    assert r.status_code == 200
+    df = _read_xlsx(r)
+    for col in ("Акций WB (кол-во)", "Вклад акции в скидку, п.п.",
+                "Разрыв до тира, п.п.", "Буст своего уровня, ×",
+                "Буст след. уровня, ×"):
+        assert col in df.columns, col
 
 
 def test_promo_refresh_api(db, api_client):

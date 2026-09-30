@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "56";
+const UI_VERSION = "57";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -4516,6 +4516,27 @@ function deltaDiscCell(v, r) {
   return arrow ? `<span class="${cls}">${arrow}${s}</span>` : s;
 }
 
+// Вклад акции WB в целевую скидку, п.п. Ноль у подавляющего большинства строк —
+// показываем тире, чтобы колонка не пестрела «0.0». Знак цвета как у дельты скидки:
+// скидка растёт → цена вниз (красный), падает → цена вверх (зелёный).
+function promoDeltaCell(v) {
+  if (v == null) return "—";
+  const d = Number(v);
+  if (!isFinite(d) || Math.abs(d) < 0.05) return "—";
+  const s = (d > 0 ? "+" : "") + fmtFloat(d, 1) + " п.п.";
+  return d > 0 ? `<span class="neg">${s}</span>` : `<span class="pos">${s}</span>`;
+}
+
+// Разрыв до уровня тира, п.п.: плюс = не дотянули (красный), ноль/минус = уровень взят.
+function promoGapCell(v) {
+  if (v == null) return "—";
+  const d = Number(v);
+  if (!isFinite(d)) return "—";
+  if (Math.abs(d) < 0.05) return "<span class='pos'>уровень взят</span>";
+  const s = (d > 0 ? "не хватает " : "выше на ") + fmtFloat(Math.abs(d), 1) + " п.п.";
+  return d > 0 ? `<span class="neg">${s}</span>` : `<span class="pos">${s}</span>`;
+}
+
 // Прибыль по товару: маржа с единицы (руб) + рентабельность от выручки (%).
 // v = margin_per_one (руб/шт), r.margin_pct — процент от выручки.
 function profitCell(v, r) {
@@ -4559,9 +4580,12 @@ const pricingHeaders = [
   { k: "promo_names", label: "Акции WB", render: cellFmts.text , tip: "Названия активных акций (до трёх, дальше — многоточие). Справочная информация о том, на какие активности WB опирается правило добора."},
   { k: "promo_part_pct", label: "Участие в акции, %", num: true, render: (v) => v == null || !v ? "—" : fmt(v) + "%" , tip: "Наибольшее участие среди активных акций WB, % — агрегат WB по товарам акции, а не по вашему артикулу (per-product участия в API WB нет). Товар попадает в акцию, когда его скидка достигает уровня (ranging) ниже."},
   { k: "promo_tier_pct", label: "Следующий тир, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Скидка следующего уровня (ranging) лучшей акции WB. Ниже этой скидки товар в следующий тир не попадает; правило R11 добирает до порога."},
-  { k: "promo_tier_boost", label: "Буст уровня", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Во сколько раз акция WB обещает поднять продажи товара в следующем тире участия (ranging boost). Справочно: крупный буст — весомый повод для добора."},
+  { k: "promo_tier_boost", label: "Буст след. уровня", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Буст СЛЕДУЮЩЕГО уровня (ranging) выбранной акции — это уровень самой акции, а не вашего товара. Своё место в лестнице показывает колонка «Буст своего уровня»."},
   { k: "promo_cap_pct", label: "Потолок промо, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки самой акции из описания WB («промо-скидка не более N%»). Это ограничение WB поверх нашей цели, а не потолок автопилота."},
-  { k: "promo_push_applied", label: "Добор в акцию", render: (v) => v ? "<span class='pos'>да</span>" : "—" , tip: "Правило R11 применило добор: целевая скидка поднята до участия в следующем тире акции, действие стало LOWER с причиной «акция WB»."},
+  { k: "promo_push_applied", label: "Добор в акцию", render: (v) => v ? "<span class='pos'>да</span>" : "—" , tip: "Правило R11 применило добор: целевая скидка поднята ради участия в акции, действие стало LOWER с причиной «акция WB»."},
+  { k: "promo_delta_discount", label: "Вклад акции, п.п.", num: true, render: promoDeltaCell , tip: "Сколько процентных пунктов к целевой скидке добавила акция WB сверх решения правил R1-R10. Ноль = акция на строку не повлияла. Общая «Дельта скидки» = вклад правил + этот вклад."},
+  { k: "promo_gap_pp", label: "Разрыв до тира, п.п.", num: true, render: promoGapCell , tip: "Насколько скидка, в которую целится автопилот, ниже уровня следующего тира акции. Плюс = не дотянули, ноль или минус = уровень взят. Считается по итоговой целевой скидке, поэтому показывает результат добора."},
+  { k: "promo_boost_gain", label: "Буст своего уровня", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Во сколько раз WB обещает поднять продажи на том уровне лестницы ranging, в который попадает скидка этого товара. Пусто = скидка ниже всех уровней акции."},
   { k: "revenue_per_one", label: "Ср. чек, руб", num: true, render: cellFmts.money , tip: "Фактическая цена продажи по детализации WB: выручка ÷ проданные штуки, ₽."},
   { k: "income_per_one", label: "К переч./шт, руб", num: true, render: cellFmts.money , tip: "К перечислению на единицу по детализации WB: сколько денег за одну проданную штуку получает продавец."},
   { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money , tip: "Комиссия КВВ на единицу по детализации WB. Учтена в расчёте пола безубыточности через долю комиссии в выручке."},
@@ -4740,6 +4764,9 @@ const PRICING_OPTIONAL = [
   { k: "promo_tier_boost", label: "Буст уровня", def: false },
   { k: "promo_cap_pct", label: "Потолок промо, %", def: false },
   { k: "promo_push_applied", label: "Добор в акцию", def: false },
+  { k: "promo_delta_discount", label: "Вклад акции, п.п.", def: false },
+  { k: "promo_gap_pp", label: "Разрыв до тира, п.п.", def: false },
+  { k: "promo_boost_gain", label: "Буст своего уровня", def: false },
 ];
 // Группы колонок для «Вид таблицы» — раскрывать сразу по смыслу.
 const PRICING_COLGROUPS = [
@@ -4748,7 +4775,7 @@ const PRICING_COLGROUPS = [
   { title: "Запасы и продажи", keys: ["stock", "stock_wb", "doc", "velocity", "trend", "buyouts", "conv_buyout_percent", "cancel_sum", "add_to_wishlist", "return_rate"] },
   { title: "Воронка и конверсия", keys: ["backlog", "conv_pct"] },
   { title: "Экономика на единицу", keys: ["margin_pct", "net_cost", "revenue_per_one", "income_per_one", "commission_per_one", "logistics_per_one", "storage_per_one"] },
-  { title: "Акции WB", keys: ["promo_count", "promo_names", "promo_part_pct", "promo_tier_pct", "promo_tier_boost", "promo_cap_pct", "promo_push_applied"] },
+  { title: "Акции WB", keys: ["promo_count", "promo_names", "promo_part_pct", "promo_tier_pct", "promo_tier_boost", "promo_cap_pct", "promo_push_applied", "promo_delta_discount", "promo_gap_pp", "promo_boost_gain"] },
   { title: "Решение", keys: ["action", "reason"] },
 ];
 registerColView("pricing", {
@@ -5305,6 +5332,7 @@ const PRICING_FOOT = {
   revenue_per_one: "avg", income_per_one: "avg", commission_per_one: "avg",
   logistics_per_one: "avg", storage_per_one: "avg", doc: "avg", velocity: "avg", trend: "avg",
   promo_count: "sum", promo_part_pct: "avg", promo_tier_pct: "avg", promo_tier_boost: "avg", promo_cap_pct: "avg",
+  promo_delta_discount: "avg", promo_gap_pp: "avg", promo_boost_gain: "avg",
 };
 function pricingFooters(rows) {
   const accum = {};

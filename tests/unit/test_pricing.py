@@ -1081,6 +1081,88 @@ def test_promo_pass_names_capped_at_three():
     assert rows[0]["promo_names"] == "Акция 0, Акция 1, Акция 2…"
 
 
+def _tier_promo(tiers=None, participation=30.0, name="ХИТЫ ГОДА"):
+    """Акция с лестницей уровней: 10% → ×25, 50% → ×30, 70% → ×35."""
+    return [{"id": 777, "name": name, "participation": participation, "cap": None,
+             "tiers": tiers if tiers is not None else [
+                 {"rate": 10.0, "boost": 25.0, "condition": ""},
+                 {"rate": 50.0, "boost": 30.0, "condition": ""},
+                 {"rate": 70.0, "boost": 35.0, "condition": ""},
+             ]}]
+
+
+def test_promo_pass_delta_is_zero_without_push():
+    """promo_delta_discount = 0.0 у всех строк, кроме реально добранных."""
+    rows = _promo_rows()
+    _promo_pass(rows, _tier_promo(), merge_settings({"promo_enabled": False}), {})
+    assert [r["promo_delta_discount"] for r in rows] == [0.0, 0.0, 0.0]
+
+    rows = _promo_rows()
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+    }), {})
+    low, high, raise_ = rows
+    assert low["promo_delta_discount"] == pytest.approx(2.0)   # 12 → 14
+    assert low["target_discount"] - low["current_discount"] == pytest.approx(4.0)
+    assert low["delta_discount"] == pytest.approx(4.0)        # общая дельта = 10 → 14
+    assert high["promo_delta_discount"] == 0.0                  # не кандидат (K=1)
+    assert raise_["promo_delta_discount"] == 0.0
+
+
+def test_promo_pass_gap_pp_sign_and_basis():
+    """Разрыв до тира: минус = уровень взят, считается по итоговой скидке."""
+    rows = [dict(_promo_rows()[0], current_discount=8.0, target_discount=20.0),
+            dict(_promo_rows()[1], current_discount=60.0, target_discount=60.0),
+            dict(_promo_rows()[2], current_discount=8.0, target_discount=None)]
+    _promo_pass(rows, _tier_promo(), merge_settings({"promo_enabled": False}), {})
+    # уровень выбран = ближайший выше participation 30 → 50% (×30)
+    assert rows[0]["promo_tier_pct"] == 50.0
+    assert rows[0]["promo_gap_pp"] == pytest.approx(30.0)    # 20 → не дотянул
+    assert rows[1]["promo_gap_pp"] == pytest.approx(-10.0)   # 60 → выше уровня
+    assert rows[2]["promo_gap_pp"] == pytest.approx(42.0)    # без цели → по текущей 8
+
+
+def test_promo_pass_boost_gain_is_row_level():
+    """Буст своего уровня — по скидке строки, а не уровень самой акции."""
+    rows = [
+        dict(_promo_rows()[0], current_discount=8.0, target_discount=8.0),    # ниже всех
+        dict(_promo_rows()[1], current_discount=45.0, target_discount=45.0),  # уровень 10
+        dict(_promo_rows()[2], current_discount=65.0, target_discount=65.0),  # уровень 50
+    ]
+    _promo_pass(rows, _tier_promo(), merge_settings({"promo_enabled": False}), {})
+    assert rows[0]["promo_boost_gain"] is None       # скидка ниже первого уровня
+    assert rows[1]["promo_boost_gain"] == 25.0
+    assert rows[2]["promo_boost_gain"] == 30.0       # не 35: уровень 70 не взят
+    assert rows[2]["promo_tier_boost"] == 30.0       # а это — буст след. уровня акции
+
+
+def test_promo_pass_push_recomputes_gap_and_boost():
+    """После добора разрыв и буст пересчитываются по итоговой скидке."""
+    rows = [dict(_promo_rows()[0], current_discount=9.0, target_discount=10.0)]
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+    }), {})
+    r = rows[0]
+    assert r["promo_push_applied"] is True
+    assert r["target_discount"] == pytest.approx(12.0)   # 10 + push 2
+    assert r["promo_delta_discount"] == pytest.approx(2.0)
+    # уровень акции 50% не взят ни до, ни после → разрыв положительный
+    assert r["promo_gap_pp"] == pytest.approx(38.0)      # 50 − 12
+    assert r["promo_boost_gain"] == 25.0                 # 12% → уровень 10
+
+
+def test_promo_pass_reason_reports_factual_push_not_tier():
+    """Причина говорит, сколько ДОБАВИЛИ, а не «до тира» (строка может быть выше)."""
+    rows = [dict(_promo_rows()[0], current_discount=40.0, target_discount=41.0)]
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+    }), {})
+    reason = rows[0]["reason"]
+    assert "+2.0 п.п." in reason
+    assert "уровень 50%" in reason
+    assert "добор участия до" not in reason   # старое, путающее «до N%» убрано
+
+
 def test_promo_pass_enabled_pushes_low_margin_candidate():
     rows = _promo_rows()
     promos = [{"id": 777, "name": "ХИТЫ ГОДА", "participation": 30.0,

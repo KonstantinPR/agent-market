@@ -794,16 +794,26 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
     """R11: акции WB в рекомендациях.
 
     Всегда добавляет инфо-поля строк (кол-во/названия акций, максимум участия,
-    ближайший ranging-тир + его буст, потолок промо-скидки). При promo_enabled —
-    «добор участия»: поднимает целевую скидку на promo_push_pct у первых K
-    кандидатов (наименее рентабельные → больший остаток → медленнее оборот →
-    объёмные), чтобы добраться до следующего тира лучшей акции. Технически
+    ближайший ranging-тир + его буст, потолок промо-скидки, добавленные п.п.,
+    разрыв до тира, буст уже достигнутого уровня). При promo_enabled — «добор
+    участия»: поднимает целевую скидку на promo_push_pct у первых K кандидатов
+    (наименее рентабельные → больший остаток → медленнее оборот → объёмные),
+    чтобы добирать участие лучшей акции до её следующего тира. Технически
     скидка может уйти ниже безубытка — до promo_max_beyond_floor_pp п.п.
+
+    Модель тиров: WB отдаёт у каждой акции лестницу ranging
+    (participationRate → boost) и агрегатный participationPercentage по своим
+    товарам, но НЕ отдаёт требования по конкретному артикулу. Поэтому уровень
+    участия конкретной строки здесь выводится из ЕЁ скидки: буст своего уровня
+    — буст наивысшего тира, rate ≤ текущая скидка; разрыв до тира — насколько
+    скидка ниже уровня следующего тира. Это наша интерпретация, не данные WB.
     """
     empty_info = {
         "promo_count": 0, "promo_names": "", "promo_part_pct": 0,
         "promo_tier_pct": None, "promo_tier_boost": None,
         "promo_cap_pct": None, "promo_push_applied": False,
+        "promo_delta_discount": 0.0, "promo_gap_pp": None,
+        "promo_boost_gain": None,
     }
     if not promos:
         for r in rows:
@@ -834,13 +844,37 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
         if best_next is None or nxt["rate"] < best_next["rate"]:
             best, best_next = p, nxt
 
+    tier_rate = best_next["rate"] if best_next else None
+    best_tiers = best["tiers"] if best else []
+
+    def tier_metrics(r) -> tuple:
+        """(разрыв до тира, буст достигнутого уровня) для строки.
+
+        Считается от скидки, в которую автопилот целится (target_discount), а при
+        его отсутствии — от текущей. Поэтому после добора (см. ниже) метрики
+        пересчитываются и показывают остаток именно по итоговому решению.
+        """
+        disc = r.get("target_discount")
+        if disc is None:
+            disc = r.get("current_discount")
+        if disc is None:
+            return None, None
+        d = _num(disc)
+        gap = round(tier_rate - d, 1) if tier_rate is not None else None
+        reached = [t for t in best_tiers if t["rate"] <= d + 1e-9]
+        return gap, (reached[-1]["boost"] if reached else None)
+
     for r in rows:
+        gap_pp, boost_gain = tier_metrics(r)
         r.update({
             "promo_count": len(promos), "promo_names": names,
             "promo_part_pct": round(max_part, 1), "promo_cap_pct": cap,
-            "promo_tier_pct": best_next["rate"] if best_next else None,
+            "promo_tier_pct": tier_rate,
             "promo_tier_boost": best_next["boost"] if best_next else None,
             "promo_push_applied": False,
+            "promo_delta_discount": 0.0,
+            "promo_gap_pp": gap_pp,
+            "promo_boost_gain": boost_gain,
         })
 
     if not s.get("promo_enabled") or best_next is None or best is None or not rows:
@@ -898,22 +932,29 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
 
     for r, cur, base_t, cap_disc in candidates[:needed]:
         new_t = min(cap_disc, base_t + push)
-        if new_t - cur < min_delta - 1e-9:
+        added = new_t - base_t
+        if new_t - cur < min_delta - 1e-9 or added <= 1e-9:
             continue
+        # Текст причины описывает ФАКТИЧЕСКИЙ добор, а не «до тира»: строка может
+        # уже быть выше уровня тира, и раньше это читалось как ошибка. Итог участия
+        # (достигнут ли уровень) показывает promo_gap_pp.
+        note = (f"акция WB «{best['name']}»: +{added:.1f} п.п. к скидке"
+                f" (уровень {tier_rate:.0f}%, буст ×{best_next['boost']:.0f})")
         if r["action"] == "HOLD":
             r["action"] = "LOWER"
             r["status"] = "suggested"
-            r["reason"] = (f"акция WB: добор участия до {best_next['rate']:.0f}%"
-                           f" (акция «{best['name']}»)")
+            r["reason"] = note
         else:
             r["status"] = "suggested"
             reason = (r.get("reason") or "").rstrip(".")
-            r["reason"] = ((reason + ". ") if reason else "") + \
-                          (f"акция WB: добор участия до {best_next['rate']:.0f}%"
-                           f" (+{push:.1f}%)")
+            r["reason"] = ((reason + ". ") if reason else "") + note
+        r["promo_delta_discount"] = round(added, 2)
         r["target_discount"] = round(new_t, 1)
         r["target_vis"] = round(_num(r["price"]) * (1 - new_t / 100), 2)
         r["delta_discount"] = round(new_t - cur, 1)
+        # Метрики участия — по итоговой скидке: разрыв мог сократиться, а уровень
+        # мог подняться (буст) именно благодаря добору.
+        r["promo_gap_pp"], r["promo_boost_gain"] = tier_metrics(r)
         if all(k in r for k in ("comm_rate", "logistics_unit", "storage_unit",
                                 "other_unit", "net_cost")):
             r["margin_pct_at_target"] = _margin_pct(r["target_vis"], r)
