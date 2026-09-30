@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "57";
+const UI_VERSION = "58";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -406,6 +406,77 @@ function tabLike(id) {
   return $("#" + id) ? $("#" + id).value.trim() : "";
 }
 
+// Статус раздела — одна строка в шапке рядом с «Применить» (эталон: «Потребность
+// в товаре»). Раньше зелёный текст жил в тулбаре каждой панели, из-за чего при
+// переключении вкладок он оставался висеть уже в чужом разделе. Писатели статуса
+// получают один элемент (statusEl/setStatus), длинный текст обрезается
+// многоточием, полный — во всплывающей подсказке по data-tip.
+const HEADER_MSG_MAX = 150;
+function statusEl() {
+  return document.getElementById("headerMsg");
+}
+function normalizeStatus() {
+  const el = statusEl();
+  if (!el) return null;
+  const s = el.textContent || "";
+  if (s.length > HEADER_MSG_MAX) {
+    el.dataset.tip = s;
+    el.textContent = s.slice(0, HEADER_MSG_MAX) + "…";
+  } else {
+    delete el.dataset.tip;
+  }
+  return el;
+}
+function setStatus(text, opts) {
+  const el = statusEl();
+  if (!el) return null;
+  el.textContent = String(text == null ? "" : text);
+  el.classList.toggle("error", !!(opts && opts.error));
+  return normalizeStatus();
+}
+function clearStatus() {
+  const el = statusEl();
+  if (!el) return;
+  el.textContent = "";
+  delete el.dataset.tip;
+  el.classList.remove("error");
+}
+// Писатели работают и через statusEl(), и прямыми msg.textContent = … —
+// наблюдатель уравнивает обрезку и подсказку для обоих способов.
+function initStatusWatch() {
+  const el = statusEl();
+  if (!el || typeof MutationObserver === "undefined") return;
+  new MutationObserver(normalizeStatus).observe(el, {
+    childList: true, characterData: true, subtree: true,
+  });
+}
+// Почему в разделе пусто. Раньше текст был зашит в JS («период с данными:
+// 2026-02-21 … 2026-08-30») и не зависел ни от окна, ни от базы — при смене
+// периодов он продолжал называть одни и те же даты. Теперь API отдаёт факты:
+// запрошенное окно (window) и реальное покрытие таблицы (detail_range).
+function emptyPeriodReason(data, what, hint) {
+  const w = data.window || {};
+  const win = w.date_from && w.date_to ? w.date_from + " … " + w.date_to : "";
+  const r = data.detail_range || {};
+  const cover = r.date_from && r.date_to ? r.date_from + " … " + r.date_to : "";
+  const tail = hint ? " " + hint : "";
+  if (!r.rows || !cover) return "Пусто: " + what + " в базе нет" + tail;
+  if (!win) return "Нет данных: " + what + ". Укажите период в шапке и нажмите «Применить».";
+  return "Нет данных: " + what + " за " + win + " · в базе покрыто " + cover + "." + tail;
+}
+function ozEmptyReason(data) {
+  return emptyPeriodReason(data, "детализации продаж Ozon",
+    "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж.");
+}
+// Период, который реально анализирует раздел: даты из шапки. Отдельных полей
+// «С/По» внутри панелей больше нет — иначе «Применить» менял шапку, а раздел
+// продолжал считать по своему старому периоду (такое было в размещении, начислениях
+// и движении средств Ozon).
+function paneDates() {
+  const f = filters();
+  return { date_from: f.date_from || "", date_to: f.date_to || "" };
+}
+
 let _hdrTipEl = null, _hdrTipTimer = null, _hdrTipNode = null;
 function initHeaderTip() {
   document.addEventListener("mouseover", (ev) => {
@@ -455,10 +526,9 @@ async function loadTab(name) {
 
 async function loadTabInner(name, f) {
 
-  if (name !== "replenish") {
-    const pm = $("#replenishMsg");
-    if (pm) { pm.textContent = ""; delete pm.dataset.tip; }
-  }
+  // Статус общий для всех разделов — гасим при каждом переключении вкладки,
+  // иначе зелёная строка предыдущего раздела остаётся висеть в новом.
+  clearStatus();
   try {
     if (name === "dashboard") await renderDashboard(qs(f));
     else if (name === "margin") {
@@ -476,8 +546,8 @@ async function loadTabInner(name, f) {
     else if (name === "ours") await renderOurs();
     else if (name === "products") await renderProducts();
     else if (name === "wh-cp") await renderWhCp();
-    else if (name === "wh-receipt") await renderWhDocs("receipt", "whRTable", "whRMsg", "whRDetail");
-    else if (name === "wh-shipment") await renderWhDocs("shipment", "whSTable", "whSMsg", "whSDetail");
+    else if (name === "wh-receipt") await renderWhDocs("receipt", "whRTable", "headerMsg", "whRDetail");
+    else if (name === "wh-shipment") await renderWhDocs("shipment", "whSTable", "headerMsg", "whSDetail");
     else if (name === "wh-stock") await renderWhStock();
     else if (name === "wh-turnover") await renderWhTurnover();
     else if (name === "replenish") await renderReplenish();
@@ -1631,7 +1701,7 @@ async function renderMarginFunnel(p) {
   pagedTable($("#marginFunnelTable"), colViewHeaders("margin-funnel", funnelHeaders), data.rows || [], null, null, colViewPinKeys("margin-funnel"));
   const cp = colViewParam("margin-funnel");
   $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p + (cp ? (p ? "&" : "?") + cp : "");
-  const msg = $("#marginFunnelMsg");
+  const msg = statusEl();
   const warn = document.getElementById("marginFunnelPeriodWarn");
   if (data.snapshot_from && data.snapshot_to) {
     msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to +
@@ -1671,20 +1741,18 @@ async function renderMarginDetail(p) {
     const cp = colViewParam("margin-detail", compare ? ["sells_pp", "margin_pp", "delta_ru", "delta_pct"] : null);
     exportBtn.dataset.url = "/api/export/margin/detail" + p + (cp ? (p ? "&" : "?") + cp : "");
   }
-  const msg = $("#marginDetailMsg");
-  const cmpMsg = $("#marginDetailCompareMsg");
-  if (cmpMsg) {
-    cmpMsg.textContent = (compare && data.prev_window) ?
-      "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
-      (compare ? "для сравнения нужны даты «С» и «По»" : "");
-  }
+  // Статус один на весь раздел: сначала писалось «сравнение: …», следом
+  // «Строк: N» — второе затирало первое. Теперь собираем одну строку.
+  const cmpMsg = (compare && data.prev_window) ?
+    "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
+    (compare ? "для сравнения нужны даты «С» и «По»" : "");
+  const tail = cmpMsg ? " · " + cmpMsg : "";
   if ((data.rows || []).length === 0) {
-    msg.textContent =
-      "Нет данных. Финансовый отчёт WB скачивается отдельным ключом (finance): WB API ▸ Детализация продаж. " +
-      "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день.";
-  } else {
-    msg.textContent = "Строк: " + fmt((data.rows || []).length);
+    setStatus("Нет данных. Финансовый отчёт WB скачивается отдельным ключом (finance): WB API ▸ Детализация продаж. " +
+      "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день." + tail);
+    return;
   }
+  setStatus("Строк: " + fmt((data.rows || []).length) + tail);
 }
 
 async function renderMarginOzonDetail(p) {
@@ -1707,39 +1775,38 @@ async function renderMarginOzonDetail(p) {
     const ep = ozBySizeParam("margin-ozon-detail", p);
     exportBtn.dataset.url = "/api/export/margin/ozon-detail" + ep + (cp ? (ep ? "&" : "?") + cp : "");
   }
-  const msg = $("#marginOzonDetailMsg");
-  const cmpMsg = $("#marginOzonDetailCompareMsg");
-  if (cmpMsg) {
-    cmpMsg.textContent = (compare && data.prev_window) ?
-      "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
-      (compare ? "для сравнения нужны даты «С» и «По»" : "");
-  }
+  const cmpMsg = (compare && data.prev_window) ?
+    "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
+    (compare ? "для сравнения нужны даты «С» и «По»" : "");
+  const tail = cmpMsg ? " · " + cmpMsg : "";
   if ((data.rows || []).length === 0) {
-    msg.textContent =
-      "Нет данных. OZON API ▸ Детализация продаж — период с данными: 2026-02-21 … 2026-08-30. Обновите детализацию за нужный период, чтобы раздел наполнился.";
-  } else {
-    let m = "Строк: " + fmt((data.rows || []).length) +
-      (bySize ? " (в разрезе размеров)" : " (по товарам)") +
-      (data.estimated ? " (оценка себестоимости: " + data.estimated + ")" : "");
-    if (data.cashflow_received != null) {
-      m += " · на р/с фактически получено: " + fmtMoney(data.cashflow_received) +
-        " (движение средств, " + fmt(data.cashflow_periods || 0) + " пер.)";
-      if (data.cashflow_ratio != null) {
-        m += " · от начислений: " + fmt(data.cashflow_ratio) + "%";
-      }
-    }
-    if (data.accrued_total != null) {
-      m += " · по начислениям: " + fmtMoney(data.accrued_total) +
-        " (артикулов с данными: " + fmt(data.accrued_rows || 0) + ")";
-      const un = (data.accrued_other || 0) + (data.accrued_unmapped || 0);
-      if (un) {
-        m += " · нераспределено: " + fmtMoney(un) +
-          " (прочее: " + fmtMoney(data.accrued_other || 0) +
-          ", без артикула: " + fmtMoney(data.accrued_unmapped || 0) + ")";
-      }
-    }
-    msg.textContent = m;
+    // Раньше здесь был зашитый текст с периодом 2026-02-21 … 2026-08-30:
+    // он не зависел ни от выбранного окна, ни от базы и сбивал с толку.
+    setStatus(emptyPeriodReason(data, "детализации продаж Ozon",
+      "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж.") + tail);
+    return;
   }
+  let m = "Строк: " + fmt((data.rows || []).length) +
+    (bySize ? " (в разрезе размеров)" : " (по товарам)") +
+    (data.estimated ? " (оценка себестоимости: " + data.estimated + ")" : "");
+  if (data.cashflow_received != null) {
+    m += " · на р/с фактически получено: " + fmtMoney(data.cashflow_received) +
+      " (движение средств, " + fmt(data.cashflow_periods || 0) + " пер.)";
+    if (data.cashflow_ratio != null) {
+      m += " · от начислений: " + fmt(data.cashflow_ratio) + "%";
+    }
+  }
+  if (data.accrued_total != null) {
+    m += " · по начислениям: " + fmtMoney(data.accrued_total) +
+      " (артикулов с данными: " + fmt(data.accrued_rows || 0) + ")";
+    const un = (data.accrued_other || 0) + (data.accrued_unmapped || 0);
+    if (un) {
+      m += " · нераспределено: " + fmtMoney(un) +
+        " (прочее: " + fmtMoney(data.accrued_other || 0) +
+        ", без артикула: " + fmtMoney(data.accrued_unmapped || 0) + ")";
+    }
+  }
+  setStatus(m + tail);
 }
 
 async function renderSales(p) {
@@ -2041,7 +2108,7 @@ async function renderReplenish() {
     return;
   }
   const isSize = replenishView() === "sizes";
-  const msg = $("#replenishMsg");
+  const msg = statusEl();
   if (msg) {
     const m = data.meta || {};
     const parts = [
@@ -2142,7 +2209,7 @@ function productsPreviewHeaders() {
 
 async function renderProducts() {
   const box = $("#productsTable");
-  const msg = document.getElementById("productsMsg");
+  const msg = statusEl();
   let data;
   try {
     data = await api("/products" + productsQs());
@@ -2177,11 +2244,11 @@ function initReplenishToggle() {
     if (!article) return;
     try {
       await apiPost("/products/replenishable", { article, value: t.checked });
-      $("#productsMsg").textContent =
+      $("#headerMsg").textContent =
         "Докупаемый: " + article + " → " + (t.checked ? "да" : "нет");
     } catch (err) {
       t.checked = !t.checked;
-      $("#productsMsg").textContent = "Ошибка: " + err.message;
+      $("#headerMsg").textContent = "Ошибка: " + err.message;
     }
   });
 }
@@ -2196,7 +2263,7 @@ function productsExportUrl() {
 }
 
 async function downloadProductsExcel() {
-  const msg = document.getElementById("productsMsg");
+  const msg = statusEl();
   if (!msg) return;
   msg.textContent = "Формирую Excel…";
   try {
@@ -2218,7 +2285,7 @@ async function downloadProductsExcel() {
 }
 
 async function uploadProductsToDisk() {
-  const msg = document.getElementById("productsMsg");
+  const msg = statusEl();
   if (!msg) return;
   msg.textContent = "Формирую файл…";
   try {
@@ -2290,7 +2357,7 @@ async function buildProductsPricePanel() {
     try {
       productsPriceMeta = await api("/products/price-settings");
     } catch (err) {
-      const msgEl = document.getElementById("productsPriceMsg");
+      const msgEl = statusEl();
       if (msgEl) msgEl.textContent = "Ошибка загрузки настроек цены: " + err.message;
       return;
     }
@@ -2349,7 +2416,7 @@ async function buildProductsPricePanel() {
 }
 
 async function previewProductsPrices() {
-  const msgEl = document.getElementById("productsPriceMsg");
+  const msgEl = statusEl();
   if (!msgEl) return;
   const likeEl = document.getElementById("productsLike");
   const sizesEl = document.getElementById("productsSizes");
@@ -2366,7 +2433,7 @@ async function previewProductsPrices() {
       price_settings: settings,
     });
     const rows = data.rows || [];
-    const msg = document.getElementById("productsMsg");
+    const msg = statusEl();
     if (msg) {
       msg.textContent = "Предпросмотр цены (без записи): " + fmt(rows.length) +
         " — нажмите «Обновить базу» в шапке, чтобы применить на карточках";
@@ -2388,7 +2455,7 @@ async function previewProductsPrices() {
 }
 
 async function sendProductsPrices() {
-  const msgEl = document.getElementById("productsPriceMsg");
+  const msgEl = statusEl();
   if (!msgEl) return;
   const likeEl = document.getElementById("productsLike");
   const sizesEl = document.getElementById("productsSizes");
@@ -2456,18 +2523,15 @@ function filenameFromDisposition(d) {
 
 async function apiDownload(api, kind, msgSel, jsonMode) {
   const pane = document.querySelector(".pane.active");
-  const from = pane.querySelector('input[data-date="from"]');
-  const to = pane.querySelector('input[data-date="to"]');
   const days = pane.querySelector("input[data-days]");
   const month = pane.querySelector("input[data-month]");
   const year = pane.querySelector("input[data-year]");
   const writeDb = pane.querySelector(".write-db");
   const bySize = pane.querySelector(".by-size");
   const params = {};
-  if (from) params.date_from = from.value;
-  else if ($("#fFrom").value) params.date_from = $("#fFrom").value;
-  if (to) params.date_to = to.value;
-  else if ($("#fTo").value) params.date_to = $("#fTo").value;
+  const pd = paneDates();
+  if (pd.date_from) params.date_from = pd.date_from;
+  if (pd.date_to) params.date_to = pd.date_to;
   if (days) params.days = days.value;
   if (month) params.month = month.value;
   if (year) params.year = year.value;
@@ -2522,16 +2586,15 @@ async function apiDownload(api, kind, msgSel, jsonMode) {
 
 async function apiUploadDisk(api, kind, msgSel) {
   const pane = document.querySelector(".pane.active");
-  const from = pane.querySelector('input[data-date="from"]');
-  const to = pane.querySelector('input[data-date="to"]');
   const days = pane.querySelector("input[data-days]");
   const month = pane.querySelector("input[data-month]");
   const year = pane.querySelector("input[data-year]");
   const writeDb = pane.querySelector(".write-db");
   const bySize = pane.querySelector(".by-size");
   const params = {};
-  if (from) params.date_from = from.value;
-  if (to) params.date_to = to.value;
+  const pd = paneDates();
+  if (pd.date_from) params.date_from = pd.date_from;
+  if (pd.date_to) params.date_to = pd.date_to;
   if (days) params.days = days.value;
   if (month) params.month = month.value;
   if (year) params.year = year.value;
@@ -2592,7 +2655,7 @@ function humanSize(n) {
 
 async function renderYandexFiles() {
   const box = document.getElementById("yandexTable");
-  const msg = document.getElementById("yandexMsg");
+  const msg = statusEl();
   if (msg) msg.textContent = "Загружаю список…";
   let data;
   try {
@@ -2628,7 +2691,7 @@ function initYandexTab() {
       if (!btn) return;
       if (!confirm("Удалить файл с Яндекс.Диска?")) return;
       const path = btn.dataset.yandexDel;
-      const msg = document.getElementById("yandexMsg");
+      const msg = statusEl();
       msg.textContent = "Удаляю…";
       try {
         const resp = await fetch("/api/yandex/delete" + qs({ path }), { method: "DELETE" });
@@ -2739,7 +2802,7 @@ function ticketCard(key, t) {
 
 async function renderTickets() {
   const board = document.getElementById("ticketsBoard");
-  const msg = document.getElementById("ticketsMsg");
+  const msg = statusEl();
   if (!board) return;
   board.innerHTML = '<div class="empty">Загружаю…</div>';
   let d;
@@ -2768,7 +2831,7 @@ async function renderTickets() {
 }
 
 async function ticketAction(act, id, card) {
-  const msg = document.getElementById("ticketsMsg");
+  const msg = statusEl();
   try {
     if (act === "close") {
       const form = card.querySelector(".ticket-close-form");
@@ -2825,7 +2888,7 @@ function initTicketsTab() {
     if (e.target.id === "ticketModal") closeModal();
   });
   document.getElementById("ticketCreate").addEventListener("click", async () => {
-    const msg = document.getElementById("ticketsMsg");
+    const msg = statusEl();
     const title = document.getElementById("ticketTitle").value.trim();
     if (!title) {
       if (msg) { msg.textContent = "Заголовок обязателен"; msg.classList.add("error"); }
@@ -2869,8 +2932,8 @@ function cardIds(name) {
   return {
     apiName, mp, tag,
     prefix: apiName + "Cards",
-    msgExcel: "#" + tag + "Msg-cards-excel",
-    msgTable: "#" + tag + "Msg-cards-table",
+    msgExcel: "#headerMsg",
+    msgTable: "#headerMsg",
   };
 }
 
@@ -3048,15 +3111,6 @@ const wbFunnelHeaders = [
   { k: "wb_club_avg_orders_per_day", label: "WB Клуб: заказов/день", num: true, render: numDec(2) , tip: "Среднее число заказов в день от участников WB Клуба (wbClub.avgOrderCountPerDay)."},
 ];
 
-function paneDates() {
-  const pane = document.querySelector(".pane.active");
-  function val(sel) {
-    const el = pane ? pane.querySelector(sel) : null;
-    return el ? el.value : "";
-  }
-  return { date_from: val('input[data-date="from"]'), date_to: val('input[data-date="to"]') };
-}
-
 async function renderWbFunnel() {
   const box = document.getElementById("wbFunnelTable");
   const likeEl = document.getElementById("wbFunnelLike");
@@ -3075,7 +3129,7 @@ async function renderWbFunnel() {
     box.innerHTML = '<div class="empty">Не удалось загрузить воронку: ' + escapeHtml(err.message) + "</div>";
     return;
   }
-  const msg = document.querySelector("#wbMsg-funnel-table");
+  const msg = statusEl();
   if (msg) msg.textContent = data.count ? "По артикулам: " + fmt(data.count) : "Нет данных в базе";
   const note = document.getElementById("wbFunnelBuyoutNote");
   if (note) {
@@ -3183,7 +3237,7 @@ async function renderWbStocks() {
     rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
   }
   const head = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
-  const msg = document.querySelector("#wbMsg-stock-table");
+  const msg = statusEl();
   if (msg) msg.textContent = stockSummary(rows, data.date, "Остатки");
   pagedTable(box, head, rows, null, null, colViewPinKeys("wb-stock"));
 }
@@ -3252,7 +3306,7 @@ async function renderWbPrices() {
   let rows = data.rows || [];
   const agg = aggEl ? aggEl.checked : false;
   if (agg) rows = aggregatePrices(rows);
-  const msg = document.querySelector("#wbMsg-prices-table");
+  const msg = statusEl();
   if (msg) {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
@@ -3280,9 +3334,9 @@ async function renderOzStocks() {
     const needle = q.toLowerCase();
     rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
   }
-  const head = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
-  const msg = document.querySelector("#ozMsg-stock-table");
-  if (msg) msg.textContent = stockSummary(rows, data.date, "Остатки");
+const head = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
+  const msg = statusEl();
+  if (msg) msg.textContent = stockSummary(rows, data.date, "Снимок") + " · «С»/«По» не применяются: раздел снимка на дату";
   pagedTable(box, head, rows, null, null, colViewPinKeys("oz-stock"));
 }
 
@@ -3301,10 +3355,11 @@ async function renderOzPrices() {
   let rows = data.rows || [];
   const agg = aggEl ? aggEl.checked : false;
   if (agg) rows = aggregatePrices(rows);
-  const msg = document.querySelector("#ozMsg-prices-table");
+const msg = statusEl();
   if (msg) {
-    const when = data.updated_at ? " · срез: " + data.updated_at : "";
-    msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
+    const when = data.updated_at ? " · на дату: " + data.updated_at : "";
+    const note = " · «С»/«По» не применяются: раздел текущих цен";
+    msg.textContent = data.count ? "Карточек: " + fmt(data.count) + when + note : "Нет данных" + note;
   }
   pagedTable(box, colViewHeaders("oz-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows, null, null, colViewPinKeys("oz-prices"));
 }
@@ -3313,24 +3368,28 @@ async function renderOzSales() {
   const box = document.getElementById("ozRealTable");
   const likeEl = document.getElementById("ozRealLike");
   const p = paneDates();
+  const q = { date_from: p.date_from || undefined, date_to: p.date_to || undefined };
   let data;
   try {
-    data = await api("/sales" + qs({
-      marketplace: "ozon",
-      date_from: p.date_from || undefined,
-      date_to: p.date_to || undefined,
-    }));
+    data = await api("/sales" + qs({ marketplace: "ozon", date_from: q.date_from, date_to: q.date_to }));
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить реализацию: ' + escapeHtml(err.message) + "</div>";
+    setStatus("Ошибка: " + err.message, { error: true });
     return;
   }
   let rows = data.rows || [];
   if (likeEl) {
-    const q = likeEl.value.trim().toLowerCase();
-    if (q) rows = rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q));
+    const s = likeEl.value.trim().toLowerCase();
+    if (s) rows = rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(s));
   }
-  const msg = document.querySelector("#ozMsg-realization-table");
-  if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
+  const win = (p.date_from && p.date_to) ? p.date_from + " … " + p.date_to : "";
+  if (!rows.length && !data.count) {
+    setStatus(win
+      ? "Нет данных: реализации Ozon за " + win + " в базе нет. Обновите продажи: «Обновить базу» → WB/OZON API ▸ Продажи."
+      : "Нет данных: реализации Ozon в базе нет. Задайте период в шапке и нажмите «Применить».");
+  } else {
+    setStatus((win ? win + " · " : "") + "Строк: " + fmt(data.count));
+  }
   pagedTable(box, colViewHeaders("oz-realization", salesHeaders), rows, null, null, colViewPinKeys("oz-realization"));
 }
 
@@ -3354,7 +3413,7 @@ async function renderWbStorage() {
     box.innerHTML = '<div class="empty">Не удалось загрузить хранение: ' + escapeHtml(err.message) + "</div>";
     return;
   }
-  const msg = document.querySelector("#wbMsg-storage-table");
+  const msg = statusEl();
   if (msg) {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
@@ -3392,7 +3451,7 @@ async function renderWbSales() {
     const q = likeEl.value.trim().toLowerCase();
     if (q) rows = rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q));
   }
-  const msg = document.querySelector("#wbMsg-sales-table");
+  const msg = statusEl();
   if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
   pagedTable(box, colViewHeaders("wb-sales", salesHeaders), rows, null, null, colViewPinKeys("wb-sales"));
 }
@@ -3405,7 +3464,7 @@ async function renderWbDetail() {
   const p = { date_from: f.date_from, date_to: f.date_to };
   const q = likeEl ? likeEl.value.trim() : "";
   const raw = rawEl ? rawEl.checked : false;
-  const msg = document.querySelector("#wbMsg-detail-table");
+  const msg = statusEl();
   const tipEl = document.getElementById("wbDetailTip");
   try {
     if (raw) {
@@ -3453,7 +3512,7 @@ function wbDetailExportUrl() {
 }
 
 async function downloadWbDetailExcel() {
-  const msg = document.querySelector("#wbMsg-detail-table");
+  const msg = statusEl();
   msg.textContent = "Формирую Excel…";
   try {
     const resp = await fetch(wbDetailExportUrl());
@@ -3474,7 +3533,7 @@ async function downloadWbDetailExcel() {
 }
 
 async function uploadWbDetailToDisk() {
-  const msg = document.querySelector("#wbMsg-detail-table");
+  const msg = statusEl();
   msg.textContent = "Формирую файл…";
   try {
     const resp = await fetch(wbDetailExportUrl());
@@ -3500,18 +3559,18 @@ async function uploadWbDetailToDisk() {
 }
 
 const WB_VIEW_MSG = {
-  "wb-cards": "#wbMsg-cards-table",
-  "wb-stock": "#wbMsg-stock-table",
-  "wb-funnel": "#wbMsg-funnel-table",
-  "wb-sales": "#wbMsg-sales-table",
-  "wb-prices": "#wbMsg-prices-table",
-  "wb-storage": "#wbMsg-storage-table",
-  "wb-detail": "#wbMsg-detail-table",
-  "oz-detail": "#ozMsg-detail-table",
-  "oz-cards": "#ozMsg-cards-table",
-  "oz-stock": "#ozMsg-stock-table",
-  "oz-prices": "#ozMsg-prices-table",
-  "oz-realization": "#ozMsg-realization-table",
+  "wb-cards": "#headerMsg",
+  "wb-stock": "#headerMsg",
+  "wb-funnel": "#headerMsg",
+  "wb-sales": "#headerMsg",
+  "wb-prices": "#headerMsg",
+  "wb-storage": "#headerMsg",
+  "wb-detail": "#headerMsg",
+  "oz-detail": "#headerMsg",
+  "oz-cards": "#headerMsg",
+  "oz-stock": "#headerMsg",
+  "oz-prices": "#headerMsg",
+  "oz-realization": "#headerMsg",
 };
 
 async function renderOzDetail() {
@@ -3521,7 +3580,7 @@ async function renderOzDetail() {
   const f = filters();
   const q = likeEl ? likeEl.value.trim() : "";
   const raw = rawEl ? rawEl.checked : false;
-  const msg = document.querySelector("#ozMsg-detail-table");
+  const msg = statusEl();
   const tipEl = document.getElementById("ozDetailTip");
   try {
     if (raw) {
@@ -3533,7 +3592,10 @@ async function renderOzDetail() {
       }));
       const rows = data.rows || [];
       tipEl.classList.add("hidden");
-      if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
+      if (!rows.length) {
+        setStatus(emptyPeriodReason(data, "детализации продаж Ozon",
+          "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж."));
+      } else if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
       pagedTable(box, colViewHeaders("oz-detail", ozDetailRowHeaders), rows, null, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     } else {
@@ -3545,17 +3607,23 @@ async function renderOzDetail() {
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
       if (msg) {
-        let m = (ozBySize("oz-detail") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
-        if (data.cashflow_received != null) {
-          m += " · на р/с фактически получено: " + fmtMoney(data.cashflow_received) +
-            " (движение средств, " + fmt(data.cashflow_periods || 0) + " пер.)";
+        if (!rows.length && !data.count) {
+          setStatus(emptyPeriodReason(data, "детализации продаж Ozon",
+            "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж."));
+        } else {
+          let m = (ozBySize("oz-detail") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
+          if (data.cashflow_received != null) {
+            m += " · на р/с фактически получено: " + fmtMoney(data.cashflow_received) +
+              " (движение средств, " + fmt(data.cashflow_periods || 0) + " пер.)";
+          }
+          msg.textContent = m;
         }
-        msg.textContent = m;
       }
       pagedTable(box, colViewHeaders("oz-detail", ozDetailSummaryHeaders), rows, data.totals, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию Ozon: ' + escapeHtml(err.message) + "</div>";
+    setStatus("Ошибка: " + err.message, { error: true });
   }
 }
 
@@ -3578,7 +3646,7 @@ function ozDetailExportUrl() {
 }
 
 async function downloadOzDetailExcel() {
-  const msg = document.querySelector("#ozMsg-detail-table");
+  const msg = statusEl();
   msg.textContent = "Формирую Excel…";
   try {
     const resp = await fetch(ozDetailExportUrl());
@@ -3599,7 +3667,7 @@ async function downloadOzDetailExcel() {
 }
 
 async function uploadOzDetailToDisk() {
-  const msg = document.querySelector("#ozMsg-detail-table");
+  const msg = statusEl();
   msg.textContent = "Формирую файл…";
   try {
     const resp = await fetch(ozDetailExportUrl());
@@ -3629,36 +3697,40 @@ async function renderOzPlacement() {
   const likeEl = document.getElementById("ozPlacementLike");
   const rawEl = document.getElementById("ozPlacementRaw");
   const p = paneDates();
-  const f = filters();
-  const date_from = p.date_from || f.date_from;
-  const date_to = p.date_to || f.date_to;
   const q = likeEl ? likeEl.value.trim() : "";
   const raw = rawEl ? rawEl.checked : false;
-  const msg = document.querySelector("#ozMsg-placement-table");
+  const msg = statusEl();
   try {
     if (raw) {
       const data = await api("/ozon/placement-rows" + qs({
-        date_from: date_from || undefined,
-        date_to: date_to || undefined,
+        date_from: p.date_from || undefined,
+        date_to: p.date_to || undefined,
         article_like: q || undefined,
         limit: 500,
       }));
       const rows = data.rows || [];
-      if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
+      if (!rows.length) {
+        setStatus(emptyPeriodReason(data, "размещения Ozon",
+          "Обновите размещение: «Обновить базу» → OZON API ▸ Размещение."));
+      } else if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
       pagedTable(box, colViewHeaders("oz-placement", ozPlacementRowHeaders), rows, data.totals, "#ozPlacementTablePager", colViewPinKeys("oz-placement"));
     } else {
       const data = await api("/ozon/placement-summary" + ozBySizeParam("oz-placement", qs({
-        date_from: date_from || undefined,
-        date_to: date_to || undefined,
+        date_from: p.date_from || undefined,
+        date_to: p.date_to || undefined,
         article_like: q || undefined,
       })));
       const rows = data.rows || [];
-      if (msg) msg.textContent = (ozBySize("oz-placement") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
+      if (!rows.length && !data.count) {
+        setStatus(emptyPeriodReason(data, "размещения Ozon",
+          "Обновите размещение: «Обновить базу» → OZON API ▸ Размещение."));
+      } else if (msg) msg.textContent = (ozBySize("oz-placement") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
       pagedTable(box, colViewHeaders("oz-placement", ozPlacementSummaryHeaders), rows, data.totals, "#ozPlacementTablePager", colViewPinKeys("oz-placement"));
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить размещение Ozon: ' + escapeHtml(err.message) + "</div>";
+    setStatus("Ошибка: " + err.message, { error: true });
   }
 }
 
@@ -3668,12 +3740,11 @@ function ozPlacementExportUrl() {
   const raw = rawEl ? rawEl.checked : false;
   const q = likeEl ? likeEl.value.trim() : "";
   const p = paneDates();
-  const f = filters();
   const path = raw ? "/api/export/ozon/placement-rows" : "/api/export/ozon/placement-summary";
   // режим группировки касается только свода; построчные данные всегда по карточкам
   const base = qs({
-    date_from: (p.date_from || f.date_from) || undefined,
-    date_to: (p.date_to || f.date_to) || undefined,
+    date_from: p.date_from || undefined,
+    date_to: p.date_to || undefined,
     article_like: q || undefined,
   });
   const p2 = raw ? base : ozBySizeParam("oz-placement", base);
@@ -3682,7 +3753,7 @@ function ozPlacementExportUrl() {
 }
 
 async function downloadOzPlacementExcel() {
-  const msg = document.querySelector("#ozMsg-placement-table");
+  const msg = statusEl();
   msg.textContent = "Формирую Excel…";
   try {
     const resp = await fetch(ozPlacementExportUrl());
@@ -3703,7 +3774,7 @@ async function downloadOzPlacementExcel() {
 }
 
 async function uploadOzPlacementToDisk() {
-  const msg = document.querySelector("#ozMsg-placement-table");
+  const msg = statusEl();
   msg.textContent = "Формирую файл…";
   try {
     const resp = await fetch(ozPlacementExportUrl());
@@ -3730,24 +3801,27 @@ async function uploadOzPlacementToDisk() {
 async function renderOzCashflow() {
   const box = document.getElementById("ozCashflowTable");
   const p = paneDates();
-  const f = filters();
-  const date_from = p.date_from || f.date_from;
-  const date_to = p.date_to || f.date_to;
-  const msg = document.querySelector("#ozMsg-cashflow");
+  const msg = statusEl();
   try {
     const data = await api("/ozon/cashflow-rows" + qs({
-      date_from: date_from || undefined,
-      date_to: date_to || undefined,
+      date_from: p.date_from || undefined,
+      date_to: p.date_to || undefined,
     }));
     const rows = data.rows || [];
-    let m = "Периодов: " + fmt(data.count || 0);
-    if (data.received != null && data.received) {
-      m += " · фактически получено: " + fmtMoney(data.received);
+    if (!rows.length && !data.count) {
+      setStatus(emptyPeriodReason(data, "движения средств Ozon",
+        "Обновите: «Обновить базу» → OZON API ▸ Движение средств."));
+    } else {
+      let m = "Периодов: " + fmt(data.count || 0);
+      if (data.received != null && data.received) {
+        m += " · фактически получено: " + fmtMoney(data.received);
+      }
+      if (msg) msg.textContent = m;
     }
-    if (msg) msg.textContent = m;
     pagedTable(box, colViewHeaders("oz-cashflow", ozCashflowHeaders), rows, data.totals, null, colViewPinKeys("oz-cashflow"));
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить движение средств: ' + escapeHtml(err.message) + "</div>";
+    setStatus("Ошибка: " + err.message, { error: true });
   }
 }
 
@@ -3768,17 +3842,17 @@ const ozAccrualHeaders = [
 async function renderOzAccrual() {
   const box = document.getElementById("ozAccrualTable");
   const p = paneDates();
-  const f = filters();
-  const date_from = p.date_from || f.date_from;
-  const date_to = p.date_to || f.date_to;
-  const msg = document.querySelector("#ozMsg-accrual-table");
+  const msg = statusEl();
   try {
     const data = await api("/ozon/accrual-rows" + qs({
-      date_from: date_from || undefined,
-      date_to: date_to || undefined,
+      date_from: p.date_from || undefined,
+      date_to: p.date_to || undefined,
     }));
     const rows = data.rows || [];
-    if (msg) {
+    if (!rows.length && !data.count) {
+      setStatus(emptyPeriodReason(data, "начислений Ozon",
+        "Обновите: «Обновить базу» → OZON API ▸ Начисления."));
+    } else if (msg) {
       let m = "Строк: " + fmt(data.count || 0);
       const s = data.totals && data.totals.amount;
       if (s != null) m += " · итог: " + fmtMoney(s);
@@ -3787,21 +3861,19 @@ async function renderOzAccrual() {
     pagedTable(box, colViewHeaders("oz-accrual", ozAccrualHeaders), rows, data.totals, "#ozAccrualTablePager", colViewPinKeys("oz-accrual"));
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить начисления: ' + escapeHtml(err.message) + "</div>";
+    setStatus("Ошибка: " + err.message, { error: true });
   }
 }
 
 function ozAccrualExportUrl() {
   const p = paneDates();
-  const f = filters();
-  const date_from = p.date_from || f.date_from;
-  const date_to = p.date_to || f.date_to;
-  const q = qs({ date_from: date_from || undefined, date_to: date_to || undefined });
+  const q = qs({ date_from: p.date_from || undefined, date_to: p.date_to || undefined });
   const cp = colViewParam("oz-accrual");
   return "/api/export/ozon/accrual-rows" + q + (cp ? (q ? "&" : "?") + cp : "");
 }
 
 async function downloadOzAccrualExcel() {
-  const msg = document.querySelector("#ozMsg-accrual-table");
+  const msg = statusEl();
   msg.textContent = "Формирую Excel…";
   try {
     const resp = await fetch(ozAccrualExportUrl());
@@ -3980,7 +4052,7 @@ async function uploadDetailFiles(files) {
   if (!files || !files.length) return;
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
-  const msg = document.querySelector("#wbMsg-detail-excel");
+  const msg = statusEl();
   msg.textContent = "Загружаю " + files.length + " файл(ов)…";
   try {
     const resp = await fetch("/api/wb/detail-upload", { method: "POST", body: fd });
@@ -4025,7 +4097,7 @@ async function uploadProductsFiles(files) {
   if (!files || !files.length) return;
   const fd = new FormData();
   fd.append("file", files[0]);
-  const msg = document.getElementById("productsMsg");
+  const msg = statusEl();
   msg.textContent = "Загружаю " + files[0].name + "…";
   try {
     const resp = await fetch("/api/import/products", { method: "POST", body: fd });
@@ -4049,7 +4121,7 @@ async function uploadNetCostFiles(files) {
   if (!files || !files.length) return;
   const fd = new FormData();
   fd.append("file", files[0]);
-  const msg = document.getElementById("netCostMsg");
+  const msg = statusEl();
   msg.textContent = "Загружаю " + files[0].name + "…";
   try {
     const resp = await fetch("/api/import/net-cost", { method: "POST", body: fd });
@@ -5189,7 +5261,7 @@ async function buildPricingSettings() {
       const d = await api("/pricing/defaults");
       pricingDefaults = d.defaults;
     } catch (err) {
-      $("#pricingMsg").textContent = "Ошибка загрузки настроек: " + err.message;
+      $("#headerMsg").textContent = "Ошибка загрузки настроек: " + err.message;
       return;
     }
   }
@@ -5353,7 +5425,7 @@ async function renderPricing(apply) {
   const s = pricingWithDates(collectPricingSettings());
   const showZeroEl = $("#pricingShowZero");
   if (showZeroEl) s.show_zero = showZeroEl.checked;
-  const msg = $("#pricingMsg");
+  const msg = statusEl();
   const likeEl = $("#pricingLike") || { value: "" };
   const q = likeEl.value.trim().toLowerCase();
   const hideSkipEl = $("#pricingHideSkip");
@@ -5403,7 +5475,7 @@ async function renderPricing(apply) {
 }
 
 async function applyPricing() {
-  const msg = $("#pricingMsg");
+  const msg = statusEl();
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
   const showZeroEl = $("#pricingShowZero");
@@ -5448,7 +5520,7 @@ async function applyPricing() {
 
 // Календарь акций WB → wb_promotions, затем пересчёт рекомендаций.
 async function refreshPricingPromos() {
-  const msg = $("#pricingMsg");
+  const msg = statusEl();
   const btn = $("#pricingPromoRefresh");
   const prev = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Обновляю акции…"; }
@@ -5475,7 +5547,7 @@ async function exportPricing() {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
-  const msg = $("#pricingMsg");
+  const msg = statusEl();
   msg.textContent = "Формирую Excel…";
   try {
     const resp = await fetch("/api/pricing/export", {
@@ -5522,7 +5594,7 @@ async function uploadBlobToYandex(blob, name, msg) {
 }
 
 async function uploadMarginToDisk() {
-  const msg = $("#marginMsg");
+  const msg = statusEl();
   const url = $("#exportMargin") ? $("#exportMargin").href : "";
   if (!url || !msg) return;
   msg.textContent = "Формирую файл…";
@@ -5539,7 +5611,7 @@ async function uploadMarginToDisk() {
 }
 
 async function uploadMarginFunnelToDisk() {
-  const msg = $("#marginFunnelMsg");
+  const msg = statusEl();
   const url = $("#exportMarginFunnel") ? $("#exportMarginFunnel").href : "";
   if (!url || !msg) return;
   msg.textContent = "Формирую файл…";
@@ -5556,7 +5628,7 @@ async function uploadMarginFunnelToDisk() {
 }
 
 async function uploadMarginDetailToDisk() {
-  const msg = $("#marginDetailMsg");
+  const msg = statusEl();
   const url = $("#exportMarginDetail") ? $("#exportMarginDetail").dataset.url : "";
   if (!url || !msg) return;
   msg.textContent = "Формирую файл…";
@@ -5573,7 +5645,7 @@ async function uploadMarginDetailToDisk() {
 }
 
 async function uploadMarginOzonDetailToDisk() {
-  const msg = $("#marginOzonDetailMsg");
+  const msg = statusEl();
   const url = $("#exportMarginOzonDetail") ? $("#exportMarginOzonDetail").dataset.url : "";
   if (!url || !msg) return;
   msg.textContent = "Формирую файл…";
@@ -5596,7 +5668,7 @@ async function uploadPricingToDisk() {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
-  const msg = $("#pricingMsg");
+  const msg = statusEl();
   msg.textContent = "Формирую файл…";
   try {
     const resp = await fetch("/api/pricing/export", {
@@ -5622,13 +5694,12 @@ async function uploadPricingToDisk() {
 
 document.addEventListener("DOMContentLoaded", () => {
   initDates();
+  initStatusWatch();
   initWriteDb();
   initOzBySize();
   initHelp();
   initYandexTab();
   updateCrumb("dashboard");
-  document.querySelectorAll('input[data-date="from"]').forEach((i) => (i.value = $("#fFrom").value));
-  document.querySelectorAll('input[data-date="to"]').forEach((i) => (i.value = $("#fTo").value));
 
   const menuBtn = $("#menuBtn");
   const navLinks = $("#navLinks");
@@ -5668,13 +5739,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const api = btn.dataset.api || "wb";
     const tag = api === "ozon" ? "oz" : "wb";
     const kind = btn.dataset.kind;
-    btn.addEventListener("click", () => busyRun(() => apiDownload(api, kind, "#" + tag + "Msg-" + kind)));
+    btn.addEventListener("click", () => busyRun(() => apiDownload(api, kind, "#headerMsg")));
     const yd = document.createElement("button");
     yd.type = "button";
     yd.className = "btn";
     yd.textContent = "Загрузить на диск";
     yd.title = "Заливает свежий Excel-отчёт в папку /agent_market на Яндекс.Диске";
-    yd.addEventListener("click", () => busyRun(() => apiUploadDisk(api, kind, "#" + tag + "Msg-" + kind)));
+    yd.addEventListener("click", () => busyRun(() => apiUploadDisk(api, kind, "#headerMsg")));
     btn.parentNode.insertBefore(yd, btn.nextSibling);
     if (api !== "wb") return;
     const upd = document.createElement("button");
@@ -5682,7 +5753,7 @@ document.addEventListener("DOMContentLoaded", () => {
     upd.className = "btn";
     upd.textContent = "Обновить базу";
     upd.title = "Тянет данные из WB API и пишет в БД, файл не скачивается";
-    upd.addEventListener("click", () => busyRun(() => apiDownload(api, kind, "#" + tag + "Msg-" + kind, true)));
+    upd.addEventListener("click", () => busyRun(() => apiDownload(api, kind, "#headerMsg", true)));
     btn.parentNode.insertBefore(upd, yd.nextSibling);
     btn.title = "Тянет данные из WB API → пишет в БД (если «в БД») → скачивает Excel";
   });
@@ -5744,22 +5815,22 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const apiPullByTab = {
-    "wb-cards": ["wb", "cards", "#wbMsg-cards-table"],
-    "wb-stock": ["wb", "stock", "#wbMsg-stock-table"],
-    "wb-funnel": ["wb", "funnel", "#wbMsg-funnel-table"],
-    "wb-sales": ["wb", "sales", "#wbMsg-sales-table"],
-    "wb-prices": ["wb", "prices", "#wbMsg-prices-table"],
-    "wb-storage": ["wb", "storage", "#wbMsg-storage-table"],
-    "wb-detail": ["wb", "detail", "#wbMsg-detail-table"],
-    "oz-cards": ["ozon", "cards", "#ozMsg-cards-table"],
-    "oz-stock": ["ozon", "stock", "#ozMsg-stock-table"],
-    "oz-prices": ["ozon", "prices", "#ozMsg-prices-table"],
-    "oz-realization": ["ozon", "realization", "#ozMsg-realization-table"],
-    "oz-detail": ["ozon", "detail", "#ozMsg-detail-table"],
-    "oz-placement": ["ozon", "placement", "#ozMsg-placement-table"],
-    "oz-accrual": ["ozon", "accrual", "#ozMsg-accrual-table"],
-    "oz-cashflow": ["ozon", "cashflow", "#ozMsg-cashflow"],
-    "products": ["products", "refresh", "#productsMsg"],
+    "wb-cards": ["wb", "cards", "#headerMsg"],
+    "wb-stock": ["wb", "stock", "#headerMsg"],
+    "wb-funnel": ["wb", "funnel", "#headerMsg"],
+    "wb-sales": ["wb", "sales", "#headerMsg"],
+    "wb-prices": ["wb", "prices", "#headerMsg"],
+    "wb-storage": ["wb", "storage", "#headerMsg"],
+    "wb-detail": ["wb", "detail", "#headerMsg"],
+    "oz-cards": ["ozon", "cards", "#headerMsg"],
+    "oz-stock": ["ozon", "stock", "#headerMsg"],
+    "oz-prices": ["ozon", "prices", "#headerMsg"],
+    "oz-realization": ["ozon", "realization", "#headerMsg"],
+    "oz-detail": ["ozon", "detail", "#headerMsg"],
+    "oz-placement": ["ozon", "placement", "#headerMsg"],
+    "oz-accrual": ["ozon", "accrual", "#headerMsg"],
+    "oz-cashflow": ["ozon", "cashflow", "#headerMsg"],
+    "products": ["products", "refresh", "#headerMsg"],
   };
   const btnUpdateWbDetail = document.getElementById("btnUpdateWbDetail");
   if (btnUpdateWbDetail) btnUpdateWbDetail.addEventListener("click", () => busyRun(() => {
@@ -5911,7 +5982,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (ozStockAgg) ozStockAgg.addEventListener("change", () => { if (currentTab === "oz-stock") loadTab(currentTab); });
   const ozPriceAgg = $("#ozPriceAgg");
   if (ozPriceAgg) ozPriceAgg.addEventListener("change", () => { if (currentTab === "oz-prices") loadTab(currentTab); });
-  $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#oursMsg", "ours"));
+  $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#headerMsg", "ours"));
   const productsLikeEl = $("#productsLike");
   if (productsLikeEl) {
     let productsLikeTimer;
@@ -5927,7 +5998,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const productsOverwriteEl = $("#productsOverwrite");
   if (productsOverwriteEl) {
     productsOverwriteEl.addEventListener("change", () => {
-      const msg = $("#productsMsg");
+      const msg = statusEl();
       if (msg) msg.textContent = "Перезапись: " + (productsOverwriteEl.checked ? "включена" : "выключена");
     });
   }
@@ -5960,15 +6031,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
   // ── «Наш склад» — импорт/экспорт/диск ──
-  $("#whCpImport").addEventListener("click", () => uploadFile("/warehouse/import/counterparties", $("#whCpFile"), "#whCpMsg", "wh-cp"));
-  $("#whRImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=receipt", $("#whRFile"), "#whRMsg", "wh-receipt"));
-  $("#whSImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=shipment", $("#whSFile"), "#whSMsg", "wh-shipment"));
-  wireWhDisk("#whCpToDisk", { kind: "counterparties" }, "#whCpMsg", "wh-cp", false);
-  wireWhDisk("#whCpFromDisk", { type: "counterparties" }, "#whCpMsg", "wh-cp", true);
-  wireWhDisk("#whRToDisk", { kind: "docs", type: "receipt" }, "#whRMsg", "wh-receipt", false);
-  wireWhDisk("#whRFromDisk", { type: "receipt" }, "#whRMsg", "wh-receipt", true);
-  wireWhDisk("#whSToDisk", { kind: "docs", type: "shipment" }, "#whSMsg", "wh-shipment", false);
-  wireWhDisk("#whSFromDisk", { type: "shipment" }, "#whSMsg", "wh-shipment", true);
+  $("#whCpImport").addEventListener("click", () => uploadFile("/warehouse/import/counterparties", $("#whCpFile"), "#headerMsg", "wh-cp"));
+  $("#whRImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=receipt", $("#whRFile"), "#headerMsg", "wh-receipt"));
+  $("#whSImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=shipment", $("#whSFile"), "#headerMsg", "wh-shipment"));
+  wireWhDisk("#whCpToDisk", { kind: "counterparties" }, "#headerMsg", "wh-cp", false);
+  wireWhDisk("#whCpFromDisk", { type: "counterparties" }, "#headerMsg", "wh-cp", true);
+  wireWhDisk("#whRToDisk", { kind: "docs", type: "receipt" }, "#headerMsg", "wh-receipt", false);
+  wireWhDisk("#whRFromDisk", { type: "receipt" }, "#headerMsg", "wh-receipt", true);
+  wireWhDisk("#whSToDisk", { kind: "docs", type: "shipment" }, "#headerMsg", "wh-shipment", false);
+  wireWhDisk("#whSFromDisk", { type: "shipment" }, "#headerMsg", "wh-shipment", true);
   [["whRTable", "whRDetail"], ["whSTable", "whSDetail"]].forEach(([t, d]) => {
     const box = $("#" + t);
     const detail = $("#" + d);
@@ -6034,7 +6105,7 @@ document.addEventListener("DOMContentLoaded", () => {
       clearTimeout(autosaveTimer);
       autosaveTimer = setTimeout(() => {
         collectPricingSettings();
-        const m = $("#pricingMsg");
+        const m = statusEl();
         if (m) m.textContent = "Настройки сохранены — примените их кнопкой «Обновить» в меню «Настройки»";
       }, 400);
     });

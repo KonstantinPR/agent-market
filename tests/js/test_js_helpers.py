@@ -157,9 +157,65 @@ assert.ok(/renderProducts[\s\S]{0,600}api\("\/products"/.test(jsSrc),
 assert.ok(jsSrc.includes('apiPost("/products/preview"'), "нет POST /api/products/preview");
 assert.ok(jsSrc.includes('api("/products/price-settings"'), "нет GET /api/products/price-settings");
 assert.ok(jsSrc.includes('"/api/export/products"'), "нет /api/export/products в app.js");
-assert.ok(jsSrc.includes('"products": ["products", "refresh", "#productsMsg"]'),
-          "нет маршрута POST /api/products/refresh в apiPullByTab");
+assert.ok(jsSrc.includes('"products": ["products", "refresh", "#headerMsg"]'),
+    "вкладка products в apiPullByTab пишет статус в шапку (#headerMsg)");
 assert.ok(apiSrc.includes('@router.post("/products/refresh")'), "в app/api.py нет POST /products/refresh");
+
+// T-29: статус разделов один — в шапке рядом с «Применить» (#headerMsg).
+assert.ok(htmlSrc.includes('<span class="msg header-msg" id="headerMsg">'),
+          "в шапке нет строки статуса #headerMsg");
+const paneMsgSpans = htmlSrc.match(/<span[^>]*class="[^"]*\bmsg\b[^"]*"[^>]*>/g) || [];
+assert.strictEqual(paneMsgSpans.length, 1,
+  "в разметке должен остаться ровно один статус — #headerMsg, найдено: " + paneMsgSpans.length);
+assert.ok(!htmlSrc.includes("data-date"),
+  "в панелях не должно быть своих полей периода (data-date): период только в шапке");
+assert.ok(jsSrc.includes("function paneDates()") &&
+           /function paneDates\(\)[\s\S]{0,320}filters\(\)/.test(jsSrc),
+  "paneDates должен брать период из шапки (filters), а не из панели");
+assert.ok(jsSrc.includes("function clearStatus()"), "нет clearStatus");
+assert.ok(/clearStatus\(\);\s*try \{/.test(jsSrc),
+          "статус должен гаситься при загрузке вкладки (loadTabInner)");
+const { setStatus, clearStatus, emptyPeriodReason, ozEmptyReason } = sandbox;
+const headerEl = {
+  textContent: "", dataset: {}, _err: false,
+  classList: {
+    toggle: (_c, v) => { headerEl._err = v; },
+    add: (_c) => { headerEl._err = true; },
+    remove: (c) => { if (c === "error") headerEl._err = false; },
+    contains: (c) => (c === "error" ? headerEl._err : false),
+  },
+};
+sandbox.document.getElementById = (id) => (id === "headerMsg" ? headerEl : null);
+clearStatus();
+setStatus("Строк: 12");
+assert.strictEqual(headerEl.textContent, "Строк: 12", "setStatus пишет в #headerMsg");
+setStatus("Ошибка: boom", { error: true });
+assert.strictEqual(headerEl._err, true, "setStatus({error}) должен красить строку в ошибку");
+setStatus("Строк: 1");
+assert.strictEqual(headerEl._err, false, "error должен сниматься следующимsetStatus");
+const long = "я".repeat(300);
+setStatus(long);
+assert.ok(headerEl.textContent.length < 300, "длинный статус должен обрезаться");
+assert.strictEqual(headerEl.dataset.tip, long, "полный текст длинного статуса — в data-tip");
+clearStatus();
+assert.strictEqual(headerEl.textContent, "", "clearStatus очищает строку");
+assert.ok(!("tip" in headerEl.dataset), "clearStatus убирает data-tip");
+
+// Пустой результат объясняется фактами, а не зашитыми датами.
+assert.ok(!jsSrc.includes("период с данными: 2026-02-21"),
+          "в app.js не должно быть зашитого периода в тексте пустого раздела");
+const win = { date_from: "2026-03-01", date_to: "2026-03-31" };
+const emptyNoCover = { window: win, detail_range: { date_from: null, date_to: null, rows: 0 } };
+assert.ok(/Пусто: детализации продаж Ozon в базе нет/.test(ozEmptyReason(emptyNoCover)),
+          "нет текста «в базе нет»: " + ozEmptyReason(emptyNoCover));
+const cover = { date_from: "2026-02-21", date_to: "2026-08-30", rows: 100 };
+const covered = { window: win, detail_range: cover };
+assert.ok(/за 2026-03-01 … 2026-03-31/.test(ozEmptyReason(covered)),
+          "в тексте должно быть запрошенное окно: " + ozEmptyReason(covered));
+assert.ok(/в базе покрыто 2026-02-21 … 2026-08-30/.test(ozEmptyReason(covered)),
+          "в тексте должно быть покрытие базы: " + ozEmptyReason(covered));
+assert.ok(/размещения Ozon/.test(emptyPeriodReason({ window: win, detail_range: cover }, "размещения Ozon", "Х")),
+          "emptyPeriodReason должен называть раздел и брать подсказку");
 
 console.log("JS_TESTS_OK");
 """

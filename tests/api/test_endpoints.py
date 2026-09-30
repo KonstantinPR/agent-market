@@ -984,6 +984,43 @@ def test_ozon_accrual_pull_rows_and_export(api_client):
     assert "Сумма, руб" in out.columns
 
 
+def test_ozon_empty_views_report_window_and_coverage(api_client):
+    """Пустой раздел должен объясняться фактами: окно запроса + покрытие базы.
+
+    Раньше текст «период с данными: 2026-02-21 … 2026-08-30» был зашит в JS и
+    не зависел ни от выбранного периода, ни от базы.
+    """
+    win = {"date_from": "2026-09-01", "date_to": "2026-09-10"}
+    api_client.post("/api/ozon/cards")
+    api_client.post("/api/ozon/detail", params=dict(win, excel=0))
+
+    for path in ("/api/margin/ozon-detail",
+                 "/api/ozon/detail-rows",
+                 "/api/ozon/detail-summary",
+                 "/api/ozon/accrual-rows"):
+        d = api_client.get(path, params=win).json()
+        assert d["window"]["date_from"] == "2026-09-01", path
+        assert d["window"]["date_to"] == "2026-09-10", path
+        rng = d["detail_range"]
+        assert set(rng) == {"date_from", "date_to", "rows"}, path
+
+    # покрыто — с датами; пусто — rows == 0
+    d = api_client.get("/api/margin/ozon-detail", params=win).json()
+    assert d["detail_range"]["date_from"] == "2026-09-01"
+    assert d["detail_range"]["rows"] > 0
+
+    empty = api_client.get("/api/margin/ozon-detail",
+                           params={"date_from": "2020-01-01", "date_to": "2020-01-31"}).json()
+    assert empty["rows"] == []
+    assert empty["detail_range"]["rows"] > 0, "в базе есть данные, окно — другое"
+
+    for path in ("/api/ozon/accrual-rows", "/api/ozon/cashflow-rows",
+                 "/api/ozon/placement-rows", "/api/ozon/placement-summary"):
+        d = api_client.get(path, params=win).json()
+        assert d["rows"] == [], path
+        assert d["detail_range"]["rows"] == 0, path + ": таблица пуста, покрытия нет"
+
+
 def test_margin_ozon_detail_view(api_client):
     """Прибыльность Ozon из ozon_detail_rows: income − себестоимость×продано."""
     api_client.post("/api/ozon/cards")

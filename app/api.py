@@ -99,6 +99,38 @@ def _cashflow_received(db, from_, to_):
         return None, 0
 
 
+def req_window(date_from, date_to) -> dict:
+    """Запрошенное окно — UI пишет фактический период запроса, а не зашитый."""
+    return {"date_from": date_from or None, "date_to": date_to or None}
+
+
+def ozon_date_range(db, model, column=None) -> dict:
+    """Границы фактического покрытия по датам в таблице Ozon.
+
+    Нужно UI, чтобы пустой результат объяснять фактами («в базе покрыто
+    2026-02-21 … 2026-08-30»), а не зашитым в JS текстом: покрытие меняется при
+    каждой загрузке, а окно запроса — нет.
+    """
+    col = column if column is not None else model.date
+    try:
+        row = db.execute(
+            select(func.min(col), func.max(col), func.count())
+        ).fetchone()
+    except Exception:  # noqa: BLE001
+        return {"date_from": None, "date_to": None, "rows": 0}
+    d1, d2, n = row if row else (None, None, 0)
+    return {
+        "date_from": d1.isoformat() if d1 else None,
+        "date_to": d2.isoformat() if d2 else None,
+        "rows": int(n or 0),
+    }
+
+
+def ozon_detail_range(db) -> dict:
+    """Покрытие детализации Ozon (ozon_detail_rows) — для маржи и раздела OZON API."""
+    return ozon_date_range(db, models.OzonDetailRow)
+
+
 # Удельные/процентные колонки детализации маржинальности: в «Итого» — среднее.
 _MARGIN_AVG_TOTALS = (
     "margin_per_one", "margin_pct", "commission_per_one",
@@ -387,6 +419,8 @@ def api_margin_ozon_detail(
         "accrued_rows": accrued_rows,
         "accrued_other": accrued_other,
         "accrued_unmapped": accrued_unmapped,
+        "window": {"date_from": date_from or "", "date_to": date_to or ""},
+        "detail_range": ozon_detail_range(db),
     }
 
 
@@ -1676,8 +1710,9 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "revenue_per_one", "income_per_one", "commission_per_one",
         "logistics_per_one", "storage_per_one", "detail_sells", "detail_returns_qty",
         "promo_count", "promo_names", "promo_part_pct", "promo_tier_pct",
-        "promo_tier_boost", "promo_cap_pct", "promo_push_applied",
-        "promo_delta_discount", "promo_gap_pp", "promo_boost_gain",
+        "promo_tier_boost", "promo_need_rows", "promo_cap_pct",
+        "promo_push_applied", "promo_delta_discount", "promo_score",
+        "promo_score_confidence", "last_sale_days_ago",
     ]
     df = df[[c for c in keep if c in df.columns]]
     df, ru = excel_io.project_export(df, {
@@ -1707,13 +1742,15 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "promo_count": "Акций WB (кол-во)",
         "promo_names": "Акции WB",
         "promo_part_pct": "Участие в акциях, % (агрегат WB)",
-        "promo_tier_pct": "Уровень след. тира акции, %",
-        "promo_tier_boost": "Буст след. уровня, ×",
+        "promo_tier_pct": "Доля участия след. буста, %",
+        "promo_tier_boost": "Буст след. ступени, ×",
+        "promo_need_rows": "Надо в акцию для буста, шт",
         "promo_cap_pct": "Потолок промо-скидки, %",
-        "promo_push_applied": "Добор в акцию",
-        "promo_delta_discount": "Вклад акции в скидку, п.п.",
-        "promo_gap_pp": "Разрыв до тира, п.п.",
-        "promo_boost_gain": "Буст своего уровня, ×",
+        "promo_push_applied": "Разгружен акцией",
+        "promo_delta_discount": "Вклад разгрузки в скидку, п.п.",
+        "promo_score": "Оценка жертвенности",
+        "promo_score_confidence": "Полнота оценки",
+        "last_sale_days_ago": "Дней без продаж",
     }, cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Автопилот")
@@ -3169,7 +3206,10 @@ def api_ozon_cashflow_rows(
     totals = _df_totals(df, extra_skip=("begin_balance", "end_balance")) if len(df) else {}
     received = round(-(totals.get("payments_amount") or 0), 2) if totals else 0.0
     return {"rows": out, "count": len(out), "totals": totals,
-            "received": received}
+            "received": received,
+            "window": req_window(date_from, date_to),
+            "detail_range": ozon_date_range(db, models.OzonCashFlow,
+                                            models.OzonCashFlow.period_begin)}
 
 
 @router.post("/ozon/accrual")
@@ -3234,7 +3274,9 @@ def api_ozon_accrual_rows(
     } for r in rows]
     df = pd.DataFrame(out) if out else pd.DataFrame()
     totals = _df_totals(df) if len(df) else {}
-    return {"rows": out, "count": len(out), "totals": totals}
+    return {"rows": out, "count": len(out), "totals": totals,
+            "window": req_window(date_from, date_to),
+            "detail_range": ozon_date_range(db, models.OzonAccrual)}
 
 
 @router.get("/export/ozon/accrual-rows")
@@ -3461,7 +3503,9 @@ def api_ozon_placement_rows(
     } for r in rows]
     df = pd.DataFrame(out) if out else pd.DataFrame()
     return {"rows": out, "total": int(total),
-            "totals": _df_totals(df) if len(df) else {}}
+            "totals": _df_totals(df) if len(df) else {},
+            "window": {"date_from": date_from or "", "date_to": date_to or ""},
+            "detail_range": ozon_date_range(db, models.OzonPlacement)}
 
 
 def _ozon_placement_agg(db, from_, to_, article_like=None, by_size=False) -> list:
@@ -3538,7 +3582,9 @@ def api_ozon_placement_summary(
     df = pd.DataFrame(out) if out else pd.DataFrame()
     return {"rows": out, "count": len(out),
             "totals": _df_totals(df, extra_skip=(
-                "days", "ops_count", "sizes_count", "offers_count")) if len(df) else {}}
+                "days", "ops_count", "sizes_count", "offers_count")) if len(df) else {},
+            "window": {"date_from": date_from or "", "date_to": date_to or ""},
+            "detail_range": ozon_date_range(db, models.OzonPlacement)}
 
 
 @router.get("/export/ozon/placement-summary")
@@ -3644,7 +3690,13 @@ def api_ozon_detail_rows(
         "source": r.source,
     } for r in rows]
     df = pd.DataFrame(out) if out else pd.DataFrame()
-    return {"rows": out, "total": int(total), "totals": _df_totals(df) if len(df) else {}}
+    return {
+        "rows": out,
+        "total": int(total),
+        "totals": _df_totals(df) if len(df) else {},
+        "window": {"date_from": date_from or "", "date_to": date_to or ""},
+        "detail_range": ozon_detail_range(db),
+    }
 
 
 @router.get("/ozon/detail-summary")
@@ -3675,6 +3727,8 @@ def api_ozon_detail_summary(
     received, periods = _cashflow_received(db, from_, to_)
     resp["cashflow_received"] = received
     resp["cashflow_periods"] = periods
+    resp["window"] = {"date_from": date_from or "", "date_to": date_to or ""}
+    resp["detail_range"] = ozon_detail_range(db)
     return resp
 
 
