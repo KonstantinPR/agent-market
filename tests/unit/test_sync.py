@@ -869,6 +869,25 @@ def test_oz_detail_summary_dataframe_by_size_keeps_offers(db):
     assert o2["storage"] == -7.0
 
 
+def test_oz_detail_summary_search_by_base_keeps_buyouts(db):
+    """Поиск по базовому артикулу находит и выкупы размеров этого товара.
+
+    Раньше выкупы фильтровались только по offer_id, поэтому при базе, которой нет
+    в артикуле размера (ручной alias), сумма выкупов обнулялась.
+    """
+    db.add(models.Product(article="TIE-BIGBAN", name="Галстук"))
+    db.add(models.ProductAlias(alias_article="OZ-1", article="TIE-BIGBAN"))
+    db.add(models.ProductAlias(alias_article="OZ-2", article="TIE-BIGBAN"))
+    db.commit()
+    upsert_ozon_detail_rows(db, normalize_ozon_detail(_oz_detail_rows()))
+    upsert_ozon_buyouts(db, normalize_ozon_buyout(_oz_buyout_rows()))
+    out = oz_detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-30",
+                                      article_like="TIE-BIGBAN")
+    assert list(out["article"]) == ["TIE-BIGBAN"]
+    # выкупы обоих размеров: 2500 + 880
+    assert out.iloc[0]["buyout_sum"] == 3380.0
+
+
 # ------------------------------------------------------------ акции WB (T-31)
 
 _PROMO_LIST = pd.DataFrame([

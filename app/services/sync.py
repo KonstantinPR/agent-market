@@ -2327,7 +2327,8 @@ def oz_detail_summary_dataframe(
     # Выкупы: у API нет дат, агрегируем по всей таблице (с тем же фильтром артикула).
     bq = select(models.OzonBuyout)
     if article_like:
-        bq = bq.where(models.OzonBuyout.offer_id.ilike(f"%{article_like}%"))
+        bq = bq.where(models.OzonBuyout.offer_id.ilike(f"%{article_like}%")
+                      | models.OzonBuyout.base_article.ilike(f"%{article_like}%"))
     buyot = {}
     for r in db.execute(bq).scalars().all():
         art = (r.offer_id or "").strip().upper()
