@@ -164,6 +164,17 @@ assert.ok(apiSrc.includes('@router.post("/products/refresh")'), "в app/api.py �
 // T-29: статус разделов один — в шапке рядом с «Применить» (#headerMsg).
 assert.ok(htmlSrc.includes('<span class="msg header-msg" id="headerMsg">'),
           "в шапке нет строки статуса #headerMsg");
+// Статус должен идти после всех кнопок ряда (в т.ч. «Обновить базу»), а прижат
+// к правому краю шапки через margin-left: auto в .header-msg.
+const hdrEnd = htmlSrc.indexOf("</header>");
+const hdr = htmlSrc.slice(htmlSrc.indexOf('<header class="filters">'), hdrEnd);
+const order = ["id=\"btnApply\"", "id=\"btnUpdateWbDetail\"", "id=\"busySpinner\"",
+               "id=\"headerMsg\""].map((k) => hdr.indexOf(k));
+assert.ok(order.every((v) => v >= 0), "в шапке нет кнопок/статуса: " + order.join(","));
+for (let i = 1; i < order.length; i++) {
+  assert.ok(order[i] > order[i - 1],
+    "статус должен идти после всех кнопок шапки, нарушен порядок: " + order.join(","));
+}
 const paneMsgSpans = htmlSrc.match(/<span[^>]*class="[^"]*\bmsg\b[^"]*"[^>]*>/g) || [];
 assert.strictEqual(paneMsgSpans.length, 1,
   "в разметке должен остаться ровно один статус — #headerMsg, найдено: " + paneMsgSpans.length);

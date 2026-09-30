@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "58";
+const UI_VERSION = "59";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -4475,9 +4475,12 @@ const PRICING_LABELS = {
   use_quality: "Качество: рейтинг, выкупы, отмены, возвраты",
   use_reviews: "Рейтинг по отзывам (ценность товара)",
   use_returns: "Возвраты/отмены: защита от мыльного спроса",
-  promo_enabled: "Учитывать акции WB в автопилоте",
-  promo_push_pct: "Добор участия в акции, п.п.",
-  promo_max_beyond_floor_pp: "Скидка ниже пола при акции, ≤ п.п.",
+  promo_enabled: "Разгружать залежалое через акции WB",
+  promo_push_pct: "Шаг скидки при разгрузке, п.п.",
+  promo_max_beyond_floor_pp: "Скидка ниже пола при разгрузке, ≤ п.п.",
+  promo_max_rows: "Товаров за проход, ≤ шт",
+  promo_min_stale_days: "Порог «залежалось», дн",
+  promo_protect_velocity: "Защита живых, шт/дн",
 };
 
 const PRICING_HINTS = {
@@ -4523,9 +4526,12 @@ const PRICING_HINTS = {
   use_quality: "Качество спроса: рейтинг магазина, конверсия выкупа, доля отмен и возвратов из детализации. Плохие показатели блокируют повышение цены; ≥2 сильных сигналов — «качество» добавляет uplift к росту. Выключено — качество не ограничивает повышение (по умолчанию выкл.).",
   use_returns: "Защита от «мыльного» спроса: когда доля возвратов/отмен превышает порог, продажи считаются шумными и товар не трогаем (повышение/снижение замораживается). Выключено — эта защита не действует (по умолчанию выкл.).",
   use_reviews: "Рейтинг по отзывам из воронки продаж (1..5): высокий рейтинг = ценный товар, скидку при снижении не раздаём (см. «Спрос и воронка» → «Рейтинг по отзывам ≥»). Выключено — рейтинг не ограничивает скидку.",
-  promo_enabled: "Календарь акций WB: подтягивать целевую скидку до ближайшего уровня (ranging) активных акций у кандидатов с запасом маржи, чтобы товар попал в тир с большим бустом продаж. Без галки автопилот лишь показывает инфо об акциях в таблице, но скидку не трогает.",
-  promo_push_pct: "Шаг добора: на сколько процентных пунктов поднимать целевую скидку кандидату (до 2 п.п. по умолчанию), чтобы добраться до следующего тира акции. Добор идёт только до достижения порога тира; лишняя скидка не даётся.",
-  promo_max_beyond_floor_pp: "Сколько процентных пунктов целевой скидке разрешено опуститься ниже порога безубыточности ради акции (по умолчанию 5). Потолок «максимальная скидка» при этом сохраняется — глубже него добор не идёт.",
+  promo_enabled: "Разгрузка склада через акции WB. Правило выбирает товары, которые долго не продаются (нет продаж ≥ «Порог залежалось»), дешевле всего режутся по себестоимости и больше всего лежат на складе, и поднимает их скидку на «Шаг скидки». Смысл — продать залежалое и освободить капитал. ВАЖНО: это НЕ попытка набрать участие в акции. WB отбирает товары в автоакции сам (для «хитов» — с ≥1 заказом за месяц), список кандидатов нам недоступен, и «доля участия» в API — это доля наших товаров в акции, а не порог скидки. Без галки автопилот лишь показывает инфо об акциях, скидку не трогая.",
+  promo_push_pct: "На сколько п.п. поднять скидку отобранному товару (по умолчанию 2). Суммарное падение скидки за проход при этом всё равно ограничено общим лимитом «Максимальное снижение, %».",
+  promo_max_beyond_floor_pp: "Сколько п.п. целевой скидке разрешено опуститься ниже порога безубыточности ради разгрузки (по умолчанию 5). Потолок «Максимальная скидка» при этом сохраняется — глубже него разгрузка не идёт.",
+  promo_max_rows: "Сколько товаров максимум разгружать за один проход (по умолчанию 30). Если подходящих товаров больше — берутся самые «жертвенные» по оценке.",
+  promo_min_stale_days: "Товары с продажами недавле этого срока разгрузкой не трогаются (по умолчанию 30 дн.). Увеличьте, если хотите разгружать только совсем остывшие позиции.",
+  promo_protect_velocity: "Защита живых товаров: если сбыт быстрее этого значения (шт/дн), разгрузка товар не трогает (по умолчанию 0.5). Поставьте 0, чтобы отключить защиту и резать всё, что прошло порог залежалось.",
 };
 
 const PRICING_ACTION = {
@@ -4599,14 +4605,14 @@ function promoDeltaCell(v) {
   return d > 0 ? `<span class="neg">${s}</span>` : `<span class="pos">${s}</span>`;
 }
 
-// Разрыв до уровня тира, п.п.: плюс = не дотянули (красный), ноль/минус = уровень взят.
-function promoGapCell(v) {
+// Полнота оценки жертвенности: WB не отдаёт данные по участию конкретного
+// артикула, а часть сигналов (остаток своего склада, история продаж) у нас
+// есть не по всем товарам. Показываем это явно, чтобы «решение» не читалось
+// как точный расчёт.
+function promoConfidenceCell(v) {
   if (v == null) return "—";
-  const d = Number(v);
-  if (!isFinite(d)) return "—";
-  if (Math.abs(d) < 0.05) return "<span class='pos'>уровень взят</span>";
-  const s = (d > 0 ? "не хватает " : "выше на ") + fmtFloat(Math.abs(d), 1) + " п.п.";
-  return d > 0 ? `<span class="neg">${s}</span>` : `<span class="pos">${s}</span>`;
+  return v === "full" ? "<span class='pos'>полная</span>"
+    : "<span style='color:#b8860b'>по фолбэку</span>";
 }
 
 // Прибыль по товару: маржа с единицы (руб) + рентабельность от выручки (%).
@@ -4648,16 +4654,18 @@ const pricingHeaders = [
   { k: "add_to_wishlist", label: "В избранное", num: true, render: cellFmts.int , tip: "Добавления в избранное и закладки за срез воронки. Интерес без заказа — повод не давать лишнюю скидку."},
   { k: "return_rate", label: "Возвраты, %", num: true, render: cellFmts.pct , tip: "Доля возвратов по детализации: возвраты ÷ (продажи + возвраты) × 100. Выше порога автопилот блокирует повышение цены как брак/неликвид."},
   { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct , tip: "Прогноз прибыли с единицы при целевой цене, %: (цена × (1 − комиссия) − логистика − хранение − услуги − себестоимость) ÷ цена. Пусто, если нет unit-экономики."},
-  { k: "promo_count", label: "Акций WB", num: true, render: (v) => v == null || !v ? "—" : fmt(v) , tip: "Сколько действующих акций WB (Календарь акций) открыто для участия на этот период. Если 0 — промо-инфо в таблице пустая, добор участия не срабатывает."},
-  { k: "promo_names", label: "Акции WB", render: cellFmts.text , tip: "Названия активных акций (до трёх, дальше — многоточие). Справочная информация о том, на какие активности WB опирается правило добора."},
-  { k: "promo_part_pct", label: "Участие в акции, %", num: true, render: (v) => v == null || !v ? "—" : fmt(v) + "%" , tip: "Наибольшее участие среди активных акций WB, % — агрегат WB по товарам акции, а не по вашему артикулу (per-product участия в API WB нет). Товар попадает в акцию, когда его скидка достигает уровня (ranging) ниже."},
-  { k: "promo_tier_pct", label: "Следующий тир, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Скидка следующего уровня (ranging) лучшей акции WB. Ниже этой скидки товар в следующий тир не попадает; правило R11 добирает до порога."},
-  { k: "promo_tier_boost", label: "Буст след. уровня", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Буст СЛЕДУЮЩЕГО уровня (ranging) выбранной акции — это уровень самой акции, а не вашего товара. Своё место в лестнице показывает колонка «Буст своего уровня»."},
-  { k: "promo_cap_pct", label: "Потолок промо, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки самой акции из описания WB («промо-скидка не более N%»). Это ограничение WB поверх нашей цели, а не потолок автопилота."},
-  { k: "promo_push_applied", label: "Добор в акцию", render: (v) => v ? "<span class='pos'>да</span>" : "—" , tip: "Правило R11 применило добор: целевая скидка поднята ради участия в акции, действие стало LOWER с причиной «акция WB»."},
-  { k: "promo_delta_discount", label: "Вклад акции, п.п.", num: true, render: promoDeltaCell , tip: "Сколько процентных пунктов к целевой скидке добавила акция WB сверх решения правил R1-R10. Ноль = акция на строку не повлияла. Общая «Дельта скидки» = вклад правил + этот вклад."},
-  { k: "promo_gap_pp", label: "Разрыв до тира, п.п.", num: true, render: promoGapCell , tip: "Насколько скидка, в которую целится автопилот, ниже уровня следующего тира акции. Плюс = не дотянули, ноль или минус = уровень взят. Считается по итоговой целевой скидке, поэтому показывает результат добора."},
-  { k: "promo_boost_gain", label: "Буст своего уровня", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Во сколько раз WB обещает поднять продажи на том уровне лестницы ranging, в который попадает скидка этого товара. Пусто = скидка ниже всех уровней акции."},
+  { k: "promo_count", label: "Акций WB", num: true, render: (v) => v == null || !v ? "—" : fmt(v) , tip: "Сколько действующих акций WB (Календарь акций) открыто на этот период. Если 0 — промо-инфо пустое, разгрузка не срабатывает."},
+  { k: "promo_names", label: "Акции WB", render: cellFmts.text , tip: "Названия активных акций (до трёх, дальше — многоточие). Справочно: какие акции берутся в расчёт при разгрузке."},
+  { k: "promo_part_pct", label: "Участие в акции, %", num: true, render: (v) => v == null || !v ? "—" : fmt(v) + "%" , tip: "Доля НАШИХ товаров в акции — так это считает WB (в_promo ÷ (в_promo + не_в_промо)). Это НЕ процент скидки и не показатель конкретного артикула."},
+  { k: "promo_tier_pct", label: "Доля для след. буста, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "ParticipationRate следующей ступени акции: доля наших товаров, которую WB хочет видеть в акции, чтобы дать буст. Не порог скидки и не цель правила — повлиять на неё выбором товаров нельзя, WB отбирает товары сам."},
+  { k: "promo_tier_boost", label: "Буст след. ступени", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Буст, который даст следующая ступень акции. Достаётся ВСЕМ участникам акции, а не отдельному товару — поэтому своей «ступени» у строки нет."},
+  { k: "promo_need_rows", label: "Надо в акцию, шт", num: true, render: (v) => v == null ? "—" : fmt(v) , tip: "Сколько наших товаров WB не хватает до следующего буста: нужная доля × ПУЛ WB (в_промо + не_в_промо) − уже в промо. Справочная цифра: раньше считалось от числа всех наших товаров, что завышало оценку в разы."},
+  { k: "promo_cap_pct", label: "Потолок промо, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки самой акции из описания WB («промо-скидка не более N%»). Справочно; автопилот свой потолок считает от безубытка."},
+  { k: "promo_push_applied", label: "Разгружен", render: (v) => v ? "<span class='pos'>да</span>" : "—" , tip: "Правило разгрузки выбрало этот товар: скидка увеличена на шаг promo_push_pct ради продажи залежалого."},
+  { k: "promo_delta_discount", label: "Вклад разгрузки, п.п.", num: true, render: promoDeltaCell , tip: "На сколько п.п. разгрузка подняла целевую скидку сверх решения остальных правил. Общая «Дельта скидки» остаётся суммой всех правил."},
+  { k: "promo_score", label: "Оценка", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(2) , tip: "Оценка жертвенности 0…2.6: дольше без продаж (до 1.0) + дешевле резать по себестоимости (до 0.6) + больше лежит на складе (до 1.0). Больше = товар лучше подходит под разгрузку."},
+  { k: "promo_score_confidence", label: "Полнота оценки", render: promoConfidenceCell , tip: "«Полная» — все сигналы взяты точными значениями. «По фолбэку» — часть данных отсутствовала (например, свой склад не заведён, продаж не было вовсе), оценка приблизительная."},
+  { k: "last_sale_days_ago", label: "Дней без продаж", num: true, render: (v) => v == null ? "—" : (Number(v) >= 9999 ? "никогда" : fmt(v)) , tip: "Дней с последней продажи товара. Основной сигнал разгрузки: чем больше, тем сильнее товар просится на распродажу. «никогда» = продаж не было вовсе (или новинка без данных)."},
   { k: "revenue_per_one", label: "Ср. чек, руб", num: true, render: cellFmts.money , tip: "Фактическая цена продажи по детализации WB: выручка ÷ проданные штуки, ₽."},
   { k: "income_per_one", label: "К переч./шт, руб", num: true, render: cellFmts.money , tip: "К перечислению на единицу по детализации WB: сколько денег за одну проданную штуку получает продавец."},
   { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money , tip: "Комиссия КВВ на единицу по детализации WB. Учтена в расчёте пола безубыточности через долю комиссии в выручке."},
@@ -4832,13 +4840,15 @@ const PRICING_OPTIONAL = [
   { k: "promo_count", label: "Акций WB", def: false },
   { k: "promo_names", label: "Акции WB", def: false },
   { k: "promo_part_pct", label: "Участие в акции, %", def: false },
-  { k: "promo_tier_pct", label: "Следующий тир, %", def: false },
-  { k: "promo_tier_boost", label: "Буст уровня", def: false },
+  { k: "promo_tier_pct", label: "Доля для след. буста, %", def: false },
+  { k: "promo_tier_boost", label: "Буст след. ступени", def: false },
+  { k: "promo_need_rows", label: "Надо в акцию, шт", def: false },
   { k: "promo_cap_pct", label: "Потолок промо, %", def: false },
-  { k: "promo_push_applied", label: "Добор в акцию", def: false },
-  { k: "promo_delta_discount", label: "Вклад акции, п.п.", def: false },
-  { k: "promo_gap_pp", label: "Разрыв до тира, п.п.", def: false },
-  { k: "promo_boost_gain", label: "Буст своего уровня", def: false },
+  { k: "promo_push_applied", label: "Разгружен", def: false },
+  { k: "promo_delta_discount", label: "Вклад разгрузки, п.п.", def: false },
+  { k: "promo_score", label: "Оценка", def: false },
+  { k: "promo_score_confidence", label: "Полнота оценки", def: false },
+  { k: "last_sale_days_ago", label: "Дней без продаж", def: false },
 ];
 // Группы колонок для «Вид таблицы» — раскрывать сразу по смыслу.
 const PRICING_COLGROUPS = [
@@ -4847,7 +4857,7 @@ const PRICING_COLGROUPS = [
   { title: "Запасы и продажи", keys: ["stock", "stock_wb", "doc", "velocity", "trend", "buyouts", "conv_buyout_percent", "cancel_sum", "add_to_wishlist", "return_rate"] },
   { title: "Воронка и конверсия", keys: ["backlog", "conv_pct"] },
   { title: "Экономика на единицу", keys: ["margin_pct", "net_cost", "revenue_per_one", "income_per_one", "commission_per_one", "logistics_per_one", "storage_per_one"] },
-  { title: "Акции WB", keys: ["promo_count", "promo_names", "promo_part_pct", "promo_tier_pct", "promo_tier_boost", "promo_cap_pct", "promo_push_applied", "promo_delta_discount", "promo_gap_pp", "promo_boost_gain"] },
+  { title: "Акции WB", keys: ["promo_count", "promo_names", "promo_part_pct", "promo_tier_pct", "promo_tier_boost", "promo_need_rows", "promo_cap_pct", "promo_push_applied", "promo_delta_discount", "promo_score", "promo_score_confidence", "last_sale_days_ago"] },
   { title: "Решение", keys: ["action", "reason"] },
 ];
 registerColView("pricing", {
@@ -5175,8 +5185,9 @@ const PRICING_GROUPS = [
       "use_replenishable", "use_season", "use_reviews", "use_quality",
       "use_returns",
   ] },
-  { title: "Акции WB", col: 2, keys: [
-      "promo_enabled", "promo_push_pct", "promo_max_beyond_floor_pp",
+  { title: "Разгрузка акциями WB", col: 2, keys: [
+      "promo_enabled", "promo_max_rows", "promo_min_stale_days",
+      "promo_protect_velocity", "promo_push_pct", "promo_max_beyond_floor_pp",
   ] },
   { title: "Окно и скорость", col: 1, keys: [
       "window_days", "season_adj", "season_damp", "min_days_with_sales",
@@ -5248,6 +5259,7 @@ function pricingParamRow(key, cur) {
     input.type = "number";
     input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias"
       || key === "min_rating_reviews" || key === "promo_push_pct"
+      || key === "promo_protect_velocity"
       || key === "promo_max_beyond_floor_pp") ? "0.1" : "1";
     input.value = cur;
   }
@@ -5404,7 +5416,7 @@ const PRICING_FOOT = {
   revenue_per_one: "avg", income_per_one: "avg", commission_per_one: "avg",
   logistics_per_one: "avg", storage_per_one: "avg", doc: "avg", velocity: "avg", trend: "avg",
   promo_count: "sum", promo_part_pct: "avg", promo_tier_pct: "avg", promo_tier_boost: "avg", promo_cap_pct: "avg",
-  promo_delta_discount: "avg", promo_gap_pp: "avg", promo_boost_gain: "avg",
+  promo_delta_discount: "avg", promo_score: "avg",
 };
 function pricingFooters(rows) {
   const accum = {};
