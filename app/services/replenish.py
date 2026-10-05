@@ -14,6 +14,8 @@
 """
 
 import math
+import re
+from datetime import timedelta
 from typing import Optional
 
 import pandas as pd
@@ -171,6 +173,112 @@ def _product_sizes(db: Session) -> dict:
         if not cur and bc:
             out[(a, s)] = str(bc).strip()
     return out
+
+
+#: Окно скорости для плана подсортировки на WB. Короткое окно спроса не годится:
+#: размер, который не продавался последние 30 дней, получает нулевую скорость,
+#: цель 0 и выпадает из плана — хотя в карточке он есть и остатков на нём нет.
+WB_SORT_VELOCITY_DAYS = 180
+
+
+def _wb_card_sizes(db: Session) -> dict:
+    """{UPPER(article): {UPPER(size): barcode}} — полный набор размеров карточки WB.
+
+    ``ProductSize`` в базе пуста, а детализация продаж и остатки знают только те
+    размеры, которые уже продавались или лежат на складе. Карточка WB —
+    единственный источник полного списка размеров товара, поэтому именно она
+    отвечает на вопрос «какие размеры есть у товара».
+    """
+    mp = _mp_id(db, "wb")
+    out: dict = {}
+    if mp is None:
+        return out
+    for vendor, size, bc in db.execute(
+        select(models.MarketplaceCard.vendor_code, models.MarketplaceCard.size,
+               models.MarketplaceCard.barcode)
+        .where(models.MarketplaceCard.marketplace_id == mp)
+    ).all():
+        a = (vendor or "").strip().upper()
+        if not a:
+            continue
+        s = (size or "").strip().upper()
+        sizes = out.setdefault(a, {})
+        # размер в список попадает всегда, штрихкод — бонусом: пустой barcode
+        # не должен выкидывать размер из плана
+        if s not in sizes:
+            sizes[s] = ""
+        if bc and not sizes[s]:
+            sizes[s] = str(bc).strip()
+    return out
+
+
+def _size_sort_key(size: str) -> tuple:
+    """Естественный порядок размеров: 9 < 10 < 42, XS < S < M < L."""
+    chunks = re.findall(r"\d+|\D+", str(size or ""))
+    return tuple((0, int(c), "") if c.isdigit() else (1, 0, c) for c in chunks)
+
+
+def wb_sorting_plan(
+    db: Session, date_to, target_days: int = 30,
+    articles: Optional[list] = None,
+    velocity_days: int = WB_SORT_VELOCITY_DAYS,
+) -> dict:
+    """План подсортировки на WB: сколько дослать в каждый размер карточки.
+
+    По каждому размеру: остаток на WB (включая наш товар в пути), скорость
+    продаж за длинное окно и сколько не хватает до целевого запаса.
+
+    Ключи — те же ``UPPER``, что у остатков и продаж, чтобы размеры не
+    «разъезжались» из-за регистра. Размеры, которых нет в карточке, но которые
+    есть в продажах или остатках, тоже попадают в план: молча терять их нельзя.
+
+    Возвращает ``{UPPER(article): {"article": …, "sizes": [...], "total": шт}}``.
+    """
+    target_days = max(1, int(target_days or 1))
+    days = max(1, int(velocity_days or WB_SORT_VELOCITY_DAYS))
+
+    cards = _wb_card_sizes(db)
+    sales = _wb_sizes(db, date_to - timedelta(days=days - 1), date_to)
+    _, stocks = _mp_stocks(db, "wb", date_to)
+
+    keys = set(cards)
+    keys.update(a for a, _s in sales)
+    keys.update(a for a, _s in stocks)
+    if articles:
+        # фильтр применяем к объединению, а не только к карточкам: иначе
+        # артикул, у которого есть продажи, но нет карточки, проскочит мимо
+        keys &= {str(a or "").strip().upper() for a in articles}
+
+    plan: dict = {}
+    for art in sorted(keys):
+        sizes = set(cards.get(art, {}))
+        sizes.update(s for (a, s) in sales if a == art)
+        sizes.update(s for (a, s) in stocks if a == art)
+        card_bc = cards.get(art, {})
+        items = []
+        total = 0
+        for s in sorted(sizes, key=_size_sort_key):
+            net = max(0, int((sales.get((art, s)) or {}).get("net") or 0))
+            vel = net / days
+            target = target_days * vel
+            st = stocks.get((art, s), [0, 0, 0, ""])
+            avail = int(st[0] or 0) + int(st[2] or 0)
+            to_sort = max(0, _ceil(target) - avail)
+            total += to_sort
+            items.append({
+                "size": s or "—",
+                "barcode": (card_bc.get(s) or (sales.get((art, s)) or {}).get("barcode")
+                            or st[3] or ""),
+                "stock": int(st[0] or 0),
+                "in_way": int(st[2] or 0),
+                "avail": avail,
+                "net": net,
+                "vel": round(vel, 3),
+                "target": round(target, 2),
+                "to_sort": to_sort,
+            })
+        plan[art] = {"article": art, "sizes": items, "total": total}
+    return plan
 
 
 def _wb_sizes(db: Session, date_from, date_to) -> dict:

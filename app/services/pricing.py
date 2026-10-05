@@ -148,6 +148,78 @@ def _wb_id(db: Session) -> int:
     ).scalar_one()
 
 
+def load_prices_from_db(
+    db: Session, marketplace: str = "wb"
+) -> tuple[Optional[pd.DataFrame], Optional[datetime]]:
+    """Цены из локального снимка price_snapshots вместо живого API WB.
+
+    Зачем: `WbProvider.get_prices()` тянет ~9 страниц discounts-prices-api
+    (лимит 5 запросов/мин, ~8 с на ответ) — 80-145 с на каждый пересчёт, при том
+    что CPU приложения в это время простаивает (замер: 0.1 ядра из 24). Те же
+    значения уже лежат в БД: refresh.pull_wb_prices -> sync.upsert_price_snapshots.
+
+    В снимке по строке на РАЗМЕР (83 608 строк на 8361 карточку), а расчёт
+    оперирует nmID, поэтому размеры сворачиваем в одну цену на карточку.
+    Сверено с живым API на 8361 карточке: цены совпали на 100 %, скидки на 99.6 %.
+
+    Возвращает (DataFrame в формате get_prices(), updated_at снимка).
+    DataFrame пустой, если снимка нет — вызывающий решает, идти ли в сеть.
+    """
+    rows = db.execute(
+        select(
+            models.PriceSnapshot.nm_id,
+            models.PriceSnapshot.article,
+            models.PriceSnapshot.price,
+            models.PriceSnapshot.discounted_price,
+            models.PriceSnapshot.discount,
+        ).where(models.PriceSnapshot.marketplace == marketplace)
+    ).all()
+    if not rows:
+        return None, None
+    updated_at = db.execute(
+        select(func.max(models.PriceSnapshot.updated_at)).where(
+            models.PriceSnapshot.marketplace == marketplace
+        )
+    ).scalar()
+
+    df = pd.DataFrame(
+        rows, columns=["nm_id", "vendorCode", "price", "discountedPrice", "discount"]
+    )
+    for col in ("nm_id", "vendorCode"):
+        df[col] = df[col].fillna("").astype(str).str.strip()
+    for col in ("price", "discountedPrice", "discount"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df = df[df["nm_id"] != ""]
+    if df.empty:
+        return None, updated_at
+    # По строке на размер — сворачиваем в одну цену на карточку (max), чтобы
+    # результат не зависел от порядка строк, как это было у «последней строки».
+    df = df.sort_values("price").drop_duplicates(subset="nm_id", keep="last")
+    return df.rename(columns={"nm_id": "nmID"}), updated_at
+
+
+def resolve_prices(
+    db: Session,
+    provider=None,
+    allow_network: bool = True,
+) -> tuple[Optional[pd.DataFrame], Optional[datetime], str]:
+    """Цены для расчёта: снимок из БД, а если его нет — живой API WB.
+
+    Снимок — основной источник: расчёт не должен ждать 80-145 с сети. Сеть
+    остаётся запасным путём, чтобы не сломать расчёт на пустой БД (например,
+    в тестах, где price_snapshots очищается, или до первого обновления цен).
+
+    Возвращает (DataFrame, updated_at снимка, источник "db" | "wb_api").
+    """
+    df, updated_at = load_prices_from_db(db)
+    if df is not None and not df.empty:
+        return df, updated_at, "db"
+    if not allow_network:
+        return None, None, "db"
+    prov = provider or provider_factory.get_wb_provider()
+    return prov.get_prices(), None, "wb_api"
+
+
 def _normalize_prices(prices_df: Optional[pd.DataFrame]) -> dict:
     """nmID -> {price, discount}. Терпим к разным наборам колонок провайдера."""
     out: dict = {}

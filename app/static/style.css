@@ -234,6 +234,16 @@ body.busy .btn { pointer-events: none; opacity: .6; }
 }
 .header-msg:empty { display: none; }
 .header-msg[data-tip] { border-bottom: 1px dashed #aaa; cursor: help; }
+/* Актуальность снимка цен WB: расчёт идёт по базе, плашка показывает её свежесть. */
+.prices-age {
+  display: inline-block;
+  color: #666;
+  font-size: 12px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.prices-age:empty { display: none; }
+.prices-age[data-stale="1"] { color: #b06a00; }
 .spinner {
   width: 14px;
   height: 14px;

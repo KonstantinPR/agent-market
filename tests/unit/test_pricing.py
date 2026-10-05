@@ -65,6 +65,66 @@ def _prices(*pairs):
     })
 
 
+def _seed_prices(db, *pairs, marketplace="wb"):
+    """pairs: (article, nm, size, price, discounted, discount) -> строки price_snapshots."""
+    for art, nm, size, price, discounted, discount in pairs:
+        db.add(models.PriceSnapshot(
+            marketplace=marketplace, article=art, nm_id=nm, size=size,
+            price=price, discounted_price=discounted, discount=discount,
+        ))
+    db.commit()
+
+
+def test_load_prices_from_db_reads_snapshot(db):
+    """Снимок читается в формате, который понимает _normalize_prices."""
+    _seed_prices(db, ("TST-1", "111", "50", 1000, 700, 30))
+    df, updated_at = pricing_service.load_prices_from_db(db)
+    assert df is not None and not df.empty
+    assert updated_at is not None
+    got = pricing_service._normalize_prices(df)
+    assert got["111"] == {"price": 1000.0, "discount": 30.0}
+
+
+def test_load_prices_from_db_collapses_sizes_to_one_price(db):
+    """В снимке по строке на размер — расчёт берёт одну цену на карточку (max)."""
+    _seed_prices(
+        db,
+        ("TST-1", "111", "50", 1000, 700, 30),
+        ("TST-1", "111", "51", 1500, 1200, 20),
+    )
+    df, _ = pricing_service.load_prices_from_db(db)
+    assert len(df) == 1
+    assert pricing_service._normalize_prices(df)["111"]["price"] == 1500.0
+
+
+def test_load_prices_from_db_empty_returns_none(db):
+    df, updated_at = pricing_service.load_prices_from_db(db)
+    assert df is None and updated_at is None
+
+
+def test_resolve_prices_prefers_db(db, stub_wb):
+    """Основной источник — БД: живой API не дёргается (иначе 80-145 с на расчёт)."""
+    _seed_prices(db, ("TST-1", "111", "50", 1000, 700, 30))
+    df, updated_at, source = pricing_service.resolve_prices(db)
+    assert source == "db" and updated_at is not None
+    assert pricing_service._normalize_prices(df)["111"]["price"] == 1000.0
+
+
+def test_resolve_prices_falls_back_to_api_when_db_empty(db, stub_wb):
+    """Пустая БД (до первого обновления цен) — не ломаем расчёт, идём в сеть."""
+    df, updated_at, source = pricing_service.resolve_prices(db, provider=stub_wb)
+    assert source == "wb_api" and updated_at is None
+    assert df is not None and not df.empty
+
+
+def test_resolve_prices_can_forbid_network(db, stub_wb):
+    """allow_network=False — пустая БД даёт пустые цены, без обращения к сети."""
+    df, _updated_at, source = pricing_service.resolve_prices(
+        db, provider=stub_wb, allow_network=False
+    )
+    assert source == "db" and (df is None or df.empty)
+
+
 def _row(rec, art):
     return next(r for r in rec["rows"] if r["article"] == art)
 

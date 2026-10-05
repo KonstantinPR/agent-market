@@ -28,6 +28,11 @@ class Settings(BaseSettings):
 
     default_net_cost: float = 500.0
 
+    photos_root: str = r"C:\YandexDisk\ФОТОГРАФИИ"
+    thumbs_dir: str = "data/thumbs"
+    thumb_max_px: int = 800
+    thumb_quality: int = 82
+
     @property
     def database_url(self) -> str:
         return (

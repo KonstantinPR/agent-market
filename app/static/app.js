@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "59";
+const UI_VERSION = "64";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -38,7 +38,9 @@ function busyRun(fn) {
   if (spin) spin.classList.remove("hidden");
   document.body.classList.add("busy");
   busyDepth++;
-  return Promise.resolve(fn())
+  // fn() вызываем уже внутри цепочки промисов. Иначе синхронный throw
+  // вылетел бы до .finally(), и спиннер остался бы гореть навсегда.
+  return Promise.resolve().then(fn)
     .catch((err) => { console.error("busyRun:", err); throw err; })
     .finally(() => {
       busyDepth--;
@@ -141,18 +143,48 @@ function qs(params) {
   return s ? "?" + s : "";
 }
 
+// Любой запрос к API ограничен по времени. Без этого зависшее соединение
+// держит «Применить» в состоянии «думает» неограниченно долго: счётчик
+// busyDepth уменьшается только в finally(), который не наступит никогда.
+const API_TIMEOUT_MS = 120000;
+
+function apiSignal() {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(API_TIMEOUT_MS);
+  }
+  return undefined;
+}
+
+function apiErr(e) {
+  if (e && e.name === "AbortError") {
+    return new Error("Сервер не ответил за " + Math.round(API_TIMEOUT_MS / 1000) + " с");
+  }
+  return e;
+}
+
 async function api(path) {
-  const resp = await fetch("/api" + path);
+  let resp;
+  try {
+    resp = await fetch("/api" + path, { signal: apiSignal() });
+  } catch (e) {
+    throw apiErr(e);
+  }
   if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
   return resp.json();
 }
 
 async function apiPost(path, body) {
-  const resp = await fetch("/api" + path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
+  let resp;
+  try {
+    resp = await fetch("/api" + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+      signal: apiSignal(),
+    });
+  } catch (e) {
+    throw apiErr(e);
+  }
   if (!resp.ok) {
     let detail = "";
     try {
@@ -420,9 +452,17 @@ function normalizeStatus() {
   if (!el) return null;
   const s = el.textContent || "";
   if (s.length > HEADER_MSG_MAX) {
-    el.dataset.tip = s;
-    el.textContent = s.slice(0, HEADER_MSG_MAX) + "…";
-  } else {
+    const cut = s.slice(0, HEADER_MSG_MAX) + "…";
+    // Обрезанный текст длиной HEADER_MSG_MAX + 1 сам не проходит проверку
+    // выше, поэтому писать надо только при реальном изменении. Без этой
+    // проверки замена textNode снова будит наблюдатель, и normalizeStatus
+    // зацикливается сам на себе — вкладка «Потребность» с длинным статусом
+    // висела в «не отвечает» (статус длиннее 150 символов).
+    if (el.textContent !== cut) {
+      el.dataset.tip = s;
+      el.textContent = cut;
+    }
+  } else if (el.dataset.tip) {
     delete el.dataset.tip;
   }
   return el;
@@ -2100,6 +2140,8 @@ async function renderReplenish() {
     const cp = colViewParam("replenish");
     exp.href = "/api/export/replenish" + p + (cp ? "&" + cp : "");
   }
+  const expPdf = $("#exportReplenishPdf");
+  if (expPdf) expPdf.href = replenishPdfUrl();
   let data;
   try {
     data = await api("/replenish" + p);
@@ -2136,6 +2178,201 @@ async function renderReplenish() {
   const headers = colViewHeaders("replenish", isSize ? replenishSizeHeaders : replenishHeaders);
   const footers = isSize ? replenishSizeFooters(data.rows || []) : replenishFooters(data.rows || []);
   pagedTable(box, headers, data.rows || [], footers, null, colViewPinKeys("replenish"));
+}
+
+// ---- Выгрузка потребности в PDF с фотографиями --------------------------
+// У PDF своя раскладка карточки (фото → артикул → размеры → итог), но набор
+// галочек по умолчанию берём из видимых колонок «Вида таблицы», чтобы список
+// полей не расходился с экраном. Выбранное хранится отдельно от colView.
+const REPLENISH_PDF_KEY = "replenishPdf";
+const PDF_PHOTO_MAX = 9;
+
+function pdfParams() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(REPLENISH_PDF_KEY) || "{}") || {}; } catch (e) { s = {}; }
+  const n = parseInt(s.photoCount, 10);
+  return {
+    withPhotos: s.withPhotos !== false,
+    photoCount: n >= 1 && n <= PDF_PHOTO_MAX ? n : 4,
+    cols: Array.isArray(s.cols) ? s.cols.slice() : null,
+  };
+}
+
+function savePdfParams(p) {
+  try { localStorage.setItem(REPLENISH_PDF_KEY, JSON.stringify(p)); } catch (e) { /* ignore */ }
+}
+
+// Колонки для галочек: всё, кроме артикула и размера — они в карточке отдельными строками.
+function replenishPdfColumns() {
+  return replenishHeaders.filter((h) => h.k !== "article" && h.k !== "size");
+}
+
+function replenishPdfCols() {
+  const p = pdfParams();
+  if (p.cols) return p.cols;
+  const st = colViewState("replenish");
+  const keys = new Set(["name"]);
+  for (const h of replenishPdfColumns()) {
+    if (st[h.k] !== false) keys.add(h.k);
+  }
+  return Array.from(keys);
+}
+
+function buildReplenishPdfMenu() {
+  const panel = $("#replenishPdfPanel");
+  if (!panel) return;
+  panel.innerHTML = "";
+  const p = pdfParams();
+
+  const head = document.createElement("label");
+  head.className = "chk";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = p.withPhotos;
+  head.appendChild(cb);
+  head.appendChild(document.createTextNode(" С фото"));
+  panel.appendChild(head);
+
+  const cntRow = document.createElement("label");
+  cntRow.className = "chk";
+  const sel = document.createElement("select");
+  sel.title = "Сколько фотографий выводить на карточку товара — первые по номеру в имени файла";
+  for (let i = 1; i <= PDF_PHOTO_MAX; i++) {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = i + " фото";
+    if (i === p.photoCount) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener("change", (e) => {
+    p.photoCount = parseInt(e.target.value, 10) || 4;
+    savePdfParams(p);
+  });
+  cntRow.appendChild(document.createTextNode(" Фото на товар: "));
+  cntRow.appendChild(sel);
+  panel.appendChild(cntRow);
+
+  const syncCountSel = () => {
+    sel.disabled = !cb.checked;
+    cntRow.classList.toggle("off", !cb.checked);
+  };
+  cb.addEventListener("change", (e) => {
+    p.withPhotos = e.target.checked;
+    savePdfParams(p);
+    syncCountSel();
+  });
+  syncCountSel();
+
+  const sep = document.createElement("hr");
+  sep.style.margin = "4px 0";
+  panel.appendChild(sep);
+
+  const title = document.createElement("div");
+  title.textContent = "Поля в карточке:";
+  title.style.fontSize = "12px";
+  title.style.color = "#666";
+  panel.appendChild(title);
+
+  const selected = new Set(replenishPdfCols());
+  for (const h of replenishPdfColumns()) {
+    const row = document.createElement("div");
+    row.className = "colview-row";
+    const lbl = document.createElement("label");
+    lbl.className = "chk";
+    const b = document.createElement("input");
+    b.type = "checkbox";
+    b.checked = selected.has(h.k);
+    b.addEventListener("change", (e) => {
+      if (e.target.checked) selected.add(h.k);
+      else selected.delete(h.k);
+      p.cols = Array.from(selected);
+      savePdfParams(p);
+    });
+    lbl.appendChild(b);
+    lbl.appendChild(document.createTextNode(" " + h.label));
+    if (h.tip) lbl.title = h.tip;
+    row.appendChild(lbl);
+    panel.appendChild(row);
+  }
+
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "btn";
+  go.textContent = "Скачать PDF";
+  go.addEventListener("click", () => {
+    panel.classList.add("hidden");
+    downloadReplenishPdf();
+  });
+  panel.appendChild(go);
+}
+
+function initReplenishPdfMenu() {
+  const btn = $("#btnReplenishPdf");
+  const menu = $("#replenishPdfMenu");
+  const panel = $("#replenishPdfPanel");
+  if (!btn || !menu || !panel) return;
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasHidden = panel.classList.contains("hidden");
+    const vpanel = $("#replenishViewPanel");
+    if (vpanel) vpanel.classList.add("hidden");
+    if (wasHidden) {
+      buildReplenishPdfMenu();
+      panel.classList.remove("hidden");
+    } else {
+      panel.classList.add("hidden");
+    }
+  });
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+}
+
+function replenishPdfUrl() {
+  let f = {};
+  try { f = filters(); } catch (e) { /* пустой объект */ }
+  const q = replenishQs(f);
+  const params = new URLSearchParams(q.charAt(0) === "?" ? q.slice(1) : q);
+  params.delete("view"); // карточка всегда по артикулам, размеры подтягиваются отдельно
+  const p = pdfParams();
+  params.set("with_photos", p.withPhotos ? 1 : 0);
+  params.set("photo_count", p.photoCount);
+  const cols = (p.cols || replenishPdfCols()).join(",");
+  if (cols) params.set("cols", cols);
+  return "/api/export/replenish/pdf?" + params.toString();
+}
+
+async function downloadReplenishPdf() {
+  const msg = statusEl();
+  const say = (t) => {
+    if (!msg) return;
+    msg.textContent = t;
+    delete msg.dataset.tip;
+  };
+  const p = pdfParams();
+  say("Формирую PDF" + (p.withPhotos ? " с фото" : "") + "…");
+  try {
+    const url = replenishPdfUrl();
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const blob = await resp.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition")) || "potrebnost.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    const n = resp.headers.get("X-Count");
+    const hits = resp.headers.get("X-Photo-Hits");
+    const cut = resp.headers.get("X-Truncated");
+    const parts = ["PDF готов"];
+    if (n != null) parts.push("товаров: " + fmt(n));
+    if (p.withPhotos && hits != null) parts.push("с фото: " + fmt(hits));
+    if (cut != null && +cut > 0) parts.push("сверху отброшено: " + fmt(cut));
+    say(parts.join(" · "));
+  } catch (err) {
+    say("Ошибка PDF: " + err.message);
+  }
 }
 
 const productsBaseHeaders = [
@@ -5432,6 +5669,54 @@ function pricingFooters(rows) {
   return accum;
 }
 
+const PRICES_STALE_HOURS = 12;
+
+function pricingAgeText(hours) {
+  if (hours < 1) return Math.max(1, Math.round(hours * 60)) + " мин";
+  if (hours < 48) return Math.round(hours) + " ч";
+  return Math.round(hours / 24) + " дн";
+}
+
+// Плашка актуальности снимка цен: расчёт идёт по базе (мгновенно), а не по
+// живому WB API, поэтому показываем, как давно снимок обновляли.
+function renderPricingPricesAge(data) {
+  const el = $("#pricingPricesAge");
+  if (!el) return;
+  const stamp = data && data.prices_updated_at;
+  if (!stamp) {
+    el.textContent = data && data.prices_source === "wb_api"
+      ? "цены WB: из API"
+      : "";
+    el.removeAttribute("data-stale");
+    return;
+  }
+  const t = Date.parse(stamp);
+  if (!isFinite(t)) { el.textContent = ""; el.removeAttribute("data-stale"); return; }
+  const hours = (Date.now() - t) / 36e5;
+  el.textContent = "цены WB: " + pricingAgeText(hours) + " назад";
+  el.setAttribute("data-stale", hours > PRICES_STALE_HOURS ? "1" : "0");
+}
+
+async function refreshPricingPrices() {
+  const msg = statusEl();
+  const btn = $("#pricingPriceRefresh");
+  const prev = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Обновляю цены…"; }
+  msg.textContent = "Загружаю цены и скидки WB…";
+  try {
+    const resp = await fetch("/api/wb/prices?excel=0", { method: "POST" });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error((j.detail || resp.status) || "не удалось загрузить цены");
+    msg.textContent = "Цены WB загружены: " + fmt(j.count || 0) + " позиций. Пересчитываю…";
+    await renderPricing(false);
+    msg.textContent = "Цены WB обновлены: " + fmt(j.count || 0) + " позиций";
+  } catch (err) {
+    msg.textContent = "Ошибка загрузки цен: " + err.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
 async function renderPricing(apply) {
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
@@ -5450,6 +5735,7 @@ async function renderPricing(apply) {
   try {
     const data = await apiPost("/pricing/recommendations", s);
     _pricingResp = data;
+    renderPricingPricesAge(data);
     const allRows = data.rows || [];
     let pre = allRows;
     if (q) {
@@ -6086,6 +6372,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (pricingApply) pricingApply.addEventListener("click", () => applyPricing());
   const pricingPromoRefresh = $("#pricingPromoRefresh");
   if (pricingPromoRefresh) pricingPromoRefresh.addEventListener("click", () => refreshPricingPromos());
+  const pricingPriceRefresh = $("#pricingPriceRefresh");
+  if (pricingPriceRefresh) pricingPriceRefresh.addEventListener("click", () => refreshPricingPrices());
   const pricingLike = $("#pricingLike");
   if (pricingLike) {
     let pricingLikeTimer;
@@ -6124,6 +6412,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   syncHeaderForTab(currentTab);
   for (const t of Object.keys(_COLVIEWS)) initColViewMenu(t);
+  initReplenishPdfMenu();
   const btnExportMarginDetail = $("#exportMarginDetail");
   if (btnExportMarginDetail) {
     btnExportMarginDetail.addEventListener("click", () => {

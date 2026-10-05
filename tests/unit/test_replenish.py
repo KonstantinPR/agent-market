@@ -1,10 +1,11 @@
 """Тесты сервиса «Потребность в товаре» (app/services/replenish.py)."""
 from datetime import date, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from app import models
-from app.services.replenish import replenish_rows
+from app.services.replenish import WB_SORT_VELOCITY_DAYS, replenish_rows, wb_sorting_plan
 
 TODAY = date(2026, 9, 20)
 D0 = TODAY - timedelta(days=29)  # окно 30 дней
@@ -360,3 +361,139 @@ def test_api_replenish_export(db, api_client):
     assert resp.headers["content-type"] == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+# ------------------------------------------------- план подсортировки на WB
+def _card_size(db, code, vendor, size, barcode=""):
+    db.add(models.MarketplaceCard(
+        marketplace_id=_mp_id(db, code), chrt_id=f"c:{vendor}:{size}",
+        vendor_code=vendor, nm_id="", barcode=barcode, size=size,
+    ))
+
+
+def _wb_size_row(op_key, article, size, day, qty, doc_type="Продажа"):
+    return models.WbDetailRow(
+        op_key=op_key, source="excel", article=article, doc_type_name=doc_type,
+        sale_dt=day, quantity=qty, retail_amount=1000.0, for_pay=850.0,
+        tech_size=size, sku="",
+    )
+
+
+def _plan_size(plan, article, size):
+    items = {s["size"]: s for s in plan[article]["sizes"]}
+    return items[size]
+
+
+def test_plan_lists_every_card_size_even_without_sales(db):
+    """Главная боль: размеры без продаж в окне тоже должны попасть в план."""
+    _card_size(db, "wb", "PLAN-1", "42", "111")
+    _card_size(db, "wb", "PLAN-1", "44", "222")
+    _card_size(db, "wb", "PLAN-1", "46", "333")
+    db.add(_wb_size_row("p1", "PLAN-1", "42", TODAY, qty=180))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    assert [s["size"] for s in plan["PLAN-1"]["sizes"]] == ["42", "44", "46"]
+    assert _plan_size(plan, "PLAN-1", "42")["to_sort"] > 0
+    # у 44 и 46 продаж нет вообще — остаются в плане, но добавлять нечего
+    assert _plan_size(plan, "PLAN-1", "44")["to_sort"] == 0
+    assert _plan_size(plan, "PLAN-1", "46")["to_sort"] == 0
+    assert _plan_size(plan, "PLAN-1", "42")["barcode"] == "111"
+
+
+def test_plan_velocity_spans_long_window(db):
+    """Продажа 60 дней назад обязана учитываться: окно скорости — 180 дней."""
+    _card_size(db, "wb", "PLAN-2", "42")
+    db.add(_wb_size_row("p2", "PLAN-2", "42", TODAY - timedelta(days=59), qty=180))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    s = _plan_size(plan, "PLAN-2", "42")
+    assert s["net"] == 180
+    assert s["vel"] == pytest.approx(1.0, abs=0.01)
+    assert s["to_sort"] == 30                    # 30 дн × 1 шт/дн
+
+
+def test_plan_ignores_sales_older_than_velocity_window(db):
+    _card_size(db, "wb", "PLAN-3", "42")
+    db.add(_wb_size_row("p3", "PLAN-3", "42",
+                        TODAY - timedelta(days=WB_SORT_VELOCITY_DAYS + 10), qty=500))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    assert _plan_size(plan, "PLAN-3", "42")["to_sort"] == 0
+
+
+def test_plan_subtracts_marketplace_stock_and_in_way(db):
+    """Остаток WB и наш товар в пути уменьшают подсортировку."""
+    _card_size(db, "wb", "PLAN-4", "42")
+    db.add(_wb_size_row("p4", "PLAN-4", "42", TODAY, qty=180))
+    db.add(models.Stock(
+        marketplace_id=_mp_id(db, "wb"), date=TODAY, article="PLAN-4", size="42",
+        warehouse="Стек", quantity=0, quantity_full=5, in_way=4,
+    ))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    s = _plan_size(plan, "PLAN-4", "42")
+    assert s["avail"] == 9                        # 5 на складе WB + 4 в пути
+    assert s["to_sort"] == 21                     # 30 − 9
+
+
+def test_plan_never_negative_on_returns_only_size(db):
+    """Возвраты могут дать отрицательное нетто — план всё равно не отрицательный."""
+    _card_size(db, "wb", "PLAN-5", "42")
+    # возврат в WB приходит положительным количеством и вычитается из нетто
+    db.add(_wb_size_row("p5", "PLAN-5", "42", TODAY, qty=1, doc_type="Возврат"))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    s = _plan_size(plan, "PLAN-5", "42")
+    assert s["net"] == 0 or s["net"] >= 0
+    assert s["to_sort"] == 0
+    assert plan["PLAN-5"]["total"] >= 0
+
+
+def test_plan_total_is_sum_and_filtered_by_articles(db):
+    _card_size(db, "wb", "PLAN-6", "42")
+    _card_size(db, "wb", "PLAN-7", "42")
+    db.add(_wb_size_row("p6", "PLAN-6", "42", TODAY, qty=180))
+    db.add(_wb_size_row("p7", "PLAN-7", "42", TODAY, qty=90))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30, articles=["PLAN-6"])
+    assert set(plan) == {"PLAN-6"}
+    assert plan["PLAN-6"]["total"] == sum(
+        s["to_sort"] for s in plan["PLAN-6"]["sizes"])
+
+
+def test_plan_keeps_sold_size_missing_from_card(db):
+    """Размер вне карточек не теряем: он приносил продажи, значит важен."""
+    db.add(_wb_size_row("p8", "PLAN-8", "42", TODAY, qty=180))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    assert _plan_size(plan, "PLAN-8", "42")["to_sort"] == 30
+
+
+def test_plan_sizes_are_sorted_naturally(db):
+    """9 должно идти раньше 10, а не после."""
+    for sz in ("10", "9", "42", "2XL"):
+        _card_size(db, "wb", "PLAN-9", sz)
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    got = [s["size"] for s in plan["PLAN-9"]["sizes"]]
+    assert got == ["2XL", "9", "10", "42"]
+
+
+def test_plan_ignores_ozon_cards(db):
+    """Пока считаем только WB — карточки Ozon не должны попадать в план."""
+    _card_size(db, "ozon", "PLAN-10", "42")
+    db.add(_wb_size_row("p9", "PLAN-10", "42", TODAY, qty=180))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30, articles=["PLAN-10"])
+    sizes = plan["PLAN-10"]["sizes"]
+    assert [s["size"] for s in sizes] == ["42"]   # только из продаж WB
+    assert _plan_size(plan, "PLAN-10", "42")["to_sort"] == 30

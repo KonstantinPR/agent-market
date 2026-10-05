@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 data/mock/
+data/thumbs/
 *.xlsx
 *.xls
 .DS_Store

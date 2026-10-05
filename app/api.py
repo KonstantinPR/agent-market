@@ -1,5 +1,7 @@
+import os
 import re
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
@@ -7,7 +9,7 @@ from typing import List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -26,10 +28,13 @@ from app.services import (
     funnel as funnel_service,
     margin as margin_service,
     ozon_article,
+    pdf_demand,
+    photos as photos_service,
     pricing as pricing_service,
     refresh as refresh_service,
     replenish as replenish_service,
     sync as sync_service,
+    thumbs as thumbs_service,
     tickets as tickets_service,
     warehouse as warehouse_service,
     yandex_disk as yandex_service,
@@ -1620,11 +1625,13 @@ def pricing_defaults():
 @router.post("/pricing/recommendations")
 def pricing_recommendations(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов)."""
-    prov = provider_factory.get_wb_provider()
-    prices_df = prov.get_prices()
-    return pricing_service.recommendations(
+    prices_df, updated_at, source = pricing_service.resolve_prices(db)
+    rec = pricing_service.recommendations(
         db, settings=payload, prices_df=prices_df,
     )
+    rec["prices_source"] = source
+    rec["prices_updated_at"] = updated_at.isoformat() if updated_at else None
+    return rec
 
 
 @router.post("/pricing/apply")
@@ -1642,10 +1649,13 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
             return pricing_service.apply_rows(
                 db, ui_rows, settings=payload, provider=prov,
             )
-        prices_df = prov.get_prices()
-        return pricing_service.apply_recommendations(
+        prices_df, updated_at, source = pricing_service.resolve_prices(db)
+        res = pricing_service.apply_recommendations(
             db, settings=payload, prices_df=prices_df, provider=prov,
         )
+        res["prices_source"] = source
+        res["prices_updated_at"] = updated_at.isoformat() if updated_at else None
+        return res
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except WbApiError as e:  # noqa: BLE001
@@ -1690,8 +1700,7 @@ PRICING_ACTION_RU = {
 def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся."""
     cols = payload.get("cols")
-    prov = provider_factory.get_wb_provider()
-    prices_df = prov.get_prices()
+    prices_df, _updated_at, _source = pricing_service.resolve_prices(db)
     rec = pricing_service.recommendations(
         db, settings=payload, prices_df=prices_df,
     )
@@ -2111,6 +2120,149 @@ def export_replenish(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+PDF_MEDIA = "application/pdf"
+
+#: Сколько товаров класть в один PDF по умолчанию. Замерено на живых данных:
+#: 100 карточек × 4 фото ≈ 18 МБ и ≈ 20 с (миниатюры уже в кэше `data/thumbs`).
+PDF_DEFAULT_LIMIT = 100
+#: Жёсткий потолок, чтобы случайный `limit=100000` не положил сервер.
+PDF_MAX_LIMIT = 500
+#: Потолок фото на карточку (предел разумной полосы на страницу).
+PDF_MAX_PHOTOS = 9
+
+
+@router.get("/export/replenish/pdf")
+def export_replenish_pdf(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    target_days: int = 30,
+    window_days: int = 30,
+    marketplace: Optional[str] = None,
+    sort: str = "urgency",
+    article_like: Optional[str] = None,
+    show_inactive: int = 0,
+    cols: Optional[str] = None,
+    with_photos: int = 1,
+    photo_count: int = 4,
+    limit: int = PDF_DEFAULT_LIMIT,
+    db: Session = Depends(get_db),
+):
+    """Карточки потребности в PDF: фото товара, артикул, размеры, итоги.
+
+    ``cols`` — те же ключи, что и в Excel-выгрузке. Фото подтягиваются из
+    индекса фотографий (рекурсивный обход диска, кэш в памяти), миниатюры
+    кэшируются на диске, поэтому повторные выгрузки быстрые.
+    """
+    from_, to_ = _parse_window400(date_from, date_to)
+    if date_from is None and date_to is None:
+        back = max(1, int(window_days or settings.sync_days_default))
+        from_ = to_ - timedelta(days=back - 1)
+    span = (to_ - from_).days + 1
+
+    common = dict(
+        target_days=target_days, span_days=span, marketplace=marketplace,
+        sort=sort, article_like=article_like, show_inactive=bool(show_inactive),
+    )
+    main = replenish_service.replenish_rows(db, from_, to_, view="article", **common)
+
+    rows = main["rows"]
+    cap = max(1, min(int(limit or PDF_DEFAULT_LIMIT), PDF_MAX_LIMIT))
+    truncated = max(0, len(rows) - cap)
+    rows = rows[:cap]
+
+    # План подсортировки: полный список размеров берём из карточки WB, а
+    # скорость — за длинное окно. По окну спроса (30 дн) размеры без продаж
+    # получают цель 0 и выпадают, хотя остатков на них может не быть вовсе.
+    plan = replenish_service.wb_sorting_plan(
+        db, to_, target_days=target_days,
+        articles=[r.get("article") for r in rows],
+    )
+
+    # Дальше идёт только CPU-работа (обход фото, ReportLab) — она занимает
+    # секунды-двадцать. Соединение из пула (5 + overflow 10) держим ровно
+    # столько, сколько нужно БД: иначе несколько открытых PDF занимают весь
+    # пул, и обычные запросы вроде «Применить» встают в 30-секундную очередь
+    # pool_timeout. Дальше db не используется, close() в get_db идемпотентен.
+    db.close()
+
+    # Размеры по артикулу: в карточке это блок «размер / наличие / дослать».
+    sizes_by_article: dict[str, list[dict]] = {
+        art: v["sizes"] for art, v in plan.items() if v["sizes"]
+    }
+
+    want_photos = bool(with_photos) and photo_count > 0
+    n_photos = max(0, min(int(photo_count or 0), PDF_MAX_PHOTOS)) if want_photos else 0
+
+    index = photos_service.get_index()
+    if want_photos and rows and not index.root.is_dir():
+        raise HTTPException(
+            400,
+            f"Папка с фотографиями не найдена: {index.root}. "
+            "Укажите путь в настройке PHOTOS_ROOT.",
+        )
+    jobs: list = []
+    if want_photos and rows:
+        tasks = []
+        for i, r in enumerate(rows):
+            paths = index.find(r.get("article") or "", n_photos)
+            for p in paths:
+                tasks.append((i, p))
+        results: dict[tuple[int, str], bytes] = {}
+        if tasks:
+            with ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 4))) as pool:
+                futures = {
+                    pool.submit(thumbs_service.thumb_bytes, p): (i, p) for i, p in tasks
+                }
+                for fut in as_completed(futures):
+                    idx, path = futures[fut]
+                    try:
+                        data = fut.result()
+                    except Exception:
+                        data = None
+                    if data:
+                        results[(idx, str(path))] = data
+        buckets: dict[int, list[bytes]] = {i: [] for i in range(len(rows))}
+        for (i, path), data in sorted(results.items(), key=lambda kv: kv[0]):
+            buckets[i].append(data)
+        for i, r in enumerate(rows):
+            jobs.append((r, sizes_by_article.get(str(r.get("article") or "").strip().upper(), []),
+                         buckets.get(i, [])))
+    else:
+        jobs = [
+            (r, sizes_by_article.get(str(r.get("article") or "").strip().upper(), []), [])
+            for r in rows
+        ]
+
+    # Только колонки из карты экспорта — иначе в подписи останется сырой ключ.
+    wanted = [k for k in (cols or "").split(",") if k in _REPLENISH_EXPORT]
+    if not wanted:
+        wanted = ["name", "need_buy", "demand", "status_label"]
+
+    pdf = pdf_demand.build_demand_pdf(
+        jobs,
+        cols=wanted,
+        labels=_REPLENISH_EXPORT,
+        with_photos=want_photos,
+        photo_count=n_photos or PDF_MAX_PHOTOS,
+        subtitle=(
+            f"{from_:%d.%m.%Y} — {to_:%d.%m.%Y} · запас {int(target_days or 0)} дн"
+            f" · скорость по {replenish_service.WB_SORT_VELOCITY_DAYS} дн · WB"
+        ),
+    )
+    hits = sum(1 for _, _, t in jobs if t)
+    fname = f"potrebnost_{from_:%Y-%m-%d}_{to_:%Y-%m-%d}.pdf"
+    return Response(
+        content=pdf,
+        media_type=PDF_MEDIA,
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "X-Count": str(len(jobs)),
+            "X-Photo-Hits": str(hits),
+            "X-Truncated": str(truncated),
+        },
     )
 
 

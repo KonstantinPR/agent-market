@@ -1806,8 +1806,12 @@ def upsert_price_snapshots(db, df: pd.DataFrame) -> int:
     ins = insert(models.PriceSnapshot)
     stmt = ins.on_conflict_do_update(
         index_elements=["article", "size"],
+        # updated_at обязателен: onupdate=func.now() не срабатывает на
+        # executemany-апсерте, и без него снимок навсегда остаётся «старым»
+        # (расчёт автопилота показывает по нему актуальность цен).
         set_={c: ins.excluded[c]
-              for c in ["nm_id", "price", "discounted_price", "discount"]},
+              for c in ["nm_id", "price", "discounted_price", "discount"]}
+        | {"updated_at": func.now()},
     )
     db.execute(stmt, values)
     db.commit()

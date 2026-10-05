@@ -47,7 +47,8 @@ const sandbox = {
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(APP_PATH, "utf8"), sandbox);
 
-const { fmt, fmtMoney, fmtFloat, fmtPct, cls, qs, writeDbStorage, setWriteDbStorage } = sandbox;
+const { fmt, fmtMoney, fmtFloat, fmtPct, cls, qs, writeDbStorage, setWriteDbStorage,
+        pricingAgeText } = sandbox;
 
 const norm = (s) => s.replace(/[\u202F\u00A0]/g, " ");
 assert.strictEqual(norm(fmt(1234)), "1 234", "fmt thousand separator");
@@ -212,6 +213,29 @@ clearStatus();
 assert.strictEqual(headerEl.textContent, "", "clearStatus очищает строку");
 assert.ok(!("tip" in headerEl.dataset), "clearStatus убирает data-tip");
 
+// Регрессия T-31: normalizeStatus обязан сходиться. Обрезка даёт
+// HEADER_MSG_MAX + 1 символ, то есть снова проходит проверку
+// s.length > HEADER_MSG_MAX, и MutationObserver на #headerMsg будит
+// normalizeStatus снова и снова. Так зависал главный поток на вкладке
+// «Наш склад → Потребность в товаре» — единственном разделе, где статус
+// длиннее 150 символов: страница отвечала «не отвечает, ждать дальше».
+const { normalizeStatus } = sandbox;
+headerEl.textContent = long;
+let passes = 0;
+let prev = null;
+while (passes < 10) {
+  normalizeStatus();
+  passes++;
+  if (headerEl.textContent === prev) break;
+  prev = headerEl.textContent;
+}
+assert.ok(passes <= 2, "normalizeStatus должен сойтись за один проход, крутился " + passes + " раз");
+assert.strictEqual(headerEl.textContent.length, 151,
+  "статус должен быть 150 символов + многоточие");
+assert.strictEqual(headerEl.dataset.tip, long,
+  "повторный проход не затирает подсказку обрезанным текстом");
+clearStatus();
+
 // Пустой результат объясняется фактами, а не зашитыми датами.
 assert.ok(!jsSrc.includes("период с данными: 2026-02-21"),
           "в app.js не должно быть зашитого периода в тексте пустого раздела");
@@ -227,6 +251,14 @@ assert.ok(/в базе покрыто 2026-02-21 … 2026-08-30/.test(ozEmptyRea
           "в тексте должно быть покрытие базы: " + ozEmptyReason(covered));
 assert.ok(/размещения Ozon/.test(emptyPeriodReason({ window: win, detail_range: cover }, "размещения Ozon", "Х")),
           "emptyPeriodReason должен называть раздел и брать подсказку");
+
+// Актуальность снимка цен WB: расчёт идёт по базе, плашка показывает её свежесть.
+assert.strictEqual(pricingAgeText(0.5), "30 мин", "полчаса -> минуты");
+assert.strictEqual(pricingAgeText(5), "5 ч", "часы");
+assert.strictEqual(pricingAgeText(72), "3 дн", "сутки");
+assert.ok(htmlSrc.includes('id="pricingPricesAge"'), "в index.html есть плашка актуальности цен");
+assert.ok(htmlSrc.includes('id="pricingPriceRefresh"'), "в index.html есть кнопка обновления цен");
+assert.ok(jsSrc.includes("/api/wb/prices"), "кнопка зовёт существующий эндпоинт цен");
 
 console.log("JS_TESTS_OK");
 """
