@@ -87,35 +87,14 @@
 - [T-36] (low) Тесты: 3 падения Ozon, зависящих от порядка прогонов
     > Тело: tests/api/test_endpoints.py::test_ozon_empty_views_report_window_and_coverage, ::test_margin_ozon_detail_view, ::test_margin_ozon_detail_by_size_view — по отдельности проходят, в полном прогоне падают. Похоже на общий стейт БД между тестами (fixtures не изолируют окно/покрытие). Нужен xdist/фикстура на транзакцию либо явная очистка.
 
+- [T-15] (medium) Автопилот цен WB: минимальная цена WB
+  > где: провайдер get_recommended_prices() (GET /public/v1/info/price)
+  > состояние: не реализовано, min_price в pricing.py отсутствует
+  > нужно: clamp target_vis ≥ max(floor_price, min_price) + блок apply без цен
+
 ## В работе
 
-- [T-12] (high) Автопилот цен WB: UI по эталону «Детализация Продаж WB»
-  > Тело: тулбар msg/tip/поиск/«Пересчитать»/pager/«Вид таблицы»/«Экспорт
-  > в Excel»/«Загрузить на диск»; кнопка «Применить в WB» (disabled-заглушка
-  > до T-16); colView base+optional как в margin-detail; подсказка-тип.
-
-- [T-13] (high) Автопилот цен WB: обогащение данных (воронка + детализация)
-  > Тело: recommendations() принимает date_from/date_to (шапка) + фолбэк
-  > window_days; джойн полного среза funnel_metric (рейтинги, выкупы,
-  > отмены ₽, конверсии, вишлисты, share/avg_orders_per_day, stock_wb/mp) и
-  > фактических денег из wb_detail_rows через margin_service (return_rate,
-  > margin_pct, commission/logistics/storage_per_one, income/revenue_per_one);
-  > новые колонки + экспорт + totals.
-
-- [T-14] (medium) Автопилот цен WB: модель решений — модуляторы R1–R10
-  > Тело: rating_min, buyout_min_pct, cancel_ratio_max, отд. возвраты из
-  > детализации; cap/блок RAISE при низком рейтинге/выкупе/высокой доле
-  > отмен; смелее RAISE при высоких выкупах+рейтинге+марже; новые настройки
-  > в PRICING_DEFAULTS + labels/hints; юнит-тесты.
-
-- [T-15] (medium) Автопилот цен WB: минимальная цена WB
-  > Тело: провайдер get_recommended_prices() (GET /public/v1/info/price,
-  > live-проба схемы), clamp target_vis ≥ max(floor_price, min_price),
-  > колонка min_price; при отсутствии мин. цен — apply заблокирован.
-
-- [T-16] (medium) Автопилот цен WB: кнопка «Применить скидки в WB»
-  > Тело: confirm-диалог + POST /api/pricing/apply (даты+настройки), результат
-  > в pricingMsg, журнал/cooldown; обновить подсказку «изменения НЕ вносятся».
+_(пусто)_
 
 ## Заблокированные
 
@@ -135,6 +114,11 @@
     > где: реализация и тесты в `stash@{0}` (R11 razgruzka akciyami WB), не применены
   > нужно: решение владельца — продолжать или закрыть как неактуальное
   > побочно: валит `test_export_contains_promo_columns` (помечен xfail)
+
+- [T-16] (medium) Автопилот цен WB: кнопка «Применить скидки в WB»
+  > где: кнопка `pricingApply` в интерфейсе, backend `POST /api/pricing/apply`
+  > состояние: кнопка disabled, ждёт токен WB API (blocking — нужен доступ)
+  > нужно: включить apply при валидном токене WB
 
 ## Закрытые
 
@@ -214,4 +198,10 @@
 - [T-31] (closed) Потребность в товаре: выгрузка в PDF с фотографиями товара — ссылка на коммит `bc4a8d2`
 
 - [T-33] (closed) План подсортировки WB: окно скорости 180 дней, размеры из карточки товара — ссылка на коммит `bc4a8d2`
+
+- [T-12] (declined) Автопилот цен WB: UI по эталону «Детализация Продаж WB»
+
+- [T-13] (declined) Автопилот цен WB: обогащение данных (воронка + детализация)
+
+- [T-14] (declined) Автопилот цен WB: модель решений — модуляторы R1–R10
 
