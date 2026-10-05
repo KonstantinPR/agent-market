@@ -88,6 +88,18 @@ venv\Scripts\python.exe app\main.py   # http://127.0.0.1:8000
 `scripts/load_sample.py` (демо-данные). Ключи API — в `.env` (см. `.env.example`
 при наличии). `.env` в git не коммитится.
 
+## Как устроен код
+
+Слои, точки входа, «запутанные места» и верные команды для тикетов —
+в [docs/architecture.md](docs/architecture.md). Остальные документы:
+
+- [docs/autopilot.md](docs/autopilot.md) — правила и логика автопилота цен WB;
+- [docs/research-ozon-artikel-grouping.md](docs/research-ozon-artikel-grouping.md)
+  — группировка артикулоразмеров Ozon;
+- [docs/research-ozon-card-sizes.md](docs/research-ozon-card-sizes.md)
+  — почему у карточек Ozon пустой размер;
+- `TICKETS.md` — очередь задач проекта.
+
 ## Разработка
 
 ### Git (только локальный)
@@ -98,8 +110,16 @@ git add -A
 git commit -m "Initial commit"
 ```
 
-Ветка `master`, история хранится локально. В `.gitignore` исключены
+Ветка `main`, история хранится локально. В `.gitignore` исключены
 `.env`, `venv/`, `data/`, `.pytest_cache/`, `.coverage`, `htmlcov/`, `*.log`.
+
+Работа идёт через тикеты (`TICKETS.md`): номер выдаёт git-ветка
+`t-<N>-<слаг>`, а подробности — в [docs/](docs/). Проверка перед коммитом:
+
+```powershell
+venv\Scripts\python.exe -m app.services.tickets validate   # exit 1 = проблемы
+venv\Scripts\python.exe -m app.services.tickets report     # сводка по задачам
+```
 
 ### Тесты
 
