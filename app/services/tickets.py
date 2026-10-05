@@ -7,8 +7,10 @@
 """
 
 import re
+import subprocess
 import threading
 from pathlib import Path
+from typing import Optional
 
 from app.config import BASE_DIR
 
@@ -31,6 +33,98 @@ _TICKET_HEAD = re.compile(r"^- \[([^\]]+)\] \(([a-z]+)\)(.*)$")
 
 _LABEL = {key: name for name, key in SECTIONS}
 
+# Метка из имени ветки: t-<N>-<слаг> -> T-<N>. Ветка уникальна по природе git,
+# поэтому номер, взятый из неё, не может достаться двум агентам одновременно —
+# в отличие от общего счётчика в TICKETS.md, за который все правят одну строку.
+_BRANCH_RE = re.compile(r"^t-(\d+)(?:-[a-z0-9][a-z0-9._-]*)?$", re.IGNORECASE)
+
+
+def branch_ticket_id(branch: Optional[str] = None) -> Optional[str]:
+    """Извлечь метку тикета из имени ветки. None, если ветка не о тикете.
+
+    `t-42` и `t-42-cenyi-wb` -> `T-42`; `main`, `t-abc` -> None.
+    """
+    if branch is None:
+        branch = current_branch()
+    if not branch:
+        return None
+    b = branch.strip()
+    if "/" in b:  # допускаем префиксы вида `agent/t-42-...`
+        b = b.rsplit("/", 1)[-1]
+    m = _BRANCH_RE.match(b)
+    return f"T-{m.group(1)}" if m else None
+
+
+def current_branch(cwd=None) -> Optional[str]:
+    """Текущая ветка git или None (не git-репозиторий / git недоступен)."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=10, cwd=str(cwd) if cwd else None,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    b = r.stdout.strip()
+    return b if b and b != "HEAD" else None
+
+
+def validate(path=None) -> list:
+    """Проверить целостность TICKETS.md. Возвращает список проблем (пусто = всё в порядке).
+
+    Ловит то, что при параллельной работе случается тихо и незаметно:
+    - одну метку в двух разделах сразу (классический конфликт двух агентов);
+    - счётчик, который не совпадает с реально занятыми метками;
+    - метку в несуществующем/перепутанном разделе.
+    """
+    p = _path(path)
+    if not p.exists():
+        return [f"файл не найден: {p}"]
+    info = _load(p)
+    problems = []
+
+    seen = {}
+    for seg in info["segs"]:
+        _hdr, key, blocks = seg
+        for b in blocks:
+            seen.setdefault(b["id"], []).append(key)
+
+    for tid, keys in sorted(seen.items(), key=lambda kv: _sort_key(kv[0])):
+        if len(keys) > 1:
+            where = ", ".join(f"«{_LABEL[k]}»" for k in keys)
+            problems.append(
+                f"метка {tid} встречается {len(keys)} раза ({where}) — "
+                f"тикет должен быть ровно в одном разделе"
+            )
+
+    ids = [int(m.group(1)) for m in (_TICKET_NUM.match(t) for t in seen) if m]
+    if info["counter"] is None:
+        problems.append("не найдена строка счётчика")
+    elif ids:
+        want = max(ids) + 1
+        if info["counter"] < want:
+            problems.append(
+                f"счётчик T-{info['counter']} меньше занятой метки T-{want} — "
+                f"номер будет выдан повторно"
+            )
+
+    for key, blocks in ((k, _section_blocks(info, k)) for _n, k in SECTIONS):
+        for b in blocks:
+            if key == "closed" and b["marker"] not in ("closed", "declined"):
+                problems.append(f"{b['id']}: в «Закрытые» без пометки (closed/declined)")
+            if key != "closed" and b["marker"] in ("closed", "declined"):
+                problems.append(f"{b['id']}: помечен {b['marker']}, но лежит в «{_LABEL[key]}»")
+    return problems
+
+
+def _sort_key(tid: str):
+    m = _TICKET_NUM.match(tid)
+    return (0, int(m.group(1))) if m else (1, tid)
+
+
+_TICKET_NUM = re.compile(r"^T-(\d+)$")
+
 BOOTSTRAP = """# Тикеты — agent_market
 
 Единая очередь задач проекта. Каждый тикет — это задача, которую нужно
@@ -44,14 +138,28 @@ BOOTSTRAP = """# Тикеты — agent_market
 
 - Метка тикета `T-<N>` — монотонный набор. Новый номер = из шапки счётчика,
   после выдачи счётчик увеличивается на 1.
+- **Параллельная работа (несколько агентов одновременно).** Номер выдаётся
+  НЕ из счётчика, а из имени ветки: сначала создай ветку `t-<N>-<слаг>`
+  (`git switch -c t-32-cenyi-wb`), затем заведи тикет — метка `T-32` возьмётся
+  из ветки. Имя ветки уникально по природе git, поэтому два агента не получат
+  один номер. Ветку `main` для новой работы не используй.
+- Счётчик — это «страховка от повторов», а не источник номера. Он всё равно
+  подтягивается вперёд, поэтому поднять его руками не нужно: если он отстал,
+  `validate()` это покажет.
+- Целостность файла проверяет `validate()`: одна метка в двух разделах,
+  счётчик меньше занятой метки, метка в неправильном разделе.
 - Приоритет: `low | medium | high`. Чем выше приоритет, тем раньше берётся.
 - Состояние тикета определяется разделом, в котором он лежит:
-  - `## Открытые` — в очереди, можно брать;
-  - `## В работе` — активные тикеты (может быть несколько);
-  - `## Заблокированные` — ждёт внешних данных/доступа/решения от владельца
+  - «Открытые» — в очереди, можно брать;
+  - «В работе» — активные тикеты (может быть несколько);
+  - «Заблокированные» — ждёт внешних данных/доступа/решения от владельца
     (в теле — короткое описание, что именно нужно);
-  - `## Закрытые` — выполненные и отклонённые (отклонённый — с пометкой
+  - «Закрытые» — выполненные и отклонённые (отклонённый — с пометкой
     `(declined)` в заголовке записи).
+  Названия разделов здесь записаны без символа заголовка, чтобы каждая
+  строка-заголовок раздела встречалась в файле ровно один раз — иначе
+  правка по подстроке (`replace` по имени раздела) бьёт по этому же
+  списку, а не по самому разделу.
 - Формат записи тикета:
   ```markdown
   - [T-3] (high) Заголовок
@@ -263,8 +371,14 @@ def load(path=None) -> dict:
     return {"counter": info["counter"], "missing": False, "sections": out}
 
 
-def create(title: str, body: str = "", priority: str = "medium", path=None) -> dict:
-    """Создаёт тикет в «Открытые», назначает номер по счётчику."""
+def create(title: str, body: str = "", priority: str = "medium", path=None,
+           branch: Optional[str] = None) -> dict:
+    """Создаёт тикет в «Открытые», назначает номер по счётчику.
+
+    Если текущая ветка — `t-<N>-<слаг>`, метка берётся из неё, а не из
+    счётчика: номер уже занят этой веткой, её не сможет создать второй агент.
+    Счётчик при этом всё равно подтягивается вперёд, чтобы не выдать его снова.
+    """
     p = _path(path)
     title = (title or "").strip()
     if not title:
@@ -279,7 +393,13 @@ def create(title: str, body: str = "", priority: str = "medium", path=None) -> d
         if info["counter"] is None:
             raise TicketError("Не найдена строка счётчика в TICKETS.md")
         n = info["counter"]
-        tid = f"T-{n}"
+        tid = branch_ticket_id(branch) or f"T-{n}"
+        if _find(info, tid)[1] is not None:
+            raise TicketError(
+                f"Метка {tid} уже занята (из ветки {branch or current_branch()!r}). "
+                f"Переименуйте ветку или заведите тикет без неё.", 409)
+        if _TICKET_NUM.match(tid) and int(_TICKET_NUM.match(tid).group(1)) >= n:
+            n = int(_TICKET_NUM.match(tid).group(1))
         raw = [f"- [{tid}] ({priority}) {title}"]
         for line in str(body).split("\n"):
             s = line.strip()
@@ -361,3 +481,30 @@ def decline(tid: str, path=None) -> dict:
 def reopen(tid: str, path=None) -> dict:
     return _move(tid, ("closed",), "open", path,
                  build=_build_reopen, err_ctx="открыть заново")
+
+
+def _main(argv=None) -> int:
+    import sys
+    argv = list(sys.argv[1:] if argv is None else argv)
+    cmd = argv[0] if argv else "validate"
+    path = Path(argv[1]) if len(argv) > 1 else None
+    if cmd == "validate":
+        problems = validate(path)
+        if not problems:
+            print(f"OK: {_path(path)} — метки уникальны, счётчик согласован")
+            return 0
+        print(f"Проблем в {_path(path)}: {len(problems)}")
+        for x in problems:
+            print("  -", x)
+        return 1
+    if cmd == "branch":
+        b = argv[1] if len(argv) > 1 else current_branch()
+        tid = branch_ticket_id(b)
+        print(tid or f"ветка {b!r} не о тикете (нужна t-<N>-<слаг>)")
+        return 0 if tid else 1
+    print(__doc__ or "usage: validate [path] | branch [имя-ветки]")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

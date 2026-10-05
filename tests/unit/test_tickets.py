@@ -194,3 +194,110 @@ def test_existing_raw_body_indent_kept(tfile):
     t.start("T-1", path=tfile)
     d = t.load(tfile)
     assert d["sections"]["in_progress"][0]["body"] == "одна\nдве"
+
+
+# ------------------------------------------------------- параллельная работа
+
+def test_branch_ticket_id_parsing():
+    assert t.branch_ticket_id("t-42") == "T-42"
+    assert t.branch_ticket_id("t-42-cenyi-wb") == "T-42"
+    assert t.branch_ticket_id("T-7-photos") == "T-7"
+    assert t.branch_ticket_id("agent/t-99-a") == "T-99"
+    for b in ("main", "t-abc", "feature/x", "", None):
+        assert t.branch_ticket_id(b) is None
+
+
+def test_create_takes_id_from_branch_not_counter(tfile):
+    """Два агента на ветках t-7-* и t-8-* не получают одну метку."""
+    a = t.create("A", path=tfile, branch="t-7-a")
+    b = t.create("B", path=tfile, branch="t-8-b")
+    assert (a["id"], b["id"]) == ("T-7", "T-8")
+    # счётчик подтянут вперёд, чтобы эти метки не выдались снова
+    assert t.load(tfile)["counter"] == 9
+
+
+def test_create_branch_id_beyond_counter_jumps_counter(tfile):
+    t.create("A", path=tfile, branch="t-40-razdal")
+    assert t.load(tfile)["counter"] == 41
+
+
+def test_create_refuses_taken_branch_id(tfile):
+    t.create("A", path=tfile, branch="t-7-a")
+    with pytest.raises(t.TicketError):
+        t.create("B", path=tfile, branch="t-7-b")  # метка T-7 уже занята
+
+
+def test_create_without_branch_uses_counter(tfile):
+    assert t.create("A", path=tfile, branch="main")["id"] == "T-1"
+
+
+# ------------------------------------------------------------------ validate
+
+def test_validate_clean_file(tfile):
+    t.create("A", path=tfile)
+    t.create("B", path=tfile)
+    assert t.validate(tfile) == []
+
+
+def _dup_into_progress(p):
+    """Ручная правка параллельного агента: тот же T-1 попал в «В работе»."""
+    text = p.read_text(encoding="utf-8")
+    p.write_text(text.replace("## В работе\n", "## В работе\n- [T-1] (high) A\n", 1),
+                 encoding="utf-8")
+
+
+def test_validate_flags_duplicate_label(tfile):
+    """Главный сценарий параллельной работы: метка в двух разделах."""
+    t.create("A", path=tfile)
+    _dup_into_progress(tfile)
+    problems = t.validate(tfile)
+    assert any("T-1" in p and "2 раза" in p for p in problems)
+
+
+def test_validate_flags_counter_behind_used_label(tfile):
+    t.create("A", path=tfile, branch="t-40-razdal")
+    tfile.write_text(_text(tfile).replace("`T-41`", "`T-2`"), encoding="utf-8")
+    assert any("счётчик" in p for p in t.validate(tfile))
+
+
+def test_validate_flags_marker_in_wrong_section(tfile):
+    t.create("A", path=tfile)
+    tfile.write_text(_text(tfile).replace("- [T-1] (medium) A", "- [T-1] (closed) A", 1),
+                     encoding="utf-8")
+    problems = t.validate(tfile)
+    assert any("T-1" in p and "Открытые" in p for p in problems)
+
+
+def test_validate_flags_missing_file(tmp_path):
+    assert t.validate(tmp_path / "nope.md")
+
+
+def test_cli_validate_exit_codes(tfile, capsys):
+    assert t._main(["validate", str(tfile)]) == 0
+    _dup_into_progress(tfile)
+    assert t._main(["validate", str(tfile)]) == 1
+
+
+def test_cli_branch(tfile, capsys):
+    assert t._main(["branch", "t-42-cenyi"]) == 0
+    assert "T-42" in capsys.readouterr().out
+    assert t._main(["branch", "main"]) == 1
+
+
+# ------------------------------------------------------- боевой TICKETS.md
+
+def test_repo_tickets_md_is_valid():
+    """Метки в реальном файле уникальны, счётчик не отстаёт.
+
+    Страхует от тихой порчи при параллельных правках: раньше в файле
+    накопились копии закрытых тикетов в «Открытые» и две разные T-13.
+    """
+    problems = t.validate()
+    assert problems == [], "TICKETS.md повреждён:\n" + "\n".join(problems)
+
+
+def test_repo_counter_is_free():
+    """Счётчик не выдаёт уже занятую метку."""
+    d = t.load()
+    ids = {x["id"] for blocks in d["sections"].values() for x in blocks}
+    assert f"T-{d['counter']}" not in ids
