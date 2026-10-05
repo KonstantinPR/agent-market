@@ -1,6 +1,7 @@
 """Юнит-тесты сервиса тикетов (файл TICKETS.md)."""
 
 import re
+import subprocess
 
 import pytest
 
@@ -36,19 +37,35 @@ def test_load_missing_file(tmp_path):
     p = tmp_path / "nothere.md"
     d = t.load(p)
     assert d["missing"] is True
-    assert d["counter"] is None
+    assert d["counter"] == 1
 
 
 # ------------------------------------------------------------------ создание
 
-def test_create_assigns_number_and_bumps_counter(tfile):
+def test_create_assigns_number_from_used_labels(tfile):
     t.create("Сделать X", "тело", "high", path=tfile)
     assert _text(tfile).count("[T-1]") == 1
-    assert re.search(r"`T-2`", _text(tfile))
     d = t.load(tfile)
     assert _ids(d, "open") == ["T-1"]
     assert d["counter"] == 2
     assert d["sections"]["open"][0]["priority"] == "high"
+
+
+def test_counter_is_computed_not_stored(tfile):
+    """В файле нет строки счётчика — метка считается по занятым номерам."""
+    t.create("Сделать X", path=tfile)
+    txt = _text(tfile)
+    assert "Счётчик:" not in txt
+    assert "счётчик увеличивается" not in txt
+    assert t.next_label(t._load(tfile)) == "T-2"
+
+
+def test_next_label_uses_max_not_length(tfile):
+    tfile.write_text(_text(tfile).replace(
+        "## Открытые\n\n_(пусто)_",
+        "## Открытые\n\n- [T-5] (low) A\n- [T-90] (low) B", 1), encoding="utf-8")
+    assert t.next_label(t._load(tfile)) == "T-91"
+    assert t.create("C", path=tfile)["id"] == "T-91"
 
 
 def test_create_multiline_body_roundtrip(tfile):
@@ -212,11 +229,10 @@ def test_create_takes_id_from_branch_not_counter(tfile):
     a = t.create("A", path=tfile, branch="t-7-a")
     b = t.create("B", path=tfile, branch="t-8-b")
     assert (a["id"], b["id"]) == ("T-7", "T-8")
-    # счётчик подтянут вперёд, чтобы эти метки не выдались снова
     assert t.load(tfile)["counter"] == 9
 
 
-def test_create_branch_id_beyond_counter_jumps_counter(tfile):
+def test_create_branch_id_beyond_used_jumps_next(tfile):
     t.create("A", path=tfile, branch="t-40-razdal")
     assert t.load(tfile)["counter"] == 41
 
@@ -227,7 +243,7 @@ def test_create_refuses_taken_branch_id(tfile):
         t.create("B", path=tfile, branch="t-7-b")  # метка T-7 уже занята
 
 
-def test_create_without_branch_uses_counter(tfile):
+def test_create_without_branch_uses_max_plus_one(tfile):
     assert t.create("A", path=tfile, branch="main")["id"] == "T-1"
 
 
@@ -254,10 +270,57 @@ def test_validate_flags_duplicate_label(tfile):
     assert any("T-1" in p and "2 раза" in p for p in problems)
 
 
-def test_validate_flags_counter_behind_used_label(tfile):
-    t.create("A", path=tfile, branch="t-40-razdal")
-    tfile.write_text(_text(tfile).replace("`T-41`", "`T-2`"), encoding="utf-8")
-    assert any("счётчик" in p for p in t.validate(tfile))
+def _git_repo(tmp_path, name):
+    """Пустой git-репозиторий с одним коммитом — иначе `git branch` не работает."""
+    repo = tmp_path / name
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "seed.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True)
+    return repo
+
+
+def test_validate_flags_in_progress_without_branch(tmp_path, monkeypatch):
+    """Агент взял тикет и пропал — по файлу раньше это не было видно."""
+    repo = _git_repo(tmp_path, "repo")
+    monkeypatch.chdir(repo)
+    p = repo / "TICKETS.md"
+    p.write_text(t.BOOTSTRAP, encoding="utf-8")
+    t.create("A", path=p)
+    t.start("T-1", path=p)
+    problems = t.validate(p, check_branches=True)
+    assert any("T-1" in x and "В работе" in x and "ветк" in x for x in problems)
+
+
+def test_validate_branch_check_passes_with_branch(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path, "repo2")
+    monkeypatch.chdir(repo)
+    p = repo / "TICKETS.md"
+    p.write_text(t.BOOTSTRAP, encoding="utf-8")
+    t.create("A", path=p)
+    t.start("T-1", path=p)
+    subprocess.run(["git", "-C", str(repo), "branch", "t-1-a"], check=True)
+    assert t.validate(p, check_branches=True) == []
+
+
+def test_validate_branch_check_skippable(tfile):
+    t.create("A", path=tfile)
+    t.start("T-1", path=tfile)
+    assert t.validate(tfile, check_branches=False) == []
+
+
+def test_report_summarizes_sections_with_commits(tfile):
+    t.create("A", "тело", path=tfile)
+    t.start("T-1", path=tfile)
+    t.close("T-1", commit="abcdef1234", path=tfile)
+    out = t.report(tfile)
+    assert "## Открытые (0)" in out
+    assert "## В работе (0)" in out
+    assert "## Закрытые (1)" in out
+    assert "abcdef1" in out
 
 
 def test_validate_flags_marker_in_wrong_section(tfile):
@@ -274,7 +337,9 @@ def test_validate_flags_missing_file(tmp_path):
 
 def test_cli_validate_exit_codes(tfile, capsys):
     assert t._main(["validate", str(tfile)]) == 0
-    _dup_into_progress(tfile)
+    t.create("A", path=tfile)
+    assert t._main(["validate", str(tfile)]) == 0
+    _dup_into_progress(tfile)  # метка T-1 теперь в двух разделах
     assert t._main(["validate", str(tfile)]) == 1
 
 
@@ -284,10 +349,16 @@ def test_cli_branch(tfile, capsys):
     assert t._main(["branch", "main"]) == 1
 
 
+def test_cli_report(tfile, capsys):
+    assert t._main(["report", str(tfile)]) == 0
+    assert "## Открытые (0)" in capsys.readouterr().out
+
+
 # ------------------------------------------------------- боевой TICKETS.md
 
 def test_repo_tickets_md_is_valid():
-    """Метки в реальном файле уникальны, счётчик не отстаёт.
+    """Метки в реальном файле уникальны, пометки соответствуют разделам,
+    а у каждого тикета в «В работе» есть ветка.
 
     Страхует от тихой порчи при параллельных правках: раньше в файле
     накопились копии закрытых тикетов в «Открытые» и две разные T-13.
@@ -297,7 +368,15 @@ def test_repo_tickets_md_is_valid():
 
 
 def test_repo_counter_is_free():
-    """Счётчик не выдаёт уже занятую метку."""
+    """Вычисленный счётчик не выдаёт уже занятую метку."""
     d = t.load()
     ids = {x["id"] for blocks in d["sections"].values() for x in blocks}
     assert f"T-{d['counter']}" not in ids
+
+
+def test_repo_tickets_md_has_no_counter_line():
+    """Счётчика в файле нет — единственный источник номера это git."""
+    from app.services.tickets import TICKETS_FILE
+    txt = TICKETS_FILE.read_text(encoding="utf-8")
+    assert "Счётчик:" not in txt
+    assert "счётчик увеличивается" not in txt

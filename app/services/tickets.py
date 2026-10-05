@@ -1,9 +1,13 @@
 """Очередь тикетов: файл TICKETS.md — единый источник правды.
 
 Тот же файл читают и правят агенты/человек вручную, поэтому мутации
-затрагивают только строку счётчика и тела четырёх секций тикетов
+затрагивают только тела четырёх секций тикетов
 (Открытые / В работе / Заблокированные / Закрытые). Всё остальное
 (шапка, правила, служебные секции) остаётся байт-в-байт.
+
+Номера в файле не хранятся: метка выводится из имени git-ветки, а свободный
+номер считается как max+1 по уже занятым меткам. Поэтому второго источника
+правды нет, и переписывание одной строки не может рассинхронизировать файл.
 """
 
 import re
@@ -27,9 +31,9 @@ SECTIONS = [
 PRIORITIES = {"low", "medium", "high"}
 _PLACEHOLDER = "_(пусто)_"
 
-_COUNTER_TICK = re.compile(r"`T-(\d+)`")
 _COMMIT_SUFFIX = re.compile(r"\s*—\s*ссылка на коммит `([^`]*)`$")
 _TICKET_HEAD = re.compile(r"^- \[([^\]]+)\] \(([a-z]+)\)(.*)$")
+_TICKET_NUM = re.compile(r"^T-(\d+)$")
 
 _LABEL = {key: name for name, key in SECTIONS}
 
@@ -37,6 +41,14 @@ _LABEL = {key: name for name, key in SECTIONS}
 # поэтому номер, взятый из неё, не может достаться двум агентам одновременно —
 # в отличие от общего счётчика в TICKETS.md, за который все правят одну строку.
 _BRANCH_RE = re.compile(r"^t-(\d+)(?:-[a-z0-9][a-z0-9._-]*)?$", re.IGNORECASE)
+
+
+def next_label(info: dict) -> str:
+    """Свободная метка = max(занятые) + 1. Хранится только в ветке."""
+    nums = [int(m.group(1)) for m in
+            (_TICKET_NUM.match(b["id"]) for _h, _k, blocks in info["segs"]
+             for b in blocks) if m]
+    return f"T-{max(nums) + 1 if nums else 1}"
 
 
 def branch_ticket_id(branch: Optional[str] = None) -> Optional[str]:
@@ -70,13 +82,36 @@ def current_branch(cwd=None) -> Optional[str]:
     return b if b and b != "HEAD" else None
 
 
-def validate(path=None) -> list:
+def ticket_branches(cwd=None) -> Optional[set]:
+    """Номера тикетов, для которых в git есть ветка `t-<N>-*`.
+
+    None — git недоступен (не репозиторий/ошибка), тогда проверку веток
+    пропускаем. Пустое множество означает «веток t-N нет», и это уже проблема.
+    """
+    try:
+        r = subprocess.run(["git", "branch", "--list"], capture_output=True,
+                           text=True, timeout=15,
+                           cwd=str(cwd) if cwd else None)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    out = set()
+    for ln in r.stdout.splitlines():
+        tid = branch_ticket_id(ln.strip().lstrip("* ").strip())
+        if tid:
+            out.add(tid)
+    return out
+
+
+def validate(path=None, check_branches: bool = False) -> list:
     """Проверить целостность TICKETS.md. Возвращает список проблем (пусто = всё в порядке).
 
     Ловит то, что при параллельной работе случается тихо и незаметно:
     - одну метку в двух разделах сразу (классический конфликт двух агентов);
-    - счётчик, который не совпадает с реально занятыми метками;
-    - метку в несуществующем/перепутанном разделе.
+    - пометку, не соответствующую разделу;
+    - тикет в «В работе» без ветки `t-<N>-*` — агент не начал или умер,
+      и по файлу это не видно.
     """
     p = _path(path)
     if not p.exists():
@@ -98,23 +133,22 @@ def validate(path=None) -> list:
                 f"тикет должен быть ровно в одном разделе"
             )
 
-    ids = [int(m.group(1)) for m in (_TICKET_NUM.match(t) for t in seen) if m]
-    if info["counter"] is None:
-        problems.append("не найдена строка счётчика")
-    elif ids:
-        want = max(ids) + 1
-        if info["counter"] < want:
-            problems.append(
-                f"счётчик T-{info['counter']} меньше занятой метки T-{want} — "
-                f"номер будет выдан повторно"
-            )
-
     for key, blocks in ((k, _section_blocks(info, k)) for _n, k in SECTIONS):
         for b in blocks:
             if key == "closed" and b["marker"] not in ("closed", "declined"):
                 problems.append(f"{b['id']}: в «Закрытые» без пометки (closed/declined)")
             if key != "closed" and b["marker"] in ("closed", "declined"):
                 problems.append(f"{b['id']}: помечен {b['marker']}, но лежит в «{_LABEL[key]}»")
+
+    if check_branches:
+        have = ticket_branches(cwd=p.parent)
+        if have is not None:
+            for b in _section_blocks(info, "in_progress"):
+                if b["id"] not in have:
+                    problems.append(
+                        f"{b['id']}: в «В работе», но ветки t-<N>-* нет — "
+                        f"работа не начата или потеряна"
+                    )
     return problems
 
 
@@ -123,8 +157,6 @@ def _sort_key(tid: str):
     return (0, int(m.group(1))) if m else (1, tid)
 
 
-_TICKET_NUM = re.compile(r"^T-(\d+)$")
-
 BOOTSTRAP = """# Тикеты — agent_market
 
 Единая очередь задач проекта. Каждый тикет — это задача, которую нужно
@@ -132,22 +164,19 @@ BOOTSTRAP = """# Тикеты — agent_market
 номер выдаётся один раз и не переиспользуется, даже если тикет закрыли,
 не начав, или закрыли как неактуальный.
 
-Счётчик: следующая свободная метка — `T-1`.
-
 ## Правила
 
-- Метка тикета `T-<N>` — монотонный набор. Новый номер = из шапки счётчика,
-  после выдачи счётчик увеличивается на 1.
-- **Параллельная работа (несколько агентов одновременно).** Номер выдаётся
-  НЕ из счётчика, а из имени ветки: сначала создай ветку `t-<N>-<слаг>`
-  (`git switch -c t-32-cenyi-wb`), затем заведи тикет — метка `T-32` возьмётся
-  из ветки. Имя ветки уникально по природе git, поэтому два агента не получат
-  один номер. Ветку `main` для новой работы не используй.
-- Счётчик — это «страховка от повторов», а не источник номера. Он всё равно
-  подтягивается вперёд, поэтому поднять его руками не нужно: если он отстал,
-  `validate()` это покажет.
-- Целостность файла проверяет `validate()`: одна метка в двух разделах,
-  счётчик меньше занятой метки, метка в неправильном разделе.
+- Метка тикета `T-<N>` — монотонный набор. Счётчика в файле нет: свободный
+  номер считается как max(занятые)+1, а метка агента берётся из имени ветки.
+- **Параллельная работа (несколько агентов одновременно).** Номер выдаёт git:
+  сначала создай ветку `t-<N>-<слаг>` (`git switch -c t-32-cenyi-wb`), затем
+  заведи тикет — метка `T-32` возьмётся из ветки. Имя ветки уникально по
+  природе git, поэтому два агента не получат один номер. Ветку `main` для
+  новой работы не используй.
+- Создание тикета без ветки (кнопка в веб-приложении) берёт max+1 и годится
+  только когда никто параллельно не заводит тикет, — гонку ловит `validate()`.
+- Целостность файла проверяет `validate()`: метка в двух разделах, пометка не
+  по разделу, «В работе» без ветки.
 - Приоритет: `low | medium | high`. Чем выше приоритет, тем раньше берётся.
 - Состояние тикета определяется разделом, в котором он лежит:
   - «Открытые» — в очереди, можно брать;
@@ -160,22 +189,24 @@ BOOTSTRAP = """# Тикеты — agent_market
   строка-заголовок раздела встречалась в файле ровно один раз — иначе
   правка по подстроке (`replace` по имени раздела) бьёт по этому же
   списку, а не по самому разделу.
-- Формат записи тикета:
+- Тело тикета — до трёх строк, разборы и логика живут в сообщении коммита
+  или в `docs/`, а не здесь:
   ```markdown
   - [T-3] (high) Заголовок
-    > Тело: что сделать, контекст, ссылки на файлы/строки.
+    > где: pricing.resolve_prices(), api.py:рекомендации
+    > состояние: ждёт коммита
   ```
-- Закрытые тикеты хранятся компактно, без тела:
+- Закрытые тикеты хранятся компактно, без тела — навсегда, это история
+  решений проекта:
   ```markdown
   - [T-3] (closed) Заголовок — ссылка на коммит `abc1234`
   ```
 
 ## Как ведётся работа
 
-- Разработка идёт только через тикеты: сначала читается этот файл,
-  берётся открытый тикет с наивысшим приоритетом, переводится
-  в «В работе», затем код + тесты + коммит `T-<N>: описание`.
-- Коммит по закрытию тикета ссылается на его номер: `T-3: ...`.
+- Разработка идёт через тикеты: прочитать файл, взять открытый тикет с
+  наивысшим приоритетом, создать ветку `t-<N>-<слаг>`, перевести тикет
+  в «В работе», затем код + тесты + коммит и закрытие тикета с хешем.
 - Если для тикета нужен токен, доступ или решение — тикет уходит
   в «Заблокированные» с описанием ожидания.
 
@@ -234,16 +265,7 @@ def _parse_block(raw: list) -> dict:
 
 
 def _parse_lines(lines: list) -> dict:
-    """Структурированный вид файла: счётчик + блоки по секциям."""
-    counter = None
-    counter_idx = None
-    for i, ln in enumerate(lines):
-        m = _COUNTER_TICK.search(ln)
-        if m:
-            counter = int(m.group(1))
-            counter_idx = i
-            break
-
+    """Структурированный вид файла: границы секций + блоки тикетов."""
     boundaries = {}
     names = {n for n, _ in SECTIONS}
     for i, ln in enumerate(lines):
@@ -271,7 +293,7 @@ def _parse_lines(lines: list) -> dict:
             else:
                 j += 1
         segs.append([hdr, key, blocks])
-    return {"counter": counter, "counter_idx": counter_idx, "segs": segs}
+    return {"segs": segs}
 
 
 def _render_body(blocks: list) -> list:
@@ -300,13 +322,8 @@ def _render(lines: list, segs: list) -> list:
     return out
 
 
-def _write(path: Path, lines: list, segs: list, set_counter=None):
+def _write(path: Path, lines: list, segs: list):
     out = _render(lines, segs)
-    if set_counter is not None:
-        for i, ln in enumerate(out):
-            if _COUNTER_TICK.search(ln):
-                out[i] = _COUNTER_TICK.sub(lambda m, v=set_counter: f"`T-{v}`", ln, count=1)
-                break
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
@@ -358,26 +375,33 @@ def _ticket_dict(b: dict, key: str) -> dict:
 # ---------------------------------------------------------------- публичный API
 
 def load(path=None) -> dict:
-    """Все тикеты по секциям + текущий счётчик."""
+    """Все тикеты по секциям + вычисленный счётчик (max+1).
+
+    Ключ `counter` остаётся в ответе ради веб-UI, но в файле счётчика нет:
+    значение каждый раз считается по занятым меткам.
+    """
     p = _path(path)
     if not p.exists():
-        return {"counter": None, "missing": True,
+        return {"counter": 1, "missing": True,
                 "sections": {key: [] for _name, key in SECTIONS}}
     with _LOCK:
         info = _load(p)
     out = {}
     for _name, key in SECTIONS:
         out[key] = [_ticket_dict(b, key) for b in _section_blocks(info, key)]
-    return {"counter": info["counter"], "missing": False, "sections": out}
+    label = next_label(info)
+    return {"counter": int(_TICKET_NUM.match(label).group(1)),
+            "missing": False, "sections": out}
 
 
 def create(title: str, body: str = "", priority: str = "medium", path=None,
            branch: Optional[str] = None) -> dict:
-    """Создаёт тикет в «Открытые», назначает номер по счётчику.
+    """Создаёт тикет в «Открытые» и назначает метку.
 
-    Если текущая ветка — `t-<N>-<слаг>`, метка берётся из неё, а не из
-    счётчика: номер уже занят этой веткой, её не сможет создать второй агент.
-    Счётчик при этом всё равно подтягивается вперёд, чтобы не выдать его снова.
+    Предпочтительный путь — задать `branch`: метка берётся из имени ветки
+    `t-<N>-<слаг>`, номер которой уже занят git'ом и не достанется второму
+    агенту. Без ветки берётся max(занятые)+1 — годится для веб-UI, когда
+    параллельных созданий нет.
     """
     p = _path(path)
     title = (title or "").strip()
@@ -390,16 +414,11 @@ def create(title: str, body: str = "", priority: str = "medium", path=None,
         if not p.exists():
             p.write_text(BOOTSTRAP, encoding="utf-8")
         info = _load(p)
-        if info["counter"] is None:
-            raise TicketError("Не найдена строка счётчика в TICKETS.md")
-        n = info["counter"]
-        tid = branch_ticket_id(branch) or f"T-{n}"
+        tid = branch_ticket_id(branch) or next_label(info)
         if _find(info, tid)[1] is not None:
             raise TicketError(
                 f"Метка {tid} уже занята (из ветки {branch or current_branch()!r}). "
                 f"Переименуйте ветку или заведите тикет без неё.", 409)
-        if _TICKET_NUM.match(tid) and int(_TICKET_NUM.match(tid).group(1)) >= n:
-            n = int(_TICKET_NUM.match(tid).group(1))
         raw = [f"- [{tid}] ({priority}) {title}"]
         for line in str(body).split("\n"):
             s = line.strip()
@@ -412,7 +431,7 @@ def create(title: str, body: str = "", priority: str = "medium", path=None,
         blocks = _section_blocks(info, "open")
         blocks.append(block)
         _set_section_blocks(info, "open", blocks)
-        _write(p, info["lines"], info["segs"], set_counter=n + 1)
+        _write(p, info["lines"], info["segs"])
         return {"id": tid, "state": "open", "priority": priority,
                 "title": title, "body": (body or "").strip(), "commit": None}
 
@@ -483,15 +502,40 @@ def reopen(tid: str, path=None) -> dict:
                  build=_build_reopen, err_ctx="открыть заново")
 
 
+def report(path=None) -> str:
+    """Сводка по тикетам: что в работе, что ждёт, что сделано."""
+    p = _path(path)
+    if not p.exists():
+        return f"файл не найден: {p}"
+    with _LOCK:
+        info = _load(p)
+    have = ticket_branches(cwd=p.parent) or set()
+    lines = [f"# Тикеты — {p.name}", ""]
+    for name, key in SECTIONS:
+        blocks = _section_blocks(info, key)
+        lines.append(f"## {name} ({len(blocks)})")
+        if not blocks:
+            lines.append("_(пусто)_")
+        for b in blocks:
+            extra = ""
+            if key == "in_progress" and have is not None and b["id"] not in have:
+                extra = " — ветки нет!"
+            elif key == "closed" and b["commit"]:
+                extra = f" — {b['commit'][:7]}"
+            lines.append(f"- [{b['id']}] {b['title']}{extra}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _main(argv=None) -> int:
     import sys
     argv = list(sys.argv[1:] if argv is None else argv)
     cmd = argv[0] if argv else "validate"
     path = Path(argv[1]) if len(argv) > 1 else None
     if cmd == "validate":
-        problems = validate(path)
+        problems = validate(path, check_branches=True)
         if not problems:
-            print(f"OK: {_path(path)} — метки уникальны, счётчик согласован")
+            print(f"OK: {_path(path)} — метки уникальны, «В работе» с ветками")
             return 0
         print(f"Проблем в {_path(path)}: {len(problems)}")
         for x in problems:
@@ -502,7 +546,10 @@ def _main(argv=None) -> int:
         tid = branch_ticket_id(b)
         print(tid or f"ветка {b!r} не о тикете (нужна t-<N>-<слаг>)")
         return 0 if tid else 1
-    print(__doc__ or "usage: validate [path] | branch [имя-ветки]")
+    if cmd == "report":
+        print(report(path), end="")
+        return 0
+    print(__doc__ or "usage: validate [path] | branch [имя-ветки] | report [path]")
     return 2
 
 
