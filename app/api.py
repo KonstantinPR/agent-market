@@ -286,7 +286,7 @@ def api_margin_detail(
             models.WbDetailRow.sale_dt <= to_,
         )
         if article_like:
-            q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+            q = q.where(common_service.like_col(models.WbDetailRow.article, article_like))
         detail_articles = int(db.execute(q).scalar_one() or 0)
     estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
     totals = _margin_detail_totals(df)
@@ -360,8 +360,8 @@ def api_margin_ozon_detail(
             models.OzonDetailRow.date <= to_,
         )
         if article_like:
-            q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%")
-                        | models.OzonDetailRow.base_article.ilike(f"%{article_like}%"))
+            q = q.where(common_service.like_col(models.OzonDetailRow.offer_id, article_like)
+                        | common_service.like_col(models.OzonDetailRow.base_article, article_like))
         detail_articles = int(db.execute(q).scalar_one() or 0)
     estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
     totals = _margin_detail_totals(df)
@@ -560,7 +560,7 @@ def api_funnel(
             .order_by(models.FunnelMetric.revenue.desc(), models.FunnelMetric.article)
         )
         if article_like:
-            q = q.where(models.FunnelMetric.article.ilike(f"%{article_like}%"))
+            q = q.where(common_service.like_col(models.FunnelMetric.article, article_like))
         out_cols = [
             "date_from", "date_to", "nm_id", "article", "name",
             "views", "opens", "adds", "orders", "cancelled", "buyouts",
@@ -1107,7 +1107,7 @@ def api_prices(
         .order_by(models.PriceSnapshot.article, models.PriceSnapshot.size)
     )
     if article_like:
-        q = q.where(models.PriceSnapshot.article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.PriceSnapshot.article, article_like))
     rows = [
         {
             "article": r.article, "nm_id": str(r.nm_id or ""),
@@ -1149,7 +1149,7 @@ def api_storage_cost(
         .order_by(models.StorageCost.article)
     )
     if article_like:
-        q = q.where(models.StorageCost.article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.StorageCost.article, article_like))
     rows = [
         {
             "nm_id": r.nm_id, "article": r.article, "name": str(r.name or ""),
@@ -1359,10 +1359,11 @@ def api_products(
         return ue_map.get((article or "").strip().upper()) or ue_global
 
     if like and like.strip():
-        pat = like.strip().lower()
-        prods = [p for p in prods if pat in (p.article or "").lower()
-                 or pat in (p.name or "").lower() or pat in (p.brand or "").lower()
-                 or pat in (p.barcode or "").lower() or pat in (p.subject or "").lower()]
+        prods = [p for p in prods if common_service.like_match(p.article, like)
+                 or common_service.like_match(p.name, like)
+                 or common_service.like_match(p.brand, like)
+                 or common_service.like_match(p.barcode, like)
+                 or common_service.like_match(p.subject, like)]
     size_map = _catalog_size_map(db)
     tags = _catalog_tags(db)
     mp_stock: dict = {}
@@ -1454,7 +1455,8 @@ def products_preview(payload: dict = Body(default={}), db: Session = Depends(get
 
     rows = []
     for p in prods:
-        if like and like not in (p.article or "").lower() and like not in (p.name or "").lower():
+        if like and not (common_service.like_match(p.article, like)
+                         or common_service.like_match(p.name, like)):
             continue
         row = {"article": p.article, "name": p.name,
                "net_cost": float(p.net_cost or 0), "volume_l": float(p.volume_l or 0)}
@@ -1491,7 +1493,8 @@ def products_prices_apply(payload: dict = Body(default={}), db: Session = Depend
 
     rows = []
     for p in prods:
-        if like and like not in (p.article or "").lower() and like not in (p.name or "").lower():
+        if like and not (common_service.like_match(p.article, like)
+                         or common_service.like_match(p.name, like)):
             continue
         cost = _eff_net_cost(p.article, p.net_cost, prefix_map)
         if mode == "min":
@@ -2057,6 +2060,7 @@ _REPLENISH_EXPORT = {
     "demand": "Спрос, шт/день", "demand_wb": "Спрос WB, шт/день",
     "demand_oz": "Спрос Ozon, шт/день",
     "sells": "Продано, шт", "returns_qty": "Возвраты, шт", "return_rate": "Возвраты, %",
+    "wb_sells": "Продано WB, шт",
     "our_stock": "У нас, шт", "our_cost": "Себестоимость, руб",
     "wb_qty": "WB склад, шт", "wb_avail": "WB доступно, шт", "wb_in_way": "WB в пути, шт",
     "wb_doc": "WB, дней запаса", "wb_def": "WB дефицит, шт",
@@ -2080,6 +2084,22 @@ _REPLENISH_EXPORT_SIZES = {
     "our_stock": "У нас, шт",
     "margin_per_one": "Маржа/шт, руб", "margin_pct": "Рентабельность, %", "margin": "Маржа, руб",
 }
+
+
+#: Ключи колонок из «Вида таблицы» → ключи строк экспорта. В таблице статус
+#: рисуется тегом по ключу ``status`` (в строке нужны и код, и подпись), а в
+#: карточке PDF и в Excel печатается готовая подпись по ключу ``status_label``.
+_REPLENISH_COL_ALIASES = {"status": "status_label"}
+
+
+def _replenish_cols(cols: Optional[str], key_map: dict) -> list[str]:
+    """CSV ключей видимых колонок UI → ключи, которые есть в карте экспорта."""
+    out: list[str] = []
+    for raw in (cols or "").split(","):
+        k = _REPLENISH_COL_ALIASES.get(raw.strip(), raw.strip())
+        if k and k in key_map and k not in out:
+            out.append(k)
+    return out
 
 
 @router.get("/export/replenish")
@@ -2110,7 +2130,7 @@ def export_replenish(
     if df.empty:
         df = pd.DataFrame(columns=list(_REPLENISH_EXPORT))
     key_map = _REPLENISH_EXPORT if view != "sizes" else _REPLENISH_EXPORT_SIZES
-    df, ru = excel_io.project_export(df, key_map, cols)
+    df, ru = excel_io.project_export(df, key_map, ",".join(_replenish_cols(cols, key_map)))
     df = df.rename(columns=ru)
     sheet = "Потребность по размерам" if view == "sizes" else "Потребность"
     buf = excel_io.df_to_excel_stream(df, sheet_name=sheet)
@@ -2134,6 +2154,11 @@ PDF_MAX_LIMIT = 500
 PDF_MAX_PHOTOS = 9
 
 
+def _fmt_days(v) -> str:
+    """Дни для подписи PDF: 7.5 -> «7.5», 8.0 -> «8» (без хвостовых нулей)."""
+    return f"{float(v):.2f}".rstrip("0").rstrip(".") or "0"
+
+
 @router.get("/export/replenish/pdf")
 def export_replenish_pdf(
     date_from: Optional[str] = None,
@@ -2146,7 +2171,9 @@ def export_replenish_pdf(
     show_inactive: int = 0,
     cols: Optional[str] = None,
     with_photos: int = 1,
-    photo_count: int = 4,
+    photo_count: int = 6,
+    vel_days: int = replenish_service.WB_SORT_VELOCITY_DAYS,
+    profit: int = 1,
     limit: int = PDF_DEFAULT_LIMIT,
     db: Session = Depends(get_db),
 ):
@@ -2155,12 +2182,23 @@ def export_replenish_pdf(
     ``cols`` — те же ключи, что и в Excel-выгрузке. Фото подтягиваются из
     индекса фотографий (рекурсивный обход диска, кэш в памяти), миниатюры
     кэшируются на диске, поэтому повторные выгрузки быстрые.
+
+    ``vel_days`` — окно скорости продаж размера: 180, 365 или 0 (все время).
+
+    ``profit`` — учитывать прибыльность: покрытие = период/4 дней продаж, а
+    целевой уровень домножается на коэффициент по рентабельности (0…2).
+    При ``profit=0`` работает как раньше: покрытие = «Запас», без коэффициента.
     """
     from_, to_ = _parse_window400(date_from, date_to)
     if date_from is None and date_to is None:
         back = max(1, int(window_days or settings.sync_days_default))
         from_ = to_ - timedelta(days=back - 1)
     span = (to_ - from_).days + 1
+
+    vel_days = int(vel_days or 0)
+    if vel_days not in replenish_service.WB_SORT_VELOCITY_WINDOWS:
+        vel_days = replenish_service.WB_SORT_VELOCITY_DAYS
+    vel_label = "всё время" if vel_days == 0 else f"{vel_days} дн"
 
     common = dict(
         target_days=target_days, span_days=span, marketplace=marketplace,
@@ -2176,10 +2214,33 @@ def export_replenish_pdf(
     # План подсортировки: полный список размеров берём из карточки WB, а
     # скорость — за длинное окно. По окну спроса (30 дн) размеры без продаж
     # получают цель 0 и выпадают, хотя остатков на них может не быть вовсе.
+    use_profit = bool(int(profit or 0))
+    coverage = None
+    factors = None
+    if use_profit:
+        # покрытие = четверть выбранного периода: недельный цикл пополнения
+        coverage = max(0.25, span / 4.0)
+        factors = replenish_service.wb_profit_factors(
+            db, to_, velocity_days=vel_days,
+            articles=[r.get("article") for r in rows],
+            article_like=article_like,
+        )
     plan = replenish_service.wb_sorting_plan(
-        db, to_, target_days=target_days,
+        db, to_, target_days=target_days, velocity_days=vel_days,
         articles=[r.get("article") for r in rows],
+        coverage_days=coverage, profit_factor=factors,
     )
+
+    if use_profit:
+        # убыточные и уже полные товары в шопинг-листе не нужны: иначе PDF
+        # наполовину состоит из нулей. Считаем отбракованные, чтобы X-Truncated
+        # остался честным.
+        alive = [r for r in rows if plan.get(
+            str(r.get("article") or "").strip().upper(), {"total": 0}
+        )["total"] > 0]
+        truncated += len(rows) - len(alive)
+        rows = alive
+        plan = {k: v for k, v in plan.items() if v["total"] > 0}
 
     # Дальше идёт только CPU-работа (обход фото, ReportLab) — она занимает
     # секунды-двадцать. Соединение из пула (5 + overflow 10) держим ровно
@@ -2237,7 +2298,7 @@ def export_replenish_pdf(
         ]
 
     # Только колонки из карты экспорта — иначе в подписи останется сырой ключ.
-    wanted = [k for k in (cols or "").split(",") if k in _REPLENISH_EXPORT]
+    wanted = _replenish_cols(cols, _REPLENISH_EXPORT)
     if not wanted:
         wanted = ["name", "need_buy", "demand", "status_label"]
 
@@ -2248,8 +2309,14 @@ def export_replenish_pdf(
         with_photos=want_photos,
         photo_count=n_photos or PDF_MAX_PHOTOS,
         subtitle=(
-            f"{from_:%d.%m.%Y} — {to_:%d.%m.%Y} · запас {int(target_days or 0)} дн"
-            f" · скорость по {replenish_service.WB_SORT_VELOCITY_DAYS} дн · WB"
+            f"{from_:%d.%m.%Y} — {to_:%d.%m.%Y}"
+            f" · {'покрытие ' + _fmt_days(coverage) + ' дн (период/4)' if use_profit else 'запас ' + str(int(target_days or 0)) + ' дн'}"
+            f" · скорость по {vel_label}"
+            + (f" · прибыльность 0…{replenish_service.PROFIT_FACTOR_MAX:g}×"
+               if use_profit else "")
+            + (f" · пустой размер ≥ {replenish_service.WB_SORT_MIN_SIZE_STOCK} шт"
+               if use_profit else "")
+            + " · WB"
         ),
     )
     hits = sum(1 for _, _, t in jobs if t)
@@ -2343,15 +2410,17 @@ def api_cards(
     """
     base_where = [models.Marketplace.code == marketplace]
     if like and like.strip():
-        pat = f"%{like.strip()}%"
         base_where.append(
-            func.concat(
-                models.MarketplaceCard.vendor_code, " ",
-                models.MarketplaceCard.barcode, " ",
-                models.MarketplaceCard.brand, " ",
-                models.MarketplaceCard.name, " ",
-                models.MarketplaceCard.nm_id,
-            ).ilike(pat)
+            common_service.like_col(
+                func.concat(
+                    models.MarketplaceCard.vendor_code, " ",
+                    models.MarketplaceCard.barcode, " ",
+                    models.MarketplaceCard.brand, " ",
+                    models.MarketplaceCard.name, " ",
+                    models.MarketplaceCard.nm_id,
+                ),
+                like,
+            )
         )
     total = db.scalar(
         select(func.count(func.distinct(models.MarketplaceCard.id)))
@@ -2719,8 +2788,9 @@ def export_sales(
     payload = api_sales(marketplace, date_from, date_to, db)
     df = pd.DataFrame(payload["rows"])
     if article_like:
-        needle = article_like.lower()
-        keep = df["article"].str.lower().str.contains(needle, regex=False)
+        keep = df["article"].str.lower().str.contains(
+            common_service.like_to_regex(article_like), regex=True, na=False
+        )
         df = df[keep].reset_index(drop=True)
     df, ru = excel_io.project_export(df, {
         "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
@@ -2965,7 +3035,7 @@ def api_wb_detail_rows(
     if to_:
         q = q.where(models.WbDetailRow.sale_dt <= to_)
     if article_like:
-        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.WbDetailRow.article, article_like))
     total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
     rows = db.execute(
         q.order_by(models.WbDetailRow.sale_dt.desc(), models.WbDetailRow.id.desc())
@@ -3065,7 +3135,7 @@ def export_wb_detail_rows(
     if to_:
         q = q.where(models.WbDetailRow.sale_dt <= to_)
     if article_like:
-        q = q.where(models.WbDetailRow.article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.WbDetailRow.article, article_like))
     rows = db.execute(q).scalars().all()
     recs = [{
         "date": r.sale_dt.isoformat() if r.sale_dt else "",
@@ -3406,8 +3476,8 @@ def api_ozon_accrual_rows(
     if bucket:
         q = q.where(models.OzonAccrual.bucket == bucket)
     if article_like:
-        q = q.where(models.OzonAccrual.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonAccrual.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonAccrual.offer_id, article_like)
+                    | common_service.like_col(models.OzonAccrual.base_article, article_like))
     rows = db.execute(
         q.order_by(models.OzonAccrual.date.asc())
     ).scalars().all()
@@ -3449,8 +3519,8 @@ def export_ozon_accrual_rows(
     if bucket:
         q = q.where(models.OzonAccrual.bucket == bucket)
     if article_like:
-        q = q.where(models.OzonAccrual.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonAccrual.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonAccrual.offer_id, article_like)
+                    | common_service.like_col(models.OzonAccrual.base_article, article_like))
     rows = db.execute(
         q.order_by(models.OzonAccrual.date.asc())
     ).scalars().all()
@@ -3639,8 +3709,8 @@ def api_ozon_placement_rows(
     if to_:
         q = q.where(models.OzonPlacement.date <= to_)
     if article_like:
-        q = q.where(models.OzonPlacement.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonPlacement.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonPlacement.offer_id, article_like)
+                    | common_service.like_col(models.OzonPlacement.base_article, article_like))
     total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
     rows = db.execute(
         q.order_by(models.OzonPlacement.date.asc(), models.OzonPlacement.offer_id.asc())
@@ -3672,8 +3742,8 @@ def _ozon_placement_agg(db, from_, to_, article_like=None, by_size=False) -> lis
     if to_:
         q = q.where(models.OzonPlacement.date <= to_)
     if article_like:
-        q = q.where(models.OzonPlacement.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonPlacement.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonPlacement.offer_id, article_like)
+                    | common_service.like_col(models.OzonPlacement.base_article, article_like))
     rows = list(db.execute(q).scalars().all())
     omap = ozon_article.build_offer_map(
         db, offers={(r.offer_id or "").strip() for r in rows})
@@ -3776,8 +3846,8 @@ def export_ozon_placement_rows(
     if to_:
         q = q.where(models.OzonPlacement.date <= to_)
     if article_like:
-        q = q.where(models.OzonPlacement.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonPlacement.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonPlacement.offer_id, article_like)
+                    | common_service.like_col(models.OzonPlacement.base_article, article_like))
     rows = db.execute(
         q.order_by(models.OzonPlacement.date.asc(), models.OzonPlacement.offer_id.asc())
     ).scalars().all()
@@ -3816,8 +3886,8 @@ def api_ozon_detail_rows(
     if to_:
         q = q.where(models.OzonDetailRow.date <= to_)
     if article_like:
-        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonDetailRow.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonDetailRow.offer_id, article_like)
+                    | common_service.like_col(models.OzonDetailRow.base_article, article_like))
     total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
     rows = db.execute(
         q.order_by(models.OzonDetailRow.date.desc(), models.OzonDetailRow.id.desc())
@@ -3894,8 +3964,8 @@ def api_ozon_buyout_rows(
     """Сырые строки «Выкупов» Ozon (ozon_buyouts) с фильтром по артикулу."""
     q = select(models.OzonBuyout)
     if article_like:
-        q = q.where(models.OzonBuyout.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonBuyout.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonBuyout.offer_id, article_like)
+                    | common_service.like_col(models.OzonBuyout.base_article, article_like))
     total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
     rows = db.execute(q.order_by(models.OzonBuyout.id.desc())
                       .offset(offset).limit(limit)).scalars().all()
@@ -3960,8 +4030,8 @@ def export_ozon_detail_rows(
     if to_:
         q = q.where(models.OzonDetailRow.date <= to_)
     if article_like:
-        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonDetailRow.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonDetailRow.offer_id, article_like)
+                    | common_service.like_col(models.OzonDetailRow.base_article, article_like))
     rows = db.execute(q).scalars().all()
     recs = [{
         "date": r.date.isoformat() if r.date else "",
@@ -3997,8 +4067,8 @@ def export_ozon_buyout_rows(
     """Экспорт сырых строк «Выкупов» Ozon в Excel."""
     q = select(models.OzonBuyout).order_by(models.OzonBuyout.id).limit(limit)
     if article_like:
-        q = q.where(models.OzonBuyout.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonBuyout.base_article.ilike(f"%{article_like}%"))
+        q = q.where(common_service.like_col(models.OzonBuyout.offer_id, article_like)
+                    | common_service.like_col(models.OzonBuyout.base_article, article_like))
     rows = db.execute(q).scalars().all()
     recs = [{
         "posting_number": r.posting_number, "offer_id": r.offer_id,

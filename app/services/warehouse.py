@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
+from app.services.common import like_match
 from app.services.excel_io import df_to_excel_stream
 
 CP_TYPE_LABELS = {
@@ -337,8 +338,9 @@ def stock_view(db: Session, article_like: str = "") -> list[dict]:
             "stock_value": round(avg * balance, 2),
         })
     if article_like:
-        al = article_like.strip().lower()
-        rows = [r for r in rows if al in r["article"].lower() or al in r["name"].lower()]
+        rows = [r for r in rows
+                if like_match(r["article"], article_like)
+                or like_match(r["name"], article_like)]
     rows.sort(key=lambda r: (-r["balance"], r["article"]))
     return rows
 

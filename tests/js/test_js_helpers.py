@@ -48,7 +48,7 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(APP_PATH, "utf8"), sandbox);
 
 const { fmt, fmtMoney, fmtFloat, fmtPct, cls, qs, writeDbStorage, setWriteDbStorage,
-        pricingAgeText } = sandbox;
+        pricingAgeText, likeMatch } = sandbox;
 
 const norm = (s) => s.replace(/[\u202F\u00A0]/g, " ");
 assert.strictEqual(norm(fmt(1234)), "1 234", "fmt thousand separator");
@@ -260,6 +260,253 @@ assert.ok(htmlSrc.includes('id="pricingPricesAge"'), "в index.html есть п�
 assert.ok(htmlSrc.includes('id="pricingPriceRefresh"'), "в index.html есть кнопка обновления цен");
 assert.ok(jsSrc.includes("/api/wb/prices"), "кнопка зовёт существующий эндпоинт цен");
 
+// Меню PDF «Потребности»: галка прибыльности включена по умолчанию, едет в URL.
+const { pdfParams, savePdfParams } = sandbox;
+assert.strictEqual(pdfParams().profit, true, "учёт прибыльности включён по умолчанию");
+assert.strictEqual(pdfParams().velDays, 180, "окно скорости по умолчанию 180 дней");
+const pdfP = pdfParams();
+pdfP.profit = false;
+savePdfParams(pdfP);
+assert.strictEqual(pdfParams().profit, false, "галка запоминается в localStorage");
+pdfP.profit = true;
+savePdfParams(pdfP);
+assert.strictEqual(pdfParams().profit, true, "и обратно включается");
+assert.ok(jsSrc.includes('params.set("profit", p.profit ? 1 : 0)'),
+  "replenishPdfUrl должен передавать profit как 1/0");
+assert.ok(jsSrc.includes("Учитывать прибыльность"),
+  "в меню PDF есть галка «Учитывать прибыльность»");
+
+// Скачать PDF — только из меню «PDF ▾»: дубль в тулбаре удалён, он же и «протухал».
+assert.ok(htmlSrc.includes('id="btnReplenishPdf"'), "меню «PDF ▾» осталось");
+assert.ok(htmlSrc.includes('id="exportReplenish"'), "экспорт в Excel на месте");
+assert.ok(!htmlSrc.includes('id="exportReplenishPdf"'),
+  "в тулбаре не должно быть второй кнопки выгрузки PDF");
+assert.ok(!jsSrc.includes('const expPdf = $("#exportReplenishPdf")'),
+  "app.js не должен обновлять href удалённой ссылки");
+
+// Поля карточки PDF = колонки «Вида таблицы» (отдельного списка галочек нет).
+const pdfColsOf = sandbox.replenishPdfCols;
+assert.ok(!jsSrc.includes("Поля в карточке"),
+  "дубль «Поля в карточке» убран из меню PDF");
+assert.ok(jsSrc.includes("Поля карточки — колонки во «Вид таблицы»"),
+  "в меню PDF осталась подсказка про «Вид таблицы»");
+assert.strictEqual(pdfParams().photoCount, 6, "по умолчанию 6 фото на карточку");
+assert.ok(!("cols" in pdfParams()),
+  "сохранённый когда-то ключ cols больше не читается");
+assert.strictEqual(sandbox.colViewState("replenish", "article").name, true,
+  "«Наименование» видимо по умолчанию");
+assert.ok(pdfColsOf().includes("wb_sells"), "новая «Продано WB» видна по умолчанию");
+assert.ok(!pdfColsOf().includes("article"), "артикул печатаётся отдельной строкой");
+sandbox.localStorage.setItem("replenishCols_article",
+  JSON.stringify({ name: false, wb_sells: false }));
+const colsHidden = pdfColsOf();
+assert.ok(!colsHidden.includes("name"), "выключенная колонка ушла из карточки");
+assert.ok(!colsHidden.includes("wb_sells"), "…в том числе новая «Продано WB»");
+assert.ok(colsHidden.includes("demand"), "остальные видимые колонки остались");
+sandbox.localStorage.removeItem("replenishCols_article");
+sandbox.localStorage.setItem("replenishCols_sizes", JSON.stringify({ name: false }));
+assert.ok(pdfColsOf().includes("name"),
+  "состояние вида «По размерам» не влияет на карточку PDF");
+sandbox.localStorage.removeItem("replenishCols_sizes");
+savePdfParams({ cols: ["demand"], photoCount: 4 });
+assert.strictEqual(pdfParams().photoCount, 4, "выбранное число фото запоминается");
+assert.ok(pdfColsOf().includes("name"), "старый cols не перекрывает «Вид таблицу»");
+savePdfParams({});
+assert.strictEqual(pdfParams().photoCount, 6, "после сброса — снова 6 фото по умолчанию");
+
+// Расширенный поиск «*»: клиентский likeMatch должен совпадать с серверным.
+const LIKE_CASES = [
+  // базовый пример пользователя
+  ["артикул-1-12-blue", "тику*12", true],
+  ["новыйАртикул12-1", "тику*12", true],
+  // порядок фрагментов значим
+  ["ABC12XYZ", "abc*12*xyz", true],
+  ["xyz12abc", "abc*12*xyz", false],
+  // звёздочка может закрывать несколько фрагментов и пустое место
+  ["01597-300-5-GREEN", "01597*GREEN", true],
+  ["GREEN-01597", "01597*GREEN", false],
+  ["abc", "a*c", true],
+  ["ac", "a*c", true],
+  ["abc", "*", true],
+  // регистр не важен
+  ["TIE-CORE-BLACK", "tie*black", true],
+  ["tie-core-black", "TIE*BLACK", true],
+  // «%» и «_» — литералы, а не спецсимволы (как на сервере)
+  ["100% хлопок", "100%", true],
+  ["1000 символов", "100%", false],
+  ["002юбка_шорты", "юбка_шорты", true],
+  ["002юбкаXшорты", "юбка_шорты", false],
+  // regex-метасимволы в пользовательском вводе — литералы
+  ["a.b", "a.b", true],
+  ["aXb", "a.b", false],
+  ["a(b)c", "a(b)c", true],
+  ["цена $5 (USD)", "цена $5 (usd)", true],
+  // пустой запрос = всё подходит
+  ["что угодно", "", true],
+  ["что угодно", "   ", true],
+];
+
+let likeFail = 0;
+for (const [hay, query, want] of LIKE_CASES) {
+  const got = likeMatch(hay, query);
+  if (got !== want) {
+    likeFail++;
+    console.error(`  likeMatch FAIL: ${JSON.stringify(hay)} ~ ${JSON.stringify(query)} => ${got}, ожидалось ${want}`);
+  }
+}
+// null/undefined не должны падать
+if (likeMatch(null, "abc") !== false) { likeFail++; console.error("  likeMatch FAIL: null haystack"); }
+if (likeMatch("abc", null) !== true) { likeFail++; console.error("  likeMatch FAIL: null query"); }
+// кэш не должен ломать результат при >200 разных запросах.
+// haystack подбирается под запрос (иначе «арт*0» = false по смыслу: в
+// «артикул-12» нет «0»), плюс отдельная негативная проверка после очистки.
+for (let i = 0; i < 250; i++) {
+  if (!likeMatch("артикул-" + i, "арт*" + i)) {
+    likeFail++;
+    console.error(`  likeMatch FAIL: cache (i=${i})`);
+    break;
+  }
+}
+if (likeMatch("артикул-12", "арт*0")) {
+  likeFail++;
+  console.error("  likeMatch FAIL: negative after cache clear");
+}
+if (likeFail) throw new Error(`${likeFail} ошибок likeMatch`);
+
+// серверные плейсхолдеры подсказывают про «*»
+const SEARCH_INPUTS = [
+  "marginSearch", "salesSearch",
+  "marginLike", "marginFunnelLike", "marginOzonDetailLike", "marginDetailLike",
+  "pricingLike", "whStockLike", "replenishLike", "productsLike",
+  "wbCardsLike", "wbStockLike", "wbFunnelLike", "wbSalesLike", "wbDetailLike",
+  "wbPricesLike", "wbStorageLike",
+  "ozCardsLike", "ozStockLike", "ozPricesLike", "ozRealLike", "ozDetailLike",
+];
+for (const id of SEARCH_INPUTS) {
+  const re = new RegExp(`id="${id}"[^>]*placeholder="([^"]*)"`);
+  const m = htmlSrc.match(re);
+  if (!m) { console.error(`  placeholder FAIL: нет поля ${id}`); continue; }
+  if (!m[1].includes("* = любая часть")) {
+    console.error(`  placeholder FAIL: ${id} => ${JSON.stringify(m[1])}`);
+  }
+}
+
+// клиентских substring-фильтров по артикулу больше не осталось
+const STRAY = [
+  /\.toLowerCase\(\)\.includes\(/,
+  /\.toLowerCase\(\)\s*$/,
+];
+for (const re of STRAY) {
+  const hits = jsSrc.split("\n").filter((l) => re.test(l) && /article|name/.test(l) && /includes/.test(l));
+  if (hits.length) console.error(`  stray substring filter: ${hits.join(" | ")}`);
+}
+
+// серверных f"%{...}%" шаблонов для article_like/like больше не осталось
+const sqlSrc = apiSrc;
+const straySql = sqlSrc.split("\n").filter((l) => /ilike\(f?"%\{/.test(l));
+if (straySql.length) console.error(`  stray ilike f-string: ${straySql.join(" | ")}`);
+
+console.log("LIKE_TESTS_OK");
+
+// ─── «Вид таблицы»: поле фильтра по колонкам ────────────────────────────
+// Фильтр прячет строки и целые группы, не перерисовывая панель (иначе при
+// наборе теряется фокус). Семантика «*» — та же, что в общем поиске.
+const { setColViewFilter } = sandbox;
+let colviewFail = 0;
+const colfail = (msg) => { colviewFail++; console.error("  colview FAIL: " + msg); };
+const PANELS = {};
+doc.querySelector = (sel) =>
+  (typeof sel === "string" && sel.endsWith("ViewPanel") ? PANELS[sel] || el(sel) : el(sel));
+
+const mkRow = (lbl) => ({ dataset: { lbl }, style: { display: "" } });
+const vis = (r) => r.style.display !== "none";
+const mkGrp = (title) => {
+  const g = { dataset: { lbl: title }, style: { display: "" }, rows: [] };
+  g.querySelectorAll = (s) => (s === ".colview-row" ? g.rows : []);
+  return g;
+};
+const mkPanel = (rows, grps, hrs) => {
+  const p = { rows, grps, hrs, empty: { hidden: true } };
+  p.querySelectorAll = (s) =>
+    s === ":scope > .colview-row" ? rows :
+    s === ".colview-grp" ? grps :
+    s === "hr" ? hrs : [];
+  p.querySelector = (s) => (s === ".colview-filter-empty" ? p.empty : null);
+  return p;
+};
+
+const rows = [mkRow("Прибыльность"), mkRow("Воронка Продаж WB"), mkRow("Скидка")];
+const g1 = mkGrp("Маркетинг"); g1.rows = [mkRow("ACOS"), mkRow("ДРР")];
+const g2 = mkGrp("Логистика"); g2.rows = [mkRow("Хранение"), mkRow("Комиссия")];
+const hrs = [{ style: { display: "" } }, { style: { display: "" } }];
+PANELS["#marginFunnelViewPanel"] = mkPanel(rows, [g1, g2], hrs);
+
+const cf = (q) => setColViewFilter("margin-funnel", q);
+
+// пустой фильтр — всё видно, разделители на месте, «ничего не найдено» скрыто
+cf("");
+if (!rows.every(vis)) colfail("пустой фильтр: скрыты строки");
+if (!g1.rows.every(vis) || !g2.rows.every(vis)) colfail("пустой фильтр: скрыты группы");
+if (!hrs.every((h) => h.style.display === "")) colfail("пустой фильтр: спрятаны разделители");
+if (PANELS["#marginFunnelViewPanel"].empty.hidden !== true) colfail("пустой фильтр: видна плашка «Ничего не найдено»");
+
+// substring + «*», регистр не важен
+cf("ворон*wb");
+if (vis(rows[0]) || !vis(rows[1]) || vis(rows[2])) colfail("ворон*wb: " + JSON.stringify(rows.map((r) => [r.dataset.lbl, r.style.display])));
+
+// совпадение заголовка группы открывает все её строки, соседняя — уходит целиком
+cf("ЛОГИСТИКА");
+if (!g2.rows.every(vis)) colfail("ЛОГИСТИКА: группа не раскрыта целиком");
+if (vis(g1.rows[0]) || vis(g1.rows[1])) colfail("ЛОГИСТИКА: чужая группа видна");
+if (g1.style.display !== "none") colfail("ЛОГИСТИКА: чужая группа не скрыта");
+if (g2.style.display !== "") colfail("ЛОГИСТИКА: своя группа скрыта");
+
+// частичное совпадение внутри группы: группа остаётся, строки фильтруются
+cf("acos");
+if (g1.style.display !== "") colfail("acos: группа с совпадением скрыта");
+if (!vis(g1.rows[0]) || vis(g1.rows[1])) colfail("acos: строки группы отфильтрованы неверно");
+if (g2.style.display !== "none") colfail("acos: группа без совпадений осталась");
+
+// ничего не найдено → все строки скрыты, плашка показана, разделители спрятаны
+cf("zzz*");
+if (rows.some(vis) || g1.rows.some(vis) || g2.rows.some(vis)) colfail("zzz*: что-то осталось видимым");
+if (PANELS["#marginFunnelViewPanel"].empty.hidden !== false) colfail("zzz*: не показана плашка «Ничего не найдено»");
+if (!hrs.every((h) => h.style.display === "none")) colfail("zzz*: разделители остались");
+
+// возврат к пустому фильтру восстанавливает всё
+cf("");
+if (!rows.every(vis) || !g1.rows.every(vis)) colfail("сброс: не всё восстановилось");
+if (!hrs.every((h) => h.style.display === "")) colfail("сброс: разделители не вернулись");
+if (PANELS["#marginFunnelViewPanel"].empty.hidden !== true) colfail("сброс: плашка осталась");
+
+// фильтр живёт по вкладке: запись для соседнего таба не трогает панель
+PANELS["#wbCardsViewPanel"] = mkPanel([mkRow("Прибыльность")], [], [{ style: { display: "" } }]);
+cf("ворон*wb");
+setColViewFilter("wb-cards", "zzz");
+if (vis(rows[0]) || !vis(rows[1])) colfail("изоляция по вкладкам: соседний таб перетёр фильтр");
+cf("");
+
+// статика: поле реально собирается в buildColViewMenu и подключено к сеттеру
+const CSS_PATH = process.argv[5];const cssSrc = fs.readFileSync(CSS_PATH, "utf8");
+const needJs = [
+  ['className = "colview-filter"', "в панель не добавляется поле фильтра"],
+  ["setColViewFilter(tab, e.target.value)", "input не вызывает setColViewFilter"],
+  ['placeholder = "Фильтр колонок… * = любая часть"', "нет подсказки про «*» в поле фильтра"],
+  ["row.dataset.lbl = label", "у строки нет data-lbl"],
+  ["grp.dataset.lbl = g.title", "у группы нет data-lbl"],
+  ["row.dataset.lbl = o.label", "у подстроки группы нет data-lbl"],
+];
+for (const [needle, msg] of needJs) if (!jsSrc.includes(needle)) colfail(msg);
+if ((jsSrc.match(/applyColViewFilter\(tab\)/g) || []).length < 2) {
+  colfail("фильтр не применяется после перестройки панели");
+}
+if (!/\.colview-filter\s*\{/.test(cssSrc)) {
+  colfail("нет CSS-правила для .colview-filter");
+}
+if (colviewFail) throw new Error(`${colviewFail} ошибок фильтра «Вид таблицы»`);
+
+console.log("COLVIEW_FILTER_OK");
+
 console.log("JS_TESTS_OK");
 """
 
@@ -285,9 +532,13 @@ def test_js_helpers(node_bin, tmp_path):
     assert html_path.exists(), str(html_path)
     api_path = Path(__file__).resolve().parents[2] / "app" / "api.py"
     assert api_path.exists(), str(api_path)
+    css_path = Path(__file__).resolve().parents[2] / "app" / "static" / "style.css"
+    assert css_path.exists(), str(css_path)
     harness = tmp_path / "harness.js"
     harness.write_text(HARNESS, encoding="utf-8")
-    res = subprocess.run([node_bin, str(harness), str(APP_JS), str(html_path), str(api_path)],
+    res = subprocess.run([node_bin, str(harness), str(APP_JS), str(html_path),
+                          str(api_path), str(css_path)],
                          capture_output=True, text=True)
     assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
     assert "JS_TESTS_OK" in res.stdout
+    assert "COLVIEW_FILTER_OK" in res.stdout

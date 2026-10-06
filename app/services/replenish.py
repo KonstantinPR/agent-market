@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.services import margin as margin_service
+from app.services.common import like_match
 from app.services.sync import _is_goods_row
 from app.services.warehouse import stock_view
 
@@ -180,6 +181,15 @@ def _product_sizes(db: Session) -> dict:
 #: цель 0 и выпадает из плана — хотя в карточке он есть и остатков на нём нет.
 WB_SORT_VELOCITY_DAYS = 180
 
+#: Окна скорости, доступные в выгрузке. 0 = вся история продаж.
+WB_SORT_VELOCITY_WINDOWS = (180, 365, 0)
+
+#: Сколько держать в размере, который есть в карточке, но пуст на WB и давно не
+#: продавался. Без этого размера не видно в продаже на карточке товара, хотя он
+#: там выбирается, и покупатель уходит. Правило осознанно грубое: одна штука —
+#: это «размер не выглядит пустым», а не запас на продажи.
+WB_SORT_MIN_SIZE_STOCK = 1
+
 
 def _wb_card_sizes(db: Session) -> dict:
     """{UPPER(article): {UPPER(size): barcode}} — полный набор размеров карточки WB.
@@ -218,15 +228,96 @@ def _size_sort_key(size: str) -> tuple:
     return tuple((0, int(c), "") if c.isdigit() else (1, 0, c) for c in chunks)
 
 
+def _wb_first_sale_dt(db: Session):
+    """Самая ранняя дата продаж WB — начало окна «всё время»."""
+    return db.execute(select(func.min(models.WbDetailRow.sale_dt))).scalar_one_or_none()
+
+
+#: Рентабельность, при которой коэффициент подсорта достигает максимума (%).
+PROFIT_FULL_PCT = 30.0
+#: Максимальный коэффициент подсорта для прибыльного товара.
+PROFIT_FACTOR_MAX = 2.0
+#: Окно маржи по умолчанию: прибыльность всегда считаем за год, даже если
+#: скорость берём «за всё время» — старые цены дают бесполезный процент.
+PROFIT_MARGIN_DAYS = 365
+
+
+def profit_factor(margin_pct: Optional[float]) -> float:
+    """Плавный коэффициент подсорта по рентабельности товара, 0…2.
+
+    Рентабельность уже посчитана с вычетом себестоимости (``margin`` в
+    margin.py = income − логистика − хранение − услуги − net_cost × продажи),
+    поэтому ``<= 0`` — это и есть убыток: такой товар не подсортировываем.
+    Дальше линейный рост: 15 % → ×1.0, 30 % и выше → ×2.0. Без ступеней,
+    чтобы не было «обрыва» на границах диапазонов.
+    """
+    if margin_pct is None:
+        return 0.0
+    pct = float(margin_pct)
+    if pct <= 0:
+        return 0.0
+    return min(PROFIT_FACTOR_MAX, PROFIT_FACTOR_MAX * pct / PROFIT_FULL_PCT)
+
+
+def wb_profit_factors(
+    db: Session, date_to, velocity_days: int = WB_SORT_VELOCITY_DAYS,
+    articles: Optional[list] = None, article_like: Optional[str] = None,
+) -> dict:
+    """Коэффициенты подсорта по артикулам: {UPPER(article): коэффициент}.
+
+    Маржа берётся из того же расчёта, что и колонки «Маржа/шт» и
+    «Рентабельность» в таблице, — иначе PDF и экран показывали бы разные
+    числа. Окно маржи ограничено ``PROFIT_MARGIN_DAYS`` независимо от окна
+    скорости.
+
+    Артикулы без продаж в окне в словарь не попадают: у них нет ни маржи, ни
+    скорости, и им достаётся только правило пола (1 шт в пустой размер).
+    """
+    days = int(velocity_days or 0)
+    days = min(days, PROFIT_MARGIN_DAYS) if days > 0 else PROFIT_MARGIN_DAYS
+    since = date_to - timedelta(days=days - 1)
+    df = margin_service.margin_detail_dataframe(
+        db, since, date_to, article_like=article_like,
+        default_net_cost=settings.default_net_cost,
+    )
+    wanted = None
+    if articles:
+        wanted = {str(a or "").strip().upper() for a in articles}
+    out: dict = {}
+    for rec in df.to_dict("records"):
+        art = str(rec.get("article") or "").strip().upper()
+        if not art or (wanted is not None and art not in wanted):
+            continue
+        out[art] = profit_factor(rec.get("margin_pct"))
+    return out
+
+
 def wb_sorting_plan(
     db: Session, date_to, target_days: int = 30,
     articles: Optional[list] = None,
     velocity_days: int = WB_SORT_VELOCITY_DAYS,
+    min_size_stock: int = WB_SORT_MIN_SIZE_STOCK,
+    coverage_days: Optional[float] = None,
+    profit_factor: Optional[dict] = None,
 ) -> dict:
     """План подсортировки на WB: сколько дослать в каждый размер карточки.
 
     По каждому размеру: остаток на WB (включая наш товар в пути), скорость
-    продаж за длинное окно и сколько не хватает до целевого запаса.
+    продаж за окно скорости и сколько не хватает до целевого запаса.
+
+    ``velocity_days`` = 0 означает «всю историю продаж» — полезно, когда товар
+    продаётся сезонно и за 180 дней просто пусто. Размер, который есть в
+    карточке, но пуст на WB и не продаётся, всё равно получает
+    ``min_size_stock`` штук: иначе размер нельзя купить на карточке.
+
+    ``coverage_days`` — сколько дней продаж держим на WB. По умолчанию
+    ``target_days``. ``profit_factor`` — коэффициенты по артикулу из
+    ``wb_profit_factors``: они домножаются к целевому уровню, поэтому
+    убыточный товар (коэффициент 0) не подсортировывается вовсе, а прибыльный
+    получает более глубокий запас. Для такого товара правило пола не
+    применяется — иначе убыточный размер всё равно получил бы 1 штуку.
+
+    ``articles`` = ``None`` — все артикулы, ``[]`` — ни одного.
 
     Ключи — те же ``UPPER``, что у остатков и продаж, чтобы размеры не
     «разъезжались» из-за регистра. Размеры, которых нет в карточке, но которые
@@ -235,18 +326,29 @@ def wb_sorting_plan(
     Возвращает ``{UPPER(article): {"article": …, "sizes": [...], "total": шт}}``.
     """
     target_days = max(1, int(target_days or 1))
-    days = max(1, int(velocity_days or WB_SORT_VELOCITY_DAYS))
+    coverage = float(coverage_days) if coverage_days else float(target_days)
+    coverage = max(0.25, coverage)
+    factors = profit_factor or None
+    days = int(velocity_days or 0)
+    if days > 0:
+        since = date_to - timedelta(days=days - 1)
+    else:
+        since = _wb_first_sale_dt(db) or date_to
+    # делим на фактическую длину окна, а не на запрошенную: при «всё время»
+    # это вся история продаж, и скорость должна быть шт/день за неё
+    span = max(1, _span_days(since, date_to))
 
     cards = _wb_card_sizes(db)
-    sales = _wb_sizes(db, date_to - timedelta(days=days - 1), date_to)
+    sales = _wb_sizes(db, since, date_to)
     _, stocks = _mp_stocks(db, "wb", date_to)
 
     keys = set(cards)
     keys.update(a for a, _s in sales)
     keys.update(a for a, _s in stocks)
-    if articles:
+    if articles is not None:
         # фильтр применяем к объединению, а не только к карточкам: иначе
-        # артикул, у которого есть продажи, но нет карточки, проскочит мимо
+        # артикул, у которого есть продажи, но нет карточки, проскочит мимо.
+        # is not None, а не truthy: пустой список = «ничего не брать»
         keys &= {str(a or "").strip().upper() for a in articles}
 
     plan: dict = {}
@@ -255,17 +357,21 @@ def wb_sorting_plan(
         sizes.update(s for (a, s) in sales if a == art)
         sizes.update(s for (a, s) in stocks if a == art)
         card_bc = cards.get(art, {})
+        k = 1.0 if factors is None else float(factors.get(art, 1.0))
         items = []
         total = 0
         for s in sorted(sizes, key=_size_sort_key):
             net = max(0, int((sales.get((art, s)) or {}).get("net") or 0))
-            vel = net / days
-            target = target_days * vel
+            vel = net / span
+            target = coverage * vel * k
             st = stocks.get((art, s), [0, 0, 0, ""])
             avail = int(st[0] or 0) + int(st[2] or 0)
             to_sort = max(0, _ceil(target) - avail)
+            if to_sort == 0 and avail == 0 and min_size_stock > 0 and k > 0:
+                to_sort = int(min_size_stock)
             total += to_sort
-            items.append({
+
+            item = {
                 "size": s or "—",
                 "barcode": (card_bc.get(s) or (sales.get((art, s)) or {}).get("barcode")
                             or st[3] or ""),
@@ -276,8 +382,16 @@ def wb_sorting_plan(
                 "vel": round(vel, 3),
                 "target": round(target, 2),
                 "to_sort": to_sort,
-            })
-        plan[art] = {"article": art, "sizes": items, "total": total}
+            }
+            if factors is not None:
+                # ключ есть только когда коэффициенты действительно применились:
+                # по нему PDF понимает, что режим прибыльности включён
+                item["factor"] = round(k, 2)
+            items.append(item)
+        entry = {"article": art, "sizes": items, "total": total}
+        if factors is not None:
+            entry["factor"] = round(k, 2)
+        plan[art] = entry
     return plan
 
 
@@ -405,8 +519,7 @@ def replenish_rows(
     for m in detail_maps.values():
         keys |= set(m)
     if article_like:
-        al = str(article_like).strip().lower()
-        keys = {k for k in keys if al in k.lower()}
+        keys = {k for k in keys if like_match(k, article_like)}
 
     if not keys:
         return {"rows": [], "meta": _meta(0)}
@@ -522,6 +635,9 @@ def replenish_rows(
             "demand": round(vel, 2), "demand_wb": round(vel_wb, 2),
             "demand_oz": round(vel_oz, 2), "return_rate": return_rate,
             "sells": sell_wb + sell_oz, "returns_qty": ret_total,
+            # Продано WB за окно, нетто: sell_wb в детализации WB уже нетто
+            # (возвраты вычтены), net_wb дополнительно отсекает возвратные минусы.
+            "wb_sells": int(net_wb),
             "our_stock": our,
             "our_cost": round(_num(prod.net_cost if prod else 0), 2),
             "wb_qty": wb_q, "wb_avail": wb_avail, "wb_in_way": wb_w,
@@ -607,8 +723,7 @@ def _size_view(
     for c in codes:
         keys.update(art_stocks[c])
     if article_like:
-        al = str(article_like).strip().lower()
-        keys = {k for k in keys if al in k.lower()}
+        keys = {k for k in keys if like_match(k, article_like)}
     if not keys:
         return {"rows": [], "meta": _meta(0)}
 

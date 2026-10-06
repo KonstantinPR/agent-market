@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app import models
 from app.database import SessionLocal
 from app.services import ozon_article
+from app.services.common import like_col, like_re
 
 NUMERIC_COLUMNS = ["quantity", "returns_qty", "revenue", "commission",
                    "logistics", "storage", "services", "income"]
@@ -924,21 +925,6 @@ def _redistribute_articleless(rows, cells, fields, weight_idx=(6, 7)):
                 c[idx] += total * weights[a] / total_w
 
 
-def like_pattern(pattern: Optional[str]):
-    """SQL LIKE '%…%' → скомпилированный regex (регистронезависимо) или None.
-
-    Сохраняет семантику ilike: % — любая последовательность, _ — один символ.
-    Используется, чтобы фильтр поиска применялся только к выводу, а не к
-    агрегации (распределение расходов не должно пересчитываться под фильтр).
-    """
-    if not pattern:
-        return None
-    return re.compile(
-        re.escape(pattern).replace("%", r".*").replace("_", r"."),
-        re.IGNORECASE,
-    )
-
-
 def detail_summary_dataframe(
     db,
     date_from=None,
@@ -967,10 +953,10 @@ def detail_summary_dataframe(
     if not rows:
         return out
 
-    # Фильтр поиска применяется только к выводу (см. like_pattern): распределение
+    # Фильтр поиска применяется только к выводу (см. like_re): распределение
     # безартикульных расходов и хранения не пересчитывается под фильтр, доли
     # считаются по всему окну.
-    art_check = like_pattern(article_like)
+    art_check = like_re(article_like)
 
     cells: dict = {}
     titles: dict = {}
@@ -2305,8 +2291,8 @@ def oz_detail_summary_dataframe(
     if date_to:
         q = q.where(models.OzonDetailRow.date <= date_to)
     if article_like:
-        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonDetailRow.base_article.ilike(f"%{article_like}%"))
+        q = q.where(like_col(models.OzonDetailRow.offer_id, article_like)
+                    | like_col(models.OzonDetailRow.base_article, article_like))
     rows = list(db.execute(q).scalars().all())
     if not rows:
         return out
@@ -2320,8 +2306,8 @@ def oz_detail_summary_dataframe(
     if date_to:
         pq = pq.where(models.OzonPlacement.date <= date_to)
     if article_like:
-        pq = pq.where(models.OzonPlacement.offer_id.ilike(f"%{article_like}%")
-                      | models.OzonPlacement.base_article.ilike(f"%{article_like}%"))
+        pq = pq.where(like_col(models.OzonPlacement.offer_id, article_like)
+                      | like_col(models.OzonPlacement.base_article, article_like))
     for p in db.execute(pq).scalars().all():
         art = (p.offer_id or "").strip()
         if not art:
@@ -2331,8 +2317,8 @@ def oz_detail_summary_dataframe(
     # Выкупы: у API нет дат, агрегируем по всей таблице (с тем же фильтром артикула).
     bq = select(models.OzonBuyout)
     if article_like:
-        bq = bq.where(models.OzonBuyout.offer_id.ilike(f"%{article_like}%")
-                      | models.OzonBuyout.base_article.ilike(f"%{article_like}%"))
+        bq = bq.where(like_col(models.OzonBuyout.offer_id, article_like)
+                      | like_col(models.OzonBuyout.base_article, article_like))
     buyot = {}
     for r in db.execute(bq).scalars().all():
         art = (r.offer_id or "").strip().upper()

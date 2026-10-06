@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app import models
 from app.api import PDF_DEFAULT_LIMIT, PDF_MAX_LIMIT, PDF_MEDIA
 from app.services import photos as photos_service
+from app.services.replenish import WB_SORT_VELOCITY_DAYS
 
 TODAY = date(2026, 9, 20)
 D0 = TODAY - timedelta(days=29)
@@ -247,3 +248,223 @@ def test_reversed_window_is_not_rejected(pdf_api):
                     params={"date_from": "2026-09-10", "date_to": "2026-09-01"})
     assert r.status_code == 200
     assert r.content.startswith(b"%PDF")
+
+
+# ------------------------------------------------- окно скорости (vel_days)
+def _card_with_size(db, article, size, sold=0, day=None):
+    db.add(models.MarketplaceCard(
+        marketplace_id=_mp_id(db, "wb"), chrt_id=f"c:{article}:{size}",
+        vendor_code=article, nm_id="", barcode="", size=size,
+    ))
+    if sold:
+        db.add(models.WbDetailRow(
+            op_key=f"{article}{size}", source="excel", article=article,
+            doc_type_name="Продажа", sale_dt=day or TODAY, quantity=sold,
+            tech_size=size, retail_amount=1000.0 * sold, for_pay=900.0 * sold,
+        ))
+    db.add(models.Product(article=article, name="Товар " + article,
+                          net_cost=100.0, replenishable=True))
+
+
+def _footer_text(pdf: bytes) -> str:
+    import fitz
+
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        return "\n".join(page.get_text() for page in doc)
+    finally:
+        doc.close()
+
+
+def test_vel_days_is_reflected_in_footer(pdf_api, db):
+    _card_with_size(db, "VEL-1", "42")
+    db.commit()
+
+    for params, label in (
+        ({"vel_days": 180}, "180 дн"),
+        ({"vel_days": 365}, "365 дн"),
+        ({"vel_days": 0}, "всё время"),
+    ):
+        r = pdf_api.get("/api/export/replenish/pdf", params={"with_photos": 0, **params})
+        assert r.status_code == 200
+        assert f"скорость по {label}" in _footer_text(r.content), label
+
+
+def test_unknown_vel_days_falls_back_to_default(pdf_api, db):
+    _card_with_size(db, "VEL-2", "42")
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "vel_days": 7})
+    assert r.status_code == 200
+    assert "скорость по 180 дн" in _footer_text(r.content)
+
+
+def test_old_sale_outside_window_still_gets_one_piece(pdf_api, db):
+    """Продажа вне окна скорости не обнуляет размер — срабатывает правило пола."""
+    _card_with_size(db, "VEL-3", "42", sold=900,
+                    day=TODAY - timedelta(days=WB_SORT_VELOCITY_DAYS + 5))
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "vel_days": WB_SORT_VELOCITY_DAYS})
+    assert r.status_code == 200
+    text = _footer_text(r.content)
+    # пустой размер всё равно получает 1 штуку, поэтому в итоге есть строка
+    assert "Итого дослать на WB" in text
+
+
+def test_floor_rule_is_named_in_footer(pdf_api, db):
+    """Правило пола должно быть видно в документе, иначе цифры непонятны."""
+    _card_with_size(db, "VEL-4", "42")
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf", params={"with_photos": 0})
+    assert "пустой размер" in _footer_text(r.content)
+
+
+# ------------------------------------------------- учёт прибыльности (profit)
+def _footer_all(pdf: bytes) -> str:
+    import fitz
+
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        return "\n".join(p.get_text() for p in doc)
+    finally:
+        doc.close()
+
+
+def test_profit_mode_explains_itself_in_footer(pdf_api, db):
+    _card_with_size(db, "PRF-1", "42")
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "date_from": "2026-09-11",
+                            "date_to": "2026-09-20", "profit": 1})
+    assert r.status_code == 200
+    txt = _footer_all(r.content)
+    # 10 дней периода / 4 = 2.5 дня покрытия
+    assert "покрытие 2.5 дн" in txt
+    assert "период/4" in txt
+    assert "прибыльность" in txt
+
+
+def test_profit_off_uses_target_days_in_footer(pdf_api, db):
+    _card_with_size(db, "PRF-2", "42")
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "target_days": 45, "profit": 0})
+    assert r.status_code == 200
+    txt = _footer_all(r.content)
+    assert "запас 45 дн" in txt
+    assert "период/4" not in txt
+
+
+def test_profit_on_is_the_default(pdf_api, db):
+    """Галка включена по умолчанию — без параметра PDF считает по прибыльности."""
+    _card_with_size(db, "PRF-3", "42")
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf", params={"with_photos": 0})
+    assert "период/4" in _footer_all(r.content)
+
+
+def test_loss_making_article_is_dropped_from_pdf(pdf_api, db):
+    """Убыточный товар в шопинг-листе не нужен: PDF без него."""
+    db.add(models.Product(article="PRF-LOSS", name="Убыточный", net_cost=5000.0,
+                          replenishable=True))
+    db.add(models.MarketplaceCard(
+        marketplace_id=_mp_id(db, "wb"), chrt_id="c:PRF-LOSS:42",
+        vendor_code="PRF-LOSS", nm_id="", barcode="", size="42",
+    ))
+    db.add(models.WbDetailRow(
+        op_key="prfloss", source="excel", article="PRF-LOSS",
+        doc_type_name="Продажа", sale_dt=TODAY, quantity=300,
+        tech_size="42", sku="", retail_amount=30000.0, for_pay=25500.0,
+    ))
+    db.add(models.Stock(
+        marketplace_id=_mp_id(db, "wb"), date=TODAY, article="PRF-LOSS", size="42",
+        warehouse="Стек", quantity=0, quantity_full=0, in_way=0,
+    ))
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf", params={"with_photos": 0})
+    assert r.status_code == 200
+    assert "PRF-LOSS" not in _footer_all(r.content)
+
+
+def test_article_reported_in_x_truncated_when_dropped(pdf_api, db):
+    """Отбракованные по прибыльности товары не должны молча исчезать из счётчика."""
+    db.add(models.Product(article="PRF-TRUNC", name="Убыточный", net_cost=5000.0,
+                          replenishable=True))
+    db.add(models.MarketplaceCard(
+        marketplace_id=_mp_id(db, "wb"), chrt_id="c:PRF-TRUNC:42",
+        vendor_code="PRF-TRUNC", nm_id="", barcode="", size="42",
+    ))
+    db.add(models.WbDetailRow(
+        op_key="prftrunc", source="excel", article="PRF-TRUNC",
+        doc_type_name="Продажа", sale_dt=TODAY, quantity=300,
+        tech_size="42", sku="", retail_amount=30000.0, for_pay=25500.0,
+    ))
+    db.add(models.Stock(
+        marketplace_id=_mp_id(db, "wb"), date=TODAY, article="PRF-TRUNC", size="42",
+        warehouse="Стек", quantity=0, quantity_full=0, in_way=0,
+    ))
+    db.commit()
+
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "limit": 500})
+    assert int(r.headers["X-Truncated"]) >= 1
+    # остаётся только прибыльный PDF-ART-1 из фикстуры, убыточный отброшен
+    assert r.headers["X-Count"] == "1"
+    assert "PRF-TRUNC" not in _footer_all(r.content)
+
+
+# ------------------------- поля карточки из «Вида таблицы» и фото по умолчанию
+def test_status_ui_key_is_printed_in_card(pdf_api):
+    """«Вид таблицы» шлёт ключ status — карточка обязана напечатать «Статус»."""
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "cols": "status,name"})
+    assert r.status_code == 200
+    txt = _footer_all(r.content)
+    assert "PDF-ART-1" in txt
+    assert "Статус" in txt
+
+
+def test_wb_sells_col_is_printed_in_card(pdf_api):
+    """Новая колонка «Продано WB, шт» доступна в карточке и в выгрузке."""
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "cols": "wb_sells,name"})
+    assert r.status_code == 200
+    assert "Продано WB, шт" in _footer_all(r.content)
+
+
+def test_default_photo_count_is_six(pdf_api, tmp_path, monkeypatch):
+    """Без параметра photo_count в карточку идёт 6 фото (раньше было 4)."""
+    from app.services import thumbs as thumbs_service
+
+    # у PDF-ART-1 должно быть больше 4 снимков, иначе 6 и 4 неразличимы
+    root = tmp_path / "photos6"
+    for n in range(1, 8):
+        p = root / "set" / f"PDF-ART-1-{n}.JPG"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(_jpeg(n))
+    idx = photos_service.PhotoIndex(root=root)
+    monkeypatch.setattr(photos_service, "get_index", lambda: idx)
+    monkeypatch.setattr(
+        thumbs_service, "thumb_bytes",
+        lambda path, max_px=None, quality=None: _jpeg(abs(hash(str(path))) % 90 + 1),
+    )
+
+    default = pdf_api.get("/api/export/replenish/pdf", params={"with_photos": 1})
+    four = pdf_api.get("/api/export/replenish/pdf",
+                       params={"with_photos": 1, "photo_count": 4})
+    six = pdf_api.get("/api/export/replenish/pdf",
+                      params={"with_photos": 1, "photo_count": 6})
+    assert default.status_code == 200 and four.status_code == 200
+    assert default.headers["X-Photo-Hits"] == "1"
+    assert len(default.content) == len(six.content)
+    assert len(four.content) < len(six.content)
+
+

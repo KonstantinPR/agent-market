@@ -11,7 +11,8 @@ from app import models
 from app.config import settings
 from app.services import funnel as funnel_service
 from app.services import ozon_article
-from app.services.sync import _is_goods_row, _redistribute_articleless, storage_split, like_pattern, marketplace_id
+from app.services.common import like_col, like_re
+from app.services.sync import _is_goods_row, _redistribute_articleless, storage_split, marketplace_id
 
 
 def funnel_dataframe(
@@ -97,7 +98,7 @@ def funnel_dataframe(
 
     storage_est_map = storage_split(db, date_from=from_, date_to=to_)
 
-    art_check = like_pattern(article_like)
+    art_check = like_re(article_like)
     seen = set()
     recs = []
     for fm, p_name, p_cost in db.execute(q):
@@ -324,10 +325,10 @@ def margin_detail_dataframe(
     if not rows:
         return out
 
-    # Фильтр поиска применяется только к выводу (см. like_pattern): распределение
+    # Фильтр поиска применяется только к выводу (см. like_re): распределение
     # безартикульных плат «Хранение», логистики и услуг не пересчитывается под
     # фильтр в строке поиска — доли считаются по всему окну периода.
-    art_check = like_pattern(article_like)
+    art_check = like_re(article_like)
 
     # Распределение безартикульных плат «Хранение» по товарам продаж пропорц.
     # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
@@ -342,12 +343,20 @@ def margin_detail_dataframe(
     # Остатки WB на конец окна: последний срез стоков <= date_to.
     stock_map = _wb_stock_map(db, date_to=date_to) if date_to else {}
 
-    prods = db.execute(select(models.Product).where(
-        func.upper(models.Product.article).in_(
-            {(r.article or "").strip().upper() for r in rows if (r.article or "").strip()})
-        | func.upper(func.coalesce(models.Product.barcode, "")).in_(
-            {(r.sku or "").strip().upper() for r in rows if (r.sku or "").strip()})
-    )).scalars().all()
+    # Два запроса вместо OR: по OR Postgres не применяет план к UPPER(...)
+    # (Seq Scan + сравнение с массивом ~16k элементов ≈ 9 с на окне 365 дней),
+    # раздельные IN отдают тот же набор строк за ~0.2 с.
+    arts_up = {(r.article or "").strip().upper() for r in rows if (r.article or "").strip()}
+    skus_up = {(r.sku or "").strip().upper() for r in rows if (r.sku or "").strip()}
+    prods = []
+    if arts_up:
+        prods += db.execute(select(models.Product).where(
+            func.upper(models.Product.article).in_(arts_up)
+        )).scalars().all()
+    if skus_up:
+        prods += db.execute(select(models.Product).where(
+            func.upper(func.coalesce(models.Product.barcode, "")).in_(skus_up)
+        )).scalars().all()
     # Себестоимость: UPPER(article) -> product; если артикул не матчится по
     # регистру — пробуем barcode от любой строки этого артикула (sku-колонка).
     prods_by_upper = {p.article.strip().upper(): p for p in prods}
@@ -543,8 +552,8 @@ def ozon_margin_detail_dataframe(
         q = q.where(models.OzonDetailRow.date <= date_to)
     if article_like:
         # ищем и по полному артикулу размера, и по базовому артикулу товара
-        q = q.where(models.OzonDetailRow.offer_id.ilike(f"%{article_like}%")
-                    | models.OzonDetailRow.base_article.ilike(f"%{article_like}%"))
+        q = q.where(like_col(models.OzonDetailRow.offer_id, article_like)
+                    | like_col(models.OzonDetailRow.base_article, article_like))
     rows = list(db.execute(q).scalars().all())
     if not rows:
         return out
@@ -837,7 +846,7 @@ def margin_dataframe(
         ids = marketplace if isinstance(marketplace, (list, tuple, set)) else [marketplace]
         query = query.where(models.Sale.marketplace_id.in_(ids))
     if article_like:
-        query = query.where(models.Sale.article.ilike(f"%{article_like}%"))
+        query = query.where(like_col(models.Sale.article, article_like))
     if source:
         query = query.where(models.Sale.source == source)
     else:

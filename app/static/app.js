@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "64";
+const UI_VERSION = "69";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -132,6 +132,29 @@ function marginMarketplace() {
   const g = $("#fMarketplace").value;
   const base = g ? [g] : sel;
   return base.filter((x) => sel.includes(x)).join(",");
+}
+
+// Расширенный поиск: «*» — любая последовательность символов (в т.ч. пустая),
+// всё остальное — буквально, регистр не важен. «abc*12*xyz» ищет именно в этом
+// порядке. Семантика совпадает с серверной (app/services/common.py).
+const _LIKE_RE_CACHE = new Map();
+function likeRe(query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (_LIKE_RE_CACHE.has(q)) return _LIKE_RE_CACHE.get(q);
+  // экранируем всё (включая «*»), затем возвращаем «*» к любой последовательности
+  const src = q
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\\\*/g, ".*");
+  const re = new RegExp(src);
+  if (_LIKE_RE_CACHE.size > 200) _LIKE_RE_CACHE.clear();
+  _LIKE_RE_CACHE.set(q, re);
+  return re;
+}
+
+function likeMatch(haystack, query) {
+  const q = String(query || "").trim();
+  if (!q) return true;
+  return likeRe(q).test(String(haystack == null ? "" : haystack).toLowerCase());
 }
 
 function qs(params) {
@@ -1048,8 +1071,8 @@ async function renderMargin(p) {
   const draw = (rows) => { pagedTable($("#marginTable"), headers, rows, null, null, colViewPinKeys("margin")); };
   draw(data.rows);
   $("#marginSearch").oninput = (e) => {
-    const q = e.target.value.trim().toLowerCase();
-    draw(data.rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q)));
+    const q = e.target.value;
+    draw(data.rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), q)));
   };
   const cp = colViewParam("margin");
   $("#exportMargin").href = "/api/export/margin" + p + (cp ? (p ? "&" : "?") + cp : "");
@@ -1187,10 +1210,48 @@ function ccTab(tab) {
 function viewBtnId(tab) { return "btn" + ccTab(tab) + "View"; }
 function viewMenuId(tab) { return ccTab(tab) + "ViewMenu"; }
 function viewPanelId(tab) { return ccTab(tab) + "ViewPanel"; }
-function colViewSet(tab) {
+// Текст фильтра в панели «Вид таблицы» — по вкладке, переживает перерисовку панели.
+const _COLVIEW_FILTER = {};
+function setColViewFilter(tab, q) {
+  _COLVIEW_FILTER[tab] = q || "";
+  applyColViewFilter(tab);
+}
+// Скрывает строки панели, не подходящие под фильтр (перерисовку не делаем,
+// иначе при наборе теряется фокус в поле). Семантика «*» — как в общем поиске.
+function applyColViewFilter(tab) {
+  const panel = $("#" + viewPanelId(tab));
+  if (!panel) return;
+  const q = _COLVIEW_FILTER[tab] || "";
+  const hit = (s) => !q || likeMatch(s || "", q);
+  for (const row of panel.querySelectorAll(":scope > .colview-row")) {
+    row.style.display = hit(row.dataset.lbl) ? "" : "none";
+  }
+  let any = false;
+  for (const grp of panel.querySelectorAll(".colview-grp")) {
+    const titleHit = hit(grp.dataset.lbl);
+    let gAny = false;
+    for (const row of grp.querySelectorAll(".colview-row")) {
+      const vis = titleHit || hit(row.dataset.lbl);
+      row.style.display = vis ? "" : "none";
+      if (vis) gAny = true;
+    }
+    grp.style.display = gAny ? "" : "none";
+    if (gAny) any = true;
+  }
+  // разделители секций лишние, пока фильтр активен
+  for (const hr of panel.querySelectorAll("hr")) hr.style.display = q ? "none" : "";
+  const empty = panel.querySelector(".colview-filter-empty");
+  if (empty) {
+    const visRows = panel.querySelectorAll(":scope > .colview-row");
+    let shown = any;
+    for (const r of visRows) if (r.style.display !== "none") { shown = true; break; }
+    empty.hidden = !q || shown;
+  }
+}
+function colViewSet(tab, modeHint) {
   const c = _COLVIEWS[tab];
   if (!c) return null;
-  const mode = c.mode ? c.mode() : "base";
+  const mode = modeHint || (c.mode ? c.mode() : "base");
   const set = c.sets ? c.sets[mode] : { headers: c.headers, optional: c.optional };
   if (!set) return null;
   return {
@@ -1199,8 +1260,8 @@ function colViewSet(tab) {
     optional: set.optional,
   };
 }
-function colViewState(tab) {
-  const set = colViewSet(tab);
+function colViewState(tab, modeHint) {
+  const set = colViewSet(tab, modeHint);
   if (!set) return null;
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(set.key)); } catch (e) { saved = null; }
@@ -1251,7 +1312,7 @@ function colViewParam(tab, extraKeys, modeHint) {
   const mode = modeHint || (c.mode ? c.mode() : "base");
   const set = c.sets ? c.sets[mode] : { headers: c.headers, optional: c.optional };
   if (!set) return "";
-  const st = colViewState(tab);
+  const st = colViewState(tab, modeHint);
   const optKeys = new Set(set.optional.map((o) => o.k));
   const keys = [];
   const push = (k) => {
@@ -1274,6 +1335,27 @@ function buildColViewMenu(tab) {
   const panel = $("#" + viewPanelId(tab));
   if (!set || !panel) return;
   panel.innerHTML = "";
+  // Поиск по колонкам — чтобы не глазать десятки чекбоксов вручную.
+  // Значение храним по вкладке: панель перерисовывается при каждом переключении
+  // чекбокса, текст фильтра должен переживать это.
+  const fw = document.createElement("div");
+  fw.className = "colview-filter";
+  const fi = document.createElement("input");
+  fi.type = "search";
+  fi.placeholder = "Фильтр колонок… * = любая часть";
+  fi.value = _COLVIEW_FILTER[tab] || "";
+  fi.setAttribute("aria-label", "Фильтр колонок в меню «Вид таблицы»");
+  fi.addEventListener("click", (e) => e.stopPropagation());
+  fi.addEventListener("input", (e) => setColViewFilter(tab, e.target.value));
+  // Escape сбрасывает фильтр; клики/набор не должны «прокидываться» наружу —
+  // панель закрывается по клику в документ.
+  fi.addEventListener("keydown", (e) => { if (e.key === "Escape") { fi.value = ""; setColViewFilter(tab, ""); } });
+  fw.appendChild(fi);
+  panel.appendChild(fw);
+  const fe = document.createElement("div");
+  fe.className = "colview-filter-empty";
+  fe.textContent = "Ничего не найдено";
+  panel.appendChild(fe);
   const st = colViewState(tab);
   const pinSet = new Set(st.pin || []);
   const base = set.headers.filter((h) => !set.optional.some((o) => o.k === h.k));
@@ -1376,6 +1458,7 @@ function buildColViewMenu(tab) {
   const item = (k, label, visOn, pinOn) => {
     const row = document.createElement("div");
     row.className = "colview-row";
+    row.dataset.lbl = label;
     const lbl = document.createElement("label");
     lbl.className = "chk";
     if (visOn !== null) {
@@ -1487,6 +1570,7 @@ function buildColViewMenu(tab) {
       const anyOn = entries.some((o) => !!st[o.k]);
       const grp = document.createElement("div");
       grp.className = "colview-grp";
+      grp.dataset.lbl = g.title;
       const lbl = document.createElement("label");
       lbl.className = "chk colview-grp-lbl";
       const cb = document.createElement("input");
@@ -1506,6 +1590,7 @@ function buildColViewMenu(tab) {
       for (const o of entries) {
         const row = document.createElement("div");
         row.className = "colview-row colview-sub";
+        row.dataset.lbl = o.label;
         const il = document.createElement("label");
         il.className = "chk";
         const icb = document.createElement("input");
@@ -1532,6 +1617,8 @@ function buildColViewMenu(tab) {
       if (o) item(o.k, o.label, !!st[o.k], pinSet.has(o.k));
     }
   }
+  // панель могли перестроить при включённом фильтре — применяем его заново
+  applyColViewFilter(tab);
 }
 // Общий обработчик кнопки «Вид таблицы» (открыть/закрыть панель).
 function initColViewMenu(tab) {
@@ -1863,8 +1950,8 @@ async function renderSales(p) {
   const draw = (rows) => { pagedTable($("#salesTable"), headers, rows); };
   draw(data.rows);
   $("#salesSearch").oninput = (e) => {
-    const q = e.target.value.trim().toLowerCase();
-    draw(data.rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q)));
+    const q = e.target.value;
+    draw(data.rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), q)));
   };
   $("#exportSales").href = "/api/export/sales" + p;
 }
@@ -2006,6 +2093,7 @@ const replenishHeaders = [
   { k: "demand", label: "Спрос, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж: (продажи − возвраты) за выбранное окно, штук в день." },
   { k: "demand_wb", label: "WB, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж только по WB за окно, штук в день (продажи − возвраты)." },
   { k: "demand_oz", label: "Ozon, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж только по Ozon за окно, штук в день (продажи − возвраты)." },
+  { k: "wb_sells", label: "Продано WB, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Сколько штук продано на WB за выбранное окно, шт, нетто (продажи − возвраты). Продано WB ÷ дни окна = «WB, шт/д»." },
   { k: "return_rate", label: "Возвраты, %", num: true, render: (v) => v == null ? "—" : fmtPct(v), tip: "Доля возвратов: возвраты ÷ (продажи + возвраты) за окно, %." },
   { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе: начальный + приход − отгрузка по документам." },
   { k: "our_cost", label: "Себест-ть", num: true, render: cellFmts.money, tip: "Себестоимость из каталога товаров; если не задана — оценка по умолчанию." },
@@ -2069,6 +2157,7 @@ function _footAvg(rows, k, dp) {
 function replenishFooters(rows) {
   if (!rows || !rows.length) return null;
   const t = {
+    wb_sells: _footSum(rows, "wb_sells"),
     our_stock: _footSum(rows, "our_stock"),
     wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
     wb_def: _footSum(rows, "wb_def"),
@@ -2140,8 +2229,6 @@ async function renderReplenish() {
     const cp = colViewParam("replenish");
     exp.href = "/api/export/replenish" + p + (cp ? "&" + cp : "");
   }
-  const expPdf = $("#exportReplenishPdf");
-  if (expPdf) expPdf.href = replenishPdfUrl();
   let data;
   try {
     data = await api("/replenish" + p);
@@ -2187,14 +2274,25 @@ async function renderReplenish() {
 const REPLENISH_PDF_KEY = "replenishPdf";
 const PDF_PHOTO_MAX = 9;
 
+// Окна скорости продаж размера для плана подсортировки. 0 — вся история.
+const PDF_VEL_WINDOWS = [
+  { v: 180, label: "180 дней" },
+  { v: 365, label: "365 дней" },
+  { v: 0, label: "всё время" },
+];
+const PDF_VEL_DEFAULT = 180;
+
 function pdfParams() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(REPLENISH_PDF_KEY) || "{}") || {}; } catch (e) { s = {}; }
   const n = parseInt(s.photoCount, 10);
+  const vd = parseInt(s.velDays, 10);
   return {
     withPhotos: s.withPhotos !== false,
-    photoCount: n >= 1 && n <= PDF_PHOTO_MAX ? n : 4,
-    cols: Array.isArray(s.cols) ? s.cols.slice() : null,
+    photoCount: n >= 1 && n <= PDF_PHOTO_MAX ? n : 6,
+    velDays: PDF_VEL_WINDOWS.some((w) => w.v === vd) ? vd : PDF_VEL_DEFAULT,
+    // галка включена по умолчанию: подсорт по прибыльности полезнее плоских 1 шт
+    profit: s.profit !== false,
   };
 }
 
@@ -2208,14 +2306,16 @@ function replenishPdfColumns() {
 }
 
 function replenishPdfCols() {
-  const p = pdfParams();
-  if (p.cols) return p.cols;
-  const st = colViewState("replenish");
-  const keys = new Set(["name"]);
+  // Карточка печатает ровно те колонки, что включены в «Вид таблицы» вида
+  // «По артикулам» (режим берём явно — PDF всегда по артикулам, даже когда
+  // таблица сейчас открыта в разрезе «По размерам»).
+  const st = colViewState("replenish", "article");
+  if (!st) return replenishPdfColumns().map((h) => h.k);
+  const keys = [];
   for (const h of replenishPdfColumns()) {
-    if (st[h.k] !== false) keys.add(h.k);
+    if (st[h.k] !== false) keys.push(h.k);
   }
-  return Array.from(keys);
+  return keys;
 }
 
 function buildReplenishPdfMenu() {
@@ -2245,12 +2345,66 @@ function buildReplenishPdfMenu() {
     sel.appendChild(o);
   }
   sel.addEventListener("change", (e) => {
-    p.photoCount = parseInt(e.target.value, 10) || 4;
+    p.photoCount = parseInt(e.target.value, 10) || 6;
     savePdfParams(p);
   });
   cntRow.appendChild(document.createTextNode(" Фото на товар: "));
   cntRow.appendChild(sel);
   panel.appendChild(cntRow);
+
+  const velRow = document.createElement("label");
+  velRow.className = "chk";
+  const velSel = document.createElement("select");
+  velSel.title = "За какое окно считать скорость продаж размера. Короткое окно даёт "
+    + "нулевую скорость у размеров, которые давно не продавались; «всё время» "
+    + "полезно для сезонных товаров";
+  for (const w of PDF_VEL_WINDOWS) {
+    const o = document.createElement("option");
+    o.value = String(w.v);
+    o.textContent = w.label;
+    if (w.v === p.velDays) o.selected = true;
+    velSel.appendChild(o);
+  }
+  velSel.addEventListener("change", (e) => {
+    const v = parseInt(e.target.value, 10);
+    p.velDays = PDF_VEL_WINDOWS.some((w) => w.v === v) ? v : PDF_VEL_DEFAULT;
+    savePdfParams(p);
+  });
+  velRow.appendChild(document.createTextNode(" Скорость по: "));
+  velRow.appendChild(velSel);
+  panel.appendChild(velRow);
+
+  // Галка прибыльности меняет смысл покрытия, поэтому гасим «Запас»:
+  // он при включённой галке не используется, и оставлять его активным
+  // с этим значением вводит в заблуждение.
+  const profitRow = document.createElement("label");
+  profitRow.className = "chk";
+  const profitCb = document.createElement("input");
+  profitCb.type = "checkbox";
+  profitCb.checked = p.profit;
+  profitCb.title = "Держать на WB четверть выбранного периода продаж и домножить "
+    + "цель на коэффициент по рентабельности: убыточный товар (рентабельность ≤ 0) "
+    + "не подсортировывается совсем, 15% → ×1.0, 30% и выше → ×2.0. Коэффициент "
+    + "считается по товару целиком: у размеров своей себестоимости нет. Выключенная "
+    + "галка возвращает покрытие из поля «Запас» и подсорт 1 шт в пустые размеры";
+  const syncTargetField = () => {
+    const t = $("#replenishTarget");
+    if (!t) return;
+    t.disabled = profitCb.checked;
+    t.title = profitCb.checked
+      ? "Пока включена галка «Учитывать прибыльность», покрытие = период / 4"
+      : "Сколько дней продаж держать на WB";
+    t.parentElement && t.parentElement.classList.toggle("off", profitCb.checked);
+  };
+  profitCb.addEventListener("change", (e) => {
+    p.profit = e.target.checked;
+    savePdfParams(p);
+    syncTargetField();
+  });
+  profitRow.appendChild(profitCb);
+  profitRow.appendChild(document.createTextNode(" Учитывать прибыльность"));
+  panel.appendChild(profitRow);
+  syncTargetField();
 
   const syncCountSel = () => {
     sel.disabled = !cb.checked;
@@ -2267,33 +2421,14 @@ function buildReplenishPdfMenu() {
   sep.style.margin = "4px 0";
   panel.appendChild(sep);
 
-  const title = document.createElement("div");
-  title.textContent = "Поля в карточке:";
-  title.style.fontSize = "12px";
-  title.style.color = "#666";
-  panel.appendChild(title);
-
-  const selected = new Set(replenishPdfCols());
-  for (const h of replenishPdfColumns()) {
-    const row = document.createElement("div");
-    row.className = "colview-row";
-    const lbl = document.createElement("label");
-    lbl.className = "chk";
-    const b = document.createElement("input");
-    b.type = "checkbox";
-    b.checked = selected.has(h.k);
-    b.addEventListener("change", (e) => {
-      if (e.target.checked) selected.add(h.k);
-      else selected.delete(h.k);
-      p.cols = Array.from(selected);
-      savePdfParams(p);
-    });
-    lbl.appendChild(b);
-    lbl.appendChild(document.createTextNode(" " + h.label));
-    if (h.tip) lbl.title = h.tip;
-    row.appendChild(lbl);
-    panel.appendChild(row);
-  }
+  const hint = document.createElement("div");
+  hint.textContent = "Поля карточки — колонки во «Вид таблицы».";
+  hint.style.fontSize = "12px";
+  hint.style.color = "#666";
+  hint.title = "Карточка печатает колонки, включённые во «Вид таблицы» для вида "
+    + "«По артикулам»: включили колонку — она есть и в PDF. Артикул и размер "
+    + "печатаются всегда.";
+  panel.appendChild(hint);
 
   const go = document.createElement("button");
   go.type = "button";
@@ -2336,7 +2471,9 @@ function replenishPdfUrl() {
   const p = pdfParams();
   params.set("with_photos", p.withPhotos ? 1 : 0);
   params.set("photo_count", p.photoCount);
-  const cols = (p.cols || replenishPdfCols()).join(",");
+  params.set("vel_days", p.velDays);
+  params.set("profit", p.profit ? 1 : 0);
+  const cols = replenishPdfCols().join(",");
   if (cols) params.set("cols", cols);
   return "/api/export/replenish/pdf?" + params.toString();
 }
@@ -3470,8 +3607,7 @@ async function renderWbStocks() {
     rows = aggregateStocks(rows);
   }
   if (q) {
-    const needle = q.toLowerCase();
-    rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
+    rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || "") + " " + (r.size || ""), q));
   }
   const head = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = statusEl();
@@ -3568,8 +3704,7 @@ async function renderOzStocks() {
     rows = aggregateStocks(rows);
   }
   if (q) {
-    const needle = q.toLowerCase();
-    rows = rows.filter((r) => (r.article + " " + (r.name || "") + " " + (r.size || "")).toLowerCase().includes(needle));
+    rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || "") + " " + (r.size || ""), q));
   }
 const head = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = statusEl();
@@ -3617,7 +3752,7 @@ async function renderOzSales() {
   let rows = data.rows || [];
   if (likeEl) {
     const s = likeEl.value.trim().toLowerCase();
-    if (s) rows = rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(s));
+    if (s) rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), s));
   }
   const win = (p.date_from && p.date_to) ? p.date_from + " … " + p.date_to : "";
   if (!rows.length && !data.count) {
@@ -3686,7 +3821,7 @@ async function renderWbSales() {
   let rows = data.rows || [];
   if (likeEl) {
     const q = likeEl.value.trim().toLowerCase();
-    if (q) rows = rows.filter((r) => (r.article + " " + (r.name || "")).toLowerCase().includes(q));
+    if (q) rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), q));
   }
   const msg = statusEl();
   if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
@@ -5740,7 +5875,7 @@ async function renderPricing(apply) {
     let pre = allRows;
     if (q) {
       pre = pre.filter((r) =>
-        (String(r.article || "") + " " + (r.name || "")).toLowerCase().includes(q)
+        likeMatch(String(r.article || "") + " " + (r.name || ""), q)
       );
     }
     const hiddenPassive = hidePassive ? pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length : 0;

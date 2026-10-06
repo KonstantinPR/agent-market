@@ -5,7 +5,10 @@ import pytest
 from sqlalchemy import select
 
 from app import models
-from app.services.replenish import WB_SORT_VELOCITY_DAYS, replenish_rows, wb_sorting_plan
+from app.services.replenish import (
+    WB_SORT_VELOCITY_DAYS, profit_factor, replenish_rows, wb_profit_factors,
+    wb_sorting_plan,
+)
 
 TODAY = date(2026, 9, 20)
 D0 = TODAY - timedelta(days=29)  # окно 30 дней
@@ -65,6 +68,7 @@ def test_replenish_wb_ship_and_buy(db):
     assert row["article"] == "WB-1"
     assert row["demand"] == 2.0            # 60/30, без возвратов
     assert row["demand_wb"] == 2.0
+    assert row["wb_sells"] == 60           # продано WB за окно, шт
     assert row["demand_oz"] == 0.0
     assert row["actual"] is True
     assert row["actual_mp"] == "wb"
@@ -95,6 +99,7 @@ def test_replenish_returns_net_demand(db):
     assert row["demand_wb"] == 2.0          # (100 − 40)/30
     assert row["demand_oz"] == 2.0          # (90 − 30)/30
     assert row["demand"] == 4.0
+    assert row["wb_sells"] == 60           # нетто WB: 100 продаж − 40 возвратов
     assert row["return_rate"] == round(70 / 220 * 100, 1)
     assert row["need_buy"] == 120           # 30 × 4, остатков нет нигде
 
@@ -385,14 +390,18 @@ def _plan_size(plan, article, size):
 
 
 def test_plan_lists_every_card_size_even_without_sales(db):
-    """Главная боль: размеры без продаж в окне тоже должны попасть в план."""
+    """Главная боль: размеры без продаж в окне тоже должны попасть в план.
+
+    Здесь ``min_size_stock=0``, чтобы проверить именно попадание размера в
+    список — правило «1 шт в пустой размер» разбирается отдельно.
+    """
     _card_size(db, "wb", "PLAN-1", "42", "111")
     _card_size(db, "wb", "PLAN-1", "44", "222")
     _card_size(db, "wb", "PLAN-1", "46", "333")
     db.add(_wb_size_row("p1", "PLAN-1", "42", TODAY, qty=180))
     db.commit()
 
-    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    plan = wb_sorting_plan(db, TODAY, target_days=30, min_size_stock=0)
     assert [s["size"] for s in plan["PLAN-1"]["sizes"]] == ["42", "44", "46"]
     assert _plan_size(plan, "PLAN-1", "42")["to_sort"] > 0
     # у 44 и 46 продаж нет вообще — остаются в плане, но добавлять нечего
@@ -420,7 +429,7 @@ def test_plan_ignores_sales_older_than_velocity_window(db):
                         TODAY - timedelta(days=WB_SORT_VELOCITY_DAYS + 10), qty=500))
     db.commit()
 
-    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    plan = wb_sorting_plan(db, TODAY, target_days=30, min_size_stock=0)
     assert _plan_size(plan, "PLAN-3", "42")["to_sort"] == 0
 
 
@@ -447,7 +456,7 @@ def test_plan_never_negative_on_returns_only_size(db):
     db.add(_wb_size_row("p5", "PLAN-5", "42", TODAY, qty=1, doc_type="Возврат"))
     db.commit()
 
-    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    plan = wb_sorting_plan(db, TODAY, target_days=30, min_size_stock=0)
     s = _plan_size(plan, "PLAN-5", "42")
     assert s["net"] == 0 or s["net"] >= 0
     assert s["to_sort"] == 0
@@ -497,3 +506,212 @@ def test_plan_ignores_ozon_cards(db):
     sizes = plan["PLAN-10"]["sizes"]
     assert [s["size"] for s in sizes] == ["42"]   # только из продаж WB
     assert _plan_size(plan, "PLAN-10", "42")["to_sort"] == 30
+
+
+# ------------------------------------------- правило «пустой размер не пустой»
+def test_plan_keeps_one_piece_in_empty_size(db):
+    """Размер в карточке, пустой на WB и без продаж, получает 1 штуку."""
+    _card_size(db, "wb", "EMPTY-1", "42")
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    assert _plan_size(plan, "EMPTY-1", "42")["to_sort"] == 1
+
+
+def test_plan_does_not_touch_size_that_already_has_stock(db):
+    """Если размер уже лежит на WB — добавлять ничего не нужно."""
+    _card_size(db, "wb", "EMPTY-2", "42")
+    db.add(models.Stock(
+        marketplace_id=_mp_id(db, "wb"), date=TODAY, article="EMPTY-2", size="42",
+        warehouse="Стек", quantity=0, quantity_full=3, in_way=0,
+    ))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    assert _plan_size(plan, "EMPTY-2", "42")["to_sort"] == 0
+
+
+def test_plan_floor_can_be_switched_off(db):
+    _card_size(db, "wb", "EMPTY-3", "42")
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30, min_size_stock=0)
+    assert _plan_size(plan, "EMPTY-3", "42")["to_sort"] == 0
+
+
+def test_plan_floor_does_not_override_demand(db):
+    """Правило не должно урезать реальный дефицит."""
+    _card_size(db, "wb", "EMPTY-4", "42")
+    db.add(_wb_size_row("f4", "EMPTY-4", "42", TODAY, qty=900))  # 5 шт/дн
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    assert _plan_size(plan, "EMPTY-4", "42")["to_sort"] == 150
+
+
+def test_plan_total_counts_floor_across_sizes(db):
+    for sz in ("42", "44", "46"):
+        _card_size(db, "wb", "EMPTY-5", sz)
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30)
+    assert plan["EMPTY-5"]["total"] == 3
+
+
+def test_plan_all_time_window_uses_whole_history(db):
+    """Окно «всё время»: продажа 3-летней давности должна попасть в скорость."""
+    _card_size(db, "wb", "ALL-1", "42")
+    db.add(_wb_size_row("a1", "ALL-1", "42", TODAY - timedelta(days=900), qty=900))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30, velocity_days=0)
+    s = _plan_size(plan, "ALL-1", "42")
+    assert s["net"] == 900
+    assert s["vel"] > 0.0, "скорость не должна обнуляться на всём окне"
+    assert s["to_sort"] > 1
+
+
+def test_plan_365_window_ignores_older_sales(db):
+    _card_size(db, "wb", "ALL-2", "42")
+    db.add(_wb_size_row("a2", "ALL-2", "42", TODAY - timedelta(days=400), qty=900))
+    db.add(_wb_size_row("a3", "ALL-2", "44", TODAY - timedelta(days=10), qty=360))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30, velocity_days=365)
+    assert _plan_size(plan, "ALL-2", "42")["to_sort"] == 1   # забытая продажа → пол
+    assert _plan_size(plan, "ALL-2", "44")["to_sort"] > 1   # свежая продажа учтена
+
+
+# ------------------------------------------- покрытие и коэффициент прибыльности
+def test_profit_factor_is_smooth_and_capped():
+    """Плавная шкала: ≤0 → не подсортировываем, 15% → ×1.0, 30%+ → ×2.0."""
+    assert profit_factor(None) == 0.0
+    assert profit_factor(-12.0) == 0.0
+    assert profit_factor(0.0) == 0.0
+    assert profit_factor(7.5) == pytest.approx(0.5)
+    assert profit_factor(15.0) == pytest.approx(1.0)
+    assert profit_factor(30.0) == pytest.approx(2.0)
+    assert profit_factor(90.0) == pytest.approx(2.0)
+
+
+def test_plan_coverage_days_replaces_target_days(db):
+    """Покрытие period/4 вместо «Запаса»: покрытие — шаг умножения скорости."""
+    _card_size(db, "wb", "COV-1", "42")
+    db.add(_wb_size_row("c1", "COV-1", "42", TODAY, qty=180))  # 1 шт/дн
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30, coverage_days=7.5,
+                           min_size_stock=0)
+    assert _plan_size(plan, "COV-1", "42")["to_sort"] == 8      # ceil(7.5 × 1.0)
+
+
+def test_plan_factor_multiplies_target(db):
+    """Коэффициент ×1.0 — нейтральный, ×2.0 удваивает подсорт."""
+    _card_size(db, "wb", "FCT-1", "42")
+    db.add(_wb_size_row("f1", "FCT-1", "42", TODAY, qty=180))
+    db.commit()
+
+    one = wb_sorting_plan(db, TODAY, target_days=30, coverage_days=10,
+                          profit_factor={"FCT-1": 1.0}, min_size_stock=0)
+    two = wb_sorting_plan(db, TODAY, target_days=30, coverage_days=10,
+                          profit_factor={"FCT-1": 2.0}, min_size_stock=0)
+    assert _plan_size(one, "FCT-1", "42")["to_sort"] == 10
+    assert _plan_size(two, "FCT-1", "42")["to_sort"] == 20
+
+
+def test_plan_loss_making_article_gets_nothing(db):
+    """Убыточный товар не подсортировывается совсем — даже пустой размер."""
+    _card_size(db, "wb", "LOSS-1", "42")
+    db.add(_wb_size_row("l1", "LOSS-1", "42", TODAY, qty=180))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30, coverage_days=7.5,
+                           profit_factor={"LOSS-1": 0.0})
+    assert _plan_size(plan, "LOSS-1", "42")["to_sort"] == 0
+    assert plan["LOSS-1"]["total"] == 0
+    assert plan["LOSS-1"]["factor"] == 0.0
+
+
+def test_plan_loss_making_article_keeps_nothing_even_with_floor(db):
+    """Правило пола не должно resurrect-ить убыточный товар."""
+    _card_size(db, "wb", "LOSS-2", "42")
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30,
+                           profit_factor={"LOSS-2": 0.0})
+    assert _plan_size(plan, "LOSS-2", "42")["to_sort"] == 0
+
+
+def test_plan_factor_only_present_in_profit_mode(db):
+    """Ключ factor — признак включённого режима прибыльности (его читает PDF)."""
+    _card_size(db, "wb", "MODE-1", "42")
+    db.commit()
+
+    off = wb_sorting_plan(db, TODAY, target_days=30)
+    on = wb_sorting_plan(db, TODAY, target_days=30, profit_factor={"MODE-1": 1.2})
+    assert "factor" not in off["MODE-1"]
+    assert "factor" not in _plan_size(off, "MODE-1", "42")
+    assert on["MODE-1"]["factor"] == pytest.approx(1.2)
+    assert _plan_size(on, "MODE-1", "42")["factor"] == pytest.approx(1.2)
+
+
+def test_plan_unknown_article_keeps_default_factor(db):
+    """Артикул без маржи (нет продаж) — нейтральный коэффициент и правило пола."""
+    _card_size(db, "wb", "MODE-2", "42")
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, target_days=30,
+                           profit_factor={"OTHER": 0.0})
+    assert _plan_size(plan, "MODE-2", "42")["to_sort"] == 1
+
+
+def test_plan_empty_article_list_returns_empty_plan(db):
+    """articles=[] — это «ничего не брать», а не «взять всё»."""
+    _card_size(db, "wb", "EMPTY-LIST", "42")
+    db.add(_wb_size_row("e1", "EMPTY-LIST", "42", TODAY, qty=180))
+    db.commit()
+
+    assert wb_sorting_plan(db, TODAY, target_days=30, articles=[]) == {}
+
+
+def test_wb_profit_factors_uses_margin_pct(db):
+    """Коэффициенты берутся из маржи по детализации, окно ограничено годом."""
+    _card_size(db, "wb", "PF-1", "42")
+    _card_size(db, "wb", "PF-2", "42")
+    _card_size(db, "wb", "PF-3", "42")
+    # без Product net_cost подставляется settings.default_net_cost и PF-1
+    # выходит убыточным — поэтому себестоимость задаём явно
+    db.add(models.Product(article="PF-1", name="Прибыльный", net_cost=50.0,
+                          replenishable=True))
+    db.add(models.Product(article="PF-3", name="Убыточный", net_cost=900.0,
+                          replenishable=True))
+    # PF-1: маржа сильно выше себестоимости -> высокий процент
+    db.add(_wb_size_row("pf1", "PF-1", "42", TODAY, qty=10))
+    db.add(_wb_size_row("pf1b", "PF-1", "42", TODAY, qty=10))
+    # PF-2: продажа 400 дней назад — за год её не видно, коэффициента не будет
+    db.add(_wb_size_row("pf2", "PF-2", "42", TODAY - timedelta(days=400), qty=10))
+    # PF-3: цена реализации ниже себестоимости -> убыток
+    db.add(models.WbDetailRow(
+        op_key="pf3", source="excel", article="PF-3", doc_type_name="Продажа",
+        sale_dt=TODAY, quantity=10, retail_amount=1000.0, for_pay=850.0,
+        tech_size="42", sku="",
+    ))
+    db.commit()
+
+    factors = wb_profit_factors(db, TODAY, velocity_days=0)
+    assert "PF-3" in factors and factors["PF-3"] == 0.0   # убыток -> не подсортируем
+    assert factors["PF-1"] > 0.0                          # прибыльный -> подсортируем
+    assert factors.get("PF-2") is None                    # нет продаж за год
+
+
+def test_wb_profit_factors_respects_article_filter(db):
+    _card_size(db, "wb", "PFF-1", "42")
+    _card_size(db, "wb", "PFF-2", "42")
+    for a in ("PFF-1", "PFF-2"):
+        db.add(_wb_size_row(f"pff{a}", a, "42", TODAY, qty=10))
+    db.commit()
+
+    factors = wb_profit_factors(db, TODAY, articles=["PFF-1"])
+    assert set(factors) == {"PFF-1"}
+
+

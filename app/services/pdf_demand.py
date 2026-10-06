@@ -367,6 +367,18 @@ class DemandPdf:
         else:
             nh = 0.0
 
+        # Режим прибыльности: под артикулом показываем применённый коэффициент,
+        # иначе нельзя понять, почему у прибыльного товара «Дослать» больше.
+        factor_p = None
+        if sizes and sizes[0].get("factor") is not None:
+            k = float(sizes[0].get("factor") or 0)
+            txt = ("учёт прибыльности: подсорт ×1 — товар убыточный, не подсортировываем"
+                   if k <= 0 else f"учёт прибыльности: подсорт ×{k:.2f}")
+            factor_p = Paragraph(_esc(txt), self.st["name"])
+            fh = factor_p.wrap(CONTENT_W, 1e6)[1] + 1 * mm
+        else:
+            fh = 0.0
+
         attr_tbl, attr_h = self._attrs_table(row)
         size_tbl, size_h, total = self._sizes_table(sizes)
         total_p = Paragraph(
@@ -379,6 +391,7 @@ class DemandPdf:
             + (PHOTO_GAP if photo_h else 0)
             + ah + 1.5 * mm
             + nh
+            + fh
             + attr_h
             + size_h
             + 2 * mm
@@ -397,6 +410,8 @@ class DemandPdf:
         self.y -= 1.5 * mm
         if name_p is not None:
             self._para(name_p)
+        if factor_p is not None:
+            self._para(factor_p)
         if attr_tbl is not None:
             attr_tbl.drawOn(self.c, MARGIN, self.y - attr_h)
             self.y -= attr_h
