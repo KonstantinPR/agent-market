@@ -24,6 +24,7 @@ from app.services import (
     base_price as base_price_service,
     common as common_service,
     dashboard as dashboard_service,
+    excel_import,
     excel_io,
     funnel as funnel_service,
     margin as margin_service,
@@ -2143,6 +2144,34 @@ def export_replenish(
     )
 
 
+@router.post("/replenish/import-excel")
+async def replenish_import_excel(file: UploadFile = File(...)):
+    """Разбор Excel-файла с правками для PDF (дропзона в меню PDF).
+
+    Файл — обычная выгрузка «Потребность» (кнопка «Excel»), отредактированная
+    в Excel. Возвращает ``{rows, meta}``: строки с ключами выгрузки для POST
+    ``/export/replenish/pdf`` и сводку предпросмотра — сколько карточек
+    распознано, какие колонки неизвестны, сколько строк без артикула
+    отброшено.
+    """
+    name = (file.filename or "").strip().lower()
+    if not name.endswith(".xlsx"):
+        raise HTTPException(400, "Нужен файл .xlsx (выгрузка «Потребность»)")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Файл пустой")
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(400, "Файл больше 20 МБ — похоже, это не выгрузка")
+    try:
+        rows, meta = excel_import.parse_replenish_excel(data, _REPLENISH_EXPORT)
+    except excel_import.ExcelImportError as e:
+        raise HTTPException(400, str(e))
+    if not rows:
+        raise HTTPException(400, "В файле нет строк с артикулом")
+    meta["file"] = file.filename or ""
+    return {"rows": rows, "meta": meta}
+
+
 PDF_MEDIA = "application/pdf"
 
 #: Сколько товаров класть в один PDF по умолчанию. Замерено на живых данных:
@@ -2177,28 +2206,25 @@ def export_replenish_pdf(
     limit: int = PDF_DEFAULT_LIMIT,
     db: Session = Depends(get_db),
 ):
-    """Карточки потребности в PDF: фото товара, артикул, размеры, итоги.
+    """Карточки потребности в PDF из строк таблицы (базовый режим).
 
     ``cols`` — те же ключи, что и в Excel-выгрузке. Фото подтягиваются из
     индекса фотографий (рекурсивный обход диска, кэш в памяти), миниатюры
     кэшируются на диске, поэтому повторные выгрузки быстрые.
 
-    ``vel_days`` — окно скорости продаж размера: 180, 365 или 0 (все время).
+    ``vel_days`` — окно скорости продаж размера: 180, 365 или 0 (всё время).
 
     ``profit`` — учитывать прибыльность: покрытие = период/4 дней продаж, а
     целевой уровень домножается на коэффициент по рентабельности (0…2).
     При ``profit=0`` работает как раньше: покрытие = «Запас», без коэффициента.
+
+    PDF из Excel-файла с правками — отдельный ``POST /export/replenish/pdf``.
     """
     from_, to_ = _parse_window400(date_from, date_to)
     if date_from is None and date_to is None:
         back = max(1, int(window_days or settings.sync_days_default))
         from_ = to_ - timedelta(days=back - 1)
     span = (to_ - from_).days + 1
-
-    vel_days = int(vel_days or 0)
-    if vel_days not in replenish_service.WB_SORT_VELOCITY_WINDOWS:
-        vel_days = replenish_service.WB_SORT_VELOCITY_DAYS
-    vel_label = "всё время" if vel_days == 0 else f"{vel_days} дн"
 
     common = dict(
         target_days=target_days, span_days=span, marketplace=marketplace,
@@ -2210,6 +2236,121 @@ def export_replenish_pdf(
     cap = max(1, min(int(limit or PDF_DEFAULT_LIMIT), PDF_MAX_LIMIT))
     truncated = max(0, len(rows) - cap)
     rows = rows[:cap]
+    return _replenish_pdf_build(
+        db, rows,
+        from_=from_, to_=to_, span=span, truncated=truncated,
+        target_days=target_days, vel_days=vel_days, profit=profit,
+        cols=cols, with_photos=with_photos, photo_count=photo_count,
+        article_like=article_like,
+    )
+
+
+@router.post("/export/replenish/pdf")
+def export_replenish_pdf_from_excel(
+    payload: dict = Body(...),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    target_days: int = 30,
+    window_days: int = 30,
+    cols: Optional[str] = None,
+    with_photos: int = 1,
+    photo_count: int = 6,
+    vel_days: int = replenish_service.WB_SORT_VELOCITY_DAYS,
+    profit: int = 1,
+    limit: int = PDF_DEFAULT_LIMIT,
+    db: Session = Depends(get_db),
+):
+    """PDF из строк Excel-файла (дропзона в меню PDF).
+
+    ``payload`` = ``{"rows": [...], "source": "имя.xlsx"}`` — строки из
+    ``POST /replenish/import-excel``, ключи как в выгрузке Excel.
+
+    ``wb_def`` («WB дефицит, шт») каждой строки задаёт бюджет «Итого
+    дослать» по артикулу (см. ``replenish.apply_sort_budget``): пустая
+    ячейка — бюджет не задан, размеры считаются по складу как обычно.
+    Отбраковка убыточных/полных карточек не применяется: файл есть истина,
+    ненужное владелец удалил сам. Фильтры таблицы (marketplace, поиск,
+    сортировка) игнорируются — состав задаёт файл; окно/скорость/прибыльность
+    и фото действуют как в базовом режиме.
+    """
+    from_, to_ = _parse_window400(date_from, date_to)
+    if date_from is None and date_to is None:
+        back = max(1, int(window_days or settings.sync_days_default))
+        from_ = to_ - timedelta(days=back - 1)
+    span = (to_ - from_).days + 1
+
+    raw = payload.get("rows")
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(400, "В файле нет строк для карточек")
+    rows: list = []
+    budgets: dict = {}
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise HTTPException(
+                400, f"Строка {i + 1}: ожидался объект, получен {type(item).__name__}"
+            )
+        r = dict(item)
+        art = str(r.get("article") or "").strip()
+        if not art:
+            raise HTTPException(400, f"Строка {i + 1}: нет артикула")
+        r["article"] = art
+        rows.append(r)
+        v = r.get("wb_def")
+        if v is None or v == "":
+            continue  # пустая ячейка = бюджет не задан, план как обычно
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f != f:  # NaN
+            continue
+        budgets[art.upper()] = max(0, int(round(f)))
+
+    cap = max(1, min(int(limit or PDF_DEFAULT_LIMIT), PDF_MAX_LIMIT))
+    truncated = max(0, len(rows) - cap)
+    rows = rows[:cap]
+
+    source = str(payload.get("source") or "").strip()[:60]
+    return _replenish_pdf_build(
+        db, rows,
+        from_=from_, to_=to_, span=span, truncated=truncated,
+        target_days=target_days, vel_days=vel_days, profit=profit,
+        cols=cols, with_photos=with_photos, photo_count=photo_count,
+        budgets=budgets,
+        subtitle_extra=(" · из Excel: " + source) if source else " · из Excel",
+    )
+
+def _replenish_pdf_build(
+    db: Session,
+    rows: list,
+    *,
+    from_: date,
+    to_: date,
+    span: int,
+    truncated: int,
+    target_days: int,
+    vel_days: int,
+    profit,
+    cols: Optional[str],
+    with_photos: int,
+    photo_count: int,
+    article_like: Optional[str] = None,
+    budgets: Optional[dict] = None,
+    subtitle_extra: str = "",
+) -> Response:
+    """Общая сборка PDF-потребности: план подсортировки, фото, карточки.
+
+    ``rows`` — строки с ключами выгрузки, уже обрезанные по ``limit``.
+    ``budgets`` не None = режим файла (PDF из Excel): «Итого дослать»
+    берёт бюджет из колонки «WB дефицит» по артикулу, а отбраковка
+    убыточных/полных карточек не применяется — файл есть истина
+    (см. ``replenish.apply_sort_budget``).
+    ``subtitle_extra`` — приписка в шапке (имя Excel-файла).
+    """
+    vel_days = int(vel_days or 0)
+    if vel_days not in replenish_service.WB_SORT_VELOCITY_WINDOWS:
+        vel_days = replenish_service.WB_SORT_VELOCITY_DAYS
+    vel_label = "всё время" if vel_days == 0 else f"{vel_days} дн"
 
     # План подсортировки: полный список размеров берём из карточки WB, а
     # скорость — за длинное окно. По окну спроса (30 дн) размеры без продаж
@@ -2231,10 +2372,14 @@ def export_replenish_pdf(
         coverage_days=coverage, profit_factor=factors,
     )
 
-    if use_profit:
+    if budgets is not None:
+        # Режим Excel: «Итого дослать» и распределение по размерам идут по
+        # колонке «WB дефицит» из файла (пустые ячейки не задают бюджет).
+        replenish_service.apply_sort_budget(plan, budgets)
+    elif use_profit:
         # убыточные и уже полные товары в шопинг-листе не нужны: иначе PDF
         # наполовину состоит из нулей. Считаем отбракованные, чтобы X-Truncated
-        # остался честным.
+        # остался честным. В режиме Excel не применяется: файл есть истина.
         alive = [r for r in rows if plan.get(
             str(r.get("article") or "").strip().upper(), {"total": 0}
         )["total"] > 0]
@@ -2317,6 +2462,7 @@ def export_replenish_pdf(
             + (f" · пустой размер ≥ {replenish_service.WB_SORT_MIN_SIZE_STOCK} шт"
                if use_profit else "")
             + " · WB"
+            + subtitle_extra
         ),
     )
     hits = sum(1 for _, _, t in jobs if t)

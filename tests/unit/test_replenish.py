@@ -6,8 +6,8 @@ from sqlalchemy import select
 
 from app import models
 from app.services.replenish import (
-    WB_SORT_VELOCITY_DAYS, profit_factor, replenish_rows, wb_profit_factors,
-    wb_sorting_plan,
+    WB_SORT_VELOCITY_DAYS, apply_sort_budget, profit_factor, replenish_rows,
+    wb_profit_factors, wb_sorting_plan,
 )
 
 TODAY = date(2026, 9, 20)
@@ -713,5 +713,108 @@ def test_wb_profit_factors_respects_article_filter(db):
 
     factors = wb_profit_factors(db, TODAY, articles=["PFF-1"])
     assert set(factors) == {"PFF-1"}
+
+
+# — PDF из Excel: бюджет «Итого дослать» из колонки «WB дефицит» ———————
+# Разрез «по размерам» файла в PDF не участвует: бюджет по артикулу
+# распределяется по размерам, чтобы карточка не противоречила файлу.
+
+def _budget_plan():
+    """План-заглушка: два продающихся размера и один мёртвый (vel=0)."""
+    sizes = [
+        {"size": "M", "to_sort": 10, "vel": 5.0},
+        {"size": "L", "to_sort": 4, "vel": 0.0},
+        {"size": "S", "to_sort": 6, "vel": 2.5},
+    ]
+    return {"BUD-1": {"article": "BUD-1", "sizes": sizes,
+                      "total": sum(s["to_sort"] for s in sizes)}}
+
+
+def _to_sorts(plan, art="BUD-1"):
+    return [s["to_sort"] for s in plan[art]["sizes"]]
+
+
+def test_sort_budget_unknown_article_keeps_plan():
+    plan = _budget_plan()
+    before = _to_sorts(plan)
+    apply_sort_budget(plan, {"OTHER": 3})
+    assert _to_sorts(plan) == before
+    assert plan["BUD-1"]["total"] == 20
+
+
+def test_sort_budget_equal_total_is_noop():
+    plan = _budget_plan()
+    apply_sort_budget(plan, {"BUD-1": 20})
+    assert _to_sorts(plan) == [10, 4, 6]
+    assert plan["BUD-1"]["total"] == 20
+
+
+def test_sort_budget_cut_fills_best_sellers_first():
+    """Меньший бюджет: сначала продающиеся размеры, мёртвый — последним."""
+    plan = _budget_plan()
+    apply_sort_budget(plan, {"BUD-1": 8})
+    # приоритет M (vel 5) -> S (vel 2.5) -> L (vel 0): M берёт min(10, 8)
+    assert _to_sorts(plan) == [8, 0, 0]
+    assert plan["BUD-1"]["total"] == 8
+
+
+def test_sort_budget_cut_stops_when_exhausted():
+    plan = _budget_plan()
+    apply_sort_budget(plan, {"BUD-1": 13})
+    # M: 10 (vel 5), затем S: 3 из 6 (vel 2.5), L: 0
+    assert _to_sorts(plan) == [10, 0, 3]
+    assert plan["BUD-1"]["total"] == 13
+
+
+def test_sort_budget_increase_goes_to_selling_sizes():
+    """Больший бюджет: докидка только продающимся размерам."""
+    plan = _budget_plan()
+    apply_sort_budget(plan, {"BUD-1": 25})
+    # база 20 + 5 сверху: live = [M, S] по кругу -> M+3, S+2, L без изменений
+    assert _to_sorts(plan) == [13, 4, 8]
+    assert plan["BUD-1"]["total"] == 25
+
+
+def test_sort_budget_zero_zeroes_everything():
+    plan = _budget_plan()
+    apply_sort_budget(plan, {"BUD-1": 0})
+    assert _to_sorts(plan) == [0, 0, 0]
+    assert plan["BUD-1"]["total"] == 0
+
+
+def test_sort_budget_negative_is_clamped_to_zero():
+    plan = _budget_plan()
+    apply_sort_budget(plan, {"BUD-1": -7})
+    assert plan["BUD-1"]["total"] == 0
+    assert _to_sorts(plan) == [0, 0, 0]
+
+
+def test_sort_budget_total_always_equals_sum_of_sizes():
+    for budget in (1, 7, 19, 20, 21, 54):
+        plan = _budget_plan()
+        apply_sort_budget(plan, {"BUD-1": budget})
+        sizes = plan["BUD-1"]["sizes"]
+        assert sum(s["to_sort"] for s in sizes) == budget, budget
+        assert plan["BUD-1"]["total"] == budget, budget
+        assert all(s["to_sort"] >= 0 for s in sizes), budget
+
+
+def test_sort_budget_applied_to_real_plan(db):
+    """Бюджет поверх настоящего плана: итог равен «WB дефицит» из файла."""
+    _card_size(db, "wb", "BUDR-1", "42")
+    _card_size(db, "wb", "BUDR-1", "43")
+    db.add(_wb_size_row("budr142", "BUDR-1", "42", TODAY, qty=30))
+    db.add(_wb_size_row("budr143", "BUDR-1", "43", TODAY, qty=10))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, articles=["BUDR-1"])
+    natural = plan["BUDR-1"]["total"]
+    assert natural > 1
+
+    apply_sort_budget(plan, {"BUDR-1": 1})
+    assert plan["BUDR-1"]["total"] == 1
+    assert sum(s["to_sort"] for s in plan["BUDR-1"]["sizes"]) == 1
+    # выдали продающемуся размеру (42 продавался активнее)
+    assert max(plan["BUDR-1"]["sizes"], key=lambda s: s["to_sort"])["size"] == "42"
 
 

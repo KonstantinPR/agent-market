@@ -266,10 +266,45 @@ class DemandPdf:
         if self.subtitle:
             parts.append(self.subtitle)
         parts.append(f"стр. {self.page_no + 1}")
+        txt = " · ".join(parts)
+
+        # Одна линия не влезает в ширину (приписка «из Excel: имя» длинная),
+        # а drawString не переносит текст — он молча уезжает за край страницы.
+        # Пробуем ужать; если и так не помещается — разделяем на две строки.
+        def _fit(line: str, start: float) -> tuple[str, float]:
+            size = start
+            while size > 5.5 and (
+                pdfmetrics.stringWidth(line, self.st["reg"], size) > CONTENT_W
+            ):
+                size -= 0.25
+            w = pdfmetrics.stringWidth(line, self.st["reg"], size)
+            if w > CONTENT_W:  # без пробелов влезть не может — рубим хвост
+                budget = size * 0.6
+                while w > CONTENT_W and line:
+                    step = max(1, int((w - CONTENT_W) / budget) + 1)
+                    line = line[:-step]
+                    w = pdfmetrics.stringWidth(line, self.st["reg"], size)
+                line = line.rstrip(" ·") + "…"
+            return line, size
+
         self.c.saveState()
-        self.c.setFont(self.st["reg"], 7.5)
         self.c.setFillColor(C_MUTED)
-        self.c.drawString(MARGIN, MARGIN + 3 * mm, " · ".join(parts))
+        if pdfmetrics.stringWidth(txt, self.st["reg"], 7.5) <= CONTENT_W:
+            lines = [(txt, 7.5)]
+        elif self.subtitle and pdfmetrics.stringWidth(
+            FOOTER_TEXT + f" · стр. {self.page_no + 1}", self.st["reg"], 7.5
+        ) <= CONTENT_W:
+            lines = [
+                _fit(FOOTER_TEXT + f" · стр. {self.page_no + 1}", 7.5),
+                _fit(self.subtitle, 7.5),
+            ]
+        else:
+            lines = [_fit(txt, 7.5)]
+        y = MARGIN + 3 * mm
+        for line, size in lines:
+            self.c.setFont(self.st["reg"], size)
+            self.c.drawString(MARGIN, y, line)
+            y += 4 * mm
         self.c.restoreState()
 
     # -- блоки ----------------------------------------------------------
@@ -367,20 +402,28 @@ class DemandPdf:
         else:
             nh = 0.0
 
+        attr_tbl, attr_h = self._attrs_table(row)
+        size_tbl, size_h, total = self._sizes_table(sizes)
+
         # Режим прибыльности: под артикулом показываем применённый коэффициент,
         # иначе нельзя понять, почему у прибыльного товара «Дослать» больше.
+        # Считаем ПОСЛЕ таблицы размеров: при k≤0 обычный режим печатает
+        # «не подсортировываем», но бюджет из Excel («WB дефицит») может
+        # задать «Дослать» вручную — тогда важнее факт ручной дослаты.
         factor_p = None
         if sizes and sizes[0].get("factor") is not None:
             k = float(sizes[0].get("factor") or 0)
-            txt = ("учёт прибыльности: подсорт ×1 — товар убыточный, не подсортировываем"
-                   if k <= 0 else f"учёт прибыльности: подсорт ×{k:.2f}")
+            if k <= 0:
+                txt = ("учёт прибыльности: подсорт ×1 — товар убыточный, не подсортировываем"
+                       if total == 0 else
+                       "учёт прибыльности: подсорт ×0 — убыточный, дослата задана вручную")
+            else:
+                txt = f"учёт прибыльности: подсорт ×{k:.2f}"
             factor_p = Paragraph(_esc(txt), self.st["name"])
             fh = factor_p.wrap(CONTENT_W, 1e6)[1] + 1 * mm
         else:
             fh = 0.0
 
-        attr_tbl, attr_h = self._attrs_table(row)
-        size_tbl, size_h, total = self._sizes_table(sizes)
         total_p = Paragraph(
             f"Итого дослать на WB: <b>{fmt_num(total)}</b> шт", self.st["total"]
         )

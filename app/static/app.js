@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "69";
+const UI_VERSION = "70";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2318,6 +2318,66 @@ function replenishPdfCols() {
   return keys;
 }
 
+// — PDF из Excel-файла (дропзона в меню PDF) ——————————————————————————
+// Файл с правками: состав карточек и атрибуты берутся из него, бюджет
+// «Итого дослать» — из колонки «WB дефицит» (пустая ячейка = расчёт по
+// складу), размеры/фото/коэффициенты — как в базовом режиме.
+let replenishExcel = null; // {name, rows, meta} | null
+
+function isExcelFileName(name) {
+  return /\.xlsx$/i.test(String(name || "").trim());
+}
+
+function replenishExcelSummary(x) {
+  const m = (x && x.meta) || {};
+  const parts = [((x && x.name) || "Файл") + " — карточек: " + fmt(m.count || 0)];
+  if (m.unknown && m.unknown.length) parts.push("нераспознанные колонки: " + m.unknown.join(", "));
+  if (m.dropped) parts.push("без артикула: " + fmt(m.dropped));
+  if (m.duplicates) parts.push("дубли колонок: " + fmt(m.duplicates));
+  if (m.truncated) parts.push("обрезано строк: " + fmt(m.truncated));
+  return parts.join(" · ");
+}
+
+async function replenishHttpError(resp) {
+  const t = await resp.text();
+  try {
+    const j = JSON.parse(t);
+    if (j && j.detail) return new Error(resp.status + " " + j.detail);
+  } catch (e) { /* не JSON — отдаём как есть */ }
+  return new Error(resp.status + " " + t);
+}
+
+async function loadReplenishExcel(file) {
+  const msg = statusEl();
+  const say = (t) => {
+    if (!msg) return;
+    msg.textContent = t;
+    delete msg.dataset.tip;
+  };
+  if (!isExcelFileName(file.name)) {
+    say("Нужен файл .xlsx — выгрузка «Потребность» (кнопка «Excel»)");
+    return;
+  }
+  say("Читаю Excel: " + file.name + "…");
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const resp = await fetch("/api/replenish/import-excel", { method: "POST", body: fd });
+    if (!resp.ok) throw await replenishHttpError(resp);
+    const data = await resp.json();
+    if (!data || !data.rows || !data.rows.length) {
+      throw new Error("в файле нет строк с артикулом");
+    }
+    replenishExcel = { name: file.name, rows: data.rows, meta: data.meta || {} };
+    buildReplenishPdfMenu();
+    say(replenishExcelSummary(replenishExcel));
+  } catch (err) {
+    replenishExcel = null;
+    buildReplenishPdfMenu();
+    say("Excel не загрузился: " + err.message);
+  }
+}
+
 function buildReplenishPdfMenu() {
   const panel = $("#replenishPdfPanel");
   if (!panel) return;
@@ -2430,10 +2490,70 @@ function buildReplenishPdfMenu() {
     + "печатаются всегда.";
   panel.appendChild(hint);
 
+  // Дропзона Excel / карточка уже загруженного файла.
+  const xrow = document.createElement("div");
+  if (replenishExcel) {
+    xrow.className = "pdf-x";
+    const info = document.createElement("div");
+    info.className = "pdf-x-info";
+    info.textContent = replenishExcelSummary(replenishExcel);
+    info.title = "PDF соберётся из файла: состав карточек и атрибуты — из него, "
+      + "бюджет «Итого дослать» — из колонки «WB дефицит» (пустая ячейка = расчёт "
+      + "по складу), размеры, фото и коэффициенты — как обычно";
+    const clr = document.createElement("button");
+    clr.type = "button";
+    clr.className = "btn pdf-x-clear";
+    clr.textContent = "×";
+    clr.title = "Убрать файл и снова формировать PDF из таблицы";
+    clr.addEventListener("click", () => {
+      replenishExcel = null;
+      buildReplenishPdfMenu();
+      const m = statusEl();
+      if (m) {
+        m.textContent = "PDF снова из таблицы";
+        delete m.dataset.tip;
+      }
+    });
+    xrow.appendChild(info);
+    xrow.appendChild(clr);
+  } else {
+    xrow.className = "pdf-drop-wrap";
+    const dz = document.createElement("div");
+    dz.className = "pdf-drop";
+    dz.textContent = "Excel с правками: перетащите файл сюда или нажмите";
+    dz.title = "Файл .xlsx — выгрузка «Потребность», отредактированная в Excel: "
+      + "удалили карточки, поправили количества — PDF соберётся из файла. "
+      + "Фото и размеры считаются, как обычно";
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    inp.className = "hidden";
+    dz.addEventListener("click", () => inp.click());
+    dz.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dz.classList.add("over");
+    });
+    dz.addEventListener("dragleave", () => dz.classList.remove("over"));
+    dz.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dz.classList.remove("over");
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) loadReplenishExcel(f);
+    });
+    inp.addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) loadReplenishExcel(f);
+      e.target.value = ""; // чтобы тот же файл можно было выбрать повторно
+    });
+    xrow.appendChild(dz);
+    xrow.appendChild(inp);
+  }
+  panel.appendChild(xrow);
+
   const go = document.createElement("button");
   go.type = "button";
   go.className = "btn";
-  go.textContent = "Скачать PDF";
+  go.textContent = replenishExcel ? "Скачать PDF из Excel" : "Скачать PDF";
   go.addEventListener("click", () => {
     panel.classList.add("hidden");
     downloadReplenishPdf();
@@ -2447,6 +2567,11 @@ function initReplenishPdfMenu() {
   const panel = $("#replenishPdfPanel");
   if (!btn || !menu || !panel) return;
   menu.addEventListener("click", (e) => e.stopPropagation());
+  // Падение файла мимо дропзоны не должно открывать его новой вкладкой.
+  const isFileDrag = (e) => e.dataTransfer
+    && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0;
+  document.addEventListener("dragover", (e) => { if (isFileDrag(e)) e.preventDefault(); });
+  document.addEventListener("drop", (e) => { if (isFileDrag(e)) e.preventDefault(); });
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const wasHidden = panel.classList.contains("hidden");
@@ -2486,11 +2611,18 @@ async function downloadReplenishPdf() {
     delete msg.dataset.tip;
   };
   const p = pdfParams();
-  say("Формирую PDF" + (p.withPhotos ? " с фото" : "") + "…");
+  const x = replenishExcel;
+  say("Формирую PDF" + (x ? " из Excel" : "") + (p.withPhotos ? " с фото" : "") + "…");
   try {
     const url = replenishPdfUrl();
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+    const resp = x
+      ? await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: x.rows, source: x.name }),
+      })
+      : await fetch(url);
+    if (!resp.ok) throw await replenishHttpError(resp);
     const blob = await resp.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -2503,6 +2635,7 @@ async function downloadReplenishPdf() {
     const hits = resp.headers.get("X-Photo-Hits");
     const cut = resp.headers.get("X-Truncated");
     const parts = ["PDF готов"];
+    if (x) parts.push("из файла «" + x.name + "»");
     if (n != null) parts.push("товаров: " + fmt(n));
     if (p.withPhotos && hits != null) parts.push("с фото: " + fmt(hits));
     if (cut != null && +cut > 0) parts.push("сверху отброшено: " + fmt(cut));

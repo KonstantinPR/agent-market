@@ -92,6 +92,14 @@
   > состояние: не реализовано, min_price в pricing.py отсутствует
   > нужно: clamp target_vis ≥ max(floor_price, min_price) + блок apply без цен
 
+- [T-37] (medium) Потребность: PDF из Excel-файла с правками (дропзона в меню «PDF ▾»)
+  > где: меню PDF (app/static/app.js + style.css + index.html), POST /api/replenish/import-excel
+  > и POST /api/export/replenish/pdf (app/api.py), app/services/excel_import.py,
+  > apply_sort_budget (app/services/replenish.py), футер PDF (app/services/pdf_demand.py)
+  > состояние: реализовано и протестировано (весь набор 713 passed; 2 падения — известный T-35).
+  > Не закоммичено.
+  > нужно: коммит → закрыть тикет с хешем
+
 ## В работе
 
 _(пусто)_

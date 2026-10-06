@@ -4,6 +4,7 @@
 не ходят по диску `C:\YandexDisk\ФОТОГРАФИИ`.
 """
 import io
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -466,5 +467,199 @@ def test_default_photo_count_is_six(pdf_api, tmp_path, monkeypatch):
     assert default.headers["X-Photo-Hits"] == "1"
     assert len(default.content) == len(six.content)
     assert len(four.content) < len(six.content)
+
+
+# ------------------------------ PDF из Excel-файла (дропзона в меню PDF) ---
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_TOTAL_RE = re.compile(r"Итого дослать на WB: ([\d ]+?) шт")
+
+
+def _xlsx(headers, rows) -> bytes:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _post_pdf(pdf_api, rows, source="правки.xlsx", **query):
+    params = {"with_photos": 0}
+    params.update(query)
+    payload = {"rows": rows}
+    if source:
+        payload["source"] = source
+    return pdf_api.post("/api/export/replenish/pdf", params=params, json=payload)
+
+
+def _one_total(pdf: bytes) -> str:
+    m = _TOTAL_RE.search(_footer_all(pdf))
+    assert m, "в документе нет строки «Итого дослать на WB»"
+    return m.group(1).replace(" ", "")
+
+
+def test_import_excel_returns_rows_and_meta(pdf_api):
+    """POST /replenish/import-excel: строки с ключами выгрузки + сводка."""
+    data = _xlsx(
+        ["Артикул", "Наименование", "Спрос, шт/день", "WB дефицит, шт"],
+        [["EX-1", "Платье летнее", 1.5, 7]],
+    )
+    r = pdf_api.post("/api/replenish/import-excel",
+                     files={"file": ("правки.xlsx", data, XLSX_MIME)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rows"] == [{
+        "article": "EX-1", "name": "Платье летнее", "demand": 1.5, "wb_def": 7,
+    }]
+    assert body["meta"]["count"] == 1
+    assert body["meta"]["file"] == "правки.xlsx"
+    assert body["meta"]["unknown"] == []
+
+
+def test_import_excel_rejects_non_xlsx(pdf_api):
+    r = pdf_api.post("/api/replenish/import-excel",
+                     files={"file": ("t.csv", b"a,b\n1,2", "text/csv")})
+    assert r.status_code == 400
+    assert "xlsx" in r.json()["detail"]
+
+
+def test_import_excel_rejects_empty_file(pdf_api):
+    r = pdf_api.post("/api/replenish/import-excel",
+                     files={"file": ("p.xlsx", b"", XLSX_MIME)})
+    assert r.status_code == 400
+    assert "пустой" in r.json()["detail"]
+
+
+def test_import_excel_rejects_file_without_article_column(pdf_api):
+    data = _xlsx(["Наименование", "Спрос, шт/день"], [["Платье", 2]])
+    r = pdf_api.post("/api/replenish/import-excel",
+                     files={"file": ("p.xlsx", data, XLSX_MIME)})
+    assert r.status_code == 400
+    assert "Артикул" in r.json()["detail"]
+
+
+def test_import_excel_rejects_rows_without_article(pdf_api):
+    data = _xlsx(["Артикул", "Наименование"], [["", "Итого: 5"]])
+    r = pdf_api.post("/api/replenish/import-excel",
+                     files={"file": ("p.xlsx", data, XLSX_MIME)})
+    assert r.status_code == 400
+    assert "ни одной строки" in r.json()["detail"]
+
+
+def test_pdf_from_excel_prints_file_values(pdf_api):
+    """PDF из файла печатает данные файла, а не строки таблицы."""
+    rows = [{"article": "PDF-ART-1", "name": "Платье из файла", "need_buy": 777}]
+    r = _post_pdf(pdf_api, rows)
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    txt = _footer_all(r.content)
+    assert "Платье из файла" in txt   # имя из файла, не «Платье PDF-ART-1»
+    assert "777" in txt               # «Купить у поставщика» из файла
+    assert "из Excel: правки.xlsx" in txt  # приписка в шапке документа
+
+
+def test_pdf_from_excel_budget_overrides_total(pdf_api):
+    """Без бюджета — как в базовом режиме; «WB дефицит» задаёт итог."""
+    natural = _post_pdf(pdf_api, [{"article": "PDF-ART-1"}])
+    assert natural.status_code == 200
+
+    base = pdf_api.get("/api/export/replenish/pdf",
+                       params={"with_photos": 0, "article_like": "PDF-ART-1"})
+    assert base.status_code == 200
+    from_file = _one_total(natural.content)
+    assert from_file == _one_total(base.content)   # пустой бюджет = план склада
+    assert int(from_file) > 1
+
+    bud = _post_pdf(pdf_api, [{"article": "PDF-ART-1", "wb_def": 1}])
+    assert bud.status_code == 200
+    assert _one_total(bud.content) == "1"          # бюджет из колонки файла
+
+
+def test_pdf_from_excel_keeps_loss_making_article(pdf_api, db):
+    """Убыточный из файла печатается: состав задаёт файл, не отбраковка."""
+    db.add(models.Product(article="EX-LOSS", name="Убыточный", net_cost=5000.0,
+                          replenishable=True))
+    db.add(models.MarketplaceCard(
+        marketplace_id=_mp_id(db, "wb"), chrt_id="c:EX-LOSS:42",
+        vendor_code="EX-LOSS", nm_id="", barcode="", size="42",
+    ))
+    db.add(models.WbDetailRow(
+        op_key="exloss", source="excel", article="EX-LOSS",
+        doc_type_name="Продажа", sale_dt=TODAY, quantity=300,
+        tech_size="42", sku="", retail_amount=30000.0, for_pay=25500.0,
+    ))
+    db.add(models.Stock(
+        marketplace_id=_mp_id(db, "wb"), date=TODAY, article="EX-LOSS", size="42",
+        warehouse="Стек", quantity=0, quantity_full=0, in_way=0,
+    ))
+    db.commit()
+
+    base = pdf_api.get("/api/export/replenish/pdf", params={"with_photos": 0})
+    assert base.status_code == 200
+    assert "EX-LOSS" not in _footer_all(base.content)   # базовый режим отбрасывает
+
+    r = _post_pdf(pdf_api, [{"article": "EX-LOSS", "name": "Убыточный", "wb_def": 5}])
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    txt = _footer_all(r.content)
+    assert "EX-LOSS" in txt
+    assert _one_total(r.content) == "5"
+    assert "дослата задана вручную" in txt   # ×0 не спорит с бюджетом файла
+
+
+def test_pdf_from_excel_ignores_table_filters(pdf_api):
+    """Фильтры таблицы не опустошают PDF: состав задаёт файл."""
+    r = _post_pdf(pdf_api, [{"article": "PDF-ART-1"}],
+                  article_like="НЕ-НАЙДУ", marketplace="ozon")
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    assert "PDF-ART-1" in _footer_all(r.content)
+
+
+def test_pdf_from_excel_requires_rows(pdf_api):
+    r = pdf_api.post("/api/export/replenish/pdf", params={"with_photos": 0}, json={})
+    assert r.status_code == 400
+    assert "нет строк" in r.json()["detail"]
+
+
+def test_pdf_from_excel_rejects_row_without_article(pdf_api):
+    r = _post_pdf(pdf_api, [{"name": "Без артикула"}])
+    assert r.status_code == 400
+    assert "нет артикула" in r.json()["detail"]
+
+
+def test_pdf_from_excel_attaches_photos(pdf_api, photo_tree):
+    r = _post_pdf(pdf_api, [{"article": "PDF-ART-1"}],
+                  with_photos=1, photo_count=2)
+    assert r.status_code == 200
+    assert r.headers["X-Photo-Hits"] == "1"
+
+
+def test_pdf_from_excel_limit_truncates(pdf_api, db):
+    for i in (2, 3):
+        db.add(models.Product(article=f"PDF-ART-{i}", name="x",
+                              net_cost=100.0, replenishable=True))
+        db.add(models.CustomStock(article=f"PDF-ART-{i}", quantity=1, net_cost=100.0))
+        db.add(models.MarketplaceCard(
+            marketplace_id=_mp_id(db, "wb"), chrt_id=f"c:{i}",
+            vendor_code=f"PDF-ART-{i}", nm_id="", barcode="",
+        ))
+        db.add(models.WbDetailRow(
+            op_key=f"ex{i}", source="excel", article=f"PDF-ART-{i}",
+            doc_type_name="Продажа", sale_dt=TODAY, quantity=60,
+            retail_amount=60000.0, for_pay=54000.0,
+        ))
+    db.commit()
+
+    rows = [{"article": f"PDF-ART-{i}"} for i in (1, 2, 3)]
+    r = _post_pdf(pdf_api, rows, limit=1)
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    assert r.headers["X-Truncated"] == "2"
+    assert "PDF-ART-1" in _footer_all(r.content)   # порядок файла сохраняется
 
 

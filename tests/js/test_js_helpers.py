@@ -314,6 +314,43 @@ assert.ok(pdfColsOf().includes("name"), "старый cols не перекрыв
 savePdfParams({});
 assert.strictEqual(pdfParams().photoCount, 6, "после сброса — снова 6 фото по умолчанию");
 
+// PDF из Excel: дропзона в меню, распознавание файла, сводка предпросмотра.
+const { isExcelFileName, replenishExcelSummary } = sandbox;
+assert.strictEqual(isExcelFileName("potrebnost_2026-09-01_2026-09-30.xlsx"), true,
+  "выгрузка .xlsx распознаётся");
+assert.strictEqual(isExcelFileName("FILE.XLSX"), true, "расширение без учёта регистра");
+assert.strictEqual(isExcelFileName("old.xls"), false, "старый .xls не принимается");
+assert.strictEqual(isExcelFileName("table.csv"), false, "csv не принимается");
+assert.strictEqual(isExcelFileName(""), false, "пустое имя — не файл");
+const excelSum = replenishExcelSummary({
+  name: "правки.xlsx",
+  meta: { count: 57, unknown: ["Заметки"], dropped: 2, truncated: 1 },
+});
+assert.ok(excelSum.includes("правки.xlsx") && excelSum.includes("57"),
+  "сводка называет файл и число карточек");
+assert.ok(excelSum.includes("Заметки"), "сводка показывает нераспознанные колонки");
+assert.ok(excelSum.includes("без артикула"), "сводка считает строки без артикула");
+assert.ok(excelSum.includes("обрезано"), "сводка считает обрезанные строки");
+assert.ok(jsSrc.includes('"/api/replenish/import-excel"'),
+  "app.js отправляет файл на /api/replenish/import-excel");
+assert.ok(jsSrc.includes("JSON.stringify({ rows: x.rows, source: x.name })"),
+  "PDF из файла грузится POST-ом со строками");
+assert.ok(jsSrc.includes('accept = ".xlsx'), "file input принимает только xlsx");
+assert.ok(jsSrc.includes("Excel с правками: перетащите файл сюда"),
+  "дропзона есть в меню PDF");
+assert.ok(jsSrc.includes('"Скачать PDF из Excel"'),
+  "кнопка подписывает режим файла");
+assert.ok(apiSrc.includes('@router.post("/replenish/import-excel")'),
+  "в app/api.py есть POST /replenish/import-excel");
+assert.ok(apiSrc.includes('@router.post("/export/replenish/pdf")'),
+  "в app/api.py есть POST /export/replenish/pdf для строк файла");
+assert.ok(apiSrc.includes("apply_sort_budget"),
+  "бюджет «Итого дослать» применяется в PDF-сборке");
+const excelCss = fs.readFileSync(process.argv[5], "utf8"); // cssSrc объявится ниже
+if (!/\.pdf-drop\s*\{/.test(excelCss)) throw new Error("нет CSS-правил для .pdf-drop");
+if (!excelCss.includes(".pdf-x-info")) throw new Error("нет CSS карточки загруженного файла");
+assert.ok(htmlSrc.includes("app.js?v=70"), "index.html подключает app.js v70");
+
 // Расширенный поиск «*»: клиентский likeMatch должен совпадать с серверным.
 const LIKE_CASES = [
   // базовый пример пользователя

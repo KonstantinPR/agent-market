@@ -334,6 +334,30 @@ table.stck tr.totals-row th.stck-col { background: #f0f4f8; }
 }
 .colview-filter input:focus { outline: none; border-color: #7aa7d0; }
 .colview-filter-empty { font-size: 12px; color: #999; padding: 2px 0 4px; }
+/* Дропзона Excel в меню PDF: файл с правками вместо строк таблицы. */
+.pdf-drop-wrap { position: relative; margin: 6px 0; }
+.pdf-drop {
+  border: 1px dashed #7aa7d0;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #38618f;
+  text-align: center;
+  cursor: pointer;
+  background: #f7fafd;
+}
+.pdf-drop:hover, .pdf-drop.over { background: #e8f2fb; border-style: solid; }
+.pdf-x { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.pdf-x-info {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #2f7a3d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdf-x-clear { padding: 0 8px; line-height: 1.6; font-weight: bold; }
 .pager {
   display: flex;
   align-items: center;

@@ -395,6 +395,64 @@ def wb_sorting_plan(
     return plan
 
 
+def apply_sort_budget(plan: dict, budgets: dict) -> dict:
+    """Пересчитать «дослать» по размерам под бюджет из Excel («WB дефицит»).
+
+    В режиме PDF из файла колонка «WB дефицит, шт» — это и есть «Итого
+    дослать на WB» карточки, поэтому её значение задаёт бюджет по артикулу,
+    а план остаётся источником только по тому, какие размеры и в каком
+    порядке закрывать.
+
+    Правила:
+
+    * артикула нет в ``budgets`` (колонки в файле не было или ячейка пустая)
+      либо бюджет равен плановому итогу — артикул не меняется;
+    * бюджет меньше плана — «дослать» выдаётся в порядке скорости продаж
+      (сначала продающиеся размеры), пока бюджет не исчерпан;
+    * бюджет больше плана — остаток докидывается тем же порядком;
+    * итог по артикулу всегда равен бюджету.
+
+    ``budgets`` — ``{UPPER(article): int}``. Изменяет ``plan`` на месте.
+    """
+    for art, entry in plan.items():
+        if art not in budgets or not entry.get("sizes"):
+            continue
+        items = entry["sizes"]
+        base = [max(0, int(it.get("to_sort") or 0)) for it in items]
+        total = sum(base)
+        try:
+            budget = max(0, int(budgets[art]))
+        except (TypeError, ValueError):
+            continue
+        if budget == total:
+            continue
+        # Сортировка по убыванию скорости продаж; исходный порядок размеров
+        # (alphabetical-numeric через _size_sort_key) сохраняется при равенстве.
+        order = sorted(range(len(items)), key=lambda i: -(items[i].get("vel") or 0))
+        if budget < total:
+            new = [0] * len(items)
+            rem = budget
+            for i in order:
+                if rem <= 0:
+                    break
+                give = min(base[i], rem)
+                new[i] = give
+                rem -= give
+        else:
+            new = list(base)
+            extra = budget - total
+            live = [i for i in order if (items[i].get("vel") or 0) > 0] or order
+            j = 0
+            while extra > 0:
+                new[live[j % len(live)]] += 1
+                extra -= 1
+                j += 1
+        for it, v in zip(items, new):
+            it["to_sort"] = v
+        entry["total"] = sum(new)
+    return plan
+
+
 def _wb_sizes(db: Session, date_from, date_to) -> dict:
     """Продажи WB по (артикул, размер): нетто = продажи − возвраты.
 
