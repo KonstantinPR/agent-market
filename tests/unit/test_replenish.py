@@ -1,7 +1,9 @@
 """Тесты сервиса «Потребность в товаре» (app/services/replenish.py)."""
+import io
 from datetime import date, timedelta
 
 import pytest
+from openpyxl import load_workbook
 from sqlalchemy import select
 
 from app import models
@@ -38,10 +40,11 @@ def _oz_row(op_key, article, day, qty=1, ret=0, income=850.0):
     )
 
 
-def _card(db, code, vendor="", barcode=""):
+def _card(db, code, vendor="", barcode="", size=""):
     db.add(models.MarketplaceCard(
-        marketplace_id=_mp_id(db, code), chrt_id="c:" + vendor + barcode,
-        vendor_code=vendor, nm_id="", barcode=barcode,
+        marketplace_id=_mp_id(db, code),
+        chrt_id=f"c:{vendor}:{size}{barcode}",
+        vendor_code=vendor, nm_id="", barcode=barcode, size=size,
     ))
 
 
@@ -73,13 +76,16 @@ def test_replenish_wb_ship_and_buy(db):
     assert row["actual"] is True
     assert row["actual_mp"] == "wb"
     assert row["our_stock"] == 50
-    assert row["wb_def"] == 60
-    assert row["ship_wb"] == 50            # покрываем дефицит WB из нашего склада
+    # «Дослать»/«WB дефицит» — из плана подсортировки как PDF: скорость 180 дн
+    # (60 × 2.0 коэффициента / 180 дн × 30), не из окна спроса 30 дн.
+    assert row["to_sort"] == 20
+    assert row["wb_def"] == 20
+    assert row["ship_wb"] == 20            # покрываем плановый дефицит WB из нашего склада
     assert row["ship_oz"] == 0
     assert row["need_buy"] == 10           # 30 дн × 2/дн − (50 + 0 + 0)
     assert row["status"] == "urgent"
     assert r["meta"]["need_total"] == 10
-    assert r["meta"]["ship_total"] == 50
+    assert r["meta"]["ship_total"] == 20
 
 
 def test_replenish_returns_net_demand(db):
@@ -192,6 +198,66 @@ def test_replenish_marketplace_filter_and_article_like(db):
     assert [x["article"] for x in like["rows"]] == ["TIE-1"]
 
 
+def test_replenish_empty_wb_card_gets_one_to_sort(db):
+    """Главная боль: пустая карточка WB без продаж в окне не должна давать 0.
+
+    «Дослать»/«WB дефицит» из плана подсортировки (как PDF) добавляет 1 шт в
+    пустой размер карточки, и «Отгрузить» покрывает её с нашего склада.
+    Раньше в окне без WB-продаж дефицит был 0, хотя размер на карточке пуст.
+    """
+    db.add(models.Product(article="DRY-1", name="Пусто на WB", net_cost=100.0))
+    db.add(models.CustomStock(article="DRY-1", quantity=5, net_cost=100))
+    _card(db, "wb", vendor="DRY-1", size="42")
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row = r["rows"][0]
+    assert row["wb_sells"] == 0
+    assert row["wb_avail"] == 0
+    assert row["to_sort"] == 1
+    assert row["wb_def"] == 1
+    assert row["ship_wb"] == 1          # пол покрывается с нашего склада
+    assert row["ship_oz"] == 0
+    assert row["need_buy"] == 0
+    assert row["status"] == "normal"
+
+
+def test_replenish_to_sort_matches_sorting_plan(db):
+    """«Дослать» в таблице — ровно итог плана подсортировки, что печатает PDF."""
+    db.add(models.Product(article="MCH-1", name="Совпадение", net_cost=50.0))
+    _card(db, "wb", vendor="MCH-1", size="42")
+    db.add(_wb_row("mch1", "MCH-1", TODAY, qty=180, income=170000.0,
+                   amount=180000.0))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row = r["rows"][0]
+    # фильтр по уникальному артикулу — план строится по тем же данным ключей
+    plan = wb_sorting_plan(
+        db, TODAY, target_days=30, articles=["MCH-1"],
+        profit_factor=wb_profit_factors(db, TODAY, articles=["MCH-1"]),
+    )
+    assert plan["MCH-1"]["total"] > 0
+    assert row["to_sort"] == plan["MCH-1"]["total"]
+    assert row["to_sort"] == row["wb_def"]
+
+
+def test_to_sort_zero_when_wb_excluded(db):
+    """Фильтр «только Ozon»: WB-плана нет, «Дослать» пусто, дефицит Ozon свой."""
+    db.add(models.Product(article="OZ-ONLY", name="Только Ozon", net_cost=100.0))
+    _card(db, "ozon", vendor="OZ-ONLY")
+    db.add(_oz_row("zo1", "OZ-ONLY", TODAY, qty=30))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                       marketplace="ozon")
+    assert len(r["rows"]) == 1
+    row = r["rows"][0]
+    assert row["to_sort"] == 0
+    assert row["wb_def"] == 0
+    assert row["oz_def"] == 30
+
+
 # ------------------------------------------------------------------ размеры
 def _wb_row_size(op_key, article, day, qty, tech_size="", sku="",
                  amount=1000.0, income=850.0, doc_type="Продажа"):
@@ -217,7 +283,8 @@ def _psize(db, article, size, barcode):
 def test_size_view_splits_by_size(db):
     """Разрез по размерам: WB-спрос, остатки и отгрузка со склада — по размеру."""
     db.add(models.Product(article="SZ", name="Свитшот", net_cost=100.0))
-    _card(db, "wb", vendor="SZ")
+    _card(db, "wb", vendor="SZ", size="S")
+    _card(db, "wb", vendor="SZ", size="L")
     db.add(models.CustomStock(article="SZ", quantity=100, net_cost=100))
     _psize(db, "SZ", "S", "BCODE-S")
     _psize(db, "SZ", "L", "BCODE-L")
@@ -238,24 +305,29 @@ def test_size_view_splits_by_size(db):
     assert s["wb_vel"] == 2.0
     assert s["wb_sells"] == 60
     assert s["wb_avail"] == 10
-    assert s["wb_def"] == 50            # 30 дн × 2 − остаток 10
-    assert s["ship_wb"] == 50
+    # «Дослать»/«WB дефицит» — из плана подсортировки (180 дн, ×2 прибыльность):
+    # S: 20 − остаток 10 = 10; L: 20 − 0 = 10.
+    assert s["wb_def"] == 10
+    assert s["to_sort"] == 10
+    assert s["ship_wb"] == 10
     l = by_size["L"]
     assert l["barcode"] == "BCODE-L"
     assert l["wb_vel"] == 1.0
     assert l["wb_avail"] == 0
-    assert l["wb_def"] == 30            # остатков по L нет
-    assert l["ship_wb"] == 30           # приоритет отгрузки — худшему запасу в днях (L)
+    assert l["wb_def"] == 10
+    assert l["to_sort"] == 10
+    assert l["ship_wb"] == 10
     # плоский разрез: «у нас» — по всему артикулу на каждой строке
     assert s["our_stock"] == 100 and l["our_stock"] == 100
-    assert r["meta"]["ship_total"] == 80
+    assert r["meta"]["ship_total"] == 20
     assert r["meta"]["need_total"] == 0  # Ozon/докупка по размерам не считаются
 
 
 def test_size_view_barcode_from_wb_and_stock(db):
     """Баркод размера из отчёта WB (sku) и из остатков склада, без каталога."""
     db.add(models.Product(article="SK", name="Без каталога", net_cost=100.0))
-    _card(db, "wb", vendor="SK")
+    _card(db, "wb", vendor="SK", size="M")
+    _card(db, "wb", vendor="SK", size="XL")
     db.add(_wb_row_size("k1", "SK", TODAY, qty=30, tech_size="M", sku="SKU-M",
                         income=27000.0, amount=30000.0))
     db.add(_wb_row_size("k2", "SK", TODAY, qty=30, tech_size="XL", sku="SKU-XL",
@@ -273,7 +345,8 @@ def test_size_view_nostock_inactive_and_filter(db):
     """nostock по размеру без остатков; неактуальные скрыты; фильтр по артикулу."""
     db.add(models.Product(article="EMPTY", name="Пусто", net_cost=100.0))
     db.add(models.Product(article="GHOST", name="Призрак", net_cost=100.0))
-    _card(db, "wb", vendor="EMPTY")
+    _card(db, "wb", vendor="EMPTY", size="S")
+    _card(db, "wb", vendor="EMPTY", size="L")
     _psize(db, "EMPTY", "S", "B-E")
     _psize(db, "EMPTY", "L", "B-E2")
     _psize(db, "GHOST", "S", "B-G")
@@ -301,9 +374,81 @@ def test_size_view_nostock_inactive_and_filter(db):
     assert r2["rows"][0]["status"] == "inactive"
 
 
+def test_size_view_includes_card_sizes_without_sales_or_stock(db):
+    """Размеры карточки WB без продаж и остатков видны в разрезе по умолчанию."""
+    db.add(models.Product(article="ZERO", name="Нулевые", net_cost=100.0))
+    _card(db, "wb", vendor="ZERO", size="S", barcode="B-S")
+    _card(db, "wb", vendor="ZERO", size="L", barcode="B-L")
+    db.add(_wb_row_size("z1", "ZERO", TODAY, qty=60, tech_size="S",
+                        income=54000.0, amount=60000.0))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30, view="sizes")
+    assert r["meta"]["count"] == 2
+    by_size = {x["size"]: x for x in r["rows"]}
+    assert set(by_size) == {"S", "L"}
+    l = by_size["L"]
+    assert l["wb_sells"] == 0
+    assert l["wb_vel"] == 0.0
+    assert l["wb_avail"] == 0
+    assert l["barcode"] == "B-L"           # баркод мёртвого размера — из карточки
+    assert l["status"] == "normal"
+
+    r2 = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                        view="sizes", hide_zero_sizes=True)
+    assert [x["size"] for x in r2["rows"]] == ["S"]
+    assert r2["meta"]["count"] == 1
+
+
+def test_size_view_floor_gives_one_to_empty_card_size(db):
+    """Пустой размер карточки получает «Дослать» 1 (правило пола из PDF)."""
+    db.add(models.Product(article="FLR-1", name="Пол", net_cost=100.0))
+    db.add(models.CustomStock(article="FLR-1", quantity=3, net_cost=100))
+    _card(db, "wb", vendor="FLR-1", size="S", barcode="B-FS")
+    _card(db, "wb", vendor="FLR-1", size="L", barcode="B-FL")
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30, view="sizes")
+    by_size = {x["size"]: x for x in r["rows"]}
+    assert set(by_size) == {"S", "L"}
+    for s in ("S", "L"):
+        assert by_size[s]["wb_sells"] == 0
+        assert by_size[s]["wb_avail"] == 0
+        assert by_size[s]["to_sort"] == 1
+        assert by_size[s]["wb_def"] == 1
+        assert by_size[s]["ship_wb"] == 1   # пол обоих размеров покрыт (склад 3)
+
+
+def test_size_view_hide_zero_keeps_sizes_with_stock(db):
+    """hide_zero_sizes убирает «везде 0», но держит размер с остатком на складе."""
+    db.add(models.Product(article="STK", name="С остатком", net_cost=100.0))
+    _card(db, "wb", vendor="STK", size="42")
+    _card(db, "wb", vendor="STK", size="44")
+    _stock_size(db, "wb", "STK", TODAY, qty=5, qf=5, size="44", barcode="B-44")
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                       view="sizes", hide_zero_sizes=True)
+    assert [x["size"] for x in r["rows"]] == ["44"]
+    assert r["meta"]["count"] == 1
+
+
+def test_size_view_hide_zero_keeps_size_with_ozon_stock(db):
+    """Остаток Ozon тоже держит размер «живым» (проверка по всем кодам)."""
+    db.add(models.Product(article="OZS", name="Озон-остаток", net_cost=100.0))
+    _card(db, "wb", vendor="OZS", size="42")
+    _stock_size(db, "ozon", "OZS", TODAY, qty=5, qf=5, size="42", barcode="B-42")
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                       view="sizes", hide_zero_sizes=True)
+    assert [x["size"] for x in r["rows"]] == ["42"]
+
+
 def test_api_replenish_size_view(db, api_client):
     db.add(models.Product(article="SZ", name="Свитшот", net_cost=100.0))
-    _card(db, "wb", vendor="SZ")
+    _card(db, "wb", vendor="SZ", size="S")
+    _card(db, "wb", vendor="SZ", size="L")
     _psize(db, "SZ", "S", "BCODE-S")
     _psize(db, "SZ", "L", "BCODE-L")
     db.add(_wb_row_size("s1", "SZ", TODAY, qty=60, tech_size="S",
@@ -329,6 +474,40 @@ def test_api_replenish_size_view(db, api_client):
     })
     assert xp.status_code == 200
     assert xp.content.startswith(b"PK")
+
+
+def test_api_replenish_size_view_hide_zero_sizes(db, api_client):
+    """hide_zero_sizes в API: таблица и Excel-выгрузка следуют фильтру."""
+    db.add(models.Product(article="SZ", name="Свитшот", net_cost=100.0))
+    _card(db, "wb", vendor="SZ", size="S", barcode="B-S")
+    _card(db, "wb", vendor="SZ", size="L", barcode="B-L")
+    db.add(_wb_row_size("s1", "SZ", TODAY, qty=60, tech_size="S",
+                        income=54000.0, amount=60000.0))
+    db.commit()
+
+    all_ = api_client.get("/api/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "target_days": 30, "window_days": 30, "view": "sizes",
+    })
+    assert all_.status_code == 200
+    assert {x["size"] for x in all_.json()["rows"]} == {"S", "L"}
+
+    filt = api_client.get("/api/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "target_days": 30, "window_days": 30, "view": "sizes",
+        "hide_zero_sizes": 1,
+    })
+    assert filt.status_code == 200
+    assert [x["size"] for x in filt.json()["rows"]] == ["S"]
+
+    xp = api_client.get("/api/export/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "view": "sizes", "hide_zero_sizes": 1,
+    })
+    assert xp.status_code == 200
+    ws = load_workbook(io.BytesIO(xp.content)).active
+    sizes_in_excel = [ws.cell(row, 2).value for row in range(2, ws.max_row + 1)]
+    assert sizes_in_excel == ["S"]       # мёртвый L не добрался до выгрузки
 
 
 # ------------------------------------------------------------------ API
@@ -366,6 +545,31 @@ def test_api_replenish_export(db, api_client):
     assert resp.headers["content-type"] == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+def test_api_replenish_to_sort_column(db, api_client):
+    """«Дослать» приходит в таблицу и колонкой уходит в Excel-выгрузку."""
+    db.add(models.Product(article="EXP-1", name="Выгрузка", net_cost=100.0))
+    _card(db, "wb", vendor="EXP-1", size="42")
+    db.add(models.CustomStock(article="EXP-1", quantity=2, net_cost=100))
+    db.commit()
+
+    resp = api_client.get("/api/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "target_days": 30, "window_days": 30,
+    })
+    assert resp.status_code == 200
+    row = resp.json()["rows"][0]
+    assert row["to_sort"] == 1
+    assert row["wb_def"] == 1
+
+    xp = api_client.get("/api/export/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+    })
+    assert xp.status_code == 200
+    ws = load_workbook(io.BytesIO(xp.content)).active
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    assert "Дослать на WB, шт" in headers
 
 
 # ------------------------------------------------- план подсортировки на WB

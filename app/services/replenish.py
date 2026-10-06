@@ -395,6 +395,26 @@ def wb_sorting_plan(
     return plan
 
 
+def _wb_sort_plan(
+    db: Session, date_to, keys, target_days: int = 30,
+) -> dict:
+    """План подсортировки на WB (как PDF по умолчанию) для набора артикулов.
+
+    UI считает «Дослать» и «WB дефицит» из того же плана и с теми же
+    параметрами, что PDF из коробки: скорость за 180 дней, пол 1 шт в пустой
+    размер карточки и учёт прибыльности. Иначе окно без WB-продаж даёт
+    дефицит 0, хотя карточка пуста, — экран и PDF разойдутся.
+    """
+    if not keys:
+        return {}
+    articles = sorted(keys)
+    factors = wb_profit_factors(db, date_to, articles=articles)
+    return wb_sorting_plan(
+        db, date_to, target_days=target_days, articles=articles,
+        profit_factor=factors,
+    )
+
+
 def apply_sort_budget(plan: dict, budgets: dict) -> dict:
     """Пересчитать «дослать» по размерам под бюджет из Excel («WB дефицит»).
 
@@ -529,13 +549,19 @@ def replenish_rows(
     sort: str = "urgency",
     article_like: Optional[str] = None,
     show_inactive: bool = False,
+    hide_zero_sizes: bool = False,
     view: str = "article",
 ) -> dict:
     """Главный расчёт. Возвращает {'rows': [...], 'meta': {...}}.
 
     view='article' — одна строка на артикул; view='sizes' — плоский разрез
     по размерам (WB-продажи по tech_size + остатки складов МП по размерам;
-    Ozon-спрос/покупка остаются на уровне артикула).
+    Ozon-спрос/покупка остаются на уровне артикула). ``hide_zero_sizes`` —
+    в размерном разрезе скрыть размеры без продаж и остатков (везде 0).
+
+    «Дослать» и «WB дефицит» идут из плана подсортировки на WB
+    (``wb_sorting_plan``, параметры PDF по умолчанию) — см. артикульный
+    расчет ниже; в размерном разрезе — по каждому размеру.
     """
     span = span_days or _span_days(date_from, date_to)
     target_days = max(1, int(target_days or 30))
@@ -550,7 +576,7 @@ def replenish_rows(
         return _size_view(
             db, date_from, date_to, target_days=target_days, span=span,
             codes=codes, sort=sort, article_like=article_like,
-            show_inactive=show_inactive,
+            show_inactive=show_inactive, hide_zero_sizes=hide_zero_sizes,
         )
 
     wb_df, oz_df = _detail_aggregates(db, date_from, date_to)
@@ -581,6 +607,14 @@ def replenish_rows(
 
     if not keys:
         return {"rows": [], "meta": _meta(0)}
+
+    # План подсортировки на WB (как PDF) — источник «Дослать» и «WB дефицит»,
+    # чтобы в окне без WB-продаж дефицит не был 0 при пустой карточке.
+    plan_total = (
+        {k: int(e.get("total") or 0) for k, e in _wb_sort_plan(
+            db, date_to, sorted(keys), target_days).items()}
+        if "wb" in codes else {}
+    )
 
     prods = db.execute(
         select(models.Product).where(models.Product.article.in_(sorted(keys)))
@@ -621,7 +655,14 @@ def replenish_rows(
 
         wb_doc = round(wb_avail / vel_wb, 1) if vel_wb > 0 else None
         oz_doc = round(oz_avail / vel_oz, 1) if vel_oz > 0 else None
+        # «WB дефицит» и «Дослать» — из плана подсортировки (как PDF): скорость
+        # 180 дн, пол 1 шт в пустой размер карточки, прибыльность. Иначе окно
+        # без WB-продаж даёт дефицит 0, хотя карточка пуста. Для артикулов без
+        # данных WB остаётся расчёт по окну спроса.
         wb_def = _ceil(target_days * vel_wb - wb_avail)
+        to_sort = plan_total.get(key, 0)
+        if key in plan_total:
+            wb_def = to_sort
         oz_def = _ceil(target_days * vel_oz - oz_avail)
 
         # Актуальность: карточка на одном из МП (артикул или баркод).
@@ -699,7 +740,7 @@ def replenish_rows(
             "our_stock": our,
             "our_cost": round(_num(prod.net_cost if prod else 0), 2),
             "wb_qty": wb_q, "wb_avail": wb_avail, "wb_in_way": wb_w,
-            "wb_doc": wb_doc, "wb_def": wb_def,
+            "wb_doc": wb_doc, "wb_def": wb_def, "to_sort": to_sort,
             "oz_qty": oz_q, "oz_avail": oz_avail, "oz_in_way": oz_w,
             "oz_doc": oz_doc, "oz_def": oz_def,
             "ship_wb": ship["wb"], "ship_oz": ship["ozon"],
@@ -743,15 +784,26 @@ def replenish_rows(
 def _size_view(
     db: Session, date_from, date_to, target_days: int = 30, span: int = 1,
     codes=None, sort: str = "urgency", article_like: Optional[str] = None,
-    show_inactive: bool = False,
+    show_inactive: bool = False, hide_zero_sizes: bool = False,
 ) -> dict:
     """Плоский разрез «по размерам».
 
     Строка — (артикул, размер). WB-спрос по tech_size детализации (реальный),
     остатки МП — по размеру из stocks, штрихкод — из каталога размеров /
-    строк WB / стоков. Ozon-спрос и «купить у поставщика» считаются только
-    на уровне артикула (размера в продажах Ozon нет) — в этом виде не
+    строк WB / стоков / карточки. Ozon-спрос и «купить у поставщика» считаются
+    только на уровне артикула (размера в продажах Ozon нет) — в этом виде не
     выводятся (meta.need_total = 0, Ozon в колонках «—»).
+
+    Каталог размеров (``ProductSize``) в базе пуст, поэтому размеры берутся из
+    карточки WB (``MarketplaceCard.size``) тоже: так в разрез попадают размеры,
+    которые есть в карточке, но ни разу не продавались и нигде не лежат.
+    ``hide_zero_sizes=True`` отсекает их — остаются только размеры с продажами
+    или остатками.
+
+    «Дослать» и «WB дефицит» берутся из плана подсортировки на WB
+    (``wb_sorting_plan``, те же параметры, что у PDF по умолчанию): скорость
+    180 дн, пол 1 шт в пустой размер карточки, учёт прибыльности. Так пустой
+    живой размер получает минимум 1, а не 0.
     """
     codes = codes or ["wb", "ozon"]
     wb_df, oz_df = _detail_aggregates(db, date_from, date_to)
@@ -772,11 +824,15 @@ def _size_view(
     cards = _cards_maps(db)
     prodsizes = _product_sizes(db)
     wbsizes = _wb_sizes(db, date_from, date_to) if "wb" in codes else {}
+    card_sizes = _wb_card_sizes(db) if "wb" in codes else {}
+    card_pairs = [(a, s) for a, ss in card_sizes.items() for s in ss]
 
     keys = set()
     for a, _s in prodsizes:
         keys.add(a)
     for a, _s in wbsizes:
+        keys.add(a)
+    for a, _s in card_pairs:
         keys.add(a)
     for c in codes:
         keys.update(art_stocks[c])
@@ -784,6 +840,27 @@ def _size_view(
         keys = {k for k in keys if like_match(k, article_like)}
     if not keys:
         return {"rows": [], "meta": _meta(0)}
+
+    # План подсортировки на WB (как PDF) — источник «Дослать» и «WB дефицит»
+    # по каждому размеру карточки. Размер вне плана (например, только Ozon)
+    # остаётся на расчёте по окну спроса.
+    plan_sz = {}
+    if "wb" in codes:
+        plan = _wb_sort_plan(db, date_to, sorted(keys), target_days)
+        plan_sz = {
+            art: {it["size"]: it for it in (entry.get("sizes") or [])}
+            for art, entry in plan.items()
+        }
+
+    def _zero_size(s: str, wbs: dict) -> bool:
+        """Размер «везде 0»: без продаж за окно и без остатков/в пути на МП."""
+        if int(wbs.get("sells") or 0) > 0:
+            return False
+        for c in codes:
+            st = sz_stocks[c].get((key, s))
+            if st and (int(st[0] or 0) or int(st[1] or 0) or int(st[2] or 0)):
+                return False
+        return True
 
     prods = db.execute(
         select(models.Product).where(models.Product.article.in_(sorted(keys)))
@@ -796,6 +873,7 @@ def _size_view(
         wb_d = detail_maps.get("wb", {}).get(key, {})
         oz_d = detail_maps.get("ozon", {}).get(key, {})
         our = int(_num(our_map.get(key)))
+        card_bc = card_sizes.get(key, {})
 
         actual_mp = []
         for code in codes:
@@ -824,6 +902,9 @@ def _size_view(
         for (a, s) in wbsizes:
             if a == key:
                 sizes.add(s)
+        for (a, s) in card_pairs:
+            if a == key:
+                sizes.add(s)
         for c in codes:
             for (a, s) in sz_stocks[c]:
                 if a == key:
@@ -840,13 +921,19 @@ def _size_view(
             vel = wbs["net"] / span if span > 0 else 0.0
             doc = round(wb_avail / vel, 1) if vel > 0 else None
             df_ = _ceil(target_days * vel - wb_avail)
-            size_defs.append((s, wbs, wb_s, wb_avail, vel, doc, df_))
+            pit = plan_sz.get(key, {}).get(s or "—")
+            # «Дослать»/«WB дефицит» — из плана подсортировки (как PDF): пол
+            # 1 шт в пустой размер карточки, скорость 180 дн, прибыльность.
+            to_sort = int((pit or {}).get("to_sort") or 0) if pit is not None else df_
+            if pit is not None:
+                df_ = to_sort
+            size_defs.append((s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort))
 
         rem = max(0, our)
         ship = {}
-        for s, wbs, wb_s, wb_avail, vel, doc, df_ in size_defs:
+        for s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort in size_defs:
             ship[s] = 0
-        for s, wbs, wb_s, wb_avail, vel, doc, df_ in \
+        for s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort in \
                 sorted(size_defs,
                        key=lambda x: (x[5] if x[5] is not None else 1e12, -x[4])):
             give = min(df_, rem)
@@ -855,7 +942,9 @@ def _size_view(
         # Остаток склада (после WB-дефицитов) не делим по размерам —
         # он отражается на строке артикула (Ozon/резерв).
 
-        for s, wbs, wb_s, wb_avail, vel, doc, df_ in size_defs:
+        for s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort in size_defs:
+            if hide_zero_sizes and _zero_size(s, wbs):
+                continue
             if not actual:
                 status = "inactive"
             elif wbs["net"] <= 0:
@@ -869,8 +958,8 @@ def _size_view(
             rows.append({
                 "article": prod.article if prod and prod.article else key,
                 "size": s or "—",
-                "barcode": (prodsizes.get((key, s)) or wbs.get("barcode")
-                            or wb_s[3] or ""),
+                "barcode": (prodsizes.get((key, s)) or card_bc.get(s)
+                            or wbs.get("barcode") or wb_s[3] or ""),
                 "name": (prod.name if prod and (prod.name or "").strip()
                          else wb_d.get("name") or oz_d.get("name") or ""),
                 "actual": actual,
@@ -880,7 +969,7 @@ def _size_view(
                 "wb_sells": wbs["sells"], "wb_ret": wbs["ret"],
                 "wb_net": wbs["net"], "wb_vel": round(vel, 2),
                 "wb_qty": wb_s[1], "wb_avail": wb_avail, "wb_in_way": wb_s[2],
-                "wb_doc": doc, "wb_def": df_, "ship_wb": ship[s],
+                "wb_doc": doc, "wb_def": df_, "to_sort": to_sort, "ship_wb": ship[s],
                 "our_stock": our,
                 "margin_per_one": margin_per_one, "margin_pct": margin_pct,
                 "margin": round(margin_total, 2),

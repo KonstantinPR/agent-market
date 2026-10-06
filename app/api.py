@@ -2024,6 +2024,7 @@ def api_replenish(
     sort: str = "urgency",
     article_like: Optional[str] = None,
     show_inactive: int = 0,
+    hide_zero_sizes: int = 0,
     view: str = "article",
     db: Session = Depends(get_db),
 ):
@@ -2032,7 +2033,8 @@ def api_replenish(
     Спрос = продажи − возвраты за окно (шт/день). target_days — целевой запас
     в днях продаж; window_days — число дней по умолчанию, когда не указаны
     даты окна. sort: urgency | margin | name. view: article | sizes —
-    размерный разрез (WB) по той же логике.
+    размерный разрез (WB) по той же логике. hide_zero_sizes — в разрезе
+    «по размерам» скрыть размеры без продаж и остатков (везде 0).
     """
     from_, to_ = _parse_window400(date_from, date_to)
     if date_from is None and date_to is None:
@@ -2048,7 +2050,8 @@ def api_replenish(
     result = replenish_service.replenish_rows(
         db, from_, to_, target_days=target_days, span_days=span,
         marketplace=marketplace, sort=sort, article_like=article_like,
-        show_inactive=bool(show_inactive), view=view,
+        show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
+        view=view,
     )
     result["date_from"] = from_.isoformat()
     result["date_to"] = to_.isoformat()
@@ -2064,7 +2067,7 @@ _REPLENISH_EXPORT = {
     "wb_sells": "Продано WB, шт",
     "our_stock": "У нас, шт", "our_cost": "Себестоимость, руб",
     "wb_qty": "WB склад, шт", "wb_avail": "WB доступно, шт", "wb_in_way": "WB в пути, шт",
-    "wb_doc": "WB, дней запаса", "wb_def": "WB дефицит, шт",
+    "wb_doc": "WB, дней запаса", "wb_def": "WB дефицит, шт", "to_sort": "Дослать на WB, шт",
     "oz_qty": "Ozon склад, шт", "oz_avail": "Ozon доступно, шт", "oz_in_way": "Ozon в пути, шт",
     "oz_doc": "Ozon, дней запаса", "oz_def": "Ozon дефицит, шт",
     "ship_wb": "Отгрузить на WB, шт", "ship_oz": "Отгрузить на Ozon, шт",
@@ -2080,7 +2083,7 @@ _REPLENISH_EXPORT_SIZES = {
     "wb_sells": "Продано WB, шт", "wb_ret": "Возвраты WB, шт",
     "wb_net": "Продажи WB нетто, шт", "wb_vel": "Спрос WB, шт/день",
     "wb_qty": "WB склад, шт", "wb_avail": "WB доступно, шт", "wb_in_way": "WB в пути, шт",
-    "wb_doc": "WB, дней запаса", "wb_def": "WB дефицит, шт",
+    "wb_doc": "WB, дней запаса", "wb_def": "WB дефицит, шт", "to_sort": "Дослать на WB, шт",
     "ship_wb": "Отгрузить на WB, шт",
     "our_stock": "У нас, шт",
     "margin_per_one": "Маржа/шт, руб", "margin_pct": "Рентабельность, %", "margin": "Маржа, руб",
@@ -2113,6 +2116,7 @@ def export_replenish(
     sort: str = "urgency",
     article_like: Optional[str] = None,
     show_inactive: int = 0,
+    hide_zero_sizes: int = 0,
     view: str = "article",
     cols: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -2125,7 +2129,8 @@ def export_replenish(
     result = replenish_service.replenish_rows(
         db, from_, to_, target_days=target_days, span_days=span,
         marketplace=marketplace, sort=sort, article_like=article_like,
-        show_inactive=bool(show_inactive), view=view,
+        show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
+        view=view,
     )
     df = pd.DataFrame(result["rows"])
     if df.empty:

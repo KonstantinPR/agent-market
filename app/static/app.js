@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "70";
+const UI_VERSION = "72";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2100,7 +2100,8 @@ const replenishHeaders = [
   { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB: остатки на складах (quantity_full) + в пути." },
   { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады WB (уже отгружен со склада WB-поставщика или в поставке)." },
   { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на WB в днях: доступно ÷ спрос в день. Идеал — целевой запас (по умолчанию 30 дн)." },
-  { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит WB до целевого запаса: целевые дни × спрос в день − доступно. Что нужно довезти на WB." },
+  { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит WB до целевого запаса. Считается как «Дослать» из плана подсортировки (как PDF: скорость 180 дн, +1 шт в пустой размер карточки, учёт прибыльности) — чтобы в окне без WB-продаж не было 0 при пустой карточке. Что нужно довезти на WB." },
+  { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB, как в PDF: итог по карточке = скорость продаж 180 дн за вычетом доступного, +1 шт в пустой размер, с учётом прибыльности. То же значение, что «WB дефицит» (для артикулов с WB)." },
   { k: "oz_avail", label: "Ozon доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на Ozon: остатки на складах + в пути." },
   { k: "oz_in_way", label: "Ozon в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады Ozon." },
   { k: "oz_doc", label: "Ozon, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на Ozon в днях: доступно ÷ спрос в день. Идеал — целевой запас." },
@@ -2126,7 +2127,8 @@ const replenishSizeHeaders = [
   { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB по этому размеру: остаток (quantity_full) + в пути." },
   { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "В пути на склады WB по этому размеру." },
   { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас этого размера на WB в днях: доступно ÷ спрос в день." },
-  { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит размера на WB до целевого запаса: целевые дни × спрос в день − доступно." },
+  { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит размера на WB до целевого запаса. Считается как «Дослать» из плана подсортировки (как PDF: скорость 180 дн, +1 шт в пустой размер карточки, учёт прибыльности) — чтобы пустой живой размер не показывал 0." },
+  { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB по этому размеру, как в PDF: скорость 180 дн за вычетом доступного, +1 шт в пустой размер карточки, с учётом прибыльности. То же значение, что «WB дефицит»." },
   { k: "ship_wb", label: "Отгрузить WB", num: true, render: (v) => (v || 0) > 0 ? `<b>${fmt(v)}</b>` : "—", tip: "Сколько отгрузить этого размера с нашего склада на WB: покрытие дефицита размера; приоритет — самому низкому запасу в днях." },
   { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе — по всему артикулу (по размерам склад не ведётся)." },
   { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа/шт по артикулу целиком (по размерам не раскладывается)." },
@@ -2160,7 +2162,7 @@ function replenishFooters(rows) {
     wb_sells: _footSum(rows, "wb_sells"),
     our_stock: _footSum(rows, "our_stock"),
     wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
-    wb_def: _footSum(rows, "wb_def"),
+    wb_def: _footSum(rows, "wb_def"), to_sort: _footSum(rows, "to_sort"),
     oz_avail: _footSum(rows, "oz_avail"), oz_in_way: _footSum(rows, "oz_in_way"),
     oz_def: _footSum(rows, "oz_def"),
     ship_wb: _footSum(rows, "ship_wb"), ship_oz: _footSum(rows, "ship_oz"),
@@ -2182,7 +2184,7 @@ function replenishSizeFooters(rows) {
   const t = {
     wb_sells: _footSum(rows, "wb_sells"),
     wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
-    wb_def: _footSum(rows, "wb_def"),
+    wb_def: _footSum(rows, "wb_def"), to_sort: _footSum(rows, "to_sort"),
     ship_wb: _footSum(rows, "ship_wb"), our_stock: _footSum(rows, "our_stock"),
     margin: _footSum(rows, "margin"),
     wb_vel: _footAvg(rows, "wb_vel", 2), wb_doc: _footAvg(rows, "wb_doc", 1),
@@ -2212,6 +2214,7 @@ function replenishQs(f) {
     sort: (sortEl && sortEl.value) || "urgency",
     view: replenishView(),
     show_inactive: $("#replenishShowInactive") && $("#replenishShowInactive").checked ? 1 : undefined,
+    hide_zero_sizes: $("#replenishHideZeroSizes") && $("#replenishHideZeroSizes").checked ? 1 : undefined,
   };
   if (f.marketplace) q.marketplace = f.marketplace;
   const like = tabLike("replenishLike");

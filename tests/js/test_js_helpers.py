@@ -284,6 +284,31 @@ assert.ok(!htmlSrc.includes('id="exportReplenishPdf"'),
 assert.ok(!jsSrc.includes('const expPdf = $("#exportReplenishPdf")'),
   "app.js не должен обновлять href удалённой ссылки");
 
+// Чекбокс «без нулевых размеров» в разминке «Размеры»: по умолчанию снят
+// (показываются все размеры, включая «везде 0»), при включении скрывает
+// размеры без продаж и остатков.
+assert.ok(htmlSrc.includes('id="replenishHideZeroSizes"'),
+  "в тулбаре Потребности есть чекбокс «без нулевых размеров»");
+assert.ok(htmlSrc.includes("без нулевых размеров"),
+  "подпись чекбокса про нулевые размеры на месте");
+assert.ok(jsSrc.includes('hide_zero_sizes: $("#replenishHideZeroSizes")'),
+  "app.js передаёт hide_zero_sizes в запрос Потребности");
+assert.ok(apiSrc.includes("hide_zero_sizes: int = 0"),
+  "в /api/replenish есть параметр hide_zero_sizes");
+
+// «Дослать» — колонка плана подсортировки (как PDF) в обоих видах и в Excel.
+assert.ok(jsSrc.includes('{ k: "to_sort", label: "Дослать"'),
+  "в «По артикулам» нет колонки «Дослать»");
+assert.ok((jsSrc.match(/\{ k: "to_sort", label: "Дослать"/g) || []).length === 2,
+  "«Дослать» должна быть и в «По артикулам», и в «По размерам»");
+assert.ok(jsSrc.includes('to_sort: _footSum(rows, "to_sort")'),
+  "в итогах Потребности нет суммы «Дослать»");
+assert.ok(apiSrc.includes('"to_sort": "Дослать на WB, шт"'),
+  "в Excel-выгрузке нет колонки «Дослать на WB, шт»");
+assert.strictEqual(
+  (apiSrc.match(/"to_sort": "Дослать на WB, шт"/g) || []).length, 2,
+  "«Дослать» должна выгружаться и в «По артикулам», и в «По размерам»");
+
 // Поля карточки PDF = колонки «Вида таблицы» (отдельного списка галочек нет).
 const pdfColsOf = sandbox.replenishPdfCols;
 assert.ok(!jsSrc.includes("Поля в карточке"),
@@ -349,7 +374,7 @@ assert.ok(apiSrc.includes("apply_sort_budget"),
 const excelCss = fs.readFileSync(process.argv[5], "utf8"); // cssSrc объявится ниже
 if (!/\.pdf-drop\s*\{/.test(excelCss)) throw new Error("нет CSS-правил для .pdf-drop");
 if (!excelCss.includes(".pdf-x-info")) throw new Error("нет CSS карточки загруженного файла");
-assert.ok(htmlSrc.includes("app.js?v=70"), "index.html подключает app.js v70");
+assert.ok(htmlSrc.includes("app.js?v=72"), "index.html подключает app.js v72");
 
 // Расширенный поиск «*»: клиентский likeMatch должен совпадать с серверным.
 const LIKE_CASES = [
