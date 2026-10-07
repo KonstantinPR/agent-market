@@ -1,8 +1,7 @@
-"""Расчёт маржинальности по продажам (агрегация sales + products)."""
+"""Расчёт маржинальности по детализациям продаж WB/Ozon (detail-отчёты) и воронке WB."""
 from datetime import date
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -181,54 +180,12 @@ def funnel_dataframe(
     return out
 
 
-def margin_columns() -> list:
-    """Колонки итогового df маржинальности (в т.ч. вычисляемые)."""
-    return [
-        "article", "name", "sells", "revenue", "commission", "logistics",
-        "storage", "services", "income", "margin_gross", "net_cost", "other",
-        "margin", "margin_per_one", "margin_pct",
-    ]
-
-
-def compute_margin(df: pd.DataFrame) -> pd.DataFrame:
-    """Считает производные колонки маржинальности из агрегированного df.
-
-    Ожидаются колонки: article, name, sells, revenue, commission, logistics,
-    storage, services, income, net_cost. Ничего не пишет в БД — чистый расчёт.
-    Маржа (margin_gross) — прибыль до себестоимости, «Маржа-себест.» (margin)
-    — после вычета net_cost за проданный (не возвращённый) товар.
-    """
-    df = df.copy()
-    df["net_cost"] = pd.to_numeric(df["net_cost"], errors="coerce").fillna(0)
-    df["other"] = (
-        df["income"] - (df["revenue"] + df["commission"]
-                        + df["logistics"] + df["storage"] + df["services"])
-    ).round(2)
-    df["margin_gross"] = round(
-        df["income"] - df["logistics"] - df["storage"] - df["services"], 2
-    )
-    df["margin"] = df["income"] - df["net_cost"] * np.maximum(0, df["sells"])
-    df["margin_per_one"] = np.where(
-        df["sells"] > 0, df["margin"] / np.where(df["sells"] == 0, 1, df["sells"]), 0
-    )
-    df["margin_pct"] = np.where(
-        (df["income"] > 0) & (df["sells"] > 0), df["margin"] / df["income"] * 100, 0
-    )
-    df = df.sort_values("margin", ascending=False).reset_index(drop=True)
-    df["article"] = df["article"].astype(str)
-    return df
-
-
-def empty_margin_df() -> pd.DataFrame:
-    return pd.DataFrame(columns=margin_columns())
-
-
 DETAIL_MARGIN_COLUMNS = [
     "article", "nm_id", "name", "sells", "returns_qty",
     "stock_qty", "stock_total", "stock_in_way",
     "revenue", "commission", "logistics", "logistics_out", "logistics_in",
     "storage", "services", "income", "margin_gross", "net_cost", "net_cost_est",
-    "margin", "margin_per_one", "margin_pct",
+    "margin", "margin_per_one", "margin_pct", "margin_pct_income",
     "commission_per_one", "logistics_per_one",
     "logistics_out_per_one", "logistics_in_per_one",
     "storage_per_one", "income_per_one", "revenue_per_one",
@@ -309,7 +266,7 @@ def margin_detail_dataframe(
             "stock_qty", "stock_total", "stock_in_way",
             "revenue", "commission", "logistics", "logistics_out", "logistics_in",
             "storage", "services", "income", "margin_gross", "net_cost",
-            "net_cost_est", "margin", "margin_per_one", "margin_pct",
+            "net_cost_est", "margin", "margin_per_one", "margin_pct", "margin_pct_income",
             "commission_per_one", "logistics_per_one",
             "logistics_out_per_one", "logistics_in_per_one",
             "storage_per_one", "income_per_one", "revenue_per_one",
@@ -456,6 +413,7 @@ def margin_detail_dataframe(
         margin = round(margin_gross - net_cost * max(0, sells), 2)
         margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
         margin_pct = round(margin / revenue * 100, 2) if revenue > 0 and sells > 0 else 0.0
+        margin_pct_income = round(margin / income * 100, 2) if income > 0 and sells > 0 else 0.0
         # Пересчитанные на единицу
         _s = sells if sells > 0 else 0
         commission_per_one = round(commission / _s, 2) if _s else 0.0
@@ -484,6 +442,7 @@ def margin_detail_dataframe(
             "net_cost": round(net_cost, 2),
             "net_cost_est": est, "margin": margin,
             "margin_per_one": margin_per_one, "margin_pct": margin_pct,
+            "margin_pct_income": margin_pct_income,
             "commission_per_one": commission_per_one,
             "logistics_per_one": logistics_per_one,
             "logistics_out_per_one": logistics_out_per_one,
@@ -811,49 +770,3 @@ def compare_margin_periods(current: pd.DataFrame, prev: pd.DataFrame) -> pd.Data
         col = cur[c]
         cur[c] = col.astype(object).where(col.notna(), None)
     return cur
-
-
-def margin_dataframe(
-    db: Session,
-    date_from=None,
-    date_to=None,
-    marketplace=None,
-    article_like: Optional[str] = None,
-    source: Optional[str] = None,
-) -> pd.DataFrame:
-    query = (
-        select(
-            models.Sale.article,
-            func.max(models.Product.name).label("name"),
-            func.sum(models.Sale.quantity).label("sells"),
-            func.sum(models.Sale.revenue).label("revenue"),
-            func.sum(models.Sale.commission).label("commission"),
-            func.sum(models.Sale.logistics).label("logistics"),
-            func.sum(models.Sale.storage).label("storage"),
-            func.sum(models.Sale.services).label("services"),
-            func.sum(models.Sale.income).label("income"),
-            func.max(models.Product.net_cost).label("net_cost"),
-        )
-        .select_from(models.Sale)
-        .join(models.Product, models.Sale.article == models.Product.article)
-        .group_by(models.Sale.article)
-    )
-    if date_from:
-        query = query.where(models.Sale.date >= pd.Timestamp(date_from).date())
-    if date_to:
-        query = query.where(models.Sale.date <= pd.Timestamp(date_to).date())
-    if marketplace is not None and marketplace != "":
-        ids = marketplace if isinstance(marketplace, (list, tuple, set)) else [marketplace]
-        query = query.where(models.Sale.marketplace_id.in_(ids))
-    if article_like:
-        query = query.where(like_col(models.Sale.article, article_like))
-    if source:
-        query = query.where(models.Sale.source == source)
-    else:
-        query = query.where(models.Sale.source != "detail")
-
-    df = pd.read_sql(query, db.bind)
-    if df.empty:
-        return empty_margin_df()
-
-    return compute_margin(df)

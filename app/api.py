@@ -216,29 +216,6 @@ def api_sales(
     return {"rows": rows, "count": len(rows), "date_from": str(from_), "date_to": str(to_), "totals": _t}
 
 
-@router.get("/margin")
-def api_margin(
-    marketplace: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    article_like: Optional[str] = None,
-    source: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    from_, to_ = _parse_window400(date_from, date_to)
-
-    mp_ids = common_service.resolve_marketplace_ids(db, marketplace)
-
-    df = margin_service.margin_dataframe(
-        db, date_from=from_, date_to=to_, marketplace=mp_ids,
-        article_like=article_like, source=source,
-    )
-    return {
-        "rows": df.replace({None: ""}).to_dict("records"),
-        "count": len(df),
-    }
-
-
 @router.get("/margin/detail")
 def api_margin_detail(
     date_from: Optional[str] = None,
@@ -629,212 +606,7 @@ def api_pulls(db: Session = Depends(get_db)):
             "rows": rows_n, "db_rows": db_rows, "window": window,
         }
         for api, kind, last_success_at, rows_n, db_rows, window in rows
-    ]
-
-
-def _real_ozon_articles(db, from_: date, to_: date):
-    """Реальные артикулы Ozon = offer_id из живого /v2/finance/realization за месяцы окна."""
-    real: set = set()
-    months = set()
-    yy, mm = from_.year, from_.month
-    while True:
-        months.add((yy, mm))
-        if (yy, mm) == (to_.year, to_.month):
-            break
-        mm += 1
-        if mm == 13:
-            mm, yy = 1, yy + 1
-
-    ok, fail = 0, 0
-    try:
-        prov = provider_factory.get_oz_provider()
-        for year_, month_ in sorted(months):
-            try:
-                df = prov.get_realization(month_, year_)
-                ok += 1
-                for offer_id in df["offer_id"]:
-                    s = str(offer_id).strip()
-                    if s:
-                        real.add(s)
-            except Exception:  # noqa: BLE001
-                fail += 1
-    except Exception as exc:  # noqa: BLE001
-        return real, f"OzonProvider не доступен: {exc}"
-
-    if real or (ok and not fail):
-        return real, f"live /v2/finance/realization (ok={ok}, fail={fail})"
-
-    # фоллбэк-эвристика: реальные артикулы Ozon не выглядят как моки
-    q = (
-        select(models.Sale.article)
-        .join(models.Marketplace, models.Sale.marketplace_id == models.Marketplace.id)
-        .where(models.Marketplace.code == "ozon")
-    )
-    for (art,) in db.execute(q):
-        s = str(art).strip()
-        if s and not re.fullmatch(r"\d+", s) and not re.fullmatch(r"JBG-10\d{2}", s):
-            real.add(s)
-    return real, f"fallback-heuristic (live недоступен: ok={ok}, fail={fail})"
-
-
-def _pick_test_articles(db, by_art, real_ozon):
-    """Автоотбор: реальные Ozon с себестоимостью + без неё (демо), плюс WB."""
-    def key(a):
-        return by_art[a]["income"]
-
-    real_cost = sorted(
-        (a for a in real_ozon if a in by_art and by_art[a]["net_cost"] > 0),
-        key=key, reverse=True,
-    )[:7]
-    real_nocost = sorted(
-        (a for a in real_ozon if a in by_art
-         and by_art[a]["net_cost"] <= 0 and by_art[a]["sells"] > 0),
-        key=key, reverse=True,
-    )[:2]
-    wb = sorted(
-        (a for a in by_art if "wb" in by_art[a]["marketplaces"]
-         and by_art[a]["net_cost"] > 0),
-        key=key, reverse=True,
-    )[:2]
-    return real_cost + real_nocost + wb
-
-
-@router.get("/margin/test")
-def api_margin_test(
-    articles: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    """Тест маржинальности на выборке товаров (read-only).
-
-    Сверяет значения из БД с эталоном реальных артикулов Ozon
-    (живой /v2/finance/realization) и ставит флаги источника/себестоимости.
-    """
-    from_, to_ = _parse_window400(date_from, date_to)
-
-    real_ozon, prov_note = _real_ozon_articles(db, from_, to_)
-
-    agg_q = (
-        select(
-            models.Marketplace.code.label("marketplace"),
-            models.Sale.article,
-            func.max(models.Product.name).label("name"),
-            func.sum(models.Sale.quantity).label("sells"),
-            func.sum(models.Sale.returns_qty).label("returns_qty"),
-            func.sum(models.Sale.revenue).label("revenue"),
-            func.sum(models.Sale.commission).label("commission"),
-            func.sum(models.Sale.logistics).label("logistics"),
-            func.sum(models.Sale.storage).label("storage"),
-            func.sum(models.Sale.services).label("services"),
-            func.sum(models.Sale.income).label("income"),
-            func.max(models.Product.net_cost).label("net_cost"),
-        )
-        .select_from(models.Sale)
-        .join(models.Marketplace, models.Sale.marketplace_id == models.Marketplace.id)
-        .join(models.Product, models.Sale.article == models.Product.article)
-        .where(models.Sale.date >= from_, models.Sale.date <= to_)
-        .group_by(models.Marketplace.code, models.Sale.article)
-        .order_by(models.Sale.article)
-    )
-
-    by_art: dict = {}
-    for r in db.execute(agg_q):
-        mp, art = r.marketplace, str(r.article)
-        rec = by_art.setdefault(art, {
-            "article": art, "name": r.name or "",
-            "marketplaces": [], "sells": 0, "returns_qty": 0,
-            "revenue": 0.0, "commission": 0.0, "logistics": 0.0,
-            "storage": 0.0, "services": 0.0, "income": 0.0,
-            "net_cost": float(r.net_cost or 0),
-            "income_ozon": 0.0, "income_wb": 0.0,
-        })
-        rec["name"] = rec["name"] or (r.name or "")
-        rec["marketplaces"].append(mp)
-        rec["sells"] += int(r.sells or 0)
-        rec["returns_qty"] += int(r.returns_qty or 0)
-        rec["revenue"] += float(r.revenue or 0)
-        rec["commission"] += float(r.commission or 0)
-        rec["logistics"] += float(r.logistics or 0)
-        rec["storage"] += float(r.storage or 0)
-        rec["services"] += float(r.services or 0)
-        rec["income"] += float(r.income or 0)
-        if mp == "ozon":
-            rec["income_ozon"] += float(r.income or 0)
-        elif mp == "wb":
-            rec["income_wb"] += float(r.income or 0)
-
-    requested = None
-    if articles:
-        requested = [a.strip() for a in articles.split(",") if a.strip()]
-
-    tested = requested if requested is not None else _pick_test_articles(db, by_art, real_ozon)
-    if requested is not None:
-        tested = [a for a in requested if a in by_art]
-
-    rows = []
-    for art in tested:
-        rec = by_art[art]
-        nc = rec["net_cost"]
-        margin = rec["income"] - nc * rec["sells"]
-        margin_per_one = margin / rec["sells"] if rec["sells"] else 0.0
-        margin_pct = margin / rec["income"] * 100 if rec["income"] else 0.0
-        comp = rec["revenue"] + rec["commission"] + rec["logistics"] + rec["storage"] + rec["services"]
-        other = rec["income"] - comp
-        src_parts = []
-        if "ozon" in rec["marketplaces"]:
-            src_parts.append("Ozon (реал)" if art in real_ozon else "Ozon (мок)")
-        if "wb" in rec["marketplaces"]:
-            src_parts.append("WB")
-        rows.append({
-            "article": art,
-            "name": rec["name"],
-            "marketplaces": rec["marketplaces"],
-            "source": " + ".join(src_parts),
-            "is_real": art in real_ozon,
-            "has_net_cost": nc > 0,
-            "sells": rec["sells"],
-            "returns_qty": rec["returns_qty"],
-            "revenue": round(rec["revenue"], 2),
-            "commission": round(rec["commission"], 2),
-            "logistics": round(rec["logistics"], 2),
-            "storage": round(rec["storage"], 2),
-            "services": round(rec["services"], 2),
-            "other": round(other, 2),
-            "income": round(rec["income"], 2),
-            "income_ozon": round(rec["income_ozon"], 2),
-            "income_wb": round(rec["income_wb"], 2),
-            "net_cost": nc,
-            "cost_total": round(nc * rec["sells"], 2),
-            "margin": round(margin, 2),
-            "margin_per_one": round(margin_per_one, 2),
-            "margin_pct": round(margin_pct, 2),
-            "identity_ok": abs(other) <= 0.02,
-        })
-    rows.sort(key=lambda x: (-x["sells"], x["article"]))
-
-    sold_no_cost = sorted(
-        a for a, rec in by_art.items() if rec["net_cost"] <= 0 and rec["sells"] > 0
-    )
-    ozon_mock_left = sum(
-        1 for a, rec in by_art.items()
-        if "ozon" in rec["marketplaces"] and a not in real_ozon and rec["sells"] > 0
-    )
-
-    return {
-        "rows": rows,
-        "count": len(rows),
-        "date_from": str(from_),
-        "date_to": str(to_),
-        "meta": {
-            "real_ozon": sorted(real_ozon),
-            "real_ozon_note": prov_note,
-            "sold_without_cost": len(sold_no_cost),
-            "sold_without_cost_sample": sold_no_cost[:10],
-            "ozon_mock_leftovers": ozon_mock_left,
-            "articles_param": requested is not None,
-        },
-    }
+]
 
 
 @router.get("/dashboard")
@@ -2693,40 +2465,6 @@ async def import_cards(
     }
 
 
-@router.get("/export/margin")
-def export_margin(
-    marketplace: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    article_like: Optional[str] = None,
-    cols: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    from_, to_ = _parse_window400(date_from, date_to)
-
-    mp_ids = common_service.resolve_marketplace_ids(db, marketplace)
-    df = margin_service.margin_dataframe(
-        db, date_from=from_, date_to=to_, marketplace=mp_ids, article_like=article_like
-    )
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "name": "Наименование", "sells": "Продано, шт",
-        "revenue": "Выручка, руб", "commission": "Комиссия, руб",
-        "logistics": "Логистика, руб", "storage": "Хранение, руб",
-        "services": "Услуги, руб", "income": "К перечислению, руб",
-        "net_cost": "Себестоимость, руб", "other": "Прочее, руб",
-        "margin_gross": "Маржа, до себестоимости, руб",
-        "margin": "Маржа, руб",
-        "margin_per_one": "Маржа на ед., руб", "margin_pct": "Маржа, %",
-    }, cols)
-    df = df.rename(columns=ru)
-    buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
-    fname = f"margin_{from_}_{to_}.xlsx"
-    return StreamingResponse(
-        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
-
-
 @router.get("/export/margin/detail")
 def export_margin_detail(
     date_from: Optional[str] = None,
@@ -2768,6 +2506,7 @@ def export_margin_detail(
         "net_cost": "Себестоимость, руб", "margin_gross": "Маржа, до себестоимости, руб",
         "margin": "Прибыль, руб",
         "margin_per_one": "Прибыль на ед., руб", "margin_pct": "Прибыль, %",
+        "margin_pct_income": "Прибыль % (к перечислению), %",
         "net_cost_est": "Себестоимость оценка",
         "sells_pp": "Пред. период: Продано, шт", "margin_pp": "Пред. период: Прибыль, руб",
         "delta_ru": "Δ прибыли, руб", "delta_pct": "Δ прибыли, %",

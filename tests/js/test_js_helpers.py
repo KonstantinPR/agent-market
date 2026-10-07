@@ -374,7 +374,7 @@ assert.ok(apiSrc.includes("apply_sort_budget"),
 const excelCss = fs.readFileSync(process.argv[5], "utf8"); // cssSrc объявится ниже
 if (!/\.pdf-drop\s*\{/.test(excelCss)) throw new Error("нет CSS-правил для .pdf-drop");
 if (!excelCss.includes(".pdf-x-info")) throw new Error("нет CSS карточки загруженного файла");
-assert.ok(htmlSrc.includes("app.js?v=72"), "index.html подключает app.js v72");
+assert.ok(htmlSrc.includes("app.js?v=73"), "index.html подключает app.js v73");
 
 // Расширенный поиск «*»: клиентский likeMatch должен совпадать с серверным.
 const LIKE_CASES = [
@@ -437,8 +437,8 @@ if (likeFail) throw new Error(`${likeFail} ошибок likeMatch`);
 
 // серверные плейсхолдеры подсказывают про «*»
 const SEARCH_INPUTS = [
-  "marginSearch", "salesSearch",
-  "marginLike", "marginFunnelLike", "marginOzonDetailLike", "marginDetailLike",
+  "salesSearch",
+  "marginFunnelLike", "marginOzonDetailLike", "marginDetailLike",
   "pricingLike", "whStockLike", "replenishLike", "productsLike",
   "wbCardsLike", "wbStockLike", "wbFunnelLike", "wbSalesLike", "wbDetailLike",
   "wbPricesLike", "wbStorageLike",

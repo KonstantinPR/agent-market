@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=40">
+<link rel="stylesheet" href="/static/style.css?v=41">
 </head>
 <body>
 <nav class="navbar">
@@ -28,7 +28,6 @@
     <div class="dropdown" id="profitDropdown">
       <button class="dropbtn" id="profitMenuBtn">Прибыльность &#9662;</button>
       <div class="dropdown-menu" id="profitMenu">
-        <a class="nav-link" data-tab="margin" href="#">Маржинальность</a>
         <a class="nav-link" data-tab="margin-funnel" href="#">Воронка Продаж WB</a>
         <a class="nav-link" data-tab="margin-detail" href="#">Детализация Продаж WB</a>
         <a class="nav-link" data-tab="margin-ozon-detail" href="#">Анализ Продаж OZON</a>
@@ -253,27 +252,6 @@
         </div>
       </div>
     </section>
-  </section>
-
-  <section id="tab-margin" class="pane">
-    <div class="toolbar">
-      <span class="chk-wrap">
-        <label class="chk"><input type="checkbox" id="mWb" checked> WB</label>
-        <label class="chk"><input type="checkbox" id="mOzon" checked> Ozon</label>
-      </span>
-      <input id="marginSearch" placeholder="Поиск… * = любая часть">
-      <input id="marginLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть">
-      <span class="toolbar-right">
-        <span id="marginTablePager"></span>
-        <div class="view-menu" id="marginViewMenu">
-          <button type="button" class="btn" id="btnmarginView">Вид таблицы &#9662;</button>
-          <div class="view-menu-panel hidden" id="marginViewPanel"></div>
-        </div>
-        <a id="exportMargin" class="btn" href="#" target="_blank">Экспорт в Excel</a>
-        <button type="button" class="btn" id="uploadMargin">Загрузить на диск</button>
-      </span>
-    </div>
-    <div class="table-wrap" id="marginTable"></div>
   </section>
 
   <section id="tab-margin-funnel" class="pane">
@@ -926,7 +904,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=72"></script>
+<script src="/static/app.js?v=73"></script>
 </body>
 </html>
 

@@ -309,8 +309,8 @@ def test_exports_are_xlsx(api_client):
     api_client.post("/api/wb/sales", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
     api_client.post("/api/wb/funnel", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
 
-    for path in ("/api/export/sales", "/api/export/margin",
-                 "/api/export/margin/funnel", "/api/export/margin/detail"):
+    for path in ("/api/export/sales", "/api/export/margin/funnel",
+                 "/api/export/margin/detail"):
         r = api_client.get(path)
         assert r.status_code == 200
         assert XLSX in r.headers["content-type"]

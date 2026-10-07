@@ -53,5 +53,5 @@ def test_full_panel_and_refresh_cycle(api_client):
     assert {m["marketplace"] for m in dash["per_marketplace"]} == {"wb", "ozon"}
 
     # экспорт маржи отдаёт файл
-    r = api_client.get("/api/export/margin")
+    r = api_client.get("/api/export/margin/detail")
     assert r.status_code == 200

@@ -3,85 +3,10 @@ from datetime import date
 
 from sqlalchemy import select
 
-from app.services.margin import (compare_margin_periods, compute_margin, empty_margin_df,
-                                 margin_columns, margin_detail_dataframe, storage_split,
-                                 ozon_margin_detail_dataframe, funnel_dataframe)
+from app.services.margin import (compare_margin_periods, margin_detail_dataframe,
+                                 storage_split, ozon_margin_detail_dataframe,
+                                 funnel_dataframe)
 from app import models
-
-
-def _base_row():
-    return {
-        "article": "A1", "name": "Товар", "sells": 2, "revenue": 800.0,
-        "commission": 50.0, "logistics": 40.0, "storage": 10.0,
-        "services": 5.0, "income": 1000.0, "net_cost": 300.0,
-    }
-
-
-def test_compute_margin_formulas():
-    df = compute_margin(pd.DataFrame([_base_row()]))
-    row = df.iloc[0]
-    assert row["other"] == 95.0  # income - (revenue+комиссия+логистика+хранение+услуги)
-    # Маржа до себестоимости в главной таблице продаж: income - расходы WB
-    assert row["margin_gross"] == 1000.0 - 40.0 - 10.0 - 5.0  # 945
-    # В главной таблице margin не меняется: income - net_cost * продажи
-    assert row["margin"] == 1000.0 - 300.0 * 2  # 400
-    assert row["margin_per_one"] == 200.0
-    assert row["margin_pct"] == 40.0
-
-
-def test_compute_margin_other_absorbs_negative():
-    row = _base_row()
-    row["services"] = -560.0
-    df = compute_margin(pd.DataFrame([row]))
-    assert df.iloc[0]["other"] == 1000.0 - (800.0 + 50.0 + 40.0 + 10.0 + (-560.0))
-
-
-def test_compute_margin_zero_income_percent():
-    row = _base_row()
-    row["income"] = 0.0
-    df = compute_margin(pd.DataFrame([row]))
-    assert df.iloc[0]["margin_pct"] == 0.0
-
-
-def test_compute_margin_zero_sells_no_division_by_zero():
-    row = _base_row()
-    row["sells"] = 0
-    df = compute_margin(pd.DataFrame([row]))
-    assert df.iloc[0]["margin_per_one"] == 0.0
-
-
-def test_compute_margin_sorts_descending_by_margin():
-    rows = [_base_row(), {**_base_row(), "article": "A2", "income": 500.0, "net_cost": 200.0}]
-    df = compute_margin(pd.DataFrame(rows))
-    assert df.iloc[0]["article"] == "A1"
-
-
-def test_compute_margin_all_derived_columns_present():
-    df = compute_margin(pd.DataFrame([_base_row()]))
-    assert set(margin_columns()).issubset(df.columns)
-
-
-def test_empty_margin_df_has_full_schema():
-    df = empty_margin_df()
-    assert df.empty
-    assert list(df.columns) == margin_columns()
-
-
-def test_compute_margin_negative_sells_no_cogs():
-    row = _base_row()
-    row["sells"] = -5  # возвратов больше, чем продаж
-    df = compute_margin(pd.DataFrame([row]))
-    # себестоимость НЕ вычитается (товар вернулся на склад) — иначе -5500*... давало бы фиктивную прибыль
-    assert df.iloc[0]["margin"] == 1000.0
-    assert df.iloc[0]["margin_per_one"] == 0.0
-    assert df.iloc[0]["margin_pct"] == 0.0
-
-
-def test_compute_margin_negative_income_percent_zero():
-    row = _base_row()
-    row["income"] = -100.0
-    df = compute_margin(pd.DataFrame([row]))
-    assert df.iloc[0]["margin_pct"] == 0.0
 
 
 def test_margin_detail_ignores_logistics_rows(db):
@@ -594,6 +519,45 @@ def test_margin_detail_per_unit_zero_sells_no_division(db):
     assert row["commission_per_one"] == 0.0
     assert row["logistics_per_one"] == 0.0
     assert row["return_rate"] == 100.0  # 1 / (0+1) * 100
+
+
+def test_margin_detail_margin_pct_income_base(db):
+    """«Прибыль % (к перечислению)»: база income (а не выручка), как в прежнем
+    разделе «Маржинальность»."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                           quantity=10, retail_amount=5000.0, for_pay=3000.0,
+                           delivery_service=200.0, ppvz_sales_commission=200.0),
+        models.WbDetailRow(op_key="sr:r1", source="excel", article="A1",
+                           doc_type_name="Возврат", sale_dt=date(2026, 9, 2),
+                           quantity=2, retail_amount=1000.0, for_pay=1000.0,
+                           delivery_service=50.0),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(db, default_net_cost=100.0)
+    row = out.iloc[0]
+    # sells=8, revenue=4000, income=2000, logistics=250, margin=950
+    assert row["margin_pct"] == 950.0 / 4000.0 * 100          # база — выручка
+    assert row["margin_pct_income"] == 950.0 / 2000.0 * 100   # база — перечисление
+
+
+def test_margin_detail_margin_pct_income_zero_guards(db):
+    """Guard: income<=0 или sells<=0 → «Прибыль % (к перечислению)» = 0."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A3",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                           quantity=1, retail_amount=500.0, for_pay=0.0),
+        models.WbDetailRow(op_key="sr:r1", source="excel", article="A4",
+                           doc_type_name="Возврат", sale_dt=date(2026, 9, 2),
+                           quantity=1, retail_amount=500.0, for_pay=500.0,
+                           delivery_service=30.0),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(db)
+    rec = {r["article"]: r for r in out.to_dict("records")}
+    assert rec["A3"]["margin_pct_income"] == 0.0  # for_pay=0 → income=0
+    assert rec["A4"]["margin_pct_income"] == 0.0  # только возврат → sells<0
 
 
 def _oz_detail(op_key, article, qty=1, ret_qty=0, price=1000.0, amount=1000.0,

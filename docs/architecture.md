@@ -27,12 +27,12 @@ FastAPI router — app/api.py  (112 эндпоинтов, один большо�
 
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/api.py` | 3820 | все HTTP-эндпоинты, `prefix="/api"` |
+| `app/api.py` | 4168 | все HTTP-эндпоинты, `prefix="/api"` |
 | `app/static/app.js` | — | весь фронтенд в одном файле |
 | `app/services/sync.py` | 2247 | запись выгрузок WB/Ozon в БД |
 | `app/services/pricing.py` | 1604 | автопилот цен: R1–R10, расчёт скидок |
 | `app/services/refresh.py` | 963 | массовое обновление, фоновые задания |
-| `app/services/margin.py` | 785 | маржинальность, группировка артикулоразмеров |
+| `app/services/margin.py` | 772 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/services/replenish.py` | 699 | подсортировка, скорость продаж |
 | `app/services/dashboard.py` | 451 | сводные панели |
 | `app/services/tickets.py` | 456 | реестр тикетов `TICKETS.md` |

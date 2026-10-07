@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "72";
+const UI_VERSION = "73";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -123,15 +123,6 @@ function filters() {
     date_from: $("#fFrom").value,
     date_to: $("#fTo").value,
   };
-}
-
-function marginMarketplace() {
-  const sel = [];
-  if ($("#mWb").checked) sel.push("wb");
-  if ($("#mOzon").checked) sel.push("ozon");
-  const g = $("#fMarketplace").value;
-  const base = g ? [g] : sel;
-  return base.filter((x) => sel.includes(x)).join(",");
 }
 
 // Расширенный поиск: «*» — любая последовательность символов (в т.ч. пустая),
@@ -594,9 +585,7 @@ async function loadTabInner(name, f) {
   clearStatus();
   try {
     if (name === "dashboard") await renderDashboard(qs(f));
-    else if (name === "margin") {
-      await renderMargin(qs({ marketplace: marginMarketplace(), date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginLike") || undefined }));
-    } else if (name === "margin-funnel") {
+    else if (name === "margin-funnel") {
       await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined }));
     } else if (name === "margin-detail") {
       const cmpEl = $("#marginDetailCompare");
@@ -1052,32 +1041,6 @@ async function renderDashboard() {
   if (exp) exp.href = "/api/export/dashboard" + qs(dashQuery());
 }
 
-const marginTableHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика. Сводка строится по таблице продаж (weekly/stat-отчёты), а не по детализации."},
-  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров по этому артикулу."},
-  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Сумма quantity за период по всем строкам продаж. Возвраты в quantity идут со знаком минус, поэтому учитываются автоматически."},
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма выручки (реализации) по артикулу за выбранный период."},
-  { k: "commission", label: "Комиссия", num: true, render: cellFmts.money , tip: "Комиссия маркетплейса (КВВ) за период, суммой по товару. Справочно: в «к перечислению» она уже учтена."},
-  { k: "logistics", label: "Логистика", num: true, render: cellFmts.money , tip: "Логистика за период суммой (доставка покупателям и возвраты)."},
-  { k: "income", label: "К перечислению", num: true, render: cellFmts.money , tip: "Сумма, которую маркетплейс перечислит за товар (forPay): уже за вычетом комиссии, логистики, хранения и услуг."},
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога товаров. Ноль означает, что себестоимость не заведена, и прибыль в строке будет завышена."},
-  { k: "margin", label: "Маржа", num: true, render: cellFmts.moneyCls , tip: "Прибыль = к перечислению − себестоимость × продано. Логистика, хранение и услуги второй раз не вычитаются — они уже в перечислении."},
-  { k: "margin_per_one", label: "Маржа на ед.", num: true, render: cellFmts.moneyCls , tip: "Маржа ÷ проданное количество, ₽/шт."},
-  { k: "margin_pct", label: "Маржа, %", num: true, render: cellFmts.pct , tip: "Рентабельность: маржа ÷ к перечислению × 100."},
-];
-async function renderMargin(p) {
-  const data = await api("/margin" + p);
-  const headers = colViewHeaders("margin", marginTableHeaders);
-  const draw = (rows) => { pagedTable($("#marginTable"), headers, rows, null, null, colViewPinKeys("margin")); };
-  draw(data.rows);
-  $("#marginSearch").oninput = (e) => {
-    const q = e.target.value;
-    draw(data.rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), q)));
-  };
-  const cp = colViewParam("margin");
-  $("#exportMargin").href = "/api/export/margin" + p + (cp ? (p ? "&" : "?") + cp : "");
-}
-
 const marginHeaders = [
 { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика (vendorCode) из строк детализации продаж WB. Артикулы разных размеров агрегируются в одну строку."},
   { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB (nmId) из строки детализации — по нему товар ищется в каталогах WB."},
@@ -1100,6 +1063,7 @@ const marginHeaders = [
   { k: "margin",  label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Маржа до себестоимости − себестоимость × проданное. Себестоимость списывается только за проданное, за возвращённое — нет."},
   { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ проданное количество, ₽/шт."},
   { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ выручка (реализация) × 100. База — выручка, а в дашборде — к перечислению."},
+  { k: "margin_pct_income", label: "Прибыль % (к перечисл.)", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ к перечислению × 100. База — доход после всех удержаний (как в прежнем разделе «Маржинальность»)."},
   { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls , tip: "Комиссия КВВ, делённая на количество проданных, ₽/шт."},
   { k: "logistics_per_one", label: "Логистика/ед.", num: true, render: cellFmts.moneyCls , tip: "Вся логистика (туда + обратно) ÷ проданное количество, ₽/шт."},
   { k: "logistics_out_per_one", label: "Логистика туда/ед.", num: true, render: cellFmts.moneyCls , tip: "Логистика туда ÷ проданное количество, ₽/шт."},
@@ -5262,7 +5226,6 @@ registerColView("products", {
     sizes: { headers: productsSizeHeaders, optional: mkOpt(productsSizeHeaders) },
   },
 });
-registerColView("margin", { storageKey: "marginCols", pinnable: true, headers: marginTableHeaders, optional: mkOpt(marginTableHeaders) });
 registerColView("dash-profit", { storageKey: "dashProfitCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops, optional: mkOpt(dashHeaders.tops) });
 registerColView("dash-loss", { storageKey: "dashLossCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops, optional: mkOpt(dashHeaders.tops) });
 registerColView("dash-price", { storageKey: "dashPriceCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.price, optional: mkOpt(dashHeaders.price) });
@@ -6162,23 +6125,6 @@ async function uploadBlobToYandex(blob, name, msg) {
   msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
 }
 
-async function uploadMarginToDisk() {
-  const msg = statusEl();
-  const url = $("#exportMargin") ? $("#exportMargin").href : "";
-  if (!url || !msg) return;
-  msg.textContent = "Формирую файл…";
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
-    const blob = await resp.blob();
-    const f = filters();
-    const name = "margin_" + (f.date_from || "na") + "_" + (f.date_to || "na") + "_" + yandexStamp() + ".xlsx";
-    await uploadBlobToYandex(blob, name, msg);
-  } catch (err) {
-    msg.textContent = "Ошибка: " + err.message;
-  }
-}
-
 async function uploadMarginFunnelToDisk() {
   const msg = statusEl();
   const url = $("#exportMarginFunnel") ? $("#exportMarginFunnel").href : "";
@@ -6447,12 +6393,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#refreshModal").addEventListener("click", (e) => {
     if (e.target.id === "refreshModal") $("#refreshModal").classList.add("hidden");
   });
-  ["mWb", "mOzon"].forEach((id) => {
-    document.getElementById(id).addEventListener("change", () => {
-      if (currentTab === "margin") loadTab(currentTab);
-    });
-  });
-  [["marginLike", "margin"], ["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"], ["marginOzonDetailLike", "margin-ozon-detail"]].forEach(([id, tab]) => {
+  [["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"], ["marginOzonDetailLike", "margin-ozon-detail"]].forEach(([id, tab]) => {
     const el = $("#" + id);
     if (!el) return;
     let timer;
@@ -6698,8 +6639,6 @@ document.addEventListener("DOMContentLoaded", () => {
       if (url) window.open(url, "_blank");
     });
   }
-  const uploadMargin = $("#uploadMargin");
-  if (uploadMargin) uploadMargin.addEventListener("click", () => uploadMarginToDisk());
   const uploadMarginFunnel = $("#uploadMarginFunnel");
   if (uploadMarginFunnel) uploadMarginFunnel.addEventListener("click", () => uploadMarginFunnelToDisk());
   const uploadMarginDetail = $("#uploadMarginDetail");
