@@ -10,7 +10,8 @@
 браузер (app/static/app.js + index.html)
         │  fetch() к /api/*
         ▼
-FastAPI router — app/api.py  (112 эндпоинтов, один большой модуль)
+FastAPI router — app/api.py  (все эндпоинты, один модуль;
+        │                 карта — docs/api.md, перегенерировать скриптом)
         │
         ├── app/providers/  — HTTP к маркетплейсам (wb.py, ozon.py)
         ├── app/services/   — бизнес-логика, единственное место расчётов
@@ -25,25 +26,68 @@ FastAPI router — app/api.py  (112 эндпоинтов, один большо�
 
 ## Ключевые файлы
 
+Таблицу пересчитывает `python scripts/gen_api_map.py` (она между маркерами
+ниже — строки меняются часто, руками не править). Тот же скрипт генерирует
+[docs/api.md](api.md) — полную карту эндпоинтов из реестра роутов FastAPI;
+`--check` возвращает exit 1, если документы устарели.
+
+<!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/api.py` | 4168 | все HTTP-эндпоинты, `prefix="/api"` |
-| `app/static/app.js` | — | весь фронтенд в одном файле |
-| `app/services/sync.py` | 2247 | запись выгрузок WB/Ozon в БД |
-| `app/services/pricing.py` | 1604 | автопилот цен: R1–R10, расчёт скидок |
-| `app/services/refresh.py` | 963 | массовое обновление, фоновые задания |
+| `app/static/app.js` | 6653 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api.py` | 4167 | все HTTP-эндпоинты, один `APIRouter(prefix="/api")` |
+| `app/services/sync.py` | 2462 | запись выгрузок WB/Ozon в БД |
+| `app/services/pricing.py` | 1789 | автопилот цен: R1–R11, расчёт скидок |
+| `tests/api/test_endpoints.py` | 1340 | HTTP-эндпоинты через TestClient |
+| `app/services/refresh.py` | 1107 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
+| `app/static/style.css` | 1102 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/services/replenish.py` | 1025 | подсортировка WB, план дефицита, скорость продаж |
+| `app/providers/wb.py` | 976 | HTTP к Wildberries |
+| `app/providers/ozon.py` | 934 | HTTP к Ozon |
+| `app/static/index.html` | 910 | разметка: навигация `data-tab` + секции `tab-*` |
+| `tests/unit/test_margin.py` | 878 | юнит-тесты маржинальности |
 | `app/services/margin.py` | 772 | маржинальность по детализациям, группировка артикулоразмеров |
-| `app/services/replenish.py` | 699 | подсортировка, скорость продаж |
-| `app/services/dashboard.py` | 451 | сводные панели |
-| `app/services/tickets.py` | 456 | реестр тикетов `TICKETS.md` |
-| `app/services/pdf_demand.py` | 495 | выгрузка потребности в PDF |
-| `app/providers/wb.py` | 916 | HTTP к Wildberries |
-| `app/providers/ozon.py` | 885 | HTTP к Ozon |
+| `app/models.py` | 673 | SQLAlchemy-модели (схема БД) |
+| `app/services/pdf_demand.py` | 623 | PDF «Потребность в товаре» |
+| `tests/js/test_js_helpers.py` | 606 | проверка app.js через Node `vm` |
+| `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
+| `app/services/dashboard.py` | 501 | сводные панели дашборда |
+| `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
+| `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
+| `app/services/photos.py` | 255 | индекс фото на диске, выбор папки, fallback по префиксу |
+| `scripts/load_sample.py` | 216 | демо-данные |
+| `app/services/base_price.py` | 178 | рекомендуемая (базовая) цена |
+| `app/services/thumbs.py` | 144 | миниатюры PDF в `data/thumbs/` |
+| `app/database.py` | 144 | engine/session PostgreSQL |
+| `app/services/excel_import.py` | 138 | разбор отредактированного Excel «Потребность» |
+| `scripts/init_db.py` | 115 | создание схемы + идемпотентные ALTER |
+| `app/services/yandex_disk.py` | 108 | загрузка отчётов на Яндекс.Диск |
+| `app/services/funnel.py` | 98 | воронка продаж (агрегация) |
+| `app/services/common.py` | 76 | общие хелперы (wildcard-фильтр `like_*`, окна) |
+| `app/services/excel_io.py` | 73 | чтение/запись Excel |
+| `app/config.py` | 55 | `Settings`, читается из `.env` |
+| `app/providers/errors.py` | 48 | нормализованные ошибки апстримов |
+| `app/main.py` | 44 | сборка FastAPI-приложения, `/`, статика |
+| `app/providers/base.py` | 33 | базовый провайдер |
+| `app/services/window.py` | 21 | окна дат |
+| `app/providers/factory.py` | 20 | точка подмены провайдеров в тестах |
+<!-- END:file-stats -->
 
 Два самых больших модуля — `api.py` и `app.js`. Это известная особенность
 проекта, а не случайность: разделение по фичам делалось в services, а
 роуты и UI добавлялись рядом с существующими. Если появится задача
 «разделить api.py» — это отдельный тикет.
+
+Куда класть новый код:
+
+- расчёт, обогащение данных, любая логика → `app/services/<фича>.py`;
+- HTTP к маркетплейсу → `app/providers/` (через `factory.py`, чтобы тесты
+  подменялись фейками);
+- новый эндпоинт → конец `app/api.py`, префикс `/api` уже у роутера;
+- таблица во фронтенде → существующий `pagedTable` (памятка в `AGENTS.md`,
+  раздел «UI таблиц»), колонки и `tip` — в `app/static/app.js`;
+- миграция колонки → идемпотентный `ALTER ... IF NOT EXISTS` в
+  `scripts/init_db.py`.
 
 ## Провайдеры
 
@@ -107,8 +151,8 @@ multiprocessing сознательно не оптимизировались.
 - **`api.py` и `app.js` — общие файлы для всех задач.** Правки с разных
   задач сталкиваются в одном месте; коммиты часто бандлятся.
 - **Кодировка.** PowerShell 5.1 читает файлы как cp1251, и round-trip
-  `Get-Content | Set-Content` портит кириллицу. Править файлы только
-  через редактор/инструменты, не PowerShell-потоками.
+  `Get-Content | Set-Content` портит кириллицу (бывали BOM и «krakozyabry»).
+  Правила и команда самопроверки — в `AGENTS.md`, раздел «Кодировка».
 - **Тесты бьют общую БД.** Параллельные `pytest` дедлочат
   `agent_market_test` — гонять полный набор в одиночку.
 - **Известные падения.** T-35 (2 предсуществующих) и T-36 (3 зависящих от
@@ -120,17 +164,15 @@ multiprocessing сознательно не оптимизировались.
 ## Разработка
 
 ```powershell
-.\venv\Scripts\python.exe -m pytest tests\unit -q      # быстрый цикл
-.\venv\Scripts\python.exe -m pytest                    # всё
+.\venv\Scripts\python.exe -m pytest -m fast -q   # быстрый цикл (< 20 с)
+.\venv\Scripts\python.exe -m pytest tests\unit -q # только unit
+.\venv\Scripts\python.exe -m pytest               # всё (~2 мин)
 node --check app\static\app.js
+python scripts\gen_api_map.py --check            # docs не протухли?
 ```
 
-Ручные проверки перед коммитом:
-
-```powershell
-git status --short                 # нет ли чужих незакоммиченных файлов
-.\venv\Scripts\python.exe -m app.services.tickets validate
-```
+Ручные проверки перед коммитом — единый чек-лист в [AGENTS.md](../AGENTS.md)
+(раздел «Перед коммитом»): именно он канонический, этот файл его не дублирует.
 
 Перед началом работы обязательно прочитать `TICKETS.md` и проверить
 `git status` — в проекте могут идти параллельные задачи, и файлы

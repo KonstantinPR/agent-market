@@ -4,6 +4,79 @@
 маржинальности, остатков, карточек, прайсов. Backend FastAPI (app/), фронтенд —
 статические файлы (app/static/), БД PostgreSQL.
 
+## Куда что читать
+
+| Вопрос | Документ |
+|---|---|
+| Как запустить, что умеет продукт | [README.md](README.md) |
+| Слои, точки входа, «запутанные места» | [docs/architecture.md](docs/architecture.md) |
+| Какой эндпоинт за что отвечает | [docs/api.md](docs/api.md) — генерируется `python scripts/gen_api_map.py` |
+| Логика автопилота цен WB | [docs/autopilot.md](docs/autopilot.md) (большие выгрузки, искать grep'ом) |
+| Что делать сейчас | `TICKETS.md` (раздел «Тикеты» ниже) |
+| Памятка по таблицам UI / перед коммитом | этот файл, разделы «UI таблиц» и «Перед коммитом» |
+
+Если документ разошёлся с кодом — правится кодовая база или документ, но не
+«примерно так»: точные цифры в `docs/architecture.md` пересчитывает
+`python scripts/gen_api_map.py` (таблица между маркерами `BEGIN:file-stats`).
+
+## Карта проекта
+
+```
+agent_market/
+├── app/                    бэкенд
+│   ├── main.py             сборка FastAPI-приложения, корень /, отдача статики
+│   ├── api.py              ВСЕ эндпоинты /api/* — один APIRouter(prefix="/api")
+│   ├── models.py           SQLAlchemy-модели (= схема БД)
+│   ├── database.py         engine + session PostgreSQL
+│   ├── config.py           Settings, читается из .env (ключи WB/Ozon, PHOTOS_ROOT)
+│   ├── providers/          HTTP к маркетплейсам: wb.py, ozon.py
+│   │                       (factory.py — подмена на фейки в тестах,
+│   │                        errors.py — нормализованные ошибки)
+│   ├── services/           бизнес-логика — ЕДИНСТВЕННОЕ место расчётов
+│   └── static/             фронтенд: index.html, app.js, style.css
+├── scripts/                init_db.py (схема+миграции), load_sample.py,
+│                           gen_api_map.py (docs/api.md + таблица размеров)
+├── tests/                  unit/ · api/ · e2e/ · js/ (+ fakes.py, conftest.py)
+├── docs/                   architecture.md, api.md, autopilot.md, research-*.md
+├── data/                   thumbs/, кэш — в git не коммитится
+├── TICKETS.md              очередь задач
+├── AGENTS.md               этот файл — точка входа для агента
+└── README.md               запуск и описание продукта
+```
+
+Ориентиры внутри `app/services/` (полная таблица со строками — в
+`docs/architecture.md`): `sync.py` — запись выгрузок WB/Ozon в БД;
+`refresh.py` — `pull_*` и кнопки «Обновить WB / Ozon»; `margin.py` —
+маржинальность; `replenish.py` — подсортировка/потребность; `pricing.py` —
+автопилот цен; `common.py` — общие хелперы (wildcard-фильтр `like_*`);
+`tickets.py` — реестр тикетов.
+
+Куда класть новое коротко: расчёты → `app/services/<фича>.py`; HTTP к
+маркетплейсу → `app/providers/`; эндпоинт → хвост `app/api.py`; вкладка/таблица
+→ `app/static/index.html` + `app/static/app.js` (см. «UI таблиц»); колонка БД →
+идемпотентный `ALTER ... IF NOT EXISTS` в `scripts/init_db.py`.
+
+## Кодировка (UTF-8, без BOM)
+
+Все текстовые файлы проекта — UTF-8 **без BOM**. PowerShell 5.1 по умолчанию
+читает их как системную ANSI (cp1251), поэтому round-trip
+`Get-Content | Set-Content` (и `-Encoding UTF8`, который кладёт BOM)
+безвозвратно портит кириллицу: «Меню» → «Р,єРµРЅ», в начало файла
+подмешивается `EF BB BF`.
+
+- **Не читать/не писать** файлы проекта через `Get-Content`/`Set-Content`/
+  `Out-File`. Править инструментами редактирования или Python
+  (`open(path, encoding="utf-8")`), без BOM.
+- Скрипт-заменители (например правка `?v=` в `index.html`) — тоже на Python,
+  не через PowerShell-`replace`.
+- Проверить после правки: в первых байтах нет `EF BB BF`, кириллица читается
+  (`Get-Content -Encoding Byte -TotalCount 3` → нет 239/187/191).
+- Если mojibake уже попал в файл — обратимо: прочитать как UTF-8, каждый
+  символ с `ord ≤ 0xFF` заменить на байт `cp1251`, результат декодировать
+  как UTF-8 и записать без BOM.
+- Учтено в тестах: `tests/js/test_js_helpers.py` и `scripts/gen_api_map.py`
+  читают исходники явно с `encoding="utf-8"`.
+
 ## Тикеты
 
 Единая очередь задач проекта — файл `TICKETS.md` в корне репо.
@@ -153,11 +226,32 @@
 
 ## Тесты
 
-- Код в `tests/` (unit + api через TestClient).
-- Команда: `& "C:\python_projects\agent_market\venv\Scripts\python.exe" -m pytest -q` из
-  `C:\python_projects\agent_market`.
+- Код в `tests/` (unit + api через TestClient), структура и команды — в
+  [README.md](README.md) (раздел «Тесты»).
+- Основная команда: `& "C:\python_projects\agent_market\venv\Scripts\python.exe" -m pytest -q`
+  из `C:\python_projects\agent_market`.
+- Маркеры: `-m fast` — быстрый прогон без БД/сети (цель < 20 с, для итераций),
+  без маркера — весь набор (~2 мин). Полный прогон обязателен перед коммитом.
+  `fast` проставляется автоматически в `tests/conftest.py` (тесты в `tests/api`
+  и `tests/e2e`, а также любые с фикстурами `db`/`client`, в `fast` не входят) —
+  руками не наносить.
+- **Защитные тесты-манифесты** (`tests/unit/test_*_manifest*.py`,
+  `test_routes_snapshot.py`) читают исходники статически и ловят «забыл
+  добавить место» ещё до запуска:
+  - `test_tab_manifest.py` — навигация ↔ секции ↔ `loadTabInner` ↔ «Вид
+    таблицы» ↔ `apiPullByTab`;
+  - `test_routes_snapshot.py` — снимок всех `/api`-роутов: новый роут →
+    вписать строку в `SNAPSHOT` внизу файла (комментарий там же), пропавший
+    роут тест поймает сам;
+  - `test_column_manifest.py` — ключи колонок «Вид таблицы» (app.js) ↔
+    export-словари (api.py): известные расхождения зафиксированы в
+    `KNOWN_JS_ONLY`/`KNOWN_PY_ONLY` (после починки запись убирается), новых —
+    тест не пропустит. Подписи колонок («Выручка» vs «Выручка, руб») здесь
+    не проверяются — они на этапе рефакторинга колонок.
 - Тестовые данные/фейки — `tests/fakes.py` (мок WB/Ozon API, когда `testing_mode`).
 - Фронтенд-линта/typecheck нет; синтаксис JS при необходимости: `node --check app/static/app.js`.
+- Общая тестовая БД `agent_market_test`: параллельные прогоны дедлочат —
+  гонять полный набор в одиночку.
 
 ## БД
 
@@ -214,6 +308,32 @@
 → тесты API → live-проверка → бамп версии. Эталон следования всем правилам —
 вкладка «Потребность в товаре» (виды «артикулы» и «размеры»).
 
+### Чек-лист: новая вкладка целиком
+
+Вкладка — это всегда **пять мест в двух файлах**, и без любого из них она
+работает молча не до конца. Порядок такой (X — имя вкладки, например `wb-funnel`):
+
+1. **`app/static/index.html`** — `<a class="nav-link" data-tab="X" href="#">`
+   в навигации (где положено по разделу: «Наш склад ▸», «WB API ▸», …).
+2. **`app/static/index.html`** — `<section id="tab-X" class="pane">` с тулбаром
+   (`.toolbar`), кнопками и контейнером таблицы.
+3. **`app/static/app.js`**, `loadTabInner` — ветка `else if (name === "X") await renderX(...)`.
+   Нет ветки → клик по пункту меню не вызывает ничего (ошибки не будет).
+4. **`app/static/app.js`** — функция `renderX()` поверх `pagedTable` + параметры
+   из панели фильтров; колонки/`tip`/`footers` — по памятке выше.
+5. **`app/static/app.js`** — по необходимости:
+   - «Вид таблицы»: три элемента с именами от `ccTab(X)`
+     (`btn<CcTab>View`, `<CcTab>ViewMenu`, `<CcTab>ViewPanel`) + `registerColView("X", …)`;
+   - «Обновить базу»: запись в `apiPullByTab`;
+   - экспорт: `downloadViewExcel`/`wbViewExportUrl` или своя кнопка → свой `/api/export/…`;
+6. **`app/api.py`** — роуты `/api/...` и `/api/export/...`; логика — в `app/services/`.
+7. **Бамп версии** (п.12 выше) и тесты из «Перед коммитом».
+
+Проверить, что ничего не забыли, помогают защитные тесты из раздела «Тесты»:
+`tests/unit/test_tab_manifest.py` (навигация ↔ секции ↔ `loadTabInner` ↔
+«Вид таблицы» ↔ «Обновить базу»), `test_routes_snapshot.py` (роуты не пропали)
+и `test_column_manifest.py` (колонки панели ↔ export-словари).
+
 ## Примечания
 
 - Реальные ключи WB/Ozon: `app/config.py` (`Settings`, читается из `.env`):
@@ -256,3 +376,42 @@
     реализовано: без per-product требований WB порог среза был бы выдумкой.
     Колонка `promo_delta_discount` отделяет вклад акции от `delta_discount`,
     который остаётся «правила R1-R10 + акция».
+
+## Перед коммитом
+
+Единый чек-лист (он же канонический — README и `docs/architecture.md` сюда
+ссылаются). Все команды из `C:\python_projects\agent_market`:
+
+```powershell
+# 1. Рабочее дерево: нет ли чужих незакоммиченных правок (см. ниже «Параллельная работа»)
+git status --short
+git diff --stat
+
+# 2. Тикеты: метка/ветка/разделы согласованы (exit 1 = проблемы)
+.venv\Scripts\python.exe -m app.services.tickets validate
+
+# 3. Синтаксис: Python и JS (node ставится отдельно от Python)
+.venv\Scripts\python.exe -m py_compile app\*.py app\services\*.py app\providers\*.py scripts\*.py
+node --check app\static\app.js
+
+# 4. Тесты — полный набор, обязательно в одиночку (общая тестовая БД)
+.venv\Scripts\python.exe -m pytest -q
+
+# 5. Документы не протухли (нужно, если трогали api.py / services / providers / static)
+.venv\Scripts\python.exe scripts\gen_api_map.py --check
+```
+
+Ручная сверка:
+
+- **Кодировка**: в изменённых файлах нет BOM и mojibake (раздел «Кодировка»).
+- **Фронтенд**: `UI_VERSION` в `app/static/app.js` и `?v=` у `/static/app.js`
+  в `app/static/index.html` увеличены **вместе** (п.12 «UI таблиц»).
+- **Коммит по номеру тикета**: `feat|fix(область): …`, тикет перенести в
+  «Закрытые» с хешем.
+
+### Параллельная работа
+
+В репо может идти чужая работа (`git status` проверяется не зря): не коммитить
+чужие файлы, не трогать `stash@{0}` (чужой WIP помечен «НЕ ТРОНАТЬ, НЕ
+КОММИТАТЬ»), после правки длинных файлов (`app/api.py`, `app/static/app.js`)
+переснимать `git status` и не переезжать поверх чужих строк.

@@ -85,13 +85,17 @@ venv\Scripts\python.exe app\main.py   # http://127.0.0.1:8000
 ```
 
 Перед первым запуском выполнить `scripts/setup_pg.*` (создание БД) и
-`scripts/load_sample.py` (демо-данные). Ключи API — в `.env` (см. `.env.example`
-при наличии). `.env` в git не коммитится.
+`scripts/load_sample.py` (демо-данные). Ключи API — в `.env`; список
+переменных и их назначение — в `app/config.py` (`Settings`) и в
+[AGENTS.md](AGENTS.md) (раздел «Примечания»). `.env` в git не коммитится.
 
 ## Как устроен код
 
-Слои, точки входа, «запутанные места» и верные команды для тикетов —
-в [docs/architecture.md](docs/architecture.md). Остальные документы:
+Точка входа для агентов и разработчика — [AGENTS.md](AGENTS.md): карта
+проекта, правило кодировки, памятки и чек-листы. Слои, точки входа и
+«запутанные места» — в [docs/architecture.md](docs/architecture.md); карта
+всех эндпоинтов — в [docs/api.md](docs/api.md) (генерируется
+`python scripts/gen_api_map.py`). Остальные документы:
 
 - [docs/autopilot.md](docs/autopilot.md) — правила и логика автопилота цен WB;
 - [docs/research-ozon-artikel-grouping.md](docs/research-ozon-artikel-grouping.md)
@@ -110,8 +114,10 @@ git add -A
 git commit -m "Initial commit"
 ```
 
-Ветка `main`, история хранится локально. В `.gitignore` исключены
-`.env`, `venv/`, `data/`, `.pytest_cache/`, `.coverage`, `htmlcov/`, `*.log`.
+Ветка `main`, история хранится локально. В `.gitignore` исключены `venv/`,
+`__pycache__/` и `*.pyc`, `.env`, `data/mock/`, `data/thumbs/`, `*.xlsx`,
+`*.xls`, `*.db`, `*.log`, `.pytest_cache/`, `.coverage`, `htmlcov/`, `.idea/`,
+`.DS_Store`.
 
 Работа идёт через тикеты (`TICKETS.md`): номер выдаёт git-ветка
 `t-<N>-<слаг>`, а подробности — в [docs/](docs/). Проверка перед коммитом:
@@ -130,6 +136,7 @@ venv\Scripts\python.exe -m app.services.tickets report     # сводка по �
 
 ```powershell
 venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+venv\Scripts\python.exe -m pytest -m fast              # быстрый без БД (< 20 с)
 venv\Scripts\python.exe -m pytest                    # все тесты
 venv\Scripts\python.exe -m pytest tests\unit -v      # unit
 venv\Scripts\python.exe -m pytest tests\api -v       # API (TestClient + тестовая БД)
@@ -150,6 +157,10 @@ venv\Scripts\python.exe -m pytest --cov=app          # с покрытием
 (переменная окружения `PG_DATABASE`).
 
 ### Проверка перед коммитом
+
+Единый чек-лист живёт в [AGENTS.md](AGENTS.md) (раздел «Перед коммитом»):
+`git status` → `tickets validate` → `py_compile` + `node --check` → `pytest`
+→ `scripts/gen_api_map.py --check`. Кратко:
 
 ```powershell
 venv\Scripts\python.exe -m py_compile app\*.py app\services\*.py app\providers\*.py
