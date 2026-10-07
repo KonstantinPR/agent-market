@@ -128,3 +128,21 @@ def _clean_refresh_state():
     refresh_service._PENDING = {"wb": None, "ozon": None}
     refresh_service._JOBS = {}
     yield
+
+
+# Фикстуры, которым нужна БД/клиент: такие тесты не входят в `-m fast`.
+_DB_FIXTURES = {"db", "db_engine", "client", "api_client", "pdf_api"}
+
+
+def pytest_collection_modifyitems(items):
+    """Проставляет маркер fast тестам, не трогающим БД (`pytest -m fast` < 20 с)."""
+    for item in items:
+        path = str(item.fspath)
+        if "\\tests\\api\\" in path or "\\tests\\e2e\\" in path:
+            continue
+        if "/tests/api/" in path or "/tests/e2e/" in path:
+            continue
+        names = set(getattr(item, "fixturenames", ()) or ())
+        if names & _DB_FIXTURES:
+            continue
+        item.add_marker(pytest.mark.fast)
