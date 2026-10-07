@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "73";
+const UI_VERSION = "74";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -66,6 +66,40 @@ function initWriteDb() {
       setWriteDbStorage(cb.dataset.api, cb.dataset.kind, cb.checked));
   });
 }
+
+// --------------------------------------------------- реестр localStorage
+// Что приложение хранит в браузере пользователя. Единый список для людей и
+// агентов: тест tests/unit/test_local_storage_manifest.py сверяет его с
+// фактическими вызовами localStorage и storageKey в этом файле. Новый ключ —
+// добавить с описанием (иначе тест упадёт), старый — не удалать, пока не
+// вырезан код.
+// Значение: точный ключ либо префикс с «*» (ключи вида base + суффикс).
+const LS_KEYS = {
+  "write_db_*": "«в БД» у кнопок скачивания: write_db_<api>_<kind>",
+  "ozBySize:*": "режим «в разрезе размеров» Ozon-вкладок: ozBySize:<tab>",
+  "dash-collapsed": "свёрнутые секции дашборда",
+  "dash-order": "порядок секций дашборда",
+  "replenishPdf": "параметры PDF вкладки «Потребность в товаре»",
+  "products_price_settings": "настройки цен в прайсе товаров",
+  "pricing_filters": "колоночные фильтры автопилота (JSON)",
+  "pricing_filters_on": "панель колоночных фильтров автопилота включена",
+  "pricing_settings": "настройки автопилота цен (JSON)",
+  "pricing_hide_skip": "скрыть «держать»/«пропустить» в автопилоте",
+  "pricing_settings_visible": "меню «Настройки» автопилота развёрнуто",
+  "pricing_open_groups": "раскрытые группы настроек автопилота (JSON)",
+};
+// «Вид таблицы»: storageKey каждой вкладки из registerColView (плюс "_<mode>"
+// у режимных, например wbDetailCols_rows) — видимость, порядок, закрепление
+// колонок. Ручное дублировение управляемое: тест сверяет список с registerColView.
+const LS_COLVIEW_KEYS = [
+  "dashLossCols", "dashPrefixCols", "dashPriceCols", "dashProfitCols",
+  "marginDetailCols", "marginFunnelCols", "marginOzonDetailCols",
+  "ozAccrualCols", "ozCardsCols", "ozCashflowCols", "ozDetailCols",
+  "ozPlacementCols", "ozPricesCols", "ozRealCols", "ozStockCols",
+  "pricingCols", "productsCols", "replenishCols",
+  "wbCardsCols", "wbDetailCols", "wbFunnelCols", "wbPricesCols",
+  "wbSalesCols", "wbStockCols", "wbStorageCols",
+];
 
 // «в разрезе размеров» OZON: по умолчанию отчёты сворачивают размеры в строку
 // товара (базовый артикул). Переключатель стоит в тулбаре каждого раздела, где
@@ -452,6 +486,33 @@ function tabLike(id) {
   return $("#" + id) ? $("#" + id).value.trim() : "";
 }
 
+// Отложенный запуск (debounce) — единая реализация вместо копий
+// `clearTimeout(timer); timer = setTimeout(...)` в десятках обработчиков.
+function debounceRun(fn, ms) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; fn(...args); }, ms || 400);
+  };
+}
+// Ввод в фильтр вкладки: перезагружает её только пока вкладка активна.
+// run не задан → обычная loadTab(tab).
+function onTabInput(id, tab, run, ms) {
+  const el = $("#" + id);
+  if (!el) return;
+  el.addEventListener("input", debounceRun(() => {
+    if (currentTab === tab) (run ? run() : loadTab(tab));
+  }, ms));
+}
+// Смена контрола (селект/чекбокс) вкладки — сразу, без задержки.
+function onTabChange(id, tab, run) {
+  const el = $("#" + id);
+  if (!el) return;
+  el.addEventListener("change", () => {
+    if (currentTab === tab) (run ? run() : loadTab(tab));
+  });
+}
+
 // Статус раздела — одна строка в шапке рядом с «Применить» (эталон: «Потребность
 // в товаре»). Раньше зелёный текст жил в тулбаре каждой панели, из-за чего при
 // переключении вкладок он оставался висеть уже в чужом разделе. Писатели статуса
@@ -578,6 +639,14 @@ async function loadTab(name) {
   await busyRun(() => loadTabInner(name, f));
 }
 
+// Ошибка загрузки вкладки — в статус шапки с классом error. Раньше в catch
+// оставался только console.error: пользователь видел пустую/старую таблицу
+// без единого объяснения.
+function showLoadError(err) {
+  const detail = err && err.message ? err.message : String(err);
+  setStatus("Ошибка загрузки: " + detail, { error: true });
+}
+
 async function loadTabInner(name, f) {
 
   // Статус общий для всех разделов — гасим при каждом переключении вкладки,
@@ -622,6 +691,7 @@ async function loadTabInner(name, f) {
     else if (name === "tickets") await renderTickets();
   } catch (err) {
     console.error("loadTab error:", err);
+    showLoadError(err);
   }
 }
 
@@ -4660,13 +4730,7 @@ function initCardsUpload() {
     const likeEl = document.getElementById(ids.prefix + "Like");
     if (btn && file) btn.addEventListener("click", () => uploadCardFiles(file.files, name));
     if (file) file.addEventListener("change", () => busyRun(() => uploadCardFiles(file.files, name)));
-    if (likeEl) {
-      let timer;
-      likeEl.addEventListener("input", () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => { if (currentTab === name) renderCards(name); }, 400);
-      });
-    }
+    if (likeEl) onTabInput(ids.prefix + "Like", name, () => renderCards(name));
     if (drop) {
       drop.addEventListener("click", () => { if (file) file.click(); });
       drop.addEventListener("dragover", (e) => {
@@ -5388,11 +5452,9 @@ function pricingRowMatches(r, filters) {
   return true;
 }
 
-let _pricingFilterTimer = null;
-function schedulePricingFilter() {
-  if (_pricingFilterTimer) clearTimeout(_pricingFilterTimer);
-  _pricingFilterTimer = setTimeout(() => { if (currentTab === "pricing") renderPricing(false); }, 300);
-}
+const schedulePricingFilter = debounceRun(() => {
+  if (currentTab === "pricing") renderPricing(false);
+}, 300);
 // Бар фильтров: один input на каждую видимую колонку. Перестраивается только при смене набора
 // колонок (чтобы не терять фокус при вводе), значения живут в _pricingColFilters.
 function buildPricingFilterBar() {
@@ -6280,8 +6342,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnExportOzDetail) btnExportOzDetail.addEventListener("click", () => busyRun(downloadOzDetailExcel));
   const btnDiskOzDetail = document.getElementById("btnDiskOzDetail");
   if (btnDiskOzDetail) btnDiskOzDetail.addEventListener("click", () => busyRun(uploadOzDetailToDisk));
-  const ozDetailRawEl = document.getElementById("ozDetailRaw");
-  if (ozDetailRawEl) ozDetailRawEl.addEventListener("change", () => {
+  onTabChange("ozDetailRaw", "oz-detail", () => {
     syncOzBySizeDisabled();
     loadTab("oz-detail");
   });
@@ -6295,19 +6356,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!spec) return Promise.resolve();
     return apiDownload(spec[0], spec[1], spec[2], true);
   }));
-  const ozPlacementRawEl = document.getElementById("ozPlacementRaw");
-  if (ozPlacementRawEl) ozPlacementRawEl.addEventListener("change", () => {
+  onTabChange("ozPlacementRaw", "oz-placement", () => {
     syncOzBySizeDisabled();
     loadTab("oz-placement");
   });
-  const ozPlacementLike = $("#ozPlacementLike");
-  if (ozPlacementLike) {
-    let timer;
-    ozPlacementLike.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === "oz-placement") loadTab(currentTab); }, 400);
-    });
-  }
+  onTabInput("ozPlacementLike", "oz-placement");
   const btnOzAccrualPull = document.getElementById("btnOzAccrualPull");
   if (btnOzAccrualPull) btnOzAccrualPull.addEventListener("click", () => busyRun(() => {
     const spec = apiPullByTab["oz-accrual"];
@@ -6393,118 +6446,30 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#refreshModal").addEventListener("click", (e) => {
     if (e.target.id === "refreshModal") $("#refreshModal").classList.add("hidden");
   });
-  [["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"], ["marginOzonDetailLike", "margin-ozon-detail"]].forEach(([id, tab]) => {
-    const el = $("#" + id);
-    if (!el) return;
-    let timer;
-    el.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
-    });
-  });
-  const marginDetailCompare = $("#marginDetailCompare");
-  if (marginDetailCompare) {
-    marginDetailCompare.addEventListener("change", () => {
-      if (currentTab === "margin-detail") loadTab(currentTab);
-    });
-  }
-  const marginOzonDetailCompare = $("#marginOzonDetailCompare");
-  if (marginOzonDetailCompare) {
-    marginOzonDetailCompare.addEventListener("change", () => {
-      if (currentTab === "margin-ozon-detail") loadTab(currentTab);
-    });
-  }
-  ["replenishWindow", "replenishTarget", "replenishSort", "replenishShowInactive", "replenishView"].forEach((id) => {
-    const el = $("#" + id);
-    if (!el) return;
-    el.addEventListener("change", () => {
-      if (currentTab === "replenish") loadTab(currentTab);
-    });
-  });
-  const replenishLike = $("#replenishLike");
-  if (replenishLike) {
-    let timer;
-    replenishLike.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === "replenish") loadTab(currentTab); }, 400);
-    });
-  }
-  const funnelLike = $("#wbFunnelLike");
-  if (funnelLike) {
-    let timer;
-    funnelLike.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === "wb-funnel") loadTab(currentTab); }, 400);
-    });
-  }
-  const wbStockLike = $("#wbStockLike");
-  if (wbStockLike) {
-    let timer;
-    wbStockLike.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === "wb-stock") loadTab(currentTab); }, 400);
-    });
-  }
-  const wbStockAgg = $("#wbStockAgg");
-  if (wbStockAgg) {
-    wbStockAgg.addEventListener("change", () => { if (currentTab === "wb-stock") loadTab(currentTab); });
-  }
-  const wbPriceAgg = $("#wbPriceAgg");
-  if (wbPriceAgg) {
-    wbPriceAgg.addEventListener("change", () => { if (currentTab === "wb-prices") loadTab(currentTab); });
-  }
-  [["wbPricesLike", "wb-prices"], ["wbStorageLike", "wb-storage"]].forEach(([id, tab]) => {
-    const el = $("#" + id);
-    if (!el) return;
-    let timer;
-    el.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
-    });
-  });
-  [["wbSalesLike", "wb-sales"], ["wbDetailLike", "wb-detail"]].forEach(([id, tab]) => {
-    const el = $("#" + id);
-    if (!el) return;
-    let timer;
-    el.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
-    });
-  });
-  const ozDetailLike = $("#ozDetailLike");
-  if (ozDetailLike) {
-    let timer;
-    ozDetailLike.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === "oz-detail") loadTab(currentTab); }, 400);
-    });
-  }
-  [["ozStockLike", "oz-stock"], ["ozPricesLike", "oz-prices"], ["ozRealLike", "oz-realization"]].forEach(([id, tab]) => {
-    const el = $("#" + id);
-    if (!el) return;
-    let timer;
-    el.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === tab) loadTab(currentTab); }, 400);
-    });
-  });
-  const ozStockAgg = $("#ozStockAgg");
-  if (ozStockAgg) ozStockAgg.addEventListener("change", () => { if (currentTab === "oz-stock") loadTab(currentTab); });
-  const ozPriceAgg = $("#ozPriceAgg");
-  if (ozPriceAgg) ozPriceAgg.addEventListener("change", () => { if (currentTab === "oz-prices") loadTab(currentTab); });
+  [["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"], ["marginOzonDetailLike", "margin-ozon-detail"]]
+    .forEach(([id, tab]) => onTabInput(id, tab));
+  onTabChange("marginDetailCompare", "margin-detail");
+  onTabChange("marginOzonDetailCompare", "margin-ozon-detail");
+  ["replenishWindow", "replenishTarget", "replenishSort", "replenishShowInactive", "replenishView"]
+    .forEach((id) => onTabChange(id, "replenish"));
+  onTabInput("replenishLike", "replenish");
+  onTabInput("wbFunnelLike", "wb-funnel");
+  onTabInput("wbStockLike", "wb-stock");
+  onTabChange("wbStockAgg", "wb-stock");
+  onTabChange("wbPriceAgg", "wb-prices");
+  [["wbPricesLike", "wb-prices"], ["wbStorageLike", "wb-storage"]]
+    .forEach(([id, tab]) => onTabInput(id, tab));
+  [["wbSalesLike", "wb-sales"], ["wbDetailLike", "wb-detail"]]
+    .forEach(([id, tab]) => onTabInput(id, tab));
+  onTabInput("ozDetailLike", "oz-detail");
+  [["ozStockLike", "oz-stock"], ["ozPricesLike", "oz-prices"], ["ozRealLike", "oz-realization"]]
+    .forEach(([id, tab]) => onTabInput(id, tab));
+  onTabChange("ozStockAgg", "oz-stock");
+  onTabChange("ozPriceAgg", "oz-prices");
   $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#headerMsg", "ours"));
-  const productsLikeEl = $("#productsLike");
-  if (productsLikeEl) {
-    let productsLikeTimer;
-    productsLikeEl.addEventListener("input", () => {
-      clearTimeout(productsLikeTimer);
-      productsLikeTimer = setTimeout(() => { if (currentTab === "products") loadTab(currentTab); }, 400);
-    });
-  }
-  const productsSizesEl = $("#productsSizes");
-  if (productsSizesEl) productsSizesEl.addEventListener("change", () => { if (currentTab === "products") loadTab(currentTab); });
-  const productsStocksEl = $("#productsStocks");
-  if (productsStocksEl) productsStocksEl.addEventListener("change", () => { if (currentTab === "products") loadTab(currentTab); });
+  onTabInput("productsLike", "products");
+  onTabChange("productsSizes", "products");
+  onTabChange("productsStocks", "products");
   const productsOverwriteEl = $("#productsOverwrite");
   if (productsOverwriteEl) {
     productsOverwriteEl.addEventListener("change", () => {
@@ -6566,14 +6531,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   });
-  const whStockLike = $("#whStockLike");
-  if (whStockLike) {
-    let timer;
-    whStockLike.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (currentTab === "wh-stock") loadTab(currentTab); }, 400);
-    });
-  }
+  onTabInput("whStockLike", "wh-stock");
   initCardsUpload();
   initDetailUpload();
   initProductsUpload();
@@ -6586,14 +6544,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (pricingPromoRefresh) pricingPromoRefresh.addEventListener("click", () => refreshPricingPromos());
   const pricingPriceRefresh = $("#pricingPriceRefresh");
   if (pricingPriceRefresh) pricingPriceRefresh.addEventListener("click", () => refreshPricingPrices());
-  const pricingLike = $("#pricingLike");
-  if (pricingLike) {
-    let pricingLikeTimer;
-    pricingLike.addEventListener("input", () => {
-      clearTimeout(pricingLikeTimer);
-      pricingLikeTimer = setTimeout(() => { if (currentTab === "pricing") renderPricing(false); }, 350);
-    });
-  }
+  onTabInput("pricingLike", "pricing", () => renderPricing(false), 350);
   initPricingShowMenu();
   const pricingFiltersBtn = $("#pricingFiltersBtn");
   if (pricingFiltersBtn) {
@@ -6611,15 +6562,14 @@ document.addEventListener("DOMContentLoaded", () => {
   if (pricingSettingsBox) {
     // Автосохранение: любое изменение поля в форме сразу пишется в localStorage,
     // чтобы значения не терялись. Пересчёт — только «Обновить» в меню «Настройки».
-    let autosaveTimer = null;
+    const autosave = debounceRun(() => {
+      collectPricingSettings();
+      const m = statusEl();
+      if (m) m.textContent = "Настройки сохранены — примените их кнопкой «Обновить» в меню «Настройки»";
+    }, 400);
     pricingSettingsBox.addEventListener("change", (ev) => {
       if (!ev.target.matches || !ev.target.matches("input[data-key]")) return;
-      clearTimeout(autosaveTimer);
-      autosaveTimer = setTimeout(() => {
-        collectPricingSettings();
-        const m = statusEl();
-        if (m) m.textContent = "Настройки сохранены — примените их кнопкой «Обновить» в меню «Настройки»";
-      }, 400);
+      autosave();
     });
   }
   syncHeaderForTab(currentTab);

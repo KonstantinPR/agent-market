@@ -34,7 +34,7 @@ FastAPI router — app/api.py  (все эндпоинты, один модуль
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 6653 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/app.js` | 6603 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/api.py` | 4167 | все HTTP-эндпоинты, один `APIRouter(prefix="/api")` |
 | `app/services/sync.py` | 2462 | запись выгрузок WB/Ozon в БД |
 | `app/services/pricing.py` | 1789 | автопилот цен: R1–R11, расчёт скидок |
@@ -49,7 +49,7 @@ FastAPI router — app/api.py  (все эндпоинты, один модуль
 | `app/services/margin.py` | 772 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/models.py` | 673 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 623 | PDF «Потребность в товаре» |
-| `tests/js/test_js_helpers.py` | 606 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 609 | проверка app.js через Node `vm` |
 | `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/dashboard.py` | 501 | сводные панели дашборда |
 | `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
