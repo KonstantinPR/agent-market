@@ -569,7 +569,7 @@ def test_api_replenish_to_sort_column(db, api_client):
     assert xp.status_code == 200
     ws = load_workbook(io.BytesIO(xp.content)).active
     headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
-    assert "Дослать на WB, шт" in headers
+    assert "Дослать" in headers
 
 
 # ------------------------------------------------- план подсортировки на WB

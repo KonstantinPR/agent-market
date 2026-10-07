@@ -116,18 +116,12 @@ def export_products(
         df["tags"] = df["tags"].map(lambda v: ", ".join(v) if isinstance(v, list) else v)
     order = [c for c in ["article", "name", "brand", "subject", "size", "sizes_count",
                          "barcode", "volume_l", "composition", "net_cost", "replenishable",
-                         "tags", "own_stock", "mp_stock", "recommended_price", "markup"]
+                         "tags", "own_stock", "mp_stock", "recommended_price", "min_price",
+                         "markup"]
              if c in df.columns]
     if order:
         df = df[order]
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "name": "Наименование", "brand": "Бренд",
-        "subject": "Предмет", "size": "Размер", "sizes_count": "Размеров",
-        "barcode": "Баркод", "volume_l": "Объём, л", "composition": "Состав",
-        "net_cost": "Себестоимость", "replenishable": "Докупаемый",
-        "tags": "Маркетплейсы", "own_stock": "Свой склад", "mp_stock": "Остаток МП",
-        "recommended_price": "Рекоменд. цена", "markup": "Наценка",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_products"), cols)
     df = df.rename(columns=ru)
     return _xlsx_response(df, "products.xlsx", payload["count"])
 
@@ -496,33 +490,7 @@ def export_margin_detail(
             pass
     if missing_only:
         df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "nm_id": "Артикул WB", "name": "Наименование", "sells": "Продано, шт",
-        "returns_qty": "Возвращено, шт",
-        "stock_qty": "Остаток, шт", "stock_total": "Остаток всего, шт",
-        "stock_in_way": "В пути, шт",
-        "revenue": "Выручка, руб", "commission": "Комиссия, руб",
-        "logistics": "Логистика, руб", "storage": "Хранение, руб",
-        "services": "Услуги, руб", "income": "К перечислению, руб",
-        "net_cost": "Себестоимость, руб", "margin_gross": "Маржа, до себестоимости, руб",
-        "margin": "Прибыль, руб",
-        "margin_per_one": "Прибыль на ед., руб", "margin_pct": "Прибыль, %",
-        "margin_pct_income": "Прибыль % (к перечислению), %",
-        "net_cost_est": "Себестоимость оценка",
-        "sells_pp": "Пред. период: Продано, шт", "margin_pp": "Пред. период: Прибыль, руб",
-        "delta_ru": "Δ прибыли, руб", "delta_pct": "Δ прибыли, %",
-        "logistics_out": "Логистика туда, руб",
-        "logistics_in": "Логистика обратно, руб",
-        "commission_per_one": "Комиссия на ед., руб",
-        "logistics_per_one": "Логистика на ед., руб",
-        "logistics_out_per_one": "Логистика туда на ед., руб",
-        "logistics_in_per_one": "Логистика обратно на ед., руб",
-        "storage_per_one": "Хранение на ед., руб",
-        "income_per_one": "К перечисл. на ед., руб",
-        "revenue_per_one": "Средняя цена, руб",
-        "margin_gross_per_one": "Маржа до себест. на ед., руб",
-        "return_rate": "Доля возвратов, %",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_margin_detail"), cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
     fname = (("detail_missing_cost" if missing_only else "margin_detail")) + f"_{from_}_{to_}.xlsx"
@@ -566,39 +534,7 @@ def export_margin_ozon_detail(
             pass
     if missing_only:
         df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "nm_id": "Артикул WB", "name": "Наименование",
-        "size": "Размер", "sizes_count": "Размеров", "offers_count": "Артикулов",
-        "sells": "Продано, шт", "returns_qty": "Возвращено, шт",
-        "postings": "Постинги",
-        "revenue": "Выручка, руб", "commission": "Комиссия, руб",
-        "services": "Услуги, руб", "income": "К перечислению, руб",
-        "cashflow_est": "На р/с (оценка), руб",
-        "storage": "Хранение, руб",
-        "net_cost": "Себестоимость, руб", "margin": "Прибыль, руб",
-        "margin_gross": "Маржа, до себестоимости, руб",
-        "net_cost_est": "Себестоимость оценка",
-        "margin_per_one": "Прибыль на ед., руб", "margin_pct": "Прибыль, %",
-        "amount": "Сумма продажи, руб",
-        "sells_pp": "Пред. период: Продано, шт", "margin_pp": "Пред. период: Прибыль, руб",
-        "delta_ru": "Δ прибыли, руб", "delta_pct": "Δ прибыли, %",
-        "commission_per_one": "Комиссия на ед., руб",
-        "services_per_one": "Услуги на ед., руб",
-        "storage_per_one": "Хранение на ед., руб",
-        "income_per_one": "К перечисл. на ед., руб",
-        "revenue_per_one": "Средняя цена, руб",
-        "return_rate": "Доля возвратов, %",
-        "accrued_sale": "Начислено: продажа, руб",
-        "accrued_commission": "Начислено: комиссия, руб",
-        "accrued_logistics": "Начислено: логистика, руб",
-        "accrued_services": "Начислено: услуги, руб",
-        "accrued_other": "Начислено: прочее, руб",
-        "accrued_net": "На р/с (по начислениям), руб",
-        "accrued_diff": "Δ нач. vs детал., руб",
-        "accrued_coverage": "Есть начисления",
-        "has_detail": "Есть детализация",
-        "margin_accrued": "Прибыль (по начислениям), руб",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_margin_ozon_detail"), cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
     fname = (("detail_missing_cost" if missing_only else "margin_ozon_detail")) + f"_{from_}_{to_}.xlsx"
@@ -623,40 +559,7 @@ def export_margin_funnel(
     df = margin_service.funnel_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like
     )
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "name": "Наименование", "views": "Просмотры",
-        "opens": "Открытия карточки", "adds": "В корзину", "orders": "Заказы",
-        "cancelled": "Отмены", "buyouts": "Выкупы", "avg_price": "Ср. цена, руб",
-        "revenue": "Выручка (оценка), руб",
-        "cart_pct": "В корзину, %", "order_pct": "Заказы, %",
-        "net_cost": "Себестоимость, руб", "margin": "Маржа (оценка), руб",
-        "margin_pct": "Маржа, %", "storage_est": "Хранение (оц.), руб",
-        "buyout_sum": "Выкуп, руб", "subject_name": "Предмет",
-        "brand_name": "Бренд", "product_rating": "Рейтинг товара",
-        "feedback_rating": "Рейтинг отзывов", "stock_wb": "Остаток WB, шт",
-        "stock_mp": "Остаток МП, шт", "stock_balance_sum": "Остаток (баланс)",
-        "cancel_sum": "Отмены, руб", "avg_orders_per_day": "Заказов в день",
-        "share_order_percent": "Доля заказов, %", "add_to_wishlist": "В избранное",
-        "time_to_ready_min": "До готовности, мин", "localization_percent": "Локализация, %",
-        "conv_to_cart_percent": "В корзину (воронка), %",
-        "conv_cart_to_order_percent": "Корзина→Заказ, %",
-        "conv_buyout_percent": "Выкуп, %",
-        "wb_club_order_count": "WB Клуб: заказы", "wb_club_order_sum": "WB Клуб: заказы, руб",
-        "wb_club_buyout_count": "WB Клуб: выкупы", "wb_club_buyout_sum": "WB Клуб: выкупы, руб",
-        "wb_club_cancel_count": "WB Клуб: отмены", "wb_club_cancel_sum": "WB Клуб: отмены, руб",
-        "wb_club_avg_price": "WB Клуб: ср. цена", "wb_club_buyout_percent": "WB Клуб: выкуп, %",
-        "wb_club_avg_orders_per_day": "WB Клуб: заказов в день",
-        "title": "Название", "subject_id": "ID предмета", "tags": "Теги",
-        "past_views": "Пред. период: просмотры", "past_adds": "Пред. период: в корзину",
-        "past_orders": "Пред. период: заказы", "past_cancelled": "Пред. период: отмены",
-        "past_buyouts": "Пред. период: выкупы", "past_revenue": "Пред. период: выручка",
-        "past_buyout_sum": "Пред. период: выкуп, руб", "past_cancel_sum": "Пред. период: отмены, руб",
-        "past_avg_price": "Пред. период: ср. цена",
-        "dy_views": "Динамика просмотров, %", "dy_adds": "Динамика корзины, %",
-        "dy_orders": "Динамика заказов, %", "dy_cancelled": "Динамика отмен, %",
-        "dy_buyouts": "Динамика выкупов, %", "dy_revenue": "Динамика выручки, %",
-        "dy_avg_price": "Динамика ср. цены, %",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_margin_funnel"), cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Воронка")
     fname = f"margin_funnel_{from_}_{to_}.xlsx"
@@ -682,11 +585,7 @@ def export_sales(
             common_service.like_to_regex(article_like), regex=True, na=False
         )
         df = df[keep].reset_index(drop=True)
-    df, ru = excel_io.project_export(df, {
-        "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
-        "name": "Наименование", "quantity": "Продано, шт",
-        "revenue": "Выручка, руб", "income": "К перечислению, руб",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_sales"), cols)
     df = df.rename(columns=ru)
     fname = f"sales_{payload['date_from']}_{payload['date_to']}.xlsx"
     return _xlsx_response(df, fname, len(df))

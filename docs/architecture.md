@@ -34,8 +34,9 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 6603 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (16 файлов)` | 4355 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/app.js` | 6538 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/columns.json` | 5496 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/api/ (16 файлов)` | 4087 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/services/sync.py` | 2462 | запись выгрузок WB/Ozon в БД |
 | `app/services/pricing.py` | 1789 | автопилот цен: R1–R11, расчёт скидок |
 | `tests/api/test_endpoints.py` | 1340 | HTTP-эндпоинты через TestClient |
@@ -49,7 +50,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/margin.py` | 772 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/models.py` | 673 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 623 | PDF «Потребность в товаре» |
-| `tests/js/test_js_helpers.py` | 616 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 618 | проверка app.js через Node `vm` |
 | `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/dashboard.py` | 501 | сводные панели дашборда |
 | `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
@@ -68,6 +69,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/config.py` | 55 | `Settings`, читается из `.env` |
 | `app/providers/errors.py` | 48 | нормализованные ошибки апстримов |
 | `app/main.py` | 44 | сборка FastAPI-приложения, `/`, статика |
+| `app/services/columns.py` | 42 | loader columns.json (`export_cols` для Python) |
 | `app/providers/base.py` | 33 | базовый провайдер |
 | `app/services/window.py` | 21 | окна дат |
 | `app/providers/factory.py` | 20 | точка подмены провайдеров в тестах |
@@ -86,7 +88,9 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 - новый эндпоинт → модуль `app/api/<группа>.py` (см. docstring
   `app/api/__init__.py`; общее — `_common.py`), префикс `/api` у роутера пакета;
 - таблица во фронтенде → существующий `pagedTable` (памятка в `AGENTS.md`,
-  раздел «UI таблиц»), колонки и `tip` — в `app/static/app.js`;
+  раздел «UI таблиц»), ключи/подписи/дефолты колонок и Excel-словари —
+  `app/static/columns.json` (единственный источник, читает
+  `app/services/columns.py`), `render`/`tip` — в `app/static/app.js`;
 - миграция колонки → идемпотентный `ALTER ... IF NOT EXISTS` в
   `scripts/init_db.py`.
 

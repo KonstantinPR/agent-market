@@ -101,7 +101,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         df["action"] = df["action"].map(PRICING_ACTION_RU)
         df["replenishable"] = df["replenishable"].map({True: "да", False: "нет"})
     keep = [
-        "article", "name", "price", "current_vis", "current_discount", "target_vis",
+        "nm_id", "article", "name", "price", "current_vis", "current_discount", "target_vis",
         "target_discount", "delta_discount", "net_cost", "action", "status", "reason",
         "doc", "velocity", "trend",
         "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
@@ -116,43 +116,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "promo_score_confidence", "last_sale_days_ago",
     ]
     df = df[[c for c in keep if c in df.columns]]
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "name": "Наименование", "price": "Цена базовая, руб",
-        "current_vis": "Цена сейчас, руб", "current_discount": "Скидка сейчас, %",
-        "target_vis": "Целевая цена, руб", "target_discount": "Целевая скидка, %",
-        "delta_discount": "Дельта скидки, п.п.", "net_cost": "Себестоимость, руб",
-        "action": "Решение", "status": "Статус", "reason": "Причина",
-        "doc": "DOC, дн", "velocity": "Продажи, шт/дн", "trend": "Тренд",
-        "conv_pct": "Конверсия, %", "backlog": "В корзине", "stock": "Остаток",
-        "avg_price": "Ср. цена факт, руб", "eff": "База расчёта, руб",
-        "floor_price": "Пол (break-even), руб", "max_discount_item": "Макс. скидка, %",
-        "margin_pct_at_target": "Маржа при цели, %", "replenishable": "Докупаемый",
-        "product_rating": "Рейтинг товара", "buyouts": "Выкупы, шт",
-        "conv_buyout_percent": "Конверсия выкупа, %", "cancel_sum": "Отмены, руб",
-        "add_to_wishlist": "В избранное, шт", "stock_wb": "Остаток WB, шт",
-        "return_rate": "Возвраты, % от продаж",
-        "margin_pct": "Маржа факт, % от выручки",
-        "margin_per_one": "Маржа/шт факт, руб",
-        "revenue_per_one": "Ср. чек факт, руб",
-        "income_per_one": "К перечислению/шт, руб",
-        "commission_per_one": "Комиссия/шт, руб",
-        "logistics_per_one": "Логистика/шт, руб",
-        "storage_per_one": "Хранение/шт, руб",
-        "detail_sells": "Продано в детализации, шт",
-        "detail_returns_qty": "Возвращено в детализации, шт",
-        "promo_count": "Акций WB (кол-во)",
-        "promo_names": "Акции WB",
-        "promo_part_pct": "Участие в акциях, % (агрегат WB)",
-        "promo_tier_pct": "Доля участия след. буста, %",
-        "promo_tier_boost": "Буст след. ступени, ×",
-        "promo_need_rows": "Надо в акцию для буста, шт",
-        "promo_cap_pct": "Потолок промо-скидки, %",
-        "promo_push_applied": "Разгружен акцией",
-        "promo_delta_discount": "Вклад разгрузки в скидку, п.п.",
-        "promo_score": "Оценка жертвенности",
-        "promo_score_confidence": "Полнота оценки",
-        "last_sale_days_ago": "Дней без продаж",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("pricing_export"), cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Автопилот")
     fname = f"pricing_{date.today().isoformat()}.xlsx"

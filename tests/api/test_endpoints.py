@@ -738,8 +738,8 @@ def test_export_wb_cards(api_client):
     assert r.headers["X-Count"] == "2"
     df = _read_xlsx(r)
     assert list(df.columns) == ["Код размера", "Артикул WB", "Артикул продавца", "Бренд",
-                                "Предмет", "Размер", "Баркод", "Объём, л", "Состав",
-                                "Наименование"]
+                                "Предмет", "Размер", "Баркод", "Объём, л.", "Состав",
+                                "Название"]
     assert set(df["Артикул продавца"]) == {"TST-1", "TST-2"}
 
 
@@ -813,7 +813,7 @@ def test_export_wb_prices(api_client, stub_wb):
     assert XLSX in r.headers["content-type"]
     df = _read_xlsx(r)
     assert set(df["Артикул"]) == {"TST-1", "TST-2"}
-    assert df["Цена без скидки"].tolist() == [1100, 990]
+    assert df["Цена без скид."].tolist() == [1100, 990]
 
 
 def test_export_wb_prices_article_like(api_client, stub_wb):
@@ -932,7 +932,7 @@ def test_export_ozon_detail_summary_and_rows(api_client):
     assert r.status_code == 200
     df = _read_xlsx(r)
     assert set(df["Артикул"]) == {"OZ"}
-    assert "К перечислению, руб" in df.columns
+    assert "К перечислению" in df.columns
 
     r = api_client.get("/api/export/ozon/detail-summary",
                        params={"date_from": "2026-09-01", "date_to": "2026-09-10",
@@ -981,7 +981,7 @@ def test_ozon_accrual_pull_rows_and_export(api_client):
     assert r.status_code == 200
     out = _read_xlsx(r)
     assert len(out) == 8
-    assert "Сумма, руб" in out.columns
+    assert "Сумма" in out.columns
 
 
 def test_ozon_empty_views_report_window_and_coverage(api_client):
@@ -1160,7 +1160,7 @@ def test_export_margin_ozon_detail(api_client):
                        params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
     assert r.status_code == 200
     out = pd.read_excel(io.BytesIO(r.content))
-    assert {"Артикул", "Прибыль, руб", "К перечислению, руб"}.issubset(set(out.columns))
+    assert {"Артикул", "Прибыль", "К перечислению"}.issubset(set(out.columns))
     assert set(out["Артикул"]) == {"OZ"}
     assert set(out["Размеров"]) == {2}
     r = api_client.get("/api/export/margin/ozon-detail",

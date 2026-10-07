@@ -25,7 +25,7 @@ def _parse(data: bytes, **kw):
 
 def test_roundtrip_uses_export_labels():
     data = _xlsx(
-        ["Артикул", "Наименование", "Спрос, шт/день", "WB дефицит, шт"],
+        ["Артикул", "Наименование", "Спрос, шт/д", "WB дефицит"],
         [["ART-1", "Платье летнее", 1.5, 10]],
     )
     rows, meta = _parse(data)
@@ -34,21 +34,21 @@ def test_roundtrip_uses_export_labels():
         "demand": 1.5, "wb_def": 10,
     }]
     assert meta["count"] == 1
-    assert meta["columns"] == ["Артикул", "Наименование", "Спрос, шт/день", "WB дефицит, шт"]
+    assert meta["columns"] == ["Артикул", "Наименование", "Спрос, шт/д", "WB дефицит"]
     assert meta["unknown"] == []
     assert meta["dropped"] == 0
     assert meta["truncated"] == 0
 
 
 def test_numeric_article_is_a_string_without_dot():
-    data = _xlsx(["Артикул", "Баркод"], [[12345, 7712345678901.0]])
+    data = _xlsx(["Артикул", "Штрихкод"], [[12345, 7712345678901.0]])
     rows, _ = _parse(data)
     assert rows[0]["article"] == "12345"
     assert rows[0]["barcode"] == "7712345678901"
 
 
 def test_missing_article_column_is_rejected():
-    data = _xlsx(["Наименование", "Спрос, шт/день"], [["Платье", 2]])
+    data = _xlsx(["Наименование", "Спрос, шт/д"], [["Платье", 2]])
     with pytest.raises(ExcelImportError, match="Артикул"):
         _parse(data)
 
@@ -79,7 +79,7 @@ def test_only_headers_sheet_is_rejected():
 
 def test_unknown_columns_are_reported_but_not_in_rows():
     data = _xlsx(
-        ["Артикул", "Заметки", "Спрос, шт/день"],
+        ["Артикул", "Заметки", "Спрос, шт/д"],
         [["ART-1", "не трогать", 3]],
     )
     rows, meta = _parse(data)
@@ -89,14 +89,14 @@ def test_unknown_columns_are_reported_but_not_in_rows():
 
 def test_empty_cell_becomes_none_not_zero():
     """Пустой «WB дефицит» = бюджет не задан, а не ноль."""
-    data = _xlsx(["Артикул", "WB дефицит, шт"], [["ART-1", None]])
+    data = _xlsx(["Артикул", "WB дефицит"], [["ART-1", None]])
     rows, _ = _parse(data)
     assert rows[0]["wb_def"] is None
 
 
 def test_duplicate_label_keeps_first_value():
     data = _xlsx(
-        ["Артикул", "Спрос, шт/день", "Спрос, шт/день"],
+        ["Артикул", "Спрос, шт/д", "Спрос, шт/д"],
         [["ART-1", 7, 99]],
     )
     rows, meta = _parse(data)

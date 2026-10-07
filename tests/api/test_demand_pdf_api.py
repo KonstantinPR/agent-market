@@ -505,7 +505,7 @@ def _one_total(pdf: bytes) -> str:
 def test_import_excel_returns_rows_and_meta(pdf_api):
     """POST /replenish/import-excel: строки с ключами выгрузки + сводка."""
     data = _xlsx(
-        ["Артикул", "Наименование", "Спрос, шт/день", "WB дефицит, шт"],
+        ["Артикул", "Наименование", "Спрос, шт/д", "WB дефицит"],
         [["EX-1", "Платье летнее", 1.5, 7]],
     )
     r = pdf_api.post("/api/replenish/import-excel",
@@ -535,7 +535,7 @@ def test_import_excel_rejects_empty_file(pdf_api):
 
 
 def test_import_excel_rejects_file_without_article_column(pdf_api):
-    data = _xlsx(["Наименование", "Спрос, шт/день"], [["Платье", 2]])
+    data = _xlsx(["Наименование", "Спрос, шт/д"], [["Платье", 2]])
     r = pdf_api.post("/api/replenish/import-excel",
                      files={"file": ("p.xlsx", data, XLSX_MIME)})
     assert r.status_code == 400

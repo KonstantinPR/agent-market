@@ -1,0 +1,5496 @@
+{
+ "_meta": {
+  "descr": "Единый источник колонок: панель «Вид таблицы» (app.js) и Excel-словари (app/api) читают отсюда. Править здесь; сверка — tests/unit/test_column_manifest.py.",
+  "panelSource": "app/static/app.js registerColView (бутстрап-скрипт)"
+ },
+ "tabs": {
+  "wb-detail": {
+   "storageKey": "wbDetailCols",
+   "pinnable": true,
+   "modes": {
+    "rows": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "title",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "doc_type",
+       "label": "Тип документа",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Кол-во",
+       "def": true
+      },
+      {
+       "k": "retail_amount",
+       "label": "Реализовано",
+       "def": true
+      },
+      {
+       "k": "commission",
+       "label": "КВВ",
+       "def": true
+      },
+      {
+       "k": "for_pay",
+       "label": "К перечислению",
+       "def": true
+      },
+      {
+       "k": "logistics",
+       "label": "Доставка",
+       "def": true
+      },
+      {
+       "k": "storage",
+       "label": "Хранение",
+       "def": true
+      },
+      {
+       "k": "office",
+       "label": "Склад",
+       "def": true
+      },
+      {
+       "k": "source",
+       "label": "Источник",
+       "def": true
+      },
+      {
+       "k": "retail_price",
+       "label": "Цена розничная",
+       "def": false
+      },
+      {
+       "k": "srid",
+       "label": "SRID",
+       "def": false
+      }
+     ]
+    },
+    "summary": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "title",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "returns_qty",
+       "label": "Возвращено, шт",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Реализовано",
+       "def": true
+      },
+      {
+       "k": "commission",
+       "label": "Комиссия",
+       "def": true
+      },
+      {
+       "k": "for_pay",
+       "label": "К перечислению",
+       "def": true
+      },
+      {
+       "k": "logistics",
+       "label": "Доставка",
+       "def": true
+      },
+      {
+       "k": "delivery_count",
+       "label": "Доставок",
+       "def": true
+      },
+      {
+       "k": "return_delivery_count",
+       "label": "Возврат доставок",
+       "def": true
+      },
+      {
+       "k": "storage",
+       "label": "Хранение (оц)",
+       "def": true
+      },
+      {
+       "k": "pvz_compensation",
+       "label": "ПВЗ-компенсации",
+       "def": true
+      },
+      {
+       "k": "payment_services",
+       "label": "Платёжные услуги",
+       "def": true
+      },
+      {
+       "k": "services",
+       "label": "Услуги/штрафы",
+       "def": true
+      },
+      {
+       "k": "ops_count",
+       "label": "Операций",
+       "def": true
+      },
+      {
+       "k": "sources",
+       "label": "Источник",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_detail_rows",
+    "export_wb_detail_summary"
+   ]
+  },
+  "oz-detail": {
+   "storageKey": "ozDetailCols",
+   "pinnable": true,
+   "modes": {
+    "rows": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "posting_number",
+       "label": "Постинг",
+       "def": true
+      },
+      {
+       "k": "offer_id",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sku",
+       "label": "SKU",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Кол-во",
+       "def": true
+      },
+      {
+       "k": "seller_price",
+       "label": "Цена",
+       "def": true
+      },
+      {
+       "k": "amount",
+       "label": "Сумма",
+       "def": true
+      },
+      {
+       "k": "commission",
+       "label": "Комиссия",
+       "def": true
+      },
+      {
+       "k": "standard_fee",
+       "label": "Услуги",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "К перечислению",
+       "def": true
+      },
+      {
+       "k": "return_qty",
+       "label": "Возврат, шт",
+       "def": true
+      },
+      {
+       "k": "return_total",
+       "label": "Возврат, руб",
+       "def": true
+      },
+      {
+       "k": "source",
+       "label": "Источник",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Штрихкод",
+       "def": false
+      },
+      {
+       "k": "commission_ratio",
+       "label": "Доля комиссии",
+       "def": false
+      }
+     ]
+    },
+    "summary": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "sizes_count",
+       "label": "Размеров",
+       "def": true
+      },
+      {
+       "k": "offers_count",
+       "label": "Артикулов",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "returns_qty",
+       "label": "Возвращено, шт",
+       "def": true
+      },
+      {
+       "k": "postings",
+       "label": "Постингов",
+       "def": true
+      },
+      {
+       "k": "seller_total",
+       "label": "Продажи (цена×кол-во)",
+       "def": true
+      },
+      {
+       "k": "amount",
+       "label": "Реализовано",
+       "def": true
+      },
+      {
+       "k": "commission",
+       "label": "Комиссия",
+       "def": true
+      },
+      {
+       "k": "services",
+       "label": "Услуги",
+       "def": true
+      },
+      {
+       "k": "storage",
+       "label": "Хранение",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "К перечислению",
+       "def": true
+      },
+      {
+       "k": "ops_count",
+       "label": "Операций",
+       "def": true
+      },
+      {
+       "k": "buyout_sum",
+       "label": "Сумма выкупов",
+       "def": true
+      },
+      {
+       "k": "buyout_percent",
+       "label": "Выкуп, %",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "OZON_DETAIL_RU_COLUMNS",
+    "OZON_DETAIL_SUMMARY_RU_COLUMNS"
+   ]
+  },
+  "wb-cards": {
+   "storageKey": "wbCardsCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "chrt_id",
+       "label": "Код размера",
+       "def": true
+      },
+      {
+       "k": "vendor_code",
+       "label": "Артикул продавца",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
+       "k": "brand",
+       "label": "Бренд",
+       "def": true
+      },
+      {
+       "k": "subject",
+       "label": "Предмет",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Баркод",
+       "def": true
+      },
+      {
+       "k": "volume_l",
+       "label": "Объём, л.",
+       "def": true
+      },
+      {
+       "k": "composition",
+       "label": "Состав",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Название",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_cards"
+   ]
+  },
+  "wb-stock": {
+   "storageKey": "wbStockCols",
+   "pinnable": true,
+   "modes": {
+    "base": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "chrt_id",
+       "label": "Код размера",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Баркод",
+       "def": true
+      },
+      {
+       "k": "warehouse",
+       "label": "Склад",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Доступно",
+       "def": true
+      },
+      {
+       "k": "quantity_full",
+       "label": "Всего на складах",
+       "def": true
+      },
+      {
+       "k": "in_way",
+       "label": "В пути",
+       "def": true
+      },
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": false
+      },
+      {
+       "k": "marketplace",
+       "label": "Маркетплейс",
+       "def": false
+      }
+     ]
+    },
+    "agg": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "warehouse",
+       "label": "Склад",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Доступно",
+       "def": true
+      },
+      {
+       "k": "quantity_full",
+       "label": "Всего на складах",
+       "def": true
+      },
+      {
+       "k": "in_way",
+       "label": "В пути",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_stock"
+   ]
+  },
+  "wb-funnel": {
+   "storageKey": "wbFunnelCols",
+   "pinnable": true,
+   "modes": {
+    "compact": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Название",
+       "def": true
+      },
+      {
+       "k": "orders",
+       "label": "Заказы",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "avg_price",
+       "label": "Ср. цена",
+       "def": true
+      }
+     ]
+    },
+    "expanded": {
+     "columns": [
+      {
+       "k": "date_from",
+       "label": "С",
+       "def": true
+      },
+      {
+       "k": "date_to",
+       "label": "По",
+       "def": true
+      },
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Название",
+       "def": true
+      },
+      {
+       "k": "title",
+       "label": "Название (API)",
+       "def": true
+      },
+      {
+       "k": "subject_name",
+       "label": "Предмет",
+       "def": true
+      },
+      {
+       "k": "subject_id",
+       "label": "ID предмета",
+       "def": true
+      },
+      {
+       "k": "brand_name",
+       "label": "Бренд",
+       "def": true
+      },
+      {
+       "k": "tags",
+       "label": "Теги",
+       "def": true
+      },
+      {
+       "k": "product_rating",
+       "label": "Рейтинг карточки",
+       "def": true
+      },
+      {
+       "k": "feedback_rating",
+       "label": "Рейтинг по отзывам",
+       "def": true
+      },
+      {
+       "k": "stock_wb",
+       "label": "Остатки WB",
+       "def": true
+      },
+      {
+       "k": "stock_mp",
+       "label": "Остатки свой склад",
+       "def": true
+      },
+      {
+       "k": "stock_balance_sum",
+       "label": "Сумма остатков",
+       "def": true
+      },
+      {
+       "k": "views",
+       "label": "Просмотры",
+       "def": true
+      },
+      {
+       "k": "opens",
+       "label": "Открытия",
+       "def": true
+      },
+      {
+       "k": "adds",
+       "label": "В корзину",
+       "def": true
+      },
+      {
+       "k": "orders",
+       "label": "Заказы",
+       "def": true
+      },
+      {
+       "k": "buyouts",
+       "label": "Выкупы",
+       "def": true
+      },
+      {
+       "k": "cancelled",
+       "label": "Отмены",
+       "def": true
+      },
+      {
+       "k": "cancel_sum",
+       "label": "Сумма отмен",
+       "def": true
+      },
+      {
+       "k": "avg_price",
+       "label": "Ср. цена",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "buyout_sum",
+       "label": "Сумма выкупа",
+       "def": true
+      },
+      {
+       "k": "avg_orders_per_day",
+       "label": "Заказов в день",
+       "def": true
+      },
+      {
+       "k": "share_order_percent",
+       "label": "Доля в выручке, %",
+       "def": true
+      },
+      {
+       "k": "add_to_wishlist",
+       "label": "В отложенные",
+       "def": true
+      },
+      {
+       "k": "time_to_ready_min",
+       "label": "Доставка, средн.",
+       "def": true
+      },
+      {
+       "k": "localization_percent",
+       "label": "Локальные, %",
+       "def": true
+      },
+      {
+       "k": "conv_to_cart_percent",
+       "label": "Просмотр→Корзина, %",
+       "def": true
+      },
+      {
+       "k": "conv_cart_to_order_percent",
+       "label": "Корзина→Заказ, %",
+       "def": true
+      },
+      {
+       "k": "conv_buyout_percent",
+       "label": "Заказ→Выкуп, %",
+       "def": true
+      },
+      {
+       "k": "past_views",
+       "label": "Просмотры (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_adds",
+       "label": "В корзину (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_orders",
+       "label": "Заказы (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_cancelled",
+       "label": "Отмены (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_buyouts",
+       "label": "Выкупы (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_revenue",
+       "label": "Выручка (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_buyout_sum",
+       "label": "Сумма выкупа (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_cancel_sum",
+       "label": "Сумма отмен (пред. период)",
+       "def": true
+      },
+      {
+       "k": "past_avg_price",
+       "label": "Ср. цена (пред. период)",
+       "def": true
+      },
+      {
+       "k": "dy_views",
+       "label": "Динамика просмотров, %",
+       "def": true
+      },
+      {
+       "k": "dy_adds",
+       "label": "Динамика «в корзину», %",
+       "def": true
+      },
+      {
+       "k": "dy_orders",
+       "label": "Динамика заказов, %",
+       "def": true
+      },
+      {
+       "k": "dy_cancelled",
+       "label": "Динамика отмен, %",
+       "def": true
+      },
+      {
+       "k": "dy_buyouts",
+       "label": "Динамика выкупов, %",
+       "def": true
+      },
+      {
+       "k": "dy_revenue",
+       "label": "Динамика выручки, %",
+       "def": true
+      },
+      {
+       "k": "dy_avg_price",
+       "label": "Динамика ср. цены, %",
+       "def": true
+      },
+      {
+       "k": "wb_club_order_count",
+       "label": "WB Клуб: заказы",
+       "def": true
+      },
+      {
+       "k": "wb_club_order_sum",
+       "label": "WB Клуб: заказы, ₽",
+       "def": true
+      },
+      {
+       "k": "wb_club_buyout_count",
+       "label": "WB Клуб: выкупы",
+       "def": true
+      },
+      {
+       "k": "wb_club_buyout_sum",
+       "label": "WB Клуб: выкупы, ₽",
+       "def": true
+      },
+      {
+       "k": "wb_club_cancel_count",
+       "label": "WB Клуб: отмены",
+       "def": true
+      },
+      {
+       "k": "wb_club_cancel_sum",
+       "label": "WB Клуб: отмены, ₽",
+       "def": true
+      },
+      {
+       "k": "wb_club_avg_price",
+       "label": "WB Клуб: ср. цена",
+       "def": true
+      },
+      {
+       "k": "wb_club_buyout_percent",
+       "label": "WB Клуб: % выкупа",
+       "def": true
+      },
+      {
+       "k": "wb_club_avg_orders_per_day",
+       "label": "WB Клуб: заказов/день",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_funnel"
+   ]
+  },
+  "wb-sales": {
+   "storageKey": "wbSalesCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "marketplace",
+       "label": "Маркетплейс",
+       "def": true
+      },
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "К перечислению",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_sales"
+   ]
+  },
+  "wb-prices": {
+   "storageKey": "wbPricesCols",
+   "pinnable": true,
+   "modes": {
+    "base": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "discounted_price",
+       "label": "Цена со скид.",
+       "def": true
+      },
+      {
+       "k": "price",
+       "label": "Цена без скид.",
+       "def": true
+      },
+      {
+       "k": "discount",
+       "label": "Скидка, %",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": false
+      }
+     ]
+    },
+    "agg": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sizes",
+       "label": "Размеров",
+       "def": true
+      },
+      {
+       "k": "disc_min",
+       "label": "Цена со скид.",
+       "def": true
+      },
+      {
+       "k": "price_min",
+       "label": "Цена без скид.",
+       "def": true
+      },
+      {
+       "k": "disc_min_p",
+       "label": "Скидка, %",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_prices"
+   ]
+  },
+  "wb-storage": {
+   "storageKey": "wbStorageCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "barcodes_count",
+       "label": "Баркодов",
+       "def": true
+      },
+      {
+       "k": "volume",
+       "label": "Объём, л",
+       "def": true
+      },
+      {
+       "k": "storage_price",
+       "label": "Хранение за баркод",
+       "def": true
+      },
+      {
+       "k": "warehouse_price",
+       "label": "Сумма хранения",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": false
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_storage"
+   ]
+  },
+  "oz-cards": {
+   "storageKey": "ozCardsCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "chrt_id",
+       "label": "Код размера",
+       "def": true
+      },
+      {
+       "k": "vendor_code",
+       "label": "Артикул продавца",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
+       "k": "brand",
+       "label": "Бренд",
+       "def": true
+      },
+      {
+       "k": "subject",
+       "label": "Предмет",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Баркод",
+       "def": true
+      },
+      {
+       "k": "volume_l",
+       "label": "Объём, л.",
+       "def": true
+      },
+      {
+       "k": "composition",
+       "label": "Состав",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Название",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_cards"
+   ]
+  },
+  "oz-stock": {
+   "storageKey": "ozStockCols",
+   "pinnable": true,
+   "modes": {
+    "base": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "chrt_id",
+       "label": "Код размера",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Баркод",
+       "def": true
+      },
+      {
+       "k": "warehouse",
+       "label": "Склад",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Доступно",
+       "def": true
+      },
+      {
+       "k": "quantity_full",
+       "label": "Всего на складах",
+       "def": true
+      },
+      {
+       "k": "in_way",
+       "label": "В пути",
+       "def": true
+      },
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": false
+      },
+      {
+       "k": "marketplace",
+       "label": "Маркетплейс",
+       "def": false
+      }
+     ]
+    },
+    "agg": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "warehouse",
+       "label": "Склад",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Доступно",
+       "def": true
+      },
+      {
+       "k": "quantity_full",
+       "label": "Всего на складах",
+       "def": true
+      },
+      {
+       "k": "in_way",
+       "label": "В пути",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_stock"
+   ]
+  },
+  "oz-prices": {
+   "storageKey": "ozPricesCols",
+   "pinnable": true,
+   "modes": {
+    "base": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "discounted_price",
+       "label": "Цена со скид.",
+       "def": true
+      },
+      {
+       "k": "price",
+       "label": "Цена без скид.",
+       "def": true
+      },
+      {
+       "k": "discount",
+       "label": "Скидка, %",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": false
+      }
+     ]
+    },
+    "agg": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sizes",
+       "label": "Размеров",
+       "def": true
+      },
+      {
+       "k": "disc_min",
+       "label": "Цена со скид.",
+       "def": true
+      },
+      {
+       "k": "price_min",
+       "label": "Цена без скид.",
+       "def": true
+      },
+      {
+       "k": "disc_min_p",
+       "label": "Скидка, %",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_wb_prices"
+   ]
+  },
+  "oz-realization": {
+   "storageKey": "ozRealCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "marketplace",
+       "label": "Маркетплейс",
+       "def": true
+      },
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "К перечислению",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_sales"
+   ]
+  },
+  "oz-cashflow": {
+   "storageKey": "ozCashflowCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "period_begin",
+       "label": "Период с",
+       "def": true
+      },
+      {
+       "k": "period_end",
+       "label": "Период по",
+       "def": true
+      },
+      {
+       "k": "begin_balance",
+       "label": "Баланс на начало",
+       "def": true
+      },
+      {
+       "k": "payments_amount",
+       "label": "Выплаты на р/с",
+       "def": true
+      },
+      {
+       "k": "delivery_total",
+       "label": "Логистика",
+       "def": true
+      },
+      {
+       "k": "return_total",
+       "label": "Возвраты",
+       "def": true
+      },
+      {
+       "k": "services_total",
+       "label": "Услуги",
+       "def": true
+      },
+      {
+       "k": "others_total",
+       "label": "Прочее",
+       "def": true
+      },
+      {
+       "k": "end_balance",
+       "label": "Баланс на конец",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "OZON_CASHFLOW_RU_COLUMNS"
+   ]
+  },
+  "oz-accrual": {
+   "storageKey": "ozAccrualCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "bucket",
+       "label": "Корзина",
+       "def": true
+      },
+      {
+       "k": "sku",
+       "label": "SKU",
+       "def": true
+      },
+      {
+       "k": "offer_id",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "unit_number",
+       "label": "Постинг",
+       "def": true
+      },
+      {
+       "k": "type_id",
+       "label": "Тип",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Кол-во",
+       "def": true
+      },
+      {
+       "k": "amount",
+       "label": "Сумма",
+       "def": true
+      },
+      {
+       "k": "seller_price",
+       "label": "Цена",
+       "def": true
+      },
+      {
+       "k": "sale_price",
+       "label": "Цена покуп.",
+       "def": true
+      },
+      {
+       "k": "accrual_id",
+       "label": "ID начисления",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "OZON_ACCRUAL_RU_COLUMNS"
+   ]
+  },
+  "oz-placement": {
+   "storageKey": "ozPlacementCols",
+   "pinnable": true,
+   "modes": {
+    "rows": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "offer_id",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "sku",
+       "label": "SKU",
+       "def": true
+      },
+      {
+       "k": "warehouse",
+       "label": "Склад",
+       "def": true
+      },
+      {
+       "k": "paid_quantity",
+       "label": "Платных экз.",
+       "def": true
+      },
+      {
+       "k": "paid_volume",
+       "label": "Платный объём, мл",
+       "def": true
+      },
+      {
+       "k": "storage",
+       "label": "Начислено",
+       "def": true
+      }
+     ]
+    },
+    "summary": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "sizes_count",
+       "label": "Размеров",
+       "def": true
+      },
+      {
+       "k": "offers_count",
+       "label": "Артикулов",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "days",
+       "label": "Дней хранения",
+       "def": true
+      },
+      {
+       "k": "paid_quantity",
+       "label": "Платных экз.",
+       "def": true
+      },
+      {
+       "k": "paid_volume",
+       "label": "Платный объём, мл",
+       "def": true
+      },
+      {
+       "k": "storage",
+       "label": "Начислено",
+       "def": true
+      },
+      {
+       "k": "ops_count",
+       "label": "Операций",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "OZON_PLACEMENT_RU_COLUMNS",
+    "OZON_PLACEMENT_SUMMARY_RU_COLUMNS"
+   ]
+  },
+  "products": {
+   "storageKey": "productsCols",
+   "pinnable": true,
+   "modes": {
+    "agg": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "brand",
+       "label": "Бренд",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Баркод",
+       "def": true
+      },
+      {
+       "k": "sizes_count",
+       "label": "Размеров",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": true
+      },
+      {
+       "k": "recommended_price",
+       "label": "Рекомендуемая цена",
+       "def": true
+      },
+      {
+       "k": "min_price",
+       "label": "Мин. цена",
+       "def": true
+      },
+      {
+       "k": "markup",
+       "label": "Наценка, %",
+       "def": true
+      },
+      {
+       "k": "replenishable",
+       "label": "Докупаемый",
+       "def": true
+      },
+      {
+       "k": "subject",
+       "label": "Предмет",
+       "def": false
+      },
+      {
+       "k": "composition",
+       "label": "Состав",
+       "def": false
+      },
+      {
+       "k": "tags",
+       "label": "Маркетплейсы",
+       "def": false
+      },
+      {
+       "k": "volume_l",
+       "label": "Объём, л",
+       "def": false
+      },
+      {
+       "k": "own_stock",
+       "label": "Остаток свой",
+       "def": true
+      },
+      {
+       "k": "mp_stock",
+       "label": "Остаток МП",
+       "def": true
+      }
+     ]
+    },
+    "sizes": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "brand",
+       "label": "Бренд",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Баркод",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": true
+      },
+      {
+       "k": "recommended_price",
+       "label": "Рекомендуемая цена",
+       "def": true
+      },
+      {
+       "k": "min_price",
+       "label": "Мин. цена",
+       "def": true
+      },
+      {
+       "k": "markup",
+       "label": "Наценка, %",
+       "def": true
+      },
+      {
+       "k": "replenishable",
+       "label": "Докупаемый",
+       "def": true
+      },
+      {
+       "k": "subject",
+       "label": "Предмет",
+       "def": false
+      },
+      {
+       "k": "composition",
+       "label": "Состав",
+       "def": false
+      },
+      {
+       "k": "tags",
+       "label": "Маркетплейсы",
+       "def": false
+      },
+      {
+       "k": "volume_l",
+       "label": "Объём, л",
+       "def": false
+      },
+      {
+       "k": "own_stock",
+       "label": "Остаток свой",
+       "def": true
+      },
+      {
+       "k": "mp_stock",
+       "label": "Остаток МП",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_products"
+   ]
+  },
+  "dash-profit": {
+   "storageKey": "dashProfitCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "marketplace",
+       "label": "МП",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "Доход",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Прибыль/шт",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Рентаб., %",
+       "def": true
+      }
+     ]
+    }
+   },
+   "reloadTab": "dashboard"
+  },
+  "dash-loss": {
+   "storageKey": "dashLossCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "marketplace",
+       "label": "МП",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "Доход",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Прибыль/шт",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Рентаб., %",
+       "def": true
+      }
+     ]
+    }
+   },
+   "reloadTab": "dashboard"
+  },
+  "dash-price": {
+   "storageKey": "dashPriceCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "avg",
+       "label": "Цена сейчас, ₽",
+       "def": true
+      },
+      {
+       "k": "avg_prev",
+       "label": "Цена прош. пер., ₽",
+       "def": true
+      },
+      {
+       "k": "delta_ru",
+       "label": "Δ, ₽",
+       "def": true
+      },
+      {
+       "k": "delta_pct",
+       "label": "Δ, %",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      }
+     ]
+    }
+   },
+   "reloadTab": "dashboard"
+  },
+  "dash-prefix": {
+   "storageKey": "dashPrefixCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "prefix",
+       "label": "Группа",
+       "def": true
+      },
+      {
+       "k": "articles",
+       "label": "Товаров",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "Доход",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Прибыль/шт",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Рентаб., %",
+       "def": true
+      }
+     ]
+    }
+   },
+   "reloadTab": "dashboard"
+  },
+  "margin-funnel": {
+   "storageKey": "marginFunnelCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "views",
+       "label": "Просмотры",
+       "def": true
+      },
+      {
+       "k": "opens",
+       "label": "Открытия",
+       "def": true
+      },
+      {
+       "k": "adds",
+       "label": "В корзину",
+       "def": true
+      },
+      {
+       "k": "orders",
+       "label": "Заказы",
+       "def": true
+      },
+      {
+       "k": "cancelled",
+       "label": "Отмены",
+       "def": true
+      },
+      {
+       "k": "buyouts",
+       "label": "Выкупы",
+       "def": true
+      },
+      {
+       "k": "cart_pct",
+       "label": "В корзину, %",
+       "def": true
+      },
+      {
+       "k": "order_pct",
+       "label": "Заказы, %",
+       "def": true
+      },
+      {
+       "k": "avg_price",
+       "label": "Ср. цена",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка (оценка)",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Маржа (оц.)",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Маржа, %",
+       "def": true
+      },
+      {
+       "k": "storage_est",
+       "label": "Хранение (оц.)",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": false
+      },
+      {
+       "k": "title",
+       "label": "Название из воронки",
+       "def": false
+      },
+      {
+       "k": "subject_id",
+       "label": "ID предмета",
+       "def": false
+      },
+      {
+       "k": "subject_name",
+       "label": "Предмет",
+       "def": false
+      },
+      {
+       "k": "brand_name",
+       "label": "Бренд",
+       "def": false
+      },
+      {
+       "k": "tags",
+       "label": "Теги",
+       "def": false
+      },
+      {
+       "k": "add_to_wishlist",
+       "label": "В избранное",
+       "def": false
+      },
+      {
+       "k": "avg_orders_per_day",
+       "label": "Заказов в день",
+       "def": false
+      },
+      {
+       "k": "cancel_sum",
+       "label": "Отмены, руб",
+       "def": false
+      },
+      {
+       "k": "buyout_sum",
+       "label": "Сумма выкупов, руб",
+       "def": false
+      },
+      {
+       "k": "share_order_percent",
+       "label": "Доля заказов, %",
+       "def": false
+      },
+      {
+       "k": "conv_to_cart_percent",
+       "label": "В корзину (воронка WB), %",
+       "def": false
+      },
+      {
+       "k": "conv_cart_to_order_percent",
+       "label": "Корзина→Заказ, %",
+       "def": false
+      },
+      {
+       "k": "conv_buyout_percent",
+       "label": "Выкуп, %",
+       "def": false
+      },
+      {
+       "k": "localization_percent",
+       "label": "Локализация, %",
+       "def": false
+      },
+      {
+       "k": "stock_wb",
+       "label": "Остаток WB, шт",
+       "def": false
+      },
+      {
+       "k": "stock_mp",
+       "label": "Остаток МП, шт",
+       "def": false
+      },
+      {
+       "k": "stock_balance_sum",
+       "label": "Остаток (баланс), руб",
+       "def": false
+      },
+      {
+       "k": "product_rating",
+       "label": "Рейтинг товара",
+       "def": false
+      },
+      {
+       "k": "feedback_rating",
+       "label": "Рейтинг отзывов",
+       "def": false
+      },
+      {
+       "k": "time_to_ready_min",
+       "label": "До готовности, мин",
+       "def": false
+      },
+      {
+       "k": "wb_club_order_count",
+       "label": "WB Клуб: заказы",
+       "def": false
+      },
+      {
+       "k": "wb_club_order_sum",
+       "label": "WB Клуб: заказы, руб",
+       "def": false
+      },
+      {
+       "k": "wb_club_buyout_count",
+       "label": "WB Клуб: выкупы",
+       "def": false
+      },
+      {
+       "k": "wb_club_buyout_sum",
+       "label": "WB Клуб: выкупы, руб",
+       "def": false
+      },
+      {
+       "k": "wb_club_cancel_count",
+       "label": "WB Клуб: отмены",
+       "def": false
+      },
+      {
+       "k": "wb_club_cancel_sum",
+       "label": "WB Клуб: отмены, руб",
+       "def": false
+      },
+      {
+       "k": "wb_club_avg_price",
+       "label": "WB Клуб: ср. цена",
+       "def": false
+      },
+      {
+       "k": "wb_club_buyout_percent",
+       "label": "WB Клуб: выкуп, %",
+       "def": false
+      },
+      {
+       "k": "wb_club_avg_orders_per_day",
+       "label": "WB Клуб: заказов в день",
+       "def": false
+      },
+      {
+       "k": "past_views",
+       "label": "Пред. период: просмотры",
+       "def": false
+      },
+      {
+       "k": "past_adds",
+       "label": "Пред. период: в корзину",
+       "def": false
+      },
+      {
+       "k": "past_orders",
+       "label": "Пред. период: заказы",
+       "def": false
+      },
+      {
+       "k": "past_cancelled",
+       "label": "Пред. период: отмены",
+       "def": false
+      },
+      {
+       "k": "past_buyouts",
+       "label": "Пред. период: выкупы",
+       "def": false
+      },
+      {
+       "k": "past_revenue",
+       "label": "Пред. период: выручка",
+       "def": false
+      },
+      {
+       "k": "past_buyout_sum",
+       "label": "Пред. период: выкуп, руб",
+       "def": false
+      },
+      {
+       "k": "past_cancel_sum",
+       "label": "Пред. период: отмены, руб",
+       "def": false
+      },
+      {
+       "k": "past_avg_price",
+       "label": "Пред. период: ср. цена",
+       "def": false
+      },
+      {
+       "k": "dy_views",
+       "label": "Динамика просмотров, %",
+       "def": false
+      },
+      {
+       "k": "dy_adds",
+       "label": "Динамика корзины, %",
+       "def": false
+      },
+      {
+       "k": "dy_orders",
+       "label": "Динамика заказов, %",
+       "def": false
+      },
+      {
+       "k": "dy_cancelled",
+       "label": "Динамика отмен, %",
+       "def": false
+      },
+      {
+       "k": "dy_buyouts",
+       "label": "Динамика выкупов, %",
+       "def": false
+      },
+      {
+       "k": "dy_revenue",
+       "label": "Динамика выручки, %",
+       "def": false
+      },
+      {
+       "k": "dy_avg_price",
+       "label": "Динамика ср. цены, %",
+       "def": false
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_margin_funnel"
+   ]
+  },
+  "margin-detail": {
+   "storageKey": "marginDetailCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "returns_qty",
+       "label": "Возвращено, шт",
+       "def": false
+      },
+      {
+       "k": "stock_qty",
+       "label": "Остаток, шт",
+       "def": true
+      },
+      {
+       "k": "stock_total",
+       "label": "Остаток всего, шт",
+       "def": true
+      },
+      {
+       "k": "stock_in_way",
+       "label": "В пути, шт",
+       "def": true
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "commission",
+       "label": "Комиссия",
+       "def": true
+      },
+      {
+       "k": "logistics",
+       "label": "Логистика",
+       "def": true
+      },
+      {
+       "k": "logistics_out",
+       "label": "Логистика туда",
+       "def": false
+      },
+      {
+       "k": "logistics_in",
+       "label": "Логистика обратно",
+       "def": false
+      },
+      {
+       "k": "storage",
+       "label": "Хранение (оц)",
+       "def": true
+      },
+      {
+       "k": "services",
+       "label": "Услуги",
+       "def": true
+      },
+      {
+       "k": "income",
+       "label": "К перечислению",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": true
+      },
+      {
+       "k": "margin_gross",
+       "label": "Маржа, до себестоимости",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Прибыль на ед.",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Прибыль, %",
+       "def": true
+      },
+      {
+       "k": "margin_pct_income",
+       "label": "Прибыль % (к перечисл.)",
+       "def": true
+      },
+      {
+       "k": "commission_per_one",
+       "label": "Комиссия/ед.",
+       "def": false
+      },
+      {
+       "k": "logistics_per_one",
+       "label": "Логистика/ед.",
+       "def": false
+      },
+      {
+       "k": "logistics_out_per_one",
+       "label": "Логистика туда/ед.",
+       "def": false
+      },
+      {
+       "k": "logistics_in_per_one",
+       "label": "Логистика обратно/ед.",
+       "def": false
+      },
+      {
+       "k": "storage_per_one",
+       "label": "Хранение/ед.",
+       "def": false
+      },
+      {
+       "k": "income_per_one",
+       "label": "К перечисл./ед.",
+       "def": false
+      },
+      {
+       "k": "revenue_per_one",
+       "label": "Средняя цена",
+       "def": false
+      },
+      {
+       "k": "margin_gross_per_one",
+       "label": "Маржа до себест./ед.",
+       "def": false
+      },
+      {
+       "k": "return_rate",
+       "label": "Доля возвратов, %",
+       "def": false
+      },
+      {
+       "k": "net_cost_est",
+       "label": "Себестоимость оценка",
+       "def": false
+      },
+      {
+       "k": "sells_pp",
+       "label": "Пред. период: Продано, шт",
+       "def": false
+      },
+      {
+       "k": "margin_pp",
+       "label": "Пред. период: Прибыль, руб",
+       "def": false
+      },
+      {
+       "k": "delta_ru",
+       "label": "Δ прибыли, руб",
+       "def": false
+      },
+      {
+       "k": "delta_pct",
+       "label": "Δ прибыли, %",
+       "def": false
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_margin_detail"
+   ]
+  },
+  "margin-ozon-detail": {
+   "storageKey": "marginOzonDetailCols",
+   "pinnable": true,
+   "modes": {
+    "base": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": false
+      },
+      {
+       "k": "sizes_count",
+       "label": "Размеров",
+       "def": true
+      },
+      {
+       "k": "offers_count",
+       "label": "Артикулов",
+       "def": false
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "returns_qty",
+       "label": "Возвращено, шт",
+       "def": false
+      },
+      {
+       "k": "postings",
+       "label": "Постинги",
+       "def": false
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "amount",
+       "label": "Сумма продажи",
+       "def": false
+      },
+      {
+       "k": "commission",
+       "label": "Комиссия",
+       "def": true
+      },
+      {
+       "k": "services",
+       "label": "Услуги",
+       "def": false
+      },
+      {
+       "k": "income",
+       "label": "К перечислению",
+       "def": true
+      },
+      {
+       "k": "cashflow_est",
+       "label": "На р/с (оценка)",
+       "def": true
+      },
+      {
+       "k": "accrued_sale",
+       "label": "Начисл.: продажа",
+       "def": false
+      },
+      {
+       "k": "accrued_commission",
+       "label": "Начисл.: комиссия",
+       "def": false
+      },
+      {
+       "k": "accrued_logistics",
+       "label": "Начисл.: логистика",
+       "def": false
+      },
+      {
+       "k": "accrued_services",
+       "label": "Начисл.: услуги",
+       "def": false
+      },
+      {
+       "k": "accrued_other",
+       "label": "Начисл.: прочее",
+       "def": false
+      },
+      {
+       "k": "accrued_net",
+       "label": "На р/с (нач.)",
+       "def": false
+      },
+      {
+       "k": "accrued_diff",
+       "label": "Δ нач. vs дет.",
+       "def": false
+      },
+      {
+       "k": "margin_accrued",
+       "label": "Прибыль (нач.)",
+       "def": true
+      },
+      {
+       "k": "has_detail",
+       "label": "Детализация",
+       "def": true
+      },
+      {
+       "k": "storage",
+       "label": "Хранение",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": false
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Прибыль на ед.",
+       "def": false
+      },
+      {
+       "k": "margin_pct",
+       "label": "Прибыль, %",
+       "def": true
+      },
+      {
+       "k": "commission_per_one",
+       "label": "Комиссия/ед.",
+       "def": false
+      },
+      {
+       "k": "services_per_one",
+       "label": "Услуги/ед.",
+       "def": false
+      },
+      {
+       "k": "income_per_one",
+       "label": "К перечисл./ед.",
+       "def": false
+      },
+      {
+       "k": "revenue_per_one",
+       "label": "Средняя цена",
+       "def": false
+      },
+      {
+       "k": "return_rate",
+       "label": "Доля возвратов, %",
+       "def": false
+      },
+      {
+       "k": "accrued_coverage",
+       "label": "Есть начисления",
+       "def": false
+      },
+      {
+       "k": "margin_gross",
+       "label": "Маржа, до себестоимости, руб",
+       "def": false
+      },
+      {
+       "k": "net_cost_est",
+       "label": "Себестоимость оценка",
+       "def": false
+      },
+      {
+       "k": "storage_per_one",
+       "label": "Хранение на ед., руб",
+       "def": false
+      },
+      {
+       "k": "sells_pp",
+       "label": "Пред. период: Продано, шт",
+       "def": false
+      },
+      {
+       "k": "margin_pp",
+       "label": "Пред. период: Прибыль, руб",
+       "def": false
+      },
+      {
+       "k": "delta_ru",
+       "label": "Δ прибыли, руб",
+       "def": false
+      },
+      {
+       "k": "delta_pct",
+       "label": "Δ прибыли, %",
+       "def": false
+      }
+     ]
+    },
+    "size": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "sizes_count",
+       "label": "Размеров",
+       "def": false
+      },
+      {
+       "k": "offers_count",
+       "label": "Артикулов",
+       "def": false
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": true
+      },
+      {
+       "k": "returns_qty",
+       "label": "Возвращено, шт",
+       "def": false
+      },
+      {
+       "k": "postings",
+       "label": "Постинги",
+       "def": false
+      },
+      {
+       "k": "revenue",
+       "label": "Выручка",
+       "def": true
+      },
+      {
+       "k": "amount",
+       "label": "Сумма продажи",
+       "def": false
+      },
+      {
+       "k": "commission",
+       "label": "Комиссия",
+       "def": true
+      },
+      {
+       "k": "services",
+       "label": "Услуги",
+       "def": false
+      },
+      {
+       "k": "income",
+       "label": "К перечислению",
+       "def": true
+      },
+      {
+       "k": "cashflow_est",
+       "label": "На р/с (оценка)",
+       "def": true
+      },
+      {
+       "k": "accrued_sale",
+       "label": "Начисл.: продажа",
+       "def": false
+      },
+      {
+       "k": "accrued_commission",
+       "label": "Начисл.: комиссия",
+       "def": false
+      },
+      {
+       "k": "accrued_logistics",
+       "label": "Начисл.: логистика",
+       "def": false
+      },
+      {
+       "k": "accrued_services",
+       "label": "Начисл.: услуги",
+       "def": false
+      },
+      {
+       "k": "accrued_other",
+       "label": "Начисл.: прочее",
+       "def": false
+      },
+      {
+       "k": "accrued_net",
+       "label": "На р/с (нач.)",
+       "def": false
+      },
+      {
+       "k": "accrued_diff",
+       "label": "Δ нач. vs дет.",
+       "def": false
+      },
+      {
+       "k": "margin_accrued",
+       "label": "Прибыль (нач.)",
+       "def": true
+      },
+      {
+       "k": "has_detail",
+       "label": "Детализация",
+       "def": true
+      },
+      {
+       "k": "storage",
+       "label": "Хранение",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": false
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Прибыль на ед.",
+       "def": false
+      },
+      {
+       "k": "margin_pct",
+       "label": "Прибыль, %",
+       "def": true
+      },
+      {
+       "k": "commission_per_one",
+       "label": "Комиссия/ед.",
+       "def": false
+      },
+      {
+       "k": "services_per_one",
+       "label": "Услуги/ед.",
+       "def": false
+      },
+      {
+       "k": "income_per_one",
+       "label": "К перечисл./ед.",
+       "def": false
+      },
+      {
+       "k": "revenue_per_one",
+       "label": "Средняя цена",
+       "def": false
+      },
+      {
+       "k": "return_rate",
+       "label": "Доля возвратов, %",
+       "def": false
+      },
+      {
+       "k": "accrued_coverage",
+       "label": "Есть начисления",
+       "def": false
+      },
+      {
+       "k": "margin_gross",
+       "label": "Маржа, до себестоимости, руб",
+       "def": false
+      },
+      {
+       "k": "net_cost_est",
+       "label": "Себестоимость оценка",
+       "def": false
+      },
+      {
+       "k": "storage_per_one",
+       "label": "Хранение на ед., руб",
+       "def": false
+      },
+      {
+       "k": "sells_pp",
+       "label": "Пред. период: Продано, шт",
+       "def": false
+      },
+      {
+       "k": "margin_pp",
+       "label": "Пред. период: Прибыль, руб",
+       "def": false
+      },
+      {
+       "k": "delta_ru",
+       "label": "Δ прибыли, руб",
+       "def": false
+      },
+      {
+       "k": "delta_pct",
+       "label": "Δ прибыли, %",
+       "def": false
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "export_margin_ozon_detail"
+   ]
+  },
+  "replenish": {
+   "storageKey": "replenishCols",
+   "pinnable": true,
+   "modes": {
+    "article": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "actual_mp",
+       "label": "Карточка",
+       "def": true
+      },
+      {
+       "k": "status_label",
+       "label": "Статус",
+       "def": true
+      },
+      {
+       "k": "demand",
+       "label": "Спрос, шт/д",
+       "def": true
+      },
+      {
+       "k": "demand_wb",
+       "label": "WB, шт/д",
+       "def": true
+      },
+      {
+       "k": "demand_oz",
+       "label": "Ozon, шт/д",
+       "def": true
+      },
+      {
+       "k": "wb_sells",
+       "label": "Продано WB, шт",
+       "def": true
+      },
+      {
+       "k": "return_rate",
+       "label": "Возвраты, %",
+       "def": true
+      },
+      {
+       "k": "our_stock",
+       "label": "У нас, шт",
+       "def": true
+      },
+      {
+       "k": "our_cost",
+       "label": "Себест-ть",
+       "def": true
+      },
+      {
+       "k": "wb_avail",
+       "label": "WB доступно",
+       "def": true
+      },
+      {
+       "k": "wb_in_way",
+       "label": "WB в пути",
+       "def": true
+      },
+      {
+       "k": "wb_doc",
+       "label": "WB, дн",
+       "def": true
+      },
+      {
+       "k": "wb_def",
+       "label": "WB дефицит",
+       "def": true
+      },
+      {
+       "k": "to_sort",
+       "label": "Дослать",
+       "def": true
+      },
+      {
+       "k": "oz_avail",
+       "label": "Ozon доступно",
+       "def": true
+      },
+      {
+       "k": "oz_in_way",
+       "label": "Ozon в пути",
+       "def": true
+      },
+      {
+       "k": "oz_doc",
+       "label": "Ozon, дн",
+       "def": true
+      },
+      {
+       "k": "oz_def",
+       "label": "Ozon дефицит",
+       "def": true
+      },
+      {
+       "k": "ship_wb",
+       "label": "Отгрузить WB",
+       "def": true
+      },
+      {
+       "k": "ship_oz",
+       "label": "Отгрузить Ozon",
+       "def": true
+      },
+      {
+       "k": "need_buy",
+       "label": "Купить у поставщика",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Маржа/шт",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Рент-сть, %",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Маржа, руб",
+       "def": true
+      },
+      {
+       "k": "sells",
+       "label": "Продано, шт",
+       "def": false
+      },
+      {
+       "k": "returns_qty",
+       "label": "Возвраты, шт",
+       "def": false
+      },
+      {
+       "k": "income",
+       "label": "К перечислению, руб",
+       "def": false
+      },
+      {
+       "k": "oz_qty",
+       "label": "Ozon склад, шт",
+       "def": false
+      },
+      {
+       "k": "wb_qty",
+       "label": "WB склад, шт",
+       "def": false
+      }
+     ]
+    },
+    "sizes": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Штрихкод",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "actual_mp",
+       "label": "Карточка",
+       "def": true
+      },
+      {
+       "k": "status_label",
+       "label": "Статус",
+       "def": true
+      },
+      {
+       "k": "wb_sells",
+       "label": "Продано WB",
+       "def": true
+      },
+      {
+       "k": "wb_vel",
+       "label": "Спрос WB, шт/д",
+       "def": true
+      },
+      {
+       "k": "wb_avail",
+       "label": "WB доступно",
+       "def": true
+      },
+      {
+       "k": "wb_in_way",
+       "label": "WB в пути",
+       "def": true
+      },
+      {
+       "k": "wb_doc",
+       "label": "WB, дн",
+       "def": true
+      },
+      {
+       "k": "wb_def",
+       "label": "WB дефицит",
+       "def": true
+      },
+      {
+       "k": "to_sort",
+       "label": "Дослать",
+       "def": true
+      },
+      {
+       "k": "ship_wb",
+       "label": "Отгрузить WB",
+       "def": true
+      },
+      {
+       "k": "our_stock",
+       "label": "У нас, шт",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Маржа/шт",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Рент-сть, %",
+       "def": true
+      },
+      {
+       "k": "wb_net",
+       "label": "Продажи WB нетто, шт",
+       "def": false
+      },
+      {
+       "k": "wb_ret",
+       "label": "Возвраты WB, шт",
+       "def": false
+      },
+      {
+       "k": "wb_qty",
+       "label": "WB склад, шт",
+       "def": false
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "_REPLENISH_EXPORT",
+    "_REPLENISH_EXPORT_SIZES"
+   ]
+  },
+  "pricing": {
+   "storageKey": "pricingCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
+       "k": "target_discount",
+       "label": "Целевая скидка, %",
+       "def": true
+      },
+      {
+       "k": "current_discount",
+       "label": "Скидка сейчас, %",
+       "def": true
+      },
+      {
+       "k": "delta_discount",
+       "label": "Дельта скидки",
+       "def": true
+      },
+      {
+       "k": "target_vis",
+       "label": "Целевая цена, руб",
+       "def": true
+      },
+      {
+       "k": "margin_per_one",
+       "label": "Прибыль/шт, руб",
+       "def": true
+      },
+      {
+       "k": "current_vis",
+       "label": "Цена сейчас, руб",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": true
+      },
+      {
+       "k": "avg_price",
+       "label": "Ср. цена факт, руб",
+       "def": true
+      },
+      {
+       "k": "stock",
+       "label": "Остаток",
+       "def": true
+      },
+      {
+       "k": "buyouts",
+       "label": "Выкупы, шт",
+       "def": true
+      },
+      {
+       "k": "backlog",
+       "label": "В корзине",
+       "def": true
+      },
+      {
+       "k": "conv_pct",
+       "label": "Конверсия, %",
+       "def": true
+      },
+      {
+       "k": "margin_pct",
+       "label": "Маржа факт, % от выручки",
+       "def": true
+      },
+      {
+       "k": "product_rating",
+       "label": "Рейтинг товара",
+       "def": true
+      },
+      {
+       "k": "action",
+       "label": "Решение",
+       "def": true
+      },
+      {
+       "k": "reason",
+       "label": "Причина",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": false
+      },
+      {
+       "k": "stock_wb",
+       "label": "Остаток WB",
+       "def": false
+      },
+      {
+       "k": "doc",
+       "label": "DOC, дн",
+       "def": false
+      },
+      {
+       "k": "velocity",
+       "label": "v, шт/дн",
+       "def": false
+      },
+      {
+       "k": "trend",
+       "label": "Тренд",
+       "def": false
+      },
+      {
+       "k": "conv_buyout_percent",
+       "label": "Конв. выкупа, %",
+       "def": false
+      },
+      {
+       "k": "cancel_sum",
+       "label": "Отмены, руб",
+       "def": false
+      },
+      {
+       "k": "add_to_wishlist",
+       "label": "В избранное",
+       "def": false
+      },
+      {
+       "k": "return_rate",
+       "label": "Возвраты, %",
+       "def": false
+      },
+      {
+       "k": "margin_pct_at_target",
+       "label": "Маржа при цели, %",
+       "def": false
+      },
+      {
+       "k": "revenue_per_one",
+       "label": "Ср. чек, руб",
+       "def": false
+      },
+      {
+       "k": "income_per_one",
+       "label": "К переч./шт, руб",
+       "def": false
+      },
+      {
+       "k": "commission_per_one",
+       "label": "Комиссия/шт, руб",
+       "def": false
+      },
+      {
+       "k": "logistics_per_one",
+       "label": "Логистика/шт, руб",
+       "def": false
+      },
+      {
+       "k": "storage_per_one",
+       "label": "Хранение/шт, руб",
+       "def": false
+      },
+      {
+       "k": "promo_count",
+       "label": "Акций WB",
+       "def": false
+      },
+      {
+       "k": "promo_names",
+       "label": "Акции WB",
+       "def": false
+      },
+      {
+       "k": "promo_part_pct",
+       "label": "Участие в акции, %",
+       "def": false
+      },
+      {
+       "k": "promo_tier_pct",
+       "label": "Доля для след. буста, %",
+       "def": false
+      },
+      {
+       "k": "promo_tier_boost",
+       "label": "Буст след. ступени",
+       "def": false
+      },
+      {
+       "k": "promo_need_rows",
+       "label": "Надо в акцию, шт",
+       "def": false
+      },
+      {
+       "k": "promo_cap_pct",
+       "label": "Потолок промо, %",
+       "def": false
+      },
+      {
+       "k": "promo_push_applied",
+       "label": "Разгружен",
+       "def": false
+      },
+      {
+       "k": "promo_delta_discount",
+       "label": "Вклад разгрузки, п.п.",
+       "def": false
+      },
+      {
+       "k": "promo_score",
+       "label": "Оценка",
+       "def": false
+      },
+      {
+       "k": "promo_score_confidence",
+       "label": "Полнота оценки",
+       "def": false
+      },
+      {
+       "k": "last_sale_days_ago",
+       "label": "Дней без продаж",
+       "def": false
+      },
+      {
+       "k": "price",
+       "label": "Цена базовая, руб",
+       "def": false
+      },
+      {
+       "k": "floor_price",
+       "label": "Пол (break-even), руб",
+       "def": false
+      },
+      {
+       "k": "eff",
+       "label": "База расчёта, руб",
+       "def": false
+      },
+      {
+       "k": "max_discount_item",
+       "label": "Макс. скидка, %",
+       "def": false
+      },
+      {
+       "k": "status",
+       "label": "Статус",
+       "def": false
+      },
+      {
+       "k": "replenishable",
+       "label": "Докупаемый",
+       "def": false
+      },
+      {
+       "k": "detail_sells",
+       "label": "Продано в детализации, шт",
+       "def": false
+      },
+      {
+       "k": "detail_returns_qty",
+       "label": "Возвращено в детализации, шт",
+       "def": false
+      }
+     ]
+    }
+   },
+   "groups": [
+    {
+     "title": "Товар",
+     "keys": [
+      "article",
+      "nm_id",
+      "name",
+      "product_rating",
+      "replenishable"
+     ]
+    },
+    {
+     "title": "Цена и скидка",
+     "keys": [
+      "current_discount",
+      "current_vis",
+      "target_discount",
+      "target_vis",
+      "margin_per_one",
+      "delta_discount",
+      "avg_price",
+      "margin_pct_at_target",
+      "price",
+      "floor_price",
+      "eff",
+      "max_discount_item"
+     ]
+    },
+    {
+     "title": "Запасы и продажи",
+     "keys": [
+      "stock",
+      "stock_wb",
+      "doc",
+      "velocity",
+      "trend",
+      "buyouts",
+      "conv_buyout_percent",
+      "cancel_sum",
+      "add_to_wishlist",
+      "return_rate",
+      "detail_sells",
+      "detail_returns_qty"
+     ]
+    },
+    {
+     "title": "Воронка и конверсия",
+     "keys": [
+      "backlog",
+      "conv_pct"
+     ]
+    },
+    {
+     "title": "Экономика на единицу",
+     "keys": [
+      "margin_pct",
+      "net_cost",
+      "revenue_per_one",
+      "income_per_one",
+      "commission_per_one",
+      "logistics_per_one",
+      "storage_per_one"
+     ]
+    },
+    {
+     "title": "Акции WB",
+     "keys": [
+      "promo_count",
+      "promo_names",
+      "promo_part_pct",
+      "promo_tier_pct",
+      "promo_tier_boost",
+      "promo_need_rows",
+      "promo_cap_pct",
+      "promo_push_applied",
+      "promo_delta_discount",
+      "promo_score",
+      "promo_score_confidence",
+      "last_sale_days_ago"
+     ]
+    },
+    {
+     "title": "Решение",
+     "keys": [
+      "action",
+      "reason",
+      "status"
+     ]
+    }
+   ],
+   "exportDicts": [
+    "pricing_export"
+   ]
+  }
+ },
+ "dicts": {
+  "export_margin_detail": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "sells",
+    "label": "Продано, шт"
+   },
+   {
+    "k": "returns_qty",
+    "label": "Возвращено, шт"
+   },
+   {
+    "k": "stock_qty",
+    "label": "Остаток, шт"
+   },
+   {
+    "k": "stock_total",
+    "label": "Остаток всего, шт"
+   },
+   {
+    "k": "stock_in_way",
+    "label": "В пути, шт"
+   },
+   {
+    "k": "revenue",
+    "label": "Выручка"
+   },
+   {
+    "k": "commission",
+    "label": "Комиссия"
+   },
+   {
+    "k": "logistics",
+    "label": "Логистика"
+   },
+   {
+    "k": "storage",
+    "label": "Хранение (оц)"
+   },
+   {
+    "k": "services",
+    "label": "Услуги"
+   },
+   {
+    "k": "income",
+    "label": "К перечислению"
+   },
+   {
+    "k": "net_cost",
+    "label": "Себестоимость"
+   },
+   {
+    "k": "margin_gross",
+    "label": "Маржа, до себестоимости"
+   },
+   {
+    "k": "margin",
+    "label": "Прибыль"
+   },
+   {
+    "k": "margin_per_one",
+    "label": "Прибыль на ед."
+   },
+   {
+    "k": "margin_pct",
+    "label": "Прибыль, %"
+   },
+   {
+    "k": "margin_pct_income",
+    "label": "Прибыль % (к перечисл.)"
+   },
+   {
+    "k": "net_cost_est",
+    "label": "Себестоимость оценка"
+   },
+   {
+    "k": "sells_pp",
+    "label": "Пред. период: Продано, шт"
+   },
+   {
+    "k": "margin_pp",
+    "label": "Пред. период: Прибыль, руб"
+   },
+   {
+    "k": "delta_ru",
+    "label": "Δ прибыли, руб"
+   },
+   {
+    "k": "delta_pct",
+    "label": "Δ прибыли, %"
+   },
+   {
+    "k": "logistics_out",
+    "label": "Логистика туда"
+   },
+   {
+    "k": "logistics_in",
+    "label": "Логистика обратно"
+   },
+   {
+    "k": "commission_per_one",
+    "label": "Комиссия/ед."
+   },
+   {
+    "k": "logistics_per_one",
+    "label": "Логистика/ед."
+   },
+   {
+    "k": "logistics_out_per_one",
+    "label": "Логистика туда/ед."
+   },
+   {
+    "k": "logistics_in_per_one",
+    "label": "Логистика обратно/ед."
+   },
+   {
+    "k": "storage_per_one",
+    "label": "Хранение/ед."
+   },
+   {
+    "k": "income_per_one",
+    "label": "К перечисл./ед."
+   },
+   {
+    "k": "revenue_per_one",
+    "label": "Средняя цена"
+   },
+   {
+    "k": "margin_gross_per_one",
+    "label": "Маржа до себест./ед."
+   },
+   {
+    "k": "return_rate",
+    "label": "Доля возвратов, %"
+   }
+  ],
+  "export_margin_funnel": [
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "views",
+    "label": "Просмотры"
+   },
+   {
+    "k": "opens",
+    "label": "Открытия"
+   },
+   {
+    "k": "adds",
+    "label": "В корзину"
+   },
+   {
+    "k": "orders",
+    "label": "Заказы"
+   },
+   {
+    "k": "cancelled",
+    "label": "Отмены"
+   },
+   {
+    "k": "buyouts",
+    "label": "Выкупы"
+   },
+   {
+    "k": "avg_price",
+    "label": "Ср. цена"
+   },
+   {
+    "k": "revenue",
+    "label": "Выручка (оценка)"
+   },
+   {
+    "k": "cart_pct",
+    "label": "В корзину, %"
+   },
+   {
+    "k": "order_pct",
+    "label": "Заказы, %"
+   },
+   {
+    "k": "net_cost",
+    "label": "Себестоимость"
+   },
+   {
+    "k": "margin",
+    "label": "Маржа (оц.)"
+   },
+   {
+    "k": "margin_pct",
+    "label": "Маржа, %"
+   },
+   {
+    "k": "storage_est",
+    "label": "Хранение (оц.)"
+   },
+   {
+    "k": "buyout_sum",
+    "label": "Сумма выкупов, руб"
+   },
+   {
+    "k": "subject_name",
+    "label": "Предмет"
+   },
+   {
+    "k": "brand_name",
+    "label": "Бренд"
+   },
+   {
+    "k": "product_rating",
+    "label": "Рейтинг товара"
+   },
+   {
+    "k": "feedback_rating",
+    "label": "Рейтинг отзывов"
+   },
+   {
+    "k": "stock_wb",
+    "label": "Остаток WB, шт"
+   },
+   {
+    "k": "stock_mp",
+    "label": "Остаток МП, шт"
+   },
+   {
+    "k": "stock_balance_sum",
+    "label": "Остаток (баланс), руб"
+   },
+   {
+    "k": "cancel_sum",
+    "label": "Отмены, руб"
+   },
+   {
+    "k": "avg_orders_per_day",
+    "label": "Заказов в день"
+   },
+   {
+    "k": "share_order_percent",
+    "label": "Доля заказов, %"
+   },
+   {
+    "k": "add_to_wishlist",
+    "label": "В избранное"
+   },
+   {
+    "k": "time_to_ready_min",
+    "label": "До готовности, мин"
+   },
+   {
+    "k": "localization_percent",
+    "label": "Локализация, %"
+   },
+   {
+    "k": "conv_to_cart_percent",
+    "label": "В корзину (воронка WB), %"
+   },
+   {
+    "k": "conv_cart_to_order_percent",
+    "label": "Корзина→Заказ, %"
+   },
+   {
+    "k": "conv_buyout_percent",
+    "label": "Выкуп, %"
+   },
+   {
+    "k": "wb_club_order_count",
+    "label": "WB Клуб: заказы"
+   },
+   {
+    "k": "wb_club_order_sum",
+    "label": "WB Клуб: заказы, руб"
+   },
+   {
+    "k": "wb_club_buyout_count",
+    "label": "WB Клуб: выкупы"
+   },
+   {
+    "k": "wb_club_buyout_sum",
+    "label": "WB Клуб: выкупы, руб"
+   },
+   {
+    "k": "wb_club_cancel_count",
+    "label": "WB Клуб: отмены"
+   },
+   {
+    "k": "wb_club_cancel_sum",
+    "label": "WB Клуб: отмены, руб"
+   },
+   {
+    "k": "wb_club_avg_price",
+    "label": "WB Клуб: ср. цена"
+   },
+   {
+    "k": "wb_club_buyout_percent",
+    "label": "WB Клуб: выкуп, %"
+   },
+   {
+    "k": "wb_club_avg_orders_per_day",
+    "label": "WB Клуб: заказов в день"
+   },
+   {
+    "k": "title",
+    "label": "Название из воронки"
+   },
+   {
+    "k": "subject_id",
+    "label": "ID предмета"
+   },
+   {
+    "k": "tags",
+    "label": "Теги"
+   },
+   {
+    "k": "past_views",
+    "label": "Пред. период: просмотры"
+   },
+   {
+    "k": "past_adds",
+    "label": "Пред. период: в корзину"
+   },
+   {
+    "k": "past_orders",
+    "label": "Пред. период: заказы"
+   },
+   {
+    "k": "past_cancelled",
+    "label": "Пред. период: отмены"
+   },
+   {
+    "k": "past_buyouts",
+    "label": "Пред. период: выкупы"
+   },
+   {
+    "k": "past_revenue",
+    "label": "Пред. период: выручка"
+   },
+   {
+    "k": "past_buyout_sum",
+    "label": "Пред. период: выкуп, руб"
+   },
+   {
+    "k": "past_cancel_sum",
+    "label": "Пред. период: отмены, руб"
+   },
+   {
+    "k": "past_avg_price",
+    "label": "Пред. период: ср. цена"
+   },
+   {
+    "k": "dy_views",
+    "label": "Динамика просмотров, %"
+   },
+   {
+    "k": "dy_adds",
+    "label": "Динамика корзины, %"
+   },
+   {
+    "k": "dy_orders",
+    "label": "Динамика заказов, %"
+   },
+   {
+    "k": "dy_cancelled",
+    "label": "Динамика отмен, %"
+   },
+   {
+    "k": "dy_buyouts",
+    "label": "Динамика выкупов, %"
+   },
+   {
+    "k": "dy_revenue",
+    "label": "Динамика выручки, %"
+   },
+   {
+    "k": "dy_avg_price",
+    "label": "Динамика ср. цены, %"
+   }
+  ],
+  "export_margin_ozon_detail": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "sizes_count",
+    "label": "Размеров"
+   },
+   {
+    "k": "offers_count",
+    "label": "Артикулов"
+   },
+   {
+    "k": "sells",
+    "label": "Продано, шт"
+   },
+   {
+    "k": "returns_qty",
+    "label": "Возвращено, шт"
+   },
+   {
+    "k": "postings",
+    "label": "Постинги"
+   },
+   {
+    "k": "revenue",
+    "label": "Выручка"
+   },
+   {
+    "k": "commission",
+    "label": "Комиссия"
+   },
+   {
+    "k": "services",
+    "label": "Услуги"
+   },
+   {
+    "k": "income",
+    "label": "К перечислению"
+   },
+   {
+    "k": "cashflow_est",
+    "label": "На р/с (оценка)"
+   },
+   {
+    "k": "storage",
+    "label": "Хранение"
+   },
+   {
+    "k": "net_cost",
+    "label": "Себестоимость"
+   },
+   {
+    "k": "margin",
+    "label": "Прибыль"
+   },
+   {
+    "k": "margin_gross",
+    "label": "Маржа, до себестоимости, руб"
+   },
+   {
+    "k": "net_cost_est",
+    "label": "Себестоимость оценка"
+   },
+   {
+    "k": "margin_per_one",
+    "label": "Прибыль на ед."
+   },
+   {
+    "k": "margin_pct",
+    "label": "Прибыль, %"
+   },
+   {
+    "k": "amount",
+    "label": "Сумма продажи"
+   },
+   {
+    "k": "sells_pp",
+    "label": "Пред. период: Продано, шт"
+   },
+   {
+    "k": "margin_pp",
+    "label": "Пред. период: Прибыль, руб"
+   },
+   {
+    "k": "delta_ru",
+    "label": "Δ прибыли, руб"
+   },
+   {
+    "k": "delta_pct",
+    "label": "Δ прибыли, %"
+   },
+   {
+    "k": "commission_per_one",
+    "label": "Комиссия/ед."
+   },
+   {
+    "k": "services_per_one",
+    "label": "Услуги/ед."
+   },
+   {
+    "k": "storage_per_one",
+    "label": "Хранение на ед., руб"
+   },
+   {
+    "k": "income_per_one",
+    "label": "К перечисл./ед."
+   },
+   {
+    "k": "revenue_per_one",
+    "label": "Средняя цена"
+   },
+   {
+    "k": "return_rate",
+    "label": "Доля возвратов, %"
+   },
+   {
+    "k": "accrued_sale",
+    "label": "Начисл.: продажа"
+   },
+   {
+    "k": "accrued_commission",
+    "label": "Начисл.: комиссия"
+   },
+   {
+    "k": "accrued_logistics",
+    "label": "Начисл.: логистика"
+   },
+   {
+    "k": "accrued_services",
+    "label": "Начисл.: услуги"
+   },
+   {
+    "k": "accrued_other",
+    "label": "Начисл.: прочее"
+   },
+   {
+    "k": "accrued_net",
+    "label": "На р/с (нач.)"
+   },
+   {
+    "k": "accrued_diff",
+    "label": "Δ нач. vs дет."
+   },
+   {
+    "k": "accrued_coverage",
+    "label": "Есть начисления"
+   },
+   {
+    "k": "has_detail",
+    "label": "Детализация"
+   },
+   {
+    "k": "margin_accrued",
+    "label": "Прибыль (нач.)"
+   }
+  ],
+  "export_products": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "brand",
+    "label": "Бренд"
+   },
+   {
+    "k": "subject",
+    "label": "Предмет"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "sizes_count",
+    "label": "Размеров"
+   },
+   {
+    "k": "barcode",
+    "label": "Баркод"
+   },
+   {
+    "k": "volume_l",
+    "label": "Объём, л"
+   },
+   {
+    "k": "composition",
+    "label": "Состав"
+   },
+   {
+    "k": "net_cost",
+    "label": "Себестоимость"
+   },
+   {
+    "k": "replenishable",
+    "label": "Докупаемый"
+   },
+   {
+    "k": "tags",
+    "label": "Маркетплейсы"
+   },
+   {
+    "k": "own_stock",
+    "label": "Свой склад"
+   },
+   {
+    "k": "mp_stock",
+    "label": "Остаток МП"
+   },
+   {
+    "k": "recommended_price",
+    "label": "Рекомендуемая цена"
+   },
+   {
+    "k": "min_price",
+    "label": "Мин. цена"
+   },
+   {
+    "k": "markup",
+    "label": "Наценка, %"
+   }
+  ],
+  "pricing_export": [
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "price",
+    "label": "Цена базовая, руб"
+   },
+   {
+    "k": "current_vis",
+    "label": "Цена сейчас, руб"
+   },
+   {
+    "k": "current_discount",
+    "label": "Скидка сейчас, %"
+   },
+   {
+    "k": "target_vis",
+    "label": "Целевая цена, руб"
+   },
+   {
+    "k": "target_discount",
+    "label": "Целевая скидка, %"
+   },
+   {
+    "k": "delta_discount",
+    "label": "Дельта скидки"
+   },
+   {
+    "k": "net_cost",
+    "label": "Себестоимость"
+   },
+   {
+    "k": "action",
+    "label": "Решение"
+   },
+   {
+    "k": "status",
+    "label": "Статус"
+   },
+   {
+    "k": "reason",
+    "label": "Причина"
+   },
+   {
+    "k": "doc",
+    "label": "DOC, дн"
+   },
+   {
+    "k": "velocity",
+    "label": "v, шт/дн"
+   },
+   {
+    "k": "trend",
+    "label": "Тренд"
+   },
+   {
+    "k": "conv_pct",
+    "label": "Конверсия, %"
+   },
+   {
+    "k": "backlog",
+    "label": "В корзине"
+   },
+   {
+    "k": "stock",
+    "label": "Остаток"
+   },
+   {
+    "k": "avg_price",
+    "label": "Ср. цена факт, руб"
+   },
+   {
+    "k": "eff",
+    "label": "База расчёта, руб"
+   },
+   {
+    "k": "floor_price",
+    "label": "Пол (break-even), руб"
+   },
+   {
+    "k": "max_discount_item",
+    "label": "Макс. скидка, %"
+   },
+   {
+    "k": "margin_pct_at_target",
+    "label": "Маржа при цели, %"
+   },
+   {
+    "k": "replenishable",
+    "label": "Докупаемый"
+   },
+   {
+    "k": "product_rating",
+    "label": "Рейтинг товара"
+   },
+   {
+    "k": "buyouts",
+    "label": "Выкупы, шт"
+   },
+   {
+    "k": "conv_buyout_percent",
+    "label": "Конв. выкупа, %"
+   },
+   {
+    "k": "cancel_sum",
+    "label": "Отмены, руб"
+   },
+   {
+    "k": "add_to_wishlist",
+    "label": "В избранное"
+   },
+   {
+    "k": "stock_wb",
+    "label": "Остаток WB"
+   },
+   {
+    "k": "return_rate",
+    "label": "Возвраты, %"
+   },
+   {
+    "k": "margin_pct",
+    "label": "Маржа факт, % от выручки"
+   },
+   {
+    "k": "margin_per_one",
+    "label": "Прибыль/шт, руб"
+   },
+   {
+    "k": "revenue_per_one",
+    "label": "Ср. чек, руб"
+   },
+   {
+    "k": "income_per_one",
+    "label": "К переч./шт, руб"
+   },
+   {
+    "k": "commission_per_one",
+    "label": "Комиссия/шт, руб"
+   },
+   {
+    "k": "logistics_per_one",
+    "label": "Логистика/шт, руб"
+   },
+   {
+    "k": "storage_per_one",
+    "label": "Хранение/шт, руб"
+   },
+   {
+    "k": "detail_sells",
+    "label": "Продано в детализации, шт"
+   },
+   {
+    "k": "detail_returns_qty",
+    "label": "Возвращено в детализации, шт"
+   },
+   {
+    "k": "promo_count",
+    "label": "Акций WB"
+   },
+   {
+    "k": "promo_names",
+    "label": "Акции WB"
+   },
+   {
+    "k": "promo_part_pct",
+    "label": "Участие в акции, %"
+   },
+   {
+    "k": "promo_tier_pct",
+    "label": "Доля для след. буста, %"
+   },
+   {
+    "k": "promo_tier_boost",
+    "label": "Буст след. ступени"
+   },
+   {
+    "k": "promo_need_rows",
+    "label": "Надо в акцию, шт"
+   },
+   {
+    "k": "promo_cap_pct",
+    "label": "Потолок промо, %"
+   },
+   {
+    "k": "promo_push_applied",
+    "label": "Разгружен"
+   },
+   {
+    "k": "promo_delta_discount",
+    "label": "Вклад разгрузки, п.п."
+   },
+   {
+    "k": "promo_score",
+    "label": "Оценка"
+   },
+   {
+    "k": "promo_score_confidence",
+    "label": "Полнота оценки"
+   },
+   {
+    "k": "last_sale_days_ago",
+    "label": "Дней без продаж"
+   }
+  ],
+  "export_wb_cards": [
+   {
+    "k": "chrt_id",
+    "label": "Код размера"
+   },
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "vendor_code",
+    "label": "Артикул продавца"
+   },
+   {
+    "k": "brand",
+    "label": "Бренд"
+   },
+   {
+    "k": "subject",
+    "label": "Предмет"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "barcode",
+    "label": "Баркод"
+   },
+   {
+    "k": "volume_l",
+    "label": "Объём, л."
+   },
+   {
+    "k": "composition",
+    "label": "Состав"
+   },
+   {
+    "k": "name",
+    "label": "Название"
+   }
+  ],
+  "export_wb_stock": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "marketplace",
+    "label": "Маркетплейс"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "warehouse",
+    "label": "Склад"
+   },
+   {
+    "k": "quantity",
+    "label": "Доступно"
+   },
+   {
+    "k": "quantity_full",
+    "label": "Всего на складах"
+   },
+   {
+    "k": "in_way",
+    "label": "В пути"
+   },
+   {
+    "k": "chrt_id",
+    "label": "Код размера"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "barcode",
+    "label": "Баркод"
+   }
+  ],
+  "export_wb_funnel": [
+   {
+    "k": "date_from",
+    "label": "С"
+   },
+   {
+    "k": "date_to",
+    "label": "По"
+   },
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Название"
+   },
+   {
+    "k": "subject_name",
+    "label": "Предмет"
+   },
+   {
+    "k": "brand_name",
+    "label": "Бренд"
+   },
+   {
+    "k": "product_rating",
+    "label": "Рейтинг карточки"
+   },
+   {
+    "k": "feedback_rating",
+    "label": "Рейтинг по отзывам"
+   },
+   {
+    "k": "views",
+    "label": "Просмотры"
+   },
+   {
+    "k": "opens",
+    "label": "Открытия"
+   },
+   {
+    "k": "adds",
+    "label": "В корзину"
+   },
+   {
+    "k": "orders",
+    "label": "Заказы"
+   },
+   {
+    "k": "cancelled",
+    "label": "Отмены"
+   },
+   {
+    "k": "cancel_sum",
+    "label": "Сумма отмен"
+   },
+   {
+    "k": "buyouts",
+    "label": "Выкупы"
+   },
+   {
+    "k": "avg_price",
+    "label": "Ср. цена"
+   },
+   {
+    "k": "revenue",
+    "label": "Выручка"
+   },
+   {
+    "k": "buyout_sum",
+    "label": "Сумма выкупа"
+   },
+   {
+    "k": "avg_orders_per_day",
+    "label": "Заказов в день"
+   },
+   {
+    "k": "share_order_percent",
+    "label": "Доля в выручке, %"
+   },
+   {
+    "k": "add_to_wishlist",
+    "label": "В отложенные"
+   },
+   {
+    "k": "time_to_ready_min",
+    "label": "Доставка, средн."
+   },
+   {
+    "k": "localization_percent",
+    "label": "Локальные, %"
+   },
+   {
+    "k": "conv_to_cart_percent",
+    "label": "Просмотр→Корзина, %"
+   },
+   {
+    "k": "conv_cart_to_order_percent",
+    "label": "Корзина→Заказ, %"
+   },
+   {
+    "k": "conv_buyout_percent",
+    "label": "Заказ→Выкуп, %"
+   },
+   {
+    "k": "wb_club_order_count",
+    "label": "WB Клуб: заказы"
+   },
+   {
+    "k": "wb_club_order_sum",
+    "label": "WB Клуб: заказы, ₽"
+   },
+   {
+    "k": "wb_club_buyout_count",
+    "label": "WB Клуб: выкупы"
+   },
+   {
+    "k": "wb_club_buyout_sum",
+    "label": "WB Клуб: выкупы, ₽"
+   },
+   {
+    "k": "wb_club_cancel_count",
+    "label": "WB Клуб: отмены"
+   },
+   {
+    "k": "wb_club_cancel_sum",
+    "label": "WB Клуб: отмены, ₽"
+   },
+   {
+    "k": "wb_club_avg_price",
+    "label": "WB Клуб: ср. цена"
+   },
+   {
+    "k": "wb_club_buyout_percent",
+    "label": "WB Клуб: % выкупа"
+   },
+   {
+    "k": "wb_club_avg_orders_per_day",
+    "label": "WB Клуб: заказов/день"
+   },
+   {
+    "k": "stock_wb",
+    "label": "Остатки WB"
+   },
+   {
+    "k": "stock_mp",
+    "label": "Остатки свой склад"
+   },
+   {
+    "k": "stock_balance_sum",
+    "label": "Сумма остатков"
+   },
+   {
+    "k": "title",
+    "label": "Название (API)"
+   },
+   {
+    "k": "subject_id",
+    "label": "ID предмета"
+   },
+   {
+    "k": "tags",
+    "label": "Теги"
+   },
+   {
+    "k": "past_views",
+    "label": "Просмотры (пред. период)"
+   },
+   {
+    "k": "past_adds",
+    "label": "В корзину (пред. период)"
+   },
+   {
+    "k": "past_orders",
+    "label": "Заказы (пред. период)"
+   },
+   {
+    "k": "past_cancelled",
+    "label": "Отмены (пред. период)"
+   },
+   {
+    "k": "past_buyouts",
+    "label": "Выкупы (пред. период)"
+   },
+   {
+    "k": "past_revenue",
+    "label": "Выручка (пред. период)"
+   },
+   {
+    "k": "past_buyout_sum",
+    "label": "Сумма выкупа (пред. период)"
+   },
+   {
+    "k": "past_cancel_sum",
+    "label": "Сумма отмен (пред. период)"
+   },
+   {
+    "k": "past_avg_price",
+    "label": "Ср. цена (пред. период)"
+   },
+   {
+    "k": "dy_views",
+    "label": "Динамика просмотров, %"
+   },
+   {
+    "k": "dy_adds",
+    "label": "Динамика «в корзину», %"
+   },
+   {
+    "k": "dy_orders",
+    "label": "Динамика заказов, %"
+   },
+   {
+    "k": "dy_cancelled",
+    "label": "Динамика отмен, %"
+   },
+   {
+    "k": "dy_buyouts",
+    "label": "Динамика выкупов, %"
+   },
+   {
+    "k": "dy_revenue",
+    "label": "Динамика выручки, %"
+   },
+   {
+    "k": "dy_avg_price",
+    "label": "Динамика ср. цены, %"
+   }
+  ],
+  "export_wb_prices": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "price",
+    "label": "Цена без скид."
+   },
+   {
+    "k": "discounted_price",
+    "label": "Цена со скид."
+   },
+   {
+    "k": "discount",
+    "label": "Скидка, %"
+   },
+   {
+    "k": "sizes",
+    "label": "Размеров"
+   },
+   {
+    "k": "disc_min",
+    "label": "Цена со скид."
+   },
+   {
+    "k": "price_min",
+    "label": "Цена без скид."
+   },
+   {
+    "k": "disc_min_p",
+    "label": "Скидка, %"
+   }
+  ],
+  "export_sales": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "marketplace",
+    "label": "Маркетплейс"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "quantity",
+    "label": "Продано, шт"
+   },
+   {
+    "k": "revenue",
+    "label": "Выручка"
+   },
+   {
+    "k": "income",
+    "label": "К перечислению"
+   }
+  ],
+  "export_wb_storage": [
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "barcodes_count",
+    "label": "Баркодов"
+   },
+   {
+    "k": "volume",
+    "label": "Объём, л"
+   },
+   {
+    "k": "storage_price",
+    "label": "Хранение за баркод"
+   },
+   {
+    "k": "warehouse_price",
+    "label": "Сумма хранения"
+   }
+  ],
+  "export_wb_detail_rows": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "title",
+    "label": "Наименование"
+   },
+   {
+    "k": "doc_type",
+    "label": "Тип документа"
+   },
+   {
+    "k": "quantity",
+    "label": "Кол-во"
+   },
+   {
+    "k": "retail_price",
+    "label": "Цена розничная"
+   },
+   {
+    "k": "retail_amount",
+    "label": "Реализовано"
+   },
+   {
+    "k": "commission",
+    "label": "КВВ"
+   },
+   {
+    "k": "for_pay",
+    "label": "К перечислению"
+   },
+   {
+    "k": "logistics",
+    "label": "Доставка"
+   },
+   {
+    "k": "storage",
+    "label": "Хранение"
+   },
+   {
+    "k": "services",
+    "label": "Услуги/штрафы"
+   },
+   {
+    "k": "office",
+    "label": "Склад"
+   },
+   {
+    "k": "srid",
+    "label": "SRID"
+   },
+   {
+    "k": "source",
+    "label": "Источник"
+   }
+  ],
+  "export_wb_detail_summary": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "title",
+    "label": "Наименование"
+   },
+   {
+    "k": "sells",
+    "label": "Продано, шт"
+   },
+   {
+    "k": "returns_qty",
+    "label": "Возвращено, шт"
+   },
+   {
+    "k": "revenue",
+    "label": "Реализовано"
+   },
+   {
+    "k": "commission",
+    "label": "КВВ"
+   },
+   {
+    "k": "for_pay",
+    "label": "К перечислению"
+   },
+   {
+    "k": "logistics",
+    "label": "Доставка"
+   },
+   {
+    "k": "delivery_count",
+    "label": "Доставок"
+   },
+   {
+    "k": "return_delivery_count",
+    "label": "Возврат доставок"
+   },
+   {
+    "k": "storage",
+    "label": "Хранение"
+   },
+   {
+    "k": "pvz_compensation",
+    "label": "ПВЗ-компенсации"
+   },
+   {
+    "k": "payment_services",
+    "label": "Платёжные услуги"
+   },
+   {
+    "k": "services",
+    "label": "Услуги/штрафы"
+   },
+   {
+    "k": "ops_count",
+    "label": "Операций"
+   },
+   {
+    "k": "sources",
+    "label": "Источник"
+   }
+  ],
+  "OZON_DETAIL_RU_COLUMNS": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "posting_number",
+    "label": "Постинг"
+   },
+   {
+    "k": "offer_id",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "sku",
+    "label": "SKU"
+   },
+   {
+    "k": "barcode",
+    "label": "Штрихкод"
+   },
+   {
+    "k": "quantity",
+    "label": "Кол-во"
+   },
+   {
+    "k": "seller_price",
+    "label": "Цена"
+   },
+   {
+    "k": "amount",
+    "label": "Сумма"
+   },
+   {
+    "k": "commission_ratio",
+    "label": "Доля комиссии"
+   },
+   {
+    "k": "commission",
+    "label": "Комиссия"
+   },
+   {
+    "k": "standard_fee",
+    "label": "Услуги"
+   },
+   {
+    "k": "income",
+    "label": "К перечислению"
+   },
+   {
+    "k": "return_qty",
+    "label": "Возврат, шт"
+   },
+   {
+    "k": "return_total",
+    "label": "Возврат, руб"
+   },
+   {
+    "k": "source",
+    "label": "Источник"
+   }
+  ],
+  "OZON_DETAIL_SUMMARY_RU_COLUMNS": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "sizes_count",
+    "label": "Размеров"
+   },
+   {
+    "k": "offers_count",
+    "label": "Артикулов"
+   },
+   {
+    "k": "sells",
+    "label": "Продано, шт"
+   },
+   {
+    "k": "returns_qty",
+    "label": "Возвращено, шт"
+   },
+   {
+    "k": "postings",
+    "label": "Постингов"
+   },
+   {
+    "k": "seller_total",
+    "label": "Продажи (цена×кол-во)"
+   },
+   {
+    "k": "amount",
+    "label": "Сумма"
+   },
+   {
+    "k": "commission",
+    "label": "Комиссия"
+   },
+   {
+    "k": "services",
+    "label": "Услуги"
+   },
+   {
+    "k": "income",
+    "label": "К перечислению"
+   },
+   {
+    "k": "ops_count",
+    "label": "Операций"
+   },
+   {
+    "k": "buyout_sum",
+    "label": "Сумма выкупов"
+   },
+   {
+    "k": "buyout_percent",
+    "label": "Выкуп, %"
+   },
+   {
+    "k": "storage",
+    "label": "Хранение"
+   }
+  ],
+  "OZON_ACCRUAL_RU_COLUMNS": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "accrual_id",
+    "label": "ID начисления"
+   },
+   {
+    "k": "bucket",
+    "label": "Корзина"
+   },
+   {
+    "k": "type_id",
+    "label": "Тип"
+   },
+   {
+    "k": "sku",
+    "label": "SKU"
+   },
+   {
+    "k": "offer_id",
+    "label": "Артикул"
+   },
+   {
+    "k": "unit_number",
+    "label": "Постинг"
+   },
+   {
+    "k": "quantity",
+    "label": "Кол-во"
+   },
+   {
+    "k": "amount",
+    "label": "Сумма"
+   },
+   {
+    "k": "seller_price",
+    "label": "Цена"
+   },
+   {
+    "k": "sale_price",
+    "label": "Цена покуп."
+   }
+  ],
+  "OZON_CASHFLOW_RU_COLUMNS": [
+   {
+    "k": "period_begin",
+    "label": "Период с"
+   },
+   {
+    "k": "period_end",
+    "label": "Период по"
+   },
+   {
+    "k": "begin_balance",
+    "label": "Баланс на начало"
+   },
+   {
+    "k": "payments_amount",
+    "label": "Выплаты на р/с"
+   },
+   {
+    "k": "delivery_total",
+    "label": "Логистика"
+   },
+   {
+    "k": "return_total",
+    "label": "Возвраты"
+   },
+   {
+    "k": "services_total",
+    "label": "Услуги"
+   },
+   {
+    "k": "others_total",
+    "label": "Прочее"
+   },
+   {
+    "k": "end_balance",
+    "label": "Баланс на конец"
+   }
+  ],
+  "OZON_PLACEMENT_RU_COLUMNS": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "sku",
+    "label": "SKU"
+   },
+   {
+    "k": "offer_id",
+    "label": "Артикул"
+   },
+   {
+    "k": "warehouse",
+    "label": "Склад"
+   },
+   {
+    "k": "paid_quantity",
+    "label": "Платных экз."
+   },
+   {
+    "k": "paid_volume",
+    "label": "Платный объём, мл"
+   },
+   {
+    "k": "storage",
+    "label": "Начислено"
+   }
+  ],
+  "OZON_PLACEMENT_SUMMARY_RU_COLUMNS": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "sizes_count",
+    "label": "Размеров"
+   },
+   {
+    "k": "offers_count",
+    "label": "Артикулов"
+   },
+   {
+    "k": "days",
+    "label": "Дней хранения"
+   },
+   {
+    "k": "paid_quantity",
+    "label": "Платных экз."
+   },
+   {
+    "k": "paid_volume",
+    "label": "Платный объём, мл"
+   },
+   {
+    "k": "storage",
+    "label": "Начислено"
+   },
+   {
+    "k": "ops_count",
+    "label": "Операций"
+   }
+  ],
+  "OZON_BUYOUT_RU_COLUMNS": [
+   {
+    "k": "posting_number",
+    "label": "Постинг"
+   },
+   {
+    "k": "offer_id",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "sku",
+    "label": "SKU"
+   },
+   {
+    "k": "quantity",
+    "label": "Кол-во"
+   },
+   {
+    "k": "seller_price",
+    "label": "Цена, руб"
+   },
+   {
+    "k": "buyout_price",
+    "label": "Цена выкупа, руб"
+   },
+   {
+    "k": "amount",
+    "label": "Сумма выкупа, руб"
+   },
+   {
+    "k": "deduction_by_category_percent",
+    "label": "Дед., %"
+   },
+   {
+    "k": "vat_percent",
+    "label": "НДС, %"
+   }
+  ],
+  "_REPLENISH_EXPORT": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "barcode",
+    "label": "Штрихкод"
+   },
+   {
+    "k": "actual_mp",
+    "label": "Карточка"
+   },
+   {
+    "k": "status_label",
+    "label": "Статус"
+   },
+   {
+    "k": "demand",
+    "label": "Спрос, шт/д"
+   },
+   {
+    "k": "demand_wb",
+    "label": "WB, шт/д"
+   },
+   {
+    "k": "demand_oz",
+    "label": "Ozon, шт/д"
+   },
+   {
+    "k": "sells",
+    "label": "Продано, шт"
+   },
+   {
+    "k": "returns_qty",
+    "label": "Возвраты, шт"
+   },
+   {
+    "k": "return_rate",
+    "label": "Возвраты, %"
+   },
+   {
+    "k": "wb_sells",
+    "label": "Продано WB, шт"
+   },
+   {
+    "k": "our_stock",
+    "label": "У нас, шт"
+   },
+   {
+    "k": "our_cost",
+    "label": "Себест-ть"
+   },
+   {
+    "k": "wb_qty",
+    "label": "WB склад, шт"
+   },
+   {
+    "k": "wb_avail",
+    "label": "WB доступно"
+   },
+   {
+    "k": "wb_in_way",
+    "label": "WB в пути"
+   },
+   {
+    "k": "wb_doc",
+    "label": "WB, дн"
+   },
+   {
+    "k": "wb_def",
+    "label": "WB дефицит"
+   },
+   {
+    "k": "to_sort",
+    "label": "Дослать"
+   },
+   {
+    "k": "oz_qty",
+    "label": "Ozon склад, шт"
+   },
+   {
+    "k": "oz_avail",
+    "label": "Ozon доступно"
+   },
+   {
+    "k": "oz_in_way",
+    "label": "Ozon в пути"
+   },
+   {
+    "k": "oz_doc",
+    "label": "Ozon, дн"
+   },
+   {
+    "k": "oz_def",
+    "label": "Ozon дефицит"
+   },
+   {
+    "k": "ship_wb",
+    "label": "Отгрузить WB"
+   },
+   {
+    "k": "ship_oz",
+    "label": "Отгрузить Ozon"
+   },
+   {
+    "k": "need_buy",
+    "label": "Купить у поставщика"
+   },
+   {
+    "k": "income",
+    "label": "К перечислению, руб"
+   },
+   {
+    "k": "margin",
+    "label": "Маржа, руб"
+   },
+   {
+    "k": "margin_per_one",
+    "label": "Маржа/шт"
+   },
+   {
+    "k": "margin_pct",
+    "label": "Рент-сть, %"
+   }
+  ],
+  "_REPLENISH_EXPORT_SIZES": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "barcode",
+    "label": "Штрихкод"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "actual_mp",
+    "label": "Карточка"
+   },
+   {
+    "k": "status_label",
+    "label": "Статус"
+   },
+   {
+    "k": "wb_sells",
+    "label": "Продано WB, шт"
+   },
+   {
+    "k": "wb_ret",
+    "label": "Возвраты WB, шт"
+   },
+   {
+    "k": "wb_net",
+    "label": "Продажи WB нетто, шт"
+   },
+   {
+    "k": "wb_vel",
+    "label": "Спрос WB, шт/д"
+   },
+   {
+    "k": "wb_qty",
+    "label": "WB склад, шт"
+   },
+   {
+    "k": "wb_avail",
+    "label": "WB доступно"
+   },
+   {
+    "k": "wb_in_way",
+    "label": "WB в пути"
+   },
+   {
+    "k": "wb_doc",
+    "label": "WB, дн"
+   },
+   {
+    "k": "wb_def",
+    "label": "WB дефицит"
+   },
+   {
+    "k": "to_sort",
+    "label": "Дослать"
+   },
+   {
+    "k": "ship_wb",
+    "label": "Отгрузить WB"
+   },
+   {
+    "k": "our_stock",
+    "label": "У нас, шт"
+   },
+   {
+    "k": "margin_per_one",
+    "label": "Маржа/шт"
+   },
+   {
+    "k": "margin_pct",
+    "label": "Рент-сть, %"
+   },
+   {
+    "k": "margin",
+    "label": "Маржа, руб"
+   }
+  ]
+ }
+}

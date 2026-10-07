@@ -94,17 +94,7 @@ def export_ozon_cashflow_rows(
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
-OZON_DETAIL_SUMMARY_RU_COLUMNS = {
-    "article": "Артикул", "name": "Наименование", "size": "Размер",
-    "sizes_count": "Размеров", "offers_count": "Артикулов",
-    "sells": "Продано, шт",
-    "returns_qty": "Возвращено, шт", "postings": "Постингов",
-    "seller_total": "Продажи (цена×кол-во), руб", "amount": "Реализовано, руб",
-    "commission": "Комиссия, руб", "services": "Услуги, руб",
-    "income": "К перечислению, руб", "ops_count": "Операций",
-    "buyout_sum": "Сумма выкупов, руб", "buyout_percent": "Выкуп, %",
-    "storage": "Хранение, руб",
-}
+OZON_DETAIL_SUMMARY_RU_COLUMNS = export_cols("OZON_DETAIL_SUMMARY_RU_COLUMNS")
 
 
 @router.get("/export/ozon/placement-summary")

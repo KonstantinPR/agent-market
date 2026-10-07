@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "74";
+const UI_VERSION = "75";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1143,31 +1143,12 @@ const marginHeaders = [
   { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls , tip: "Выручка ÷ проданное количество — средняя цена продажи, ₽/шт."},
   { k: "margin_gross_per_one", label: "Маржа до себест./ед.", num: true, render: cellFmts.moneyCls , tip: "Маржа до себестоимости (перечисление − расходы) ÷ проданное количество, ₽/шт."},
   { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct , tip: "Возвраты ÷ (продажи + возвраты) × 100. Показывает качество товара и размерную сетку."},
+  { k: "net_cost_est", label: "Себестоимость оценка", num: true, render: cellFmts.moneyEst , tip: "Себестоимость проданного, оценённая по воронке (поле net_cost_est). ~ перед суммой = каталожной себестоимости нет."},
+  { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано за предыдущий период — видно при включённом сравнении периодов."},
+  { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период — видно при включённом сравнении периодов."},
+  { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Текущая прибыль минус прибыль предыдущего периода, ₽."},
+  { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли к предыдущему периоду, %. Плюс = рост."},
 ];
-const MARGIN_DETAIL_OPTIONAL = [
-  { k: "nm_id", label: "Артикул WB" },
-  { k: "returns_qty", label: "Возвращено, шт" },
-  { k: "stock_qty", label: "Остаток, шт" },
-  { k: "stock_total", label: "Остаток всего, шт" },
-  { k: "stock_in_way", label: "В пути, шт" },
-  { k: "logistics_out", label: "Логистика туда" },
-  { k: "logistics_in", label: "Логистика обратно" },
-  { k: "storage", label: "Хранение (оц)" },
-  { k: "services", label: "Услуги" },
-  { k: "net_cost", label: "Себестоимость" },
-  { k: "margin_gross", label: "Маржа до себестоимости" },
-  { k: "margin_per_one", label: "Прибыль на ед." },
-  { k: "commission_per_one", label: "Комиссия/ед." },
-  { k: "logistics_per_one", label: "Логистика/ед." },
-  { k: "logistics_out_per_one", label: "Логистика туда/ед." },
-  { k: "logistics_in_per_one", label: "Логистика обратно/ед." },
-  { k: "storage_per_one", label: "Хранение/ед." },
-  { k: "income_per_one", label: "К перечисл./ед." },
-  { k: "revenue_per_one", label: "Средняя цена" },
-  { k: "margin_gross_per_one", label: "Маржа до себест./ед." },
-  { k: "return_rate", label: "Доля возвратов, %" },
-];
-const _OLD_OPTIONAL = new Set(["storage", "services", "net_cost", "margin_gross", "margin_per_one"]);
 // ----------------------------------------------------- «Анализ Продаж OZON» — при
 // ----------------------------------------------------- маржинальности от детализации Ozon
 const ozonMarginHeaders = [
@@ -1205,37 +1186,30 @@ const ozonMarginHeaders = [
   { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls , tip: "К перечислению ÷ гросс-продажи, ₽/шт."},
   { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls , tip: "Выручка ÷ гросс-продажи, ₽/шт."},
   { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct , tip: "Возвраты ÷ (продажи + возвраты) × 100 за период."},
-];
-const OZON_MARGIN_DETAIL_OPTIONAL = [
-  { k: "nm_id", label: "Артикул WB" },
-  { k: "size", label: "Размер" },
-  { k: "offers_count", label: "Артикулов" },
-  { k: "returns_qty", label: "Возвращено, шт" },
-  { k: "postings", label: "Постинги" },
-  { k: "amount", label: "Сумма продажи" },
-  { k: "services", label: "Услуги" },
-  { k: "net_cost", label: "Себестоимость" },
-  { k: "margin_per_one", label: "Прибыль на ед." },
-  { k: "commission_per_one", label: "Комиссия/ед." },
-  { k: "services_per_one", label: "Услуги/ед." },
-  { k: "storage_per_one", label: "Хранение/ед." },
-  { k: "income_per_one", label: "К перечисл./ед." },
-  { k: "revenue_per_one", label: "Средняя цена" },
-  { k: "return_rate", label: "Доля возвратов, %" },
-  { k: "accrued_sale", label: "Начисл.: продажа" },
-  { k: "accrued_commission", label: "Начисл.: комиссия" },
-  { k: "accrued_logistics", label: "Начисл.: логистика" },
-  { k: "accrued_services", label: "Начисл.: услуги" },
-  { k: "accrued_other", label: "Начисл.: прочее" },
-  { k: "accrued_net", label: "На р/с (нач.)" },
-  { k: "accrued_diff", label: "Δ нач. vs дет." },
+  { k: "accrued_coverage", label: "Есть начисления", render: (v) => v ? "да" : "нет" , tip: "1/0: есть ли по артикулу строки отчёта начислений Ozon за окно. Без них «Прибыль (нач.)» пустая."},
+  { k: "margin_gross", label: "Маржа, до себестоимости, руб", num: true, render: cellFmts.moneyCls , tip: "К перечислению + хранение (минус) — прибыль до списания себестоимости."},
+  { k: "net_cost_est", label: "Себестоимость оценка", num: true, render: cellFmts.moneyEst , tip: "Себестоимость проданного, оценённая по воронке (net_cost_est). ~ = каталожной себестоимости нет."},
+  { k: "storage_per_one", label: "Хранение на ед., руб", num: true, render: cellFmts.moneyCls , tip: "Стоимость размещения ÷ гросс-продажи, ₽/шт."},
+  { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Гросс-продажи за предыдущий период — видно при включённом сравнении периодов."},
+  { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период — видно при включённом сравнении периодов."},
+  { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Текущая прибыль минус прибыль предыдущего периода, ₽."},
+  { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли к предыдущему периоду, %. Плюс = рост."},
 ];
 // ----------------------------------------------------- «Вид таблицы» — единый механизм
-// Для каждого таба регистрируется набор настраиваемых колонок. Состояние живёт в
-// localStorage под ключом `<storageKey>[_<mode>]` (mode — активный режим таба, напр.
-// "rows"/"summary" у wb-detail). Значение — { колонка: true/false }. По умолчанию
-// колонка видна (def=true), пока её не скрыли.
+// Для каждого таба регистрируется набор настраиваемых колонок (headers и режимы).
+// Наборы колонок, подписи и флаги по умолчанию (def) приходят из единого источника
+// app/static/columns.json (см. loadColViews): localStorage хранит только
+// пользовательские отклонения — { колонка: true/false, order, pin }.
+// Состояние живёт в localStorage под ключом `<storageKey>[_<mode>]`.
 const _COLVIEWS = {};
+// columns.json — мастер колонок (наборы/def/группы/Excel-словари). null до fetch.
+let COLS = null;
+async function loadColViews() {
+  try {
+    const r = await fetch("/static/columns.json", { cache: "no-store" });
+    if (r.ok) COLS = await r.json();
+  } catch (e) { COLS = null; }
+}
 function registerColView(tab, cfg) { _COLVIEWS[tab] = cfg; }
 function ccTab(tab) {
   const [head, ...rest] = tab.split("-");
@@ -1285,13 +1259,19 @@ function applyColViewFilter(tab) {
 function colViewSet(tab, modeHint) {
   const c = _COLVIEWS[tab];
   if (!c) return null;
-  const mode = modeHint || (c.mode ? c.mode() : "base");
-  const set = c.sets ? c.sets[mode] : { headers: c.headers, optional: c.optional };
+  const mode = modeHint || (c.mode ? c.mode() : "default");
+  const set = c.sets ? c.sets[mode] : { headers: c.headers };
   if (!set) return null;
+  // optional/группы — из columns.json; до fetch (или без него) все колонки видимы.
+  const tm = (COLS && COLS.tabs[tab] && COLS.tabs[tab].modes[mode]) || null;
+  const optional = tm
+    ? tm.columns.map((x) => ({ k: x.k, label: x.label, def: x.def }))
+    : set.headers.map((h) => ({ k: h.k, label: h.label, def: true }));
   return {
     key: c.storageKey + (c.mode ? "_" + mode : ""),
     headers: set.headers,
-    optional: set.optional,
+    optional,
+    groups: (COLS && COLS.tabs[tab] && COLS.tabs[tab].groups) || [],
   };
 }
 function colViewState(tab, modeHint) {
@@ -1300,6 +1280,12 @@ function colViewState(tab, modeHint) {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(set.key)); } catch (e) { saved = null; }
   if (!saved || typeof saved !== "object") saved = {};
+  // Миграция: колонка статуса Потребности в панели переименована status → status_label
+  // (предыдущие сохранения с «status» не должны теряться).
+  if (tab === "replenish" && "status" in saved && !("status_label" in saved)) {
+    saved.status_label = saved.status;
+    delete saved.status;
+  }
   const st = {};
   for (const o of set.optional) st[o.k] = (o.k in saved) ? !!saved[o.k] : !!o.def;
   st.pin = Array.isArray(saved.pin)
@@ -1341,10 +1327,7 @@ function colViewHeaders(tab, headersList) {
 // колонки сравнения у margin-detail). modeHint — принудительный режим (напр. wb-prices
 // в свёрнутом режиме экспортируется по базовым колонкам, т.к. агрегат на сервере не считается).
 function colViewParam(tab, extraKeys, modeHint) {
-  const c = _COLVIEWS[tab];
-  if (!c) return "";
-  const mode = modeHint || (c.mode ? c.mode() : "base");
-  const set = c.sets ? c.sets[mode] : { headers: c.headers, optional: c.optional };
+  const set = colViewSet(tab, modeHint);
   if (!set) return "";
   const st = colViewState(tab, modeHint);
   const optKeys = new Set(set.optional.map((o) => o.k));
@@ -1410,8 +1393,8 @@ function buildColViewMenu(tab) {
     const ta = set.optional.some((o) => o.k === a);
     const tb = set.optional.some((o) => o.k === b);
     if (ta !== tb) return false;
-    if (!c.groups) return true;
-    const gi = (kk) => { for (let i = 0; i < c.groups.length; i++) if (c.groups[i].keys.includes(kk)) return i; return -1; };
+    if (!set.groups.length) return true;
+    const gi = (kk) => { for (let i = 0; i < set.groups.length; i++) if (set.groups[i].keys.includes(kk)) return i; return -1; };
     const ia = gi(a), ib = gi(b);
     return ia !== -1 && ia === ib;
   };
@@ -1596,8 +1579,8 @@ function buildColViewMenu(tab) {
     return pinLbl;
   };
   const optByKey = new Map(set.optional.map((o) => [o.k, o]));
-  if (c.groups && c.groups.length) {
-    for (const g of c.groups) {
+  if (set.groups.length) {
+    for (const g of set.groups) {
       const entries = orderFor(g.keys.filter((k) => optByKey.has(k))).map((k) => optByKey.get(k));
       if (!entries.length) continue;
       const allOn = entries.every((o) => !!st[o.k]);
@@ -1694,6 +1677,8 @@ const wbDetailRowHeaders = [
   { k: "storage", label: "Хранение", num: true, render: cellFmts.money , tip: "Платёж за хранение по строке, в минус. В детализации WB такие платы идут без артикула, у товарных строк обычно 0."},
   { k: "office", label: "Склад", render: cellFmts.text , tip: "Склад WB (officeName) из строки отчёта; у служебных строк часто пусто."},
   { k: "source", label: "Источник", render: cellFmts.tag , tip: "Источник строки: excel — файл ЛК, api — finance-API WB."},
+  { k: "retail_price", label: "Цена розничная", num: true, render: cellFmts.money , tip: "Розничная цена единицы в строке отчёта (retailPrice), ₽."},
+  { k: "srid", label: "SRID", render: cellFmts.text , tip: "Идентификатор строки реализации (srid) из отчёта WB — по нему строка сверяется с API."},
 ];
 
 const wbDetailSummaryHeaders = [
@@ -1730,6 +1715,8 @@ const ozDetailRowHeaders = [
   { k: "return_qty", label: "Возврат, шт", num: true, render: cellFmts.int , tip: "Количество возвратов в строке (return_commission.quantity). В своде считается отдельно от «Продано»."},
   { k: "return_total", label: "Возврат, руб", num: true, render: cellFmts.money , tip: "Сумма возврата по строке (return_commission.total) — именно она вычитается из «К перечислению»."},
   { k: "source", label: "Источник", render: cellFmts.tag , tip: "Источник строки: api — прямой метод /v1/finance/realization/posting, report — фолбэк-отчёт /v1/report/realization/posting."},
+  { k: "barcode", label: "Штрихкод", render: cellFmts.text , tip: "Штрихкод из строки детализации Ozon — ключ сопоставления с каталогом."},
+  { k: "commission_ratio", label: "Доля комиссии", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) , tip: "Доля комиссии Ozon (доля от суммы строки), %. Используется, когда standard_fee пуст."},
 ];
 
 const ozDetailSummaryHeaders = [
@@ -1787,11 +1774,8 @@ const ozCashflowHeaders = [
   { k: "end_balance", label: "Баланс на конец", num: true, render: cellFmts.money , tip: "Остаток на конец периода (end_balance_amount). Не суммируется в итогах и не участвует в расчёте «фактически получено»."},
 ];
 
-// Колонки маржинальной воронки. Порядок = порядок по умолчанию: первые 16 —
-// «базовые» (видны сразу), остальные включаются чекбоксами в «Вид таблицы».
-const FUNNEL_DEFAULT_KEYS = ["article", "name", "views", "opens", "adds", "orders",
-  "cancelled", "buyouts", "cart_pct", "order_pct", "avg_price", "revenue",
-  "net_cost", "margin", "margin_pct", "storage_est"];
+// Колонки маржинальной воронки. Порядок = порядок по умолчанию; видимость по
+// умолчанию (def) — из columns.json (dicts["_FUNNEL_COL_DEFAULTS"] → margin-funnel).
 const funnelHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика в срезе воронки продаж WB. Один товар — одна строка, независимо от числа размеров."},
   { k: "name", label: "Наименование", render: cellFmts.text , tip: "Берётся из воронки (поле title), при отсутствии — из каталога товаров. Смотрите также колонку «Название из воронки»."},
@@ -1890,11 +1874,11 @@ async function renderMarginDetail(p) {
   let headers = colViewHeaders("margin-detail", marginHeaders);
   if (compare) {
     headers = headers.concat([
-      { k: "sells_pp", label: "Пред. период: шт", num: true, render: cellFmts.int },
-      { k: "margin_pp", label: "Пред. период: Прибыль", num: true, render: cellFmts.moneyCls },
-      { k: "delta_ru", label: "Δ прибыли", num: true, render: cellFmts.moneyCls },
-      { k: "delta_pct", label: "Δ, %", num: true, render: cellFmts.pct },
-    ]);
+      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int },
+      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls },
+      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls },
+      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct },
+    ].filter((h) => !headers.some((x) => x.k === h.k)));
   }
   pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-detail"));
   const exportBtn = $("#exportMarginDetail");
@@ -1923,11 +1907,11 @@ async function renderMarginOzonDetail(p) {
   let headers = colViewHeaders("margin-ozon-detail", ozonMarginHeaders);
   if (compare) {
     headers = headers.concat([
-      { k: "sells_pp", label: "Пред. период: шт", num: true, render: cellFmts.int },
-      { k: "margin_pp", label: "Пред. период: Прибыль", num: true, render: cellFmts.moneyCls },
-      { k: "delta_ru", label: "Δ прибыли", num: true, render: cellFmts.moneyCls },
-      { k: "delta_pct", label: "Δ, %", num: true, render: cellFmts.pct },
-    ]);
+      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int },
+      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls },
+      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls },
+      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct },
+    ].filter((h) => !headers.some((x) => x.k === h.k)));
   }
   pagedTable($("#marginOzonDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-ozon-detail"));
   const exportBtn = $("#exportMarginOzonDetail");
@@ -2123,7 +2107,7 @@ const replenishHeaders = [
   { k: "name", label: "Наименование", render: (v) => (v == null || v === "") ? "—" : v, tip: "Название товара из каталога (или из детализации)." },
   { k: "actual_mp", label: "Карточка", render: (v) => (v == null || v === "") ? "—"
     : v.split(",").map((x) => MP_LABELS[x] || x).join(" / "), tip: "На каком маркетплейсе есть карточка товара. Сверка по артикулу и штрихкоду; без карточки товар неактуален." },
-  { k: "status", label: "Статус", render: (v, r) => `<span class="tag st-${r.status}">${r.status_label}</span>`, tip: "Срочно — есть дефицит или нужен докуп; Нет нигде — продажи есть, а остатков нет; Норма — запаса хватает; Неактуальный — нет карточки на WB/Ozon." },
+  { k: "status_label", label: "Статус", render: (v, r) => `<span class="tag st-${r.status}">${v}</span>`, tip: "Срочно — есть дефицит или нужен докуп; Нет нигде — продажи есть, а остатков нет; Норма — запаса хватает; Неактуальный — нет карточки на WB/Ozon." },
   { k: "demand", label: "Спрос, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж: (продажи − возвраты) за выбранное окно, штук в день." },
   { k: "demand_wb", label: "WB, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж только по WB за окно, штук в день (продажи − возвраты)." },
   { k: "demand_oz", label: "Ozon, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Скорость продаж только по Ozon за окно, штук в день (продажи − возвраты)." },
@@ -2146,6 +2130,11 @@ const replenishHeaders = [
   { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа (после себестоимости и расходов маркетплейса) в расчёте на одну проданную штуку." },
   { k: "margin_pct", label: "Рент-сть, %", num: true, render: cellFmts.pct, tip: "Рентабельность: маржа ÷ сумма к перечислению, %." },
   { k: "margin", label: "Маржа, руб", num: true, render: cellFmts.money, tip: "Маржа за окно по артикулу: к перечислению − расходы маркетплейса − себестоимость проданного." },
+  { k: "sells", label: "Продано, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Продано за окно суммарно по WB и Ozon, шт (с учётом возвратов)." },
+  { k: "returns_qty", label: "Возвраты, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Возвраты покупателей за окно по WB и Ozon, шт." },
+  { k: "income", label: "К перечислению, руб", num: true, render: cellFmts.money, tip: "Сумма к перечислению маркетплейсами за окно: WB + Ozon после всех удержаний." },
+  { k: "oz_qty", label: "Ozon склад, шт", num: true, render: cellFmts.int, tip: "Остаток на складах Ozon (свободный + резерв) по последнему срезу." },
+  { k: "wb_qty", label: "WB склад, шт", num: true, render: cellFmts.int, tip: "Остаток на складах WB (quantity) по последнему срезу, все склады суммой." },
 ];
 
 const replenishSizeHeaders = [
@@ -2155,7 +2144,7 @@ const replenishSizeHeaders = [
   { k: "name", label: "Наименование", render: (v) => (v == null || v === "") ? "—" : v, tip: "Название товара из каталога (или из детализации)." },
   { k: "actual_mp", label: "Карточка", render: (v) => (v == null || v === "") ? "—"
     : v.split(",").map((x) => MP_LABELS[x] || x).join(" / "), tip: "Где есть карточка (сверка по артикулу/штрихкоду); без карточки товар неактуален." },
-  { k: "status", label: "Статус", render: (v, r) => `<span class="tag st-${r.status}">${r.status_label}</span>`, tip: "Статус по размеру (по WB-спросу и остаткам размера; «Нет нигде» — продажи есть, остатков по размеру и на нашем складе нет)." },
+  { k: "status_label", label: "Статус", render: (v, r) => `<span class="tag st-${r.status}">${v}</span>`, tip: "Статус по размеру (по WB-спросу и остаткам размера; «Нет нигде» — продажи есть, остатков по размеру и на нашем складе нет)." },
   { k: "wb_sells", label: "Продано WB", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Продано на WB по этому размеру за окно, шт (нетто: продажи − возвраты)." },
   { k: "wb_vel", label: "Спрос WB, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Спрос по размеру на WB: продажи (без возвратов) за окно ÷ дни, шт/день." },
   { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB по этому размеру: остаток (quantity_full) + в пути." },
@@ -2167,6 +2156,9 @@ const replenishSizeHeaders = [
   { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе — по всему артикулу (по размерам склад не ведётся)." },
   { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа/шт по артикулу целиком (по размерам не раскладывается)." },
   { k: "margin_pct", label: "Рент-сть, %", num: true, render: cellFmts.pct, tip: "Рентабельность по артикулу целиком, %." },
+  { k: "wb_net", label: "Продажи WB нетто, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Продажи этого размера на WB за окно нетто (продажи − возвраты, без минусовых возвратов)." },
+  { k: "wb_ret", label: "Возвраты WB, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Возвраты этого размера на WB за окно, шт." },
+  { k: "wb_qty", label: "WB склад, шт", num: true, render: cellFmts.int, tip: "Остаток этого размера на складах WB (quantity) по последнему срезу." },
 ];
 
 function replenishView() {
@@ -2693,6 +2685,10 @@ const productsBaseHeaders = [
   { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money , tip: "Цена безубыточности: (себестоимость + хранение + логистика + услуги) ÷ (1 − комиссия% − мин. прибыль%). Ниже не опускаемся, не ниже себестоимости."},
   { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) , tip: "Итоговый множитель наценки f(себестоимость) × f(объём), показанный в процентах (значение ×100). Рекомендуемая цена = себестоимость × этот множитель до округления."},
   { k: "replenishable", label: "Докупаемый", render: replenishableCell , tip: "Чекбокс: докупаем ли товар. Флаг влияет на решения автопилота — дефицитный докупаемый товар он не спешит удорожать. Сохраняется в каталог."},
+  { k: "subject", label: "Предмет", render: (v) => (v == null || v === "") ? "—" : v , tip: "Предмет WB (категория карточки) из каталога."},
+  { k: "composition", label: "Состав", render: (v) => (v == null || v === "") ? "—" : v , tip: "Состав товара из карточки маркетплейса."},
+  { k: "tags", label: "Маркетплейсы", render: (v) => Array.isArray(v) ? v.join(", ") : ((v == null || v === "") ? "—" : v) , tip: "Маркетплейсы, где заведена карточка: wb, ozon."},
+  { k: "volume_l", label: "Объём, л", num: true, render: (v) => v == null || v === 0 ? "—" : fmt(v) , tip: "Объём товара в литрах из ЛК WB — по нему считается стоимость хранения."},
 ];
 const productsSizeHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул единого каталога, к которому относится размер."},
@@ -2705,6 +2701,10 @@ const productsSizeHeaders = [
   { k: "min_price", label: "Мин. цена", num: true, render: cellFmts.money , tip: "Цена безубыточности единицы по unit-экономике товара (комиссия, логистика, хранение, услуги за 30 дней). Не ниже себестоимости."},
   { k: "markup", label: "Наценка, %", num: true, render: (v) => v == null ? "—" : fmtPct(Number(v) * 100) , tip: "Множитель наценки f(себестоимость) × f(объём) в процентах (значение ×100). Работает от себестоимости и объёма, размер на него не влияет."},
   { k: "replenishable", label: "Докупаемый", render: replenishableCell , tip: "Чекбокс «докупаемый» — общий флаг на товар, одинаков для всех размеров. Используется автопилотом скидок и в отчёте о пополнении."},
+  { k: "subject", label: "Предмет", render: (v) => (v == null || v === "") ? "—" : v , tip: "Предмет WB (категория карточки) из каталога."},
+  { k: "composition", label: "Состав", render: (v) => (v == null || v === "") ? "—" : v , tip: "Состав товара из карточки маркетплейса."},
+  { k: "tags", label: "Маркетплейсы", render: (v) => Array.isArray(v) ? v.join(", ") : ((v == null || v === "") ? "—" : v) , tip: "Маркетплейсы, где заведена карточка: wb, ozon."},
+  { k: "volume_l", label: "Объём, л", num: true, render: (v) => v == null || v === 0 ? "—" : fmt(v) , tip: "Объём товара в литрах из ЛК WB — по нему считается стоимость хранения."},
 ];
 const productsStockHeaders = [
   { k: "own_stock", label: "Остаток свой", num: true, render: (v) => v == null ? "—" : (Number.isInteger(Number(v)) ? fmt(v) : fmtFloat(Number(v), 1)) , tip: "Наш склад: баланс по документам (начальный + приход − отгрузка) без разбивки по размерам. Тот же источник, что и вкладка «Остатки»."},
@@ -3749,6 +3749,8 @@ const wbStockHeaders = [
   { k: "quantity", label: "Доступно", num: true, render: cellFmts.int , tip: "Доступно к продаже: на WB — quantity из отчёта об остатках, на Ozon — свободный остаток free_to_sell_amount."},
   { k: "quantity_full", label: "Всего на складах", num: true, render: cellFmts.int , tip: "Всего на складах: на WB — quantityFull, на Ozon — свободный + зарезервированный + обещанный остаток."},
   { k: "in_way", label: "В пути", num: true, render: cellFmts.int , tip: "В пути: на WB — inWayToClient + inWayFromClient, на Ozon — обещанное количество promised_amount."},
+  { k: "date", label: "Дата", render: cellFmts.text , tip: "Дата среза остатков из отчёта маркетплейса."},
+  { k: "marketplace", label: "Маркетплейс", render: (v) => (v == null || v === "") ? "—" : (MP_LABELS[v] || v) , tip: "Маркетплейс среза: WB или Ozon."},
 ];
 
 const wbStockAggHeaders = [
@@ -3823,6 +3825,7 @@ const wbPricesHeaders = [
   { k: "discounted_price", label: "Цена со скид.", num: true, render: cellFmts.money , tip: "Цена со скидкой: на WB — discountedPrice из discounts-prices-api. На Ozon поле равно текущей цене."},
   { k: "price", label: "Цена без скид.", num: true, render: cellFmts.money , tip: "Цена без скидки: на WB — price из discounts-prices-api, на Ozon — текущая цена price_price."},
   { k: "discount", label: "Скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v, 1) + "%" , tip: "Скидка в %: WB — (price − discounted_price) ÷ price × 100; Ozon — (1 − цена ÷ зачёркнутая цена) × 100."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB (nmId) из прайса — по нему товар ищется на маркетплейсе."},
 ];
 
 const wbPricesAggHeaders = [
@@ -3942,6 +3945,7 @@ const wbStorageHeaders = [
   { k: "volume", label: "Объём, л", num: true, render: (v) => v == null ? "—" : fmtVol(v) , tip: "Объём товара по данным WB, л. Тоже среднее по складам и дням отчёта — по умолчанию за 7 дней."},
   { k: "storage_price", label: "Хранение за баркод", num: true, render: cellFmts.money4 , tip: "Хранение за один баркод, ₽: warehousePrice ÷ barcodesCount. Метрика WB за 7 дней, за баркод, не за литр."},
   { k: "warehouse_price", label: "Сумма хранения", num: true, render: cellFmts.money4 , tip: "Сумма хранения warehousePrice, ₽ за отчётный период (7 дней), усреднённая по складам и сохранённая по nm_id."},
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB (nmId), по которому хранение сохраняется в базе."},
 ];
 
 async function renderWbStorage() {
@@ -5207,197 +5211,127 @@ const pricingHeaders = [
   { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money , tip: "Комиссия КВВ на единицу по детализации WB. Учтена в расчёте пола безубыточности через долю комиссии в выручке."},
   { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money , tip: "Логистика (туда и обратно) на единицу по детализации WB. Входит в формулу минимальной цены."},
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money , tip: "Хранение на единицу по детализации WB, включая оценку безартикульных плат. Тоже входит в формулу минимальной цены."},
+  { k: "price", label: "Цена базовая, руб", num: true, render: cellFmts.money , tip: "Базовая цена карточки WB (price из прайса), от неё считается витринная цена со скидкой."},
+  { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money , tip: "Минимальная цена безубыточности: себестоимость + логистика + комиссия + хранение + услуги, ₽/шт."},
+  { k: "eff", label: "База расчёта, руб", num: true, render: cellFmts.money , tip: "Цена, от которой считается целевая скидка: витринная или ср. цена факт (если воронки нет)."},
+  { k: "max_discount_item", label: "Макс. скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки для этого товара, % — ограничение правила, ниже которого цена не опускается."},
+  { k: "status", label: "Статус", render: cellFmts.text , tip: "Статус товара в расчёте цен — те же значения, что в служебной колонке решений."},
+  { k: "replenishable", label: "Докупаемый", render: (v) => v ? "да" : "нет" , tip: "Флаг каталога «докупаемый»: дефицитный товар автопилот не спешит удорожать."},
+  { k: "detail_sells", label: "Продано в детализации, шт", num: true, render: cellFmts.int , tip: "Продано по детализации продаж WB за окно, шт."},
+  { k: "detail_returns_qty", label: "Возвращено в детализации, шт", num: true, render: cellFmts.int , tip: "Возвраты по детализации продаж WB за окно, шт."},
 ];
 
 // ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
-const mkOpt = (list) => list.map((h) => ({ k: h.k, label: h.label, def: true }));
 registerColView("wb-detail", {
   storageKey: "wbDetailCols", pinnable: true,
   mode: () => { const rawEl = document.getElementById("wbDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
   sets: {
-    rows: { headers: wbDetailRowHeaders, optional: mkOpt(wbDetailRowHeaders) },
-    summary: { headers: wbDetailSummaryHeaders, optional: mkOpt(wbDetailSummaryHeaders) },
+    rows: { headers: wbDetailRowHeaders },
+    summary: { headers: wbDetailSummaryHeaders },
   },
 });
 registerColView("oz-detail", {
   storageKey: "ozDetailCols", pinnable: true,
   mode: () => { const rawEl = document.getElementById("ozDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
   sets: {
-    rows: { headers: ozDetailRowHeaders, optional: mkOpt(ozDetailRowHeaders) },
-    summary: { headers: ozDetailSummaryHeaders, optional: mkOpt(ozDetailSummaryHeaders) },
+    rows: { headers: ozDetailRowHeaders },
+    summary: { headers: ozDetailSummaryHeaders },
   },
 });
-registerColView("wb-cards", { storageKey: "wbCardsCols", pinnable: true, headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
+registerColView("wb-cards", { storageKey: "wbCardsCols", pinnable: true, headers: cardsHeaders });
 registerColView("wb-stock", {
   storageKey: "wbStockCols", pinnable: true,
   mode: () => { const agg = document.getElementById("wbStockAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
-    base: { headers: wbStockHeaders, optional: mkOpt(wbStockHeaders) },
-    agg: { headers: wbStockAggHeaders, optional: mkOpt(wbStockAggHeaders) },
+    base: { headers: wbStockHeaders },
+    agg: { headers: wbStockAggHeaders },
   },
 });
 registerColView("wb-funnel", {
   storageKey: "wbFunnelCols", pinnable: true,
   mode: () => { const exp = document.getElementById("wbFunnelExpanded"); return exp && exp.checked ? "expanded" : "compact"; },
   sets: {
-    compact: { headers: wbFunnelCompact, optional: mkOpt(wbFunnelCompact) },
-    expanded: { headers: wbFunnelHeaders, optional: mkOpt(wbFunnelHeaders) },
+    compact: { headers: wbFunnelCompact },
+    expanded: { headers: wbFunnelHeaders },
   },
 });
-registerColView("wb-sales", { storageKey: "wbSalesCols", pinnable: true, headers: salesHeaders, optional: mkOpt(salesHeaders) });
+registerColView("wb-sales", { storageKey: "wbSalesCols", pinnable: true, headers: salesHeaders });
 registerColView("wb-prices", {
   storageKey: "wbPricesCols", pinnable: true,
   mode: () => { const agg = document.getElementById("wbPriceAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
-    base: { headers: wbPricesHeaders, optional: mkOpt(wbPricesHeaders) },
-    agg: { headers: wbPricesAggHeaders, optional: mkOpt(wbPricesAggHeaders) },
+    base: { headers: wbPricesHeaders },
+    agg: { headers: wbPricesAggHeaders },
   },
 });
-registerColView("wb-storage", { storageKey: "wbStorageCols", pinnable: true, headers: wbStorageHeaders, optional: mkOpt(wbStorageHeaders) });
-registerColView("oz-cards", { storageKey: "ozCardsCols", pinnable: true, headers: cardsHeaders, optional: mkOpt(cardsHeaders) });
+registerColView("wb-storage", { storageKey: "wbStorageCols", pinnable: true, headers: wbStorageHeaders });
+registerColView("oz-cards", { storageKey: "ozCardsCols", pinnable: true, headers: cardsHeaders });
 registerColView("oz-stock", {
   storageKey: "ozStockCols", pinnable: true,
   mode: () => { const agg = document.getElementById("ozStockAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
-    base: { headers: wbStockHeaders, optional: mkOpt(wbStockHeaders) },
-    agg: { headers: wbStockAggHeaders, optional: mkOpt(wbStockAggHeaders) },
+    base: { headers: wbStockHeaders },
+    agg: { headers: wbStockAggHeaders },
   },
 });
 registerColView("oz-prices", {
   storageKey: "ozPricesCols", pinnable: true,
   mode: () => { const agg = document.getElementById("ozPriceAgg"); return agg && agg.checked ? "agg" : "base"; },
   sets: {
-    base: { headers: wbPricesHeaders, optional: mkOpt(wbPricesHeaders) },
-    agg: { headers: wbPricesAggHeaders, optional: mkOpt(wbPricesAggHeaders) },
+    base: { headers: wbPricesHeaders },
+    agg: { headers: wbPricesAggHeaders },
   },
 });
-registerColView("oz-realization", { storageKey: "ozRealCols", pinnable: true, headers: salesHeaders, optional: mkOpt(salesHeaders) });
-registerColView("oz-cashflow", { storageKey: "ozCashflowCols", pinnable: true, headers: ozCashflowHeaders, optional: mkOpt(ozCashflowHeaders) });
-registerColView("oz-accrual", { storageKey: "ozAccrualCols", pinnable: true, headers: ozAccrualHeaders, optional: mkOpt(ozAccrualHeaders) });
+registerColView("oz-realization", { storageKey: "ozRealCols", pinnable: true, headers: salesHeaders });
+registerColView("oz-cashflow", { storageKey: "ozCashflowCols", pinnable: true, headers: ozCashflowHeaders });
+registerColView("oz-accrual", { storageKey: "ozAccrualCols", pinnable: true, headers: ozAccrualHeaders });
 registerColView("oz-placement", {
   storageKey: "ozPlacementCols", pinnable: true,
   mode: () => { const rawEl = document.getElementById("ozPlacementRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
   sets: {
-    rows: { headers: ozPlacementRowHeaders, optional: mkOpt(ozPlacementRowHeaders) },
-    summary: { headers: ozPlacementSummaryHeaders, optional: mkOpt(ozPlacementSummaryHeaders) },
+    rows: { headers: ozPlacementRowHeaders },
+    summary: { headers: ozPlacementSummaryHeaders },
   },
 });
 registerColView("products", {
   storageKey: "productsCols", pinnable: true,
   mode: () => { const s = document.getElementById("productsSizes"); return s && s.checked ? "sizes" : "agg"; },
   sets: {
-    agg: { headers: productsBaseHeaders, optional: mkOpt(productsBaseHeaders) },
-    sizes: { headers: productsSizeHeaders, optional: mkOpt(productsSizeHeaders) },
+    agg: { headers: productsBaseHeaders },
+    sizes: { headers: productsSizeHeaders },
   },
 });
-registerColView("dash-profit", { storageKey: "dashProfitCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops, optional: mkOpt(dashHeaders.tops) });
-registerColView("dash-loss", { storageKey: "dashLossCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops, optional: mkOpt(dashHeaders.tops) });
-registerColView("dash-price", { storageKey: "dashPriceCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.price, optional: mkOpt(dashHeaders.price) });
-registerColView("dash-prefix", { storageKey: "dashPrefixCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.prefix, optional: mkOpt(dashHeaders.prefix) });
+registerColView("dash-profit", { storageKey: "dashProfitCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops });
+registerColView("dash-loss", { storageKey: "dashLossCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.tops });
+registerColView("dash-price", { storageKey: "dashPriceCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.price });
+registerColView("dash-prefix", { storageKey: "dashPrefixCols", pinnable: true, reloadTab: "dashboard", headers: dashHeaders.prefix });
 registerColView("margin-funnel", {
   storageKey: "marginFunnelCols", pinnable: true,
   headers: funnelHeaders,
-  optional: funnelHeaders.map((h) => ({
-    k: h.k, label: h.label, def: FUNNEL_DEFAULT_KEYS.includes(h.k),
-  })),
 });
 registerColView("margin-detail", {
   storageKey: "marginDetailCols", pinnable: true,
   headers: marginHeaders,
-  optional: marginHeaders.map((h) => ({
-    k: h.k, label: h.label,
-    def: !MARGIN_DETAIL_OPTIONAL.some((c) => c.k === h.k) || _OLD_OPTIONAL.has(h.k) || h.k === "nm_id"
-      || h.k === "stock_qty" || h.k === "stock_total" || h.k === "stock_in_way",
-  })),
-});
-// Колонки маржи Ozon по умолчанию; в режиме «в разрезе размеров» строка — карточка,
-// поэтому показываем «Размер» и прячем счётчики свёртки (там всегда 1).
-const ozonMarginOptional = (bySize) => ozonMarginHeaders.map((h) => {
-  const def = !OZON_MARGIN_DETAIL_OPTIONAL.some((c) => c.k === h.k) || h.k === "nm_id";
-  if (!bySize) return { k: h.k, label: h.label, def };
-  if (h.k === "size") return { k: h.k, label: h.label, def: true };
-  if (h.k === "sizes_count" || h.k === "offers_count") return { k: h.k, label: h.label, def: false };
-  return { k: h.k, label: h.label, def };
 });
 registerColView("margin-ozon-detail", {
   storageKey: "marginOzonDetailCols", pinnable: true,
   mode: () => (ozBySize("margin-ozon-detail") ? "size" : "base"),
   sets: {
-    base: { headers: ozonMarginHeaders, optional: ozonMarginOptional(false) },
-    size: { headers: ozonMarginHeaders, optional: ozonMarginOptional(true) },
+    base: { headers: ozonMarginHeaders },
+    size: { headers: ozonMarginHeaders },
   },
 });
 registerColView("replenish", {
   storageKey: "replenishCols", pinnable: true,
   mode: replenishView,
   sets: {
-    article: { headers: replenishHeaders, optional: mkOpt(replenishHeaders) },
-    sizes: { headers: replenishSizeHeaders, optional: mkOpt(replenishSizeHeaders) },
+    article: { headers: replenishHeaders },
+    sizes: { headers: replenishSizeHeaders },
   },
 });
-// Необязательные колонки автопилота. Порядок = порядок колонок в таблице.
-// По умолчанию видимы только 18 основных (см. def: true) — остальные скрыты и
-// раскрываются по одному или группами (PRICING_COLGROUPS) в «Вид таблицы».
-const PRICING_OPTIONAL = [
-  { k: "article", label: "Артикул", def: true },
-  { k: "nm_id", label: "Артикул WB", def: true },
-  { k: "target_discount", label: "Целевая скидка, %", def: true },
-  { k: "current_discount", label: "Скидка сейчас, %", def: true },
-  { k: "delta_discount", label: "Дельта скидки", def: true },
-  { k: "target_vis", label: "Целевая цена, руб", def: true },
-  { k: "margin_per_one", label: "Прибыль/шт, руб", def: true },
-  { k: "current_vis", label: "Цена сейчас, руб", def: true },
-  { k: "net_cost", label: "Себестоимость", def: true },
-  { k: "avg_price", label: "Ср. цена факт, руб", def: true },
-  { k: "stock", label: "Остаток", def: true },
-  { k: "buyouts", label: "Выкупы, шт", def: true },
-  { k: "backlog", label: "В корзине", def: true },
-  { k: "conv_pct", label: "Конверсия, %", def: true },
-  { k: "margin_pct", label: "Маржа факт, % от выручки", def: true },
-  { k: "product_rating", label: "Рейтинг товара", def: true },
-  { k: "action", label: "Решение", def: true },
-  { k: "reason", label: "Причина", def: true },
-  { k: "name", label: "Наименование", def: false },
-  { k: "stock_wb", label: "Остаток WB", def: false },
-  { k: "doc", label: "DOC, дн", def: false },
-  { k: "velocity", label: "v, шт/дн", def: false },
-  { k: "trend", label: "Тренд", def: false },
-  { k: "conv_buyout_percent", label: "Конв. выкупа, %", def: false },
-  { k: "cancel_sum", label: "Отмены, руб", def: false },
-  { k: "add_to_wishlist", label: "В избранное", def: false },
-  { k: "return_rate", label: "Возвраты, %", def: false },
-  { k: "margin_pct_at_target", label: "Маржа при цели, %", def: false },
-  { k: "revenue_per_one", label: "Ср. чек, руб", def: false },
-  { k: "income_per_one", label: "К переч./шт, руб", def: false },
-  { k: "commission_per_one", label: "Комиссия/шт, руб", def: false },
-  { k: "logistics_per_one", label: "Логистика/шт, руб", def: false },
-  { k: "storage_per_one", label: "Хранение/шт, руб", def: false },
-  { k: "promo_count", label: "Акций WB", def: false },
-  { k: "promo_names", label: "Акции WB", def: false },
-  { k: "promo_part_pct", label: "Участие в акции, %", def: false },
-  { k: "promo_tier_pct", label: "Доля для след. буста, %", def: false },
-  { k: "promo_tier_boost", label: "Буст след. ступени", def: false },
-  { k: "promo_need_rows", label: "Надо в акцию, шт", def: false },
-  { k: "promo_cap_pct", label: "Потолок промо, %", def: false },
-  { k: "promo_push_applied", label: "Разгружен", def: false },
-  { k: "promo_delta_discount", label: "Вклад разгрузки, п.п.", def: false },
-  { k: "promo_score", label: "Оценка", def: false },
-  { k: "promo_score_confidence", label: "Полнота оценки", def: false },
-  { k: "last_sale_days_ago", label: "Дней без продаж", def: false },
-];
-// Группы колонок для «Вид таблицы» — раскрывать сразу по смыслу.
-const PRICING_COLGROUPS = [
-  { title: "Товар", keys: ["article", "nm_id", "name", "product_rating"] },
-  { title: "Цена и скидка", keys: ["current_discount", "current_vis", "target_discount", "target_vis", "margin_per_one", "delta_discount", "avg_price", "margin_pct_at_target"] },
-  { title: "Запасы и продажи", keys: ["stock", "stock_wb", "doc", "velocity", "trend", "buyouts", "conv_buyout_percent", "cancel_sum", "add_to_wishlist", "return_rate"] },
-  { title: "Воронка и конверсия", keys: ["backlog", "conv_pct"] },
-  { title: "Экономика на единицу", keys: ["margin_pct", "net_cost", "revenue_per_one", "income_per_one", "commission_per_one", "logistics_per_one", "storage_per_one"] },
-  { title: "Акции WB", keys: ["promo_count", "promo_names", "promo_part_pct", "promo_tier_pct", "promo_tier_boost", "promo_need_rows", "promo_cap_pct", "promo_push_applied", "promo_delta_discount", "promo_score", "promo_score_confidence", "last_sale_days_ago"] },
-  { title: "Решение", keys: ["action", "reason"] },
-];
 registerColView("pricing", {
   storageKey: "pricingCols", pinnable: true,
-  headers: pricingHeaders, optional: PRICING_OPTIONAL, groups: PRICING_COLGROUPS,
+  headers: pricingHeaders,
 });
 
 // ----------------------------------------------------- Фильтр по колонкам таблицы автопилота
@@ -6269,7 +6203,8 @@ async function uploadPricingToDisk() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+  await loadColViews();
   initDates();
   initStatusWatch();
   initWriteDb();

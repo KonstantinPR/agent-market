@@ -244,11 +244,12 @@ agent_market/
   - `test_routes_snapshot.py` — снимок всех `/api`-роутов: новый роут →
     вписать строку в `SNAPSHOT` внизу файла (комментарий там же), пропавший
     роут тест поймает сам;
-  - `test_column_manifest.py` — ключи колонок «Вид таблицы» (app.js) ↔
-    export-словари (api.py): известные расхождения зафиксированы в
-    `KNOWN_JS_ONLY`/`KNOWN_PY_ONLY` (после починки запись убирается), новых —
-    тест не пропустит. Подписи колонок («Выручка» vs «Выручка, руб») здесь
-    не проверяются — они на этапе рефакторинга колонок;
+  - `test_column_manifest.py` — манифест колонок `app/static/columns.json`
+    (единственный источник этапа 4): колонки режимов вкладки == её
+    export-словари, подписи панельных `headers` в app.js == `modes`, вызовы
+    `export_cols("...")` ссылаются на существующие словари (и наоборот — без
+    мёртвых), в `app/api` не вернулись литеральные dict-ы. Расхождений нет —
+    KNOWN-списков больше нет, тест падает на любом новом;
   - `test_local_storage_manifest.py` — ключи localStorage ↔ реестры `LS_KEYS`
     (с описаниями) и `LS_COLVIEW_KEYS` (app.js): новый ключ браузера —
     занести в реестр, иначе тест падает.
@@ -318,6 +319,12 @@ agent_market/
 → тесты API → live-проверка → бамп версии. Эталон следования всем правилам —
 вкладка «Потребность в товаре» (виды «артикулы» и «размеры»).
 
+Колонка живёт в двух местах: **`k`/`label`/`def` и групп — в
+`app/static/columns.json`** (панель «Вид таблицы», подписи, Excel-словари;
+`export_cols(...)` в Python читает оттуда), а **`render`/`tip`/`num` — в
+массиве `headers` в `app.js`**. Пропуск любого из двух мест ловит
+`test_column_manifest.py` (паритет ключей и подписей).
+
 ### Чек-лист: новая вкладка целиком
 
 Вкладка — это всегда **пять мест в двух файлах**, и без любого из них она
@@ -335,6 +342,10 @@ agent_market/
    - «Вид таблицы»: три элемента с именами от `ccTab(X)`
      (`btn<CcTab>View`, `<CcTab>ViewMenu`, `<CcTab>ViewPanel`) + `registerColView("X", …)`;
      её `storageKey` — в список `LS_COLVIEW_KEYS` (реестр localStorage, см. ниже);
+   - **`app/static/columns.json`** — вкладка `X`: `modes` (колонки режимов с
+     `k`/`label`/`def`), `groups`, `storageKey`, `pinnable` и `exportDicts`
+     (словари экспорта, которые обязаны покрыть те же ключи). Панель, подписи
+     и Excel-словари читаются оттуда; `test_column_manifest.py` требует паритета;
    - «Обновить базу»: запись в `apiPullByTab`;
    - экспорт: `downloadViewExcel`/`wbViewExportUrl` или своя кнопка → свой `/api/export/…`;
    - фильтры тулбара: `onTabInput`/`onTabChange` (п.8 памятки выше);
@@ -347,7 +358,7 @@ agent_market/
 Проверить, что ничего не забыли, помогают защитные тесты из раздела «Тесты»:
 `tests/unit/test_tab_manifest.py` (навигация ↔ секции ↔ `loadTabInner` ↔
 «Вид таблицы» ↔ «Обновить базу»), `test_routes_snapshot.py` (роуты не пропали),
-`test_column_manifest.py` (колонки панели ↔ export-словари) и
+`test_column_manifest.py` (columns.json ↔ панель ↔ export-словари) и
 `test_local_storage_manifest.py` (ключи браузера ↔ реестр `LS_KEYS`).
 
 ## Примечания

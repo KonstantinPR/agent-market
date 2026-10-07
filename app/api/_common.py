@@ -43,6 +43,7 @@ from app.services import (
     yandex_disk as yandex_service,
 )
 from app.services.window import parse_window
+from app.services.columns import export_cols
 
 
 router = APIRouter()
@@ -774,36 +775,8 @@ def api_products(
     return {"rows": rows, "count": len(rows), "price_settings": settings, "totals": totals}
 
 
-_REPLENISH_EXPORT = {
-    "article": "Артикул", "name": "Наименование", "barcode": "Баркод",
-    "actual_mp": "Карточки", "status_label": "Статус",
-    "demand": "Спрос, шт/день", "demand_wb": "Спрос WB, шт/день",
-    "demand_oz": "Спрос Ozon, шт/день",
-    "sells": "Продано, шт", "returns_qty": "Возвраты, шт", "return_rate": "Возвраты, %",
-    "wb_sells": "Продано WB, шт",
-    "our_stock": "У нас, шт", "our_cost": "Себестоимость, руб",
-    "wb_qty": "WB склад, шт", "wb_avail": "WB доступно, шт", "wb_in_way": "WB в пути, шт",
-    "wb_doc": "WB, дней запаса", "wb_def": "WB дефицит, шт", "to_sort": "Дослать на WB, шт",
-    "oz_qty": "Ozon склад, шт", "oz_avail": "Ozon доступно, шт", "oz_in_way": "Ozon в пути, шт",
-    "oz_doc": "Ozon, дней запаса", "oz_def": "Ozon дефицит, шт",
-    "ship_wb": "Отгрузить на WB, шт", "ship_oz": "Отгрузить на Ozon, шт",
-    "need_buy": "Купить у поставщика, шт",
-    "income": "К перечислению, руб", "margin": "Маржа, руб",
-    "margin_per_one": "Маржа/шт, руб", "margin_pct": "Рентабельность, %",
-}
-
-
-_REPLENISH_EXPORT_SIZES = {
-    "article": "Артикул", "size": "Размер", "barcode": "Штрихкод",
-    "name": "Наименование", "actual_mp": "Карточки", "status_label": "Статус",
-    "wb_sells": "Продано WB, шт", "wb_ret": "Возвраты WB, шт",
-    "wb_net": "Продажи WB нетто, шт", "wb_vel": "Спрос WB, шт/день",
-    "wb_qty": "WB склад, шт", "wb_avail": "WB доступно, шт", "wb_in_way": "WB в пути, шт",
-    "wb_doc": "WB, дней запаса", "wb_def": "WB дефицит, шт", "to_sort": "Дослать на WB, шт",
-    "ship_wb": "Отгрузить на WB, шт",
-    "our_stock": "У нас, шт",
-    "margin_per_one": "Маржа/шт, руб", "margin_pct": "Рентабельность, %", "margin": "Маржа, руб",
-}
+_REPLENISH_EXPORT = export_cols("_REPLENISH_EXPORT")
+_REPLENISH_EXPORT_SIZES = export_cols("_REPLENISH_EXPORT_SIZES")
 
 
 #: Ключи колонок из «Вида таблицы» → ключи строк экспорта. В таблице статус
@@ -932,53 +905,18 @@ def _pull_json(res: dict):
             "window": res.get("window", "")}
 
 
-OZON_DETAIL_RU_COLUMNS = {
-    "date": "Дата", "posting_number": "Постинг", "offer_id": "Артикул",
-    "name": "Наименование", "sku": "SKU", "barcode": "Штрихкод",
-    "quantity": "Кол-во", "seller_price": "Цена, руб", "amount": "Сумма, руб",
-    "commission_ratio": "Доля комиссии", "commission": "Комиссия, руб",
-    "standard_fee": "Услуги, руб", "income": "К перечислению, руб",
-    "return_qty": "Возврат, шт", "return_total": "Возврат, руб",
-}
+OZON_DETAIL_RU_COLUMNS = export_cols("OZON_DETAIL_RU_COLUMNS")
 
-OZON_ACCRUAL_RU_COLUMNS = {
-    "date": "Дата", "accrual_id": "ID начисления", "bucket": "Корзина",
-    "type_id": "Тип", "sku": "SKU", "offer_id": "Артикул",
-    "unit_number": "Постинг", "quantity": "Кол-во",
-    "amount": "Сумма, руб", "seller_price": "Цена, руб",
-    "sale_price": "Цена покупателя, руб",
-}
+OZON_ACCRUAL_RU_COLUMNS = export_cols("OZON_ACCRUAL_RU_COLUMNS")
 
-OZON_BUYOUT_RU_COLUMNS = {
-    "posting_number": "Постинг", "offer_id": "Артикул", "name": "Наименование",
-    "sku": "SKU", "quantity": "Кол-во", "seller_price": "Цена, руб",
-    "buyout_price": "Цена выкупа, руб", "amount": "Сумма выкупа, руб",
-    "deduction_by_category_percent": "Дед., %", "vat_percent": "НДС, %",
-}
+OZON_BUYOUT_RU_COLUMNS = export_cols("OZON_BUYOUT_RU_COLUMNS")
 
 
-OZON_PLACEMENT_RU_COLUMNS = {
-    "date": "Дата", "sku": "SKU", "offer_id": "Артикул",
-    "warehouse": "Склад", "paid_quantity": "Платных экз.",
-    "paid_volume": "Платный объём, мл", "storage": "Начислено, руб",
-}
+OZON_PLACEMENT_RU_COLUMNS = export_cols("OZON_PLACEMENT_RU_COLUMNS")
 
-OZON_PLACEMENT_SUMMARY_RU_COLUMNS = {
-    "article": "Артикул", "name": "Наименование", "size": "Размер",
-    "sizes_count": "Размеров", "offers_count": "Артикулов",
-    "days": "Дней хранения",
-    "paid_quantity": "Платных экз.", "paid_volume": "Платный объём, мл",
-    "storage": "Начислено, руб", "ops_count": "Операций",
-}
+OZON_PLACEMENT_SUMMARY_RU_COLUMNS = export_cols("OZON_PLACEMENT_SUMMARY_RU_COLUMNS")
 
-OZON_CASHFLOW_RU_COLUMNS = {
-    "period_begin": "Период с", "period_end": "Период по",
-    "begin_balance": "Баланс на начало",
-    "payments_amount": "Выплаты на р/с",
-    "delivery_total": "Логистика", "return_total": "Возвраты",
-    "services_total": "Услуги", "others_total": "Прочее",
-    "end_balance": "Баланс на конец",
-}
+OZON_CASHFLOW_RU_COLUMNS = export_cols("OZON_CASHFLOW_RU_COLUMNS")
 
 
 def _ozon_placement_agg(db, from_, to_, article_like=None, by_size=False) -> list:

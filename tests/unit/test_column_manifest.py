@@ -1,301 +1,244 @@
 # -*- coding: utf-8 -*-
-"""Сверка колонок JS ↔ Python: панель «Вид таблицы» и Excel-экспорт.
+"""Манифест колонок: app/static/columns.json — единственный источник (этап 4).
 
-Каждая вкладка хранит свои ключи колонок в двух местах: в `registerColView`
-(app.js — что видно на экране) и в словаре export-роута (app/api/ — что
-попадает в Excel). Ключ, которого нет в export-словаре, молча не печатается
-в файле; ключ, которого нет в панели, не может быть включён пользователем.
+Раньше ключи колонок жили в трёх местах: `registerColView` в app.js (панель
+«Вид таблицы»), литеральные словари в app/api/*.py (Excel) и KNOWN-списки
+расхождений здесь. Теперь и панель, и export-словари приходят из
+columns.json, поэтому тест сверяет:
 
-Тест фиксирует текущие расхождения в KNOWN_JS_ONLY / KNOWN_PY_ONLY (устранимые
-на этапе рефакторинга колонок) и падает на любых новых. Строгое равенство —
-после устранения расхождения запись убирается из KNOWN, чтобы возврат не
-прошёл незамеченным.
-
-Расхождения по ПОДПИСЯМ («Выручка» vs «Выручка, руб» и т.п.) здесь не
-проверяются — они отдельным шагом на том же этапе колонок.
+  1. внутренний паритет JSON: колонки всех режимов вкладки == объединение её
+     export-словарей (ключ, которого нет в словаре, в Excel молча не
+     печатается; ключ, которого нет в панели, не может включить пользователь);
+  2. JSON ↔ app.js: registerColView настроен ровно на вкладки JSON, а подписи
+     (k, label) панельных headers совпадают с modes;
+  3. JSON ↔ Python: каждый вызов export_cols("...") ссылается на существующий
+     словарь, и ни один словарь не остался без ссылок;
+  4. санити JSON: без дублей ключей, def — булевы, группы ссылаются на
+     существующие колонки, а в app/api не вернулись литеральные dict-ы.
 """
 import json
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+COLUMNS_JSON = ROOT / "app" / "static" / "columns.json"
 APP_JS = ROOT / "app" / "static" / "app.js"
-API_DIR = ROOT / "app" / "api"
+APP_DIR = ROOT / "app"
 
-# Граница между файлами пакета: тело последнего роута модуля не должно
-# «протекать» в шапку следующего модуля при конкатенации (BODY_END ловит её).
-_API_JOIN = "\n__API_FILE_BOUNDARY__ = None\n"
-
-
-def api_source() -> str:
-    """Источник всех модулей пакета app/api/ (бывший app/api.py)."""
-    files = sorted(API_DIR.glob("*.py"))
-    assert files, "нет модулей в %s" % API_DIR
-    return _API_JOIN.join(p.read_text(encoding="utf-8") for p in files)
-
-
-# Вкладка -> экспорт-роуты, чьи ключи обязаны покрывать колонки вкладки.
-# (Пути из app/api/ — без префикса /api; для режимов rows/summary — оба.)
-TAB_EXPORT = {
-    "margin-detail": ["/export/margin/detail"],
-    "margin-funnel": ["/export/margin/funnel"],
-    "margin-ozon-detail": ["/export/margin/ozon-detail"],
-    "products": ["/export/products"],
-    "replenish": ["/export/replenish"],
-    "pricing": ["/pricing/export"],
-    "wb-cards": ["/export/wb/cards"],
-    "oz-cards": ["/export/wb/cards"],
-    "wb-stock": ["/export/wb/stock"],
-    "oz-stock": ["/export/wb/stock"],
-    "wb-funnel": ["/export/wb/funnel"],
-    "wb-prices": ["/export/wb/prices"],
-    "oz-prices": ["/export/wb/prices"],
-    "wb-sales": ["/export/sales"],
-    "oz-realization": ["/export/sales"],
-    "wb-storage": ["/export/wb/storage"],
-    "wb-detail": ["/export/wb/detail-rows", "/export/wb/detail-summary"],
-    "oz-detail": ["/export/ozon/detail-rows", "/export/ozon/detail-summary"],
-    "oz-accrual": ["/export/ozon/accrual-rows"],
-    "oz-cashflow": ["/export/ozon/cashflow-rows"],
-    "oz-placement": ["/export/ozon/placement-rows", "/export/ozon/placement-summary"],
+# Вкладки дашборда: headers задаются точечными ссылками на объект dashHeaders
+# (dashHeaders.tops / .price / .prefix) — читаем его поля по этому маппингу.
+DASH_HEADER_FIELD = {
+    "dash-profit": "tops",
+    "dash-loss": "tops",
+    "dash-price": "price",
+    "dash-prefix": "prefix",
 }
 
-# Известные расхождения (устранимые). Строго: фактический список обязан
-# совпасть с KNOWN — иначе тест просит обновить KNOWN осознанно.
-# Вкладки панели дашборда (dash-*) не покрываются: их headers задаются
-# точечными ссылками (dashHeaders.tops), парсер их не читает.
-KNOWN_JS_ONLY = {
-    "margin-funnel": ["nm_id"],
-    "oz-detail": ["source"],
-    "oz-prices": ["disc_min", "disc_min_p", "price_min", "sizes"],
-    "pricing": ["nm_id"],
-    "products": ["min_price"],
-    "wb-funnel": [
-        "dy_adds", "dy_avg_price", "dy_buyouts", "dy_cancelled", "dy_orders",
-        "dy_revenue", "dy_views", "past_adds", "past_avg_price",
-        "past_buyout_sum", "past_buyouts", "past_cancel_sum",
-        "past_cancelled", "past_orders", "past_revenue", "past_views",
-        "subject_id", "tags", "title",
-    ],
-    "wb-prices": ["disc_min", "disc_min_p", "price_min", "sizes"],
+# Дополнительные переменные с headers, входящие в состав вкладки, но не
+# упомянутые в её registerColView (колонки включаются другим чекбоксом).
+EXTRA_JS_HEADERS = {
+    "products": ["productsStockHeaders"],
 }
 
-KNOWN_PY_ONLY = {
-    "margin-detail": ["delta_pct", "delta_ru", "margin_pp", "net_cost_est", "sells_pp"],
-    "margin-ozon-detail": [
-        "accrued_coverage", "delta_pct", "delta_ru", "margin_gross",
-        "margin_pp", "net_cost_est", "sells_pp", "storage_per_one",
-    ],
-    "oz-detail": ["barcode", "commission_ratio"],
-    "oz-prices": ["nm_id"],
-    "oz-stock": ["date", "marketplace"],
-    "pricing": [
-        "detail_returns_qty", "detail_sells", "eff", "floor_price",
-        "max_discount_item", "price", "replenishable", "status",
-    ],
-    "products": ["composition", "mp_stock", "own_stock", "subject", "tags", "volume_l"],
-    "replenish": [
-        "income", "oz_qty", "returns_qty", "sells", "status_label",
-        "wb_net", "wb_qty", "wb_ret",
-    ],
-    "wb-detail": ["retail_price", "srid"],
-    "wb-prices": ["nm_id"],
-    "wb-stock": ["date", "marketplace"],
-    "wb-storage": ["nm_id"],
-}
 
-# Дополнительные python-константы, участвующие в cols конкретной вкладки,
-# но не упомянутые прямо в теле её роута (алиасы применяет helper).
-EXTRA_CONST = {"replenish": ["_REPLENISH_COL_ALIASES"]}
-
-PAIR = re.compile(r'"([a-z_][a-z0-9_]*)"\s*:\s*"([^"]*)"')
-CONST_SUFFIX = re.compile(
-    r"\b([A-Z_][A-Z0-9_]*_(?:RU_COLUMNS|RENAME|EXPORT|EXPORT_SIZES|COL_ALIASES))\b"
-)
-BODY_END = re.compile(r"(?m)^(?:@router\.(?:get|post)\(|def |async def |[A-Z_][A-Z0-9_]*\s*=)")
+def _load_json() -> dict:
+    assert COLUMNS_JSON.exists(), "нет columns.json — единого источника колонок"
+    return json.loads(COLUMNS_JSON.read_text(encoding="utf-8"))
 
 
-def _brace_dict(text: str, start: int):
-    """Пары (ключ, подпись) из литерала dict, начинающегося после `start`."""
-    i = text.find("{", start)
-    if i < 0:
-        return set()
+def _balanced_block(text: str, open_pos: int, open_ch: str, close_ch: str) -> str:
+    """Текст блока от open_pos (символ open_ch) до парной закрывающей скобки."""
     depth = 0
-    for j in range(i, len(text)):
-        if text[j] == "{":
+    for j in range(open_pos, len(text)):
+        if text[j] == open_ch:
             depth += 1
-        elif text[j] == "}":
+        elif text[j] == close_ch:
             depth -= 1
             if depth == 0:
-                return set(PAIR.findall(text[i:j + 1]))
-    return set()
-
-
-def python_route_keys(api_src: str) -> dict:
-    """Путь роута -> множество ключей его export-словарей."""
-    consts = {}
-
-    def const_pairs(name):
-        if name not in consts:
-            m = re.search(r"(?m)^%s\s*=\s*\{" % re.escape(name), api_src)
-            consts[name] = _brace_dict(api_src, m.start()) if m else set()
-        return consts[name]
-
-    out = {}
-    for m in re.finditer(r'@router\.(get|post)\("([^"]+)"\)', api_src):
-        path = m.group(2)
-        fn = re.search(r"(?m)^(?:async )?def\s+\w+", api_src[m.end():])
-        body_start = m.end() + fn.start() if fn else m.end()
-        nxt = BODY_END.search(api_src, body_start + 1)
-        body = api_src[body_start:nxt.start()] if nxt else api_src[body_start:]
-        pairs = PAIR.findall(body)
-        for name in set(CONST_SUFFIX.findall(body)):
-            pairs += list(const_pairs(name))
-        if pairs:
-            out.setdefault(path, set()).update(k for k, _ in pairs)
-    for tab, names in EXTRA_CONST.items():
-        for name in names:
-            for path in TAB_EXPORT[tab]:
-                out.setdefault(path, set()).update(k for k, _ in const_pairs(name))
-    return out
-
-
-def _brace_array(text: str, start: int) -> str:
-    i = text.find("[", start)
-    depth = 0
-    for j in range(i, len(text)):
-        if text[j] == "[":
-            depth += 1
-        elif text[j] == "]":
-            depth -= 1
-            if depth == 0:
-                return text[i:j + 1]
+                return text[open_pos:j + 1]
     return ""
 
 
-def js_colview_keys(js_src: str) -> dict:
-    """Вкладка -> множество ключей колонок всех её режимов."""
-    headers = {}
-    for m in re.finditer(r"(?:const|let|var)\s+(\w*Headers)\s*=\s*\[", js_src):
-        body = _brace_array(js_src, m.end() - 1)
-        headers[m.group(1)] = re.findall(r'\bk:\s*"([^"]+)"', body)
+def _pairs(block: str) -> list:
+    """Пары (k, label) из блока вида { k: "...", label: "..." , ... }."""
+    return re.findall(r'\bk:\s*"([^"]+)",\s*label:\s*"([^"]*)"', block)
 
+
+def js_headers(js: str) -> dict:
+    """Имя переменной-массива -> список пар (k, label); плюс поля dashHeaders."""
     out = {}
-    for m in re.finditer(r'registerColView\("([^"]+)",\s*\{', js_src):
-        tab = m.group(1)
-        depth = 0
-        body = ""
-        for j in range(m.end() - 1, len(js_src)):
-            if js_src[j] == "{":
-                depth += 1
-            elif js_src[j] == "}":
-                depth -= 1
-                if depth == 0:
-                    body = js_src[m.end() - 1:j + 1]
-                    break
-        keys = []
-        for name in re.findall(r"headers:\s*([A-Za-z_$][\w$]*)", body):
-            if "." in name:  # точечные ссылки (dashHeaders.tops) не читаем
-                keys = []
-                break
-            keys += headers.get(name, [])
-        out[tab] = set(keys)
+    for m in re.finditer(r"(?:const|let|var)\s+(\w*Headers)\s*=\s*\[", js):
+        out[m.group(1)] = _pairs(_balanced_block(js, m.end() - 1, "[", "]"))
+    m = re.search(r"(?:const|let|var)\s+dashHeaders\s*=\s*\{", js)
+    if m:
+        obj = _balanced_block(js, m.end() - 1, "{", "}")
+        for f in re.finditer(r"(\w+):\s*\[", obj):
+            out["dashHeaders." + f.group(1)] = _pairs(
+                _balanced_block(obj, f.end() - 1, "[", "]"))
     return out
 
 
-def _diff(tab: str, js_keys: set, py_keys: set):
-    js_only = sorted(js_keys - py_keys)
-    py_only = sorted(py_keys - js_keys)
-    assert js_only == sorted(KNOWN_JS_ONLY.get(tab, [])), (
-        "колонки панели без поддержки в Excel-экспорте вкладки %s.\n"
-        "  фактически: %s\n  KNOWN:     %s\n"
-        "Если расхождение новое — починить export или осознанно добавить в KNOWN_JS_ONLY."
-        % (tab, js_only, sorted(KNOWN_JS_ONLY.get(tab, [])))
+def js_register_views(js: str) -> dict:
+    """Вкладка -> список имён headers-переменных в её registerColView."""
+    out = {}
+    for m in re.finditer(r'registerColView\("([^"]+)",\s*\{', js):
+        body = _balanced_block(js, m.end() - 1, "{", "}")
+        out[m.group(1)] = re.findall(r"headers:\s*([A-Za-z_$][\w$.]*)", body)
+    return out
+
+
+def js_tab_pairs(js: str, tab: str, names: list) -> set:
+    """Все пары (k, label) панельных колонок вкладки."""
+    headers = js_headers(js)
+    pairs = set()
+    for name in names:
+        if name.startswith("dashHeaders."):
+            pairs |= set(headers.get(name, []))
+        else:
+            pairs |= set(headers.get(name, []))
+    for extra in EXTRA_JS_HEADERS.get(tab, []):
+        pairs |= set(headers.get(extra, []))
+    return pairs
+
+
+def json_tab_pairs(doc: dict, tab: str) -> set:
+    pairs = set()
+    for mode in doc["tabs"][tab]["modes"].values():
+        pairs |= {(c["k"], c["label"]) for c in mode["columns"]}
+    return pairs
+
+
+def json_tab_keys(doc: dict, tab: str) -> set:
+    keys = set()
+    for mode in doc["tabs"][tab]["modes"].values():
+        keys |= {c["k"] for c in mode["columns"]}
+    return keys
+
+
+def test_register_view_covers_json_tabs():
+    """registerColView и columns.json описывают один и тот же набор вкладок."""
+    doc = _load_json()
+    views = js_register_views(APP_JS.read_text(encoding="utf-8"))
+    assert set(views) == set(doc["tabs"]), (
+        "вкладки app.js и columns.json разошлись:\n"
+        "  только в app.js: %s\n  только в JSON:  %s"
+        % (sorted(set(views) - set(doc["tabs"])),
+           sorted(set(doc["tabs"]) - set(views)))
     )
-    assert py_only == sorted(KNOWN_PY_ONLY.get(tab, [])), (
-        "колонки Excel-экспорта вкладки %s недоступны в панели «Вид таблицы».\n"
-        "  фактически: %s\n  KNOWN:     %s"
-        % (tab, py_only, sorted(KNOWN_PY_ONLY.get(tab, [])))
-    )
+    keys = [t.get("storageKey") for t in doc["tabs"].values()]
+    assert len(keys) == len(set(keys)), "storageKey вкладок обязаны быть уникальны"
+    assert all(keys), "у каждой вкладки должен быть storageKey"
 
 
-def _load():
-    return (
-        js_colview_keys(APP_JS.read_text(encoding="utf-8")),
-        python_route_keys(api_source()),
-    )
-
-
-def test_every_colview_tab_has_export_mapping():
-    """Каждая вкладка с «Вид таблицы» должна иметь известный export-роут."""
-    js_keys, py_keys = _load()
-    tabs = {t for t, k in js_keys.items() if k}
-    assert set(TAB_EXPORT) <= tabs, f"маппинг на несуществующие вкладки: {sorted(set(TAB_EXPORT) - tabs)}"
-    missing = tabs - set(TAB_EXPORT) - {"dash-loss", "dash-prefix", "dash-price", "dash-profit"}
-    assert not missing, (
-        "вкладка с колонками, но без строки в TAB_EXPORT (добавьте роуты экспорта): "
-        f"{sorted(missing)}"
-    )
-
-
-def test_mapped_export_routes_exist():
-    _, py_keys = _load()
-    missing = [(t, p) for t, paths in TAB_EXPORT.items() for p in paths if p not in py_keys]
-    assert not missing, f"export-роут без словаря колонок (переименован/удалён?): {missing}"
-
-
-def test_column_keys_match_between_ui_and_export():
-    """Главная сверка: ключи панели и export-словаря совпадают (с KNOWN)."""
-    js_keys, py_keys = _load()
-    for tab, paths in sorted(TAB_EXPORT.items()):
-        if not js_keys.get(tab):
+def test_json_modes_match_export_dicts():
+    """Колонки режимов вкладки == объединение её export-словарей (строго)."""
+    doc = _load_json()
+    for tab, tdef in sorted(doc["tabs"].items()):
+        mode_keys = json_tab_keys(doc, tab)
+        dict_names = tdef.get("exportDicts", [])
+        if not dict_names:
+            assert tab in DASH_HEADER_FIELD, (
+                "вкладка %s без exportDicts — экспорта нет? "
+                "добавьте её в DASH_HEADER_FIELD или дайте exportDicts" % tab
+            )
             continue
-        py = set()
-        for p in paths:
-            py |= py_keys.get(p, set())
-        _diff(tab, js_keys[tab], py)
+        dict_keys = set()
+        for name in dict_names:
+            assert name in doc["dicts"], f"{tab}: нет словаря {name}"
+            dict_keys |= {c["k"] for c in doc["dicts"][name]}
+        assert mode_keys == dict_keys, (
+            "вкладка %s: колонки режимов и export-словари разошлись.\n"
+            "  только в режимах: %s\n  только в словарях: %s"
+            % (tab, sorted(mode_keys - dict_keys), sorted(dict_keys - mode_keys))
+        )
 
 
-def test_export_dicts_have_no_duplicate_keys():
-    """Дубль ключа в словаре экспорта: Python молча оставит первое значение."""
-    api_src = api_source()
+def test_js_headers_match_json_modes():
+    """Подписи (k, label) панельных headers == колонки modes из JSON."""
+    doc = _load_json()
+    js = APP_JS.read_text(encoding="utf-8")
+    views = js_register_views(js)
     problems = []
-    for name in set(CONST_SUFFIX.findall(api_src)):
-        m = re.search(r"(?m)^%s\s*=\s*\{" % re.escape(name), api_src)
-        if not m:
+    for tab in sorted(views):
+        js_pairs = js_tab_pairs(js, tab, views[tab])
+        json_pairs = json_tab_pairs(doc, tab)
+        if not js_pairs:
+            problems.append("%s: headers app.js не разобраны" % tab)
             continue
-        raw = re.findall(r'"([a-z_][a-z0-9_]*)"\s*:', _brace_dict_source(api_src, m.start()))
-        dups = sorted({k for k in raw if raw.count(k) > 1})
+        if js_pairs != json_pairs:
+            only_json = sorted(json_pairs - js_pairs)[:6]
+            only_js = sorted(js_pairs - json_pairs)[:6]
+            problems.append(
+                "%s: только в JSON: %s; только в app.js: %s" % (tab, only_json, only_js)
+            )
+    assert not problems, "панель и columns.json разошлись:\n  " + "\n  ".join(problems)
+
+
+def test_all_keys_exist_somewhere_in_js():
+    """Каждый ключ колонок JSON встречается в headers app.js (страховка)."""
+    doc = _load_json()
+    js = APP_JS.read_text(encoding="utf-8")
+    missing = []
+    for tab in sorted(doc["tabs"]):
+        for key in sorted(json_tab_keys(doc, tab)):
+            if ('k: "%s"' % key) not in js and ('k:"%s"' % key) not in js:
+                missing.append((tab, key))
+    assert not missing, "ключи колонок без представления в app.js: %s" % missing[:20]
+
+
+def test_export_cols_refs_exist():
+    """Вызовы export_cols("...") ссылаются на словари JSON, и все словари живы."""
+    doc = _load_json()
+    calls = set()
+    for path in sorted(APP_DIR.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        src = path.read_text(encoding="utf-8", errors="replace")
+        calls |= set(re.findall(r'export_cols\("([^"]+)"\)', src))
+    dicts = set(doc["dicts"])
+    unknown = sorted(calls - dicts)
+    dead = sorted(dicts - calls)
+    assert not unknown, "export_cols со ссылкой на несуществующий словарь: %s" % unknown
+    assert not dead, "словари columns.json без использования в коде: %s" % dead
+
+
+def test_no_literal_export_dicts_in_api():
+    """В app/api не должны вернуться литеральные dict-ы в project_export."""
+    problems = []
+    for path in sorted((APP_DIR / "api").glob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        for m in re.finditer(r"project_export\(\s*\w+,\s*\{", src):
+            line = src.count("\n", 0, m.start()) + 1
+            problems.append("%s:%d" % (path.name, line))
+    assert not problems, (
+        "литеральный словарь вместо export_cols(...) в: %s — "
+        "источник колонок только columns.json" % problems
+    )
+
+
+def test_json_is_sane():
+    """Дубли, типы и ссылки внутри columns.json."""
+    doc = _load_json()
+    problems = []
+    for tab, tdef in sorted(doc["tabs"].items()):
+        assert tdef.get("modes"), f"{tab}: нет режимов"
+        for mname, mode in tdef["modes"].items():
+            keys = [c["k"] for c in mode["columns"]]
+            dups = sorted({k for k in keys if keys.count(k) > 1})
+            if dups:
+                problems.append("%s/%s: дубли %s" % (tab, mname, dups))
+            for c in mode["columns"]:
+                if not isinstance(c.get("def"), bool):
+                    problems.append("%s/%s: %s.def не bool" % (tab, mname, c["k"]))
+                if not c.get("label"):
+                    problems.append("%s/%s: %s без подписи" % (tab, mname, c["k"]))
+        for group in tdef.get("groups", []):
+            for k in group["keys"]:
+                if k not in json_tab_keys(doc, tab):
+                    problems.append("%s: группа «%s» ссылается на %s" % (tab, group["title"], k))
+    for name, entries in sorted(doc["dicts"].items()):
+        keys = [c["k"] for c in entries]
+        dups = sorted({k for k in keys if keys.count(k) > 1})
         if dups:
-            problems.append(f"{name}: {dups}")
-    # литеральные dict-ы внутри export-роутов
-    for m in re.finditer(r"project_export\(\s*\w+,\s*\{", api_src):
-        raw = re.findall(r'"([a-z_][a-z0-9_]*)"\s*:', _brace_dict_source(api_src, m.start()))
-        dups = sorted({k for k in raw if raw.count(k) > 1})
-        if dups:
-            line = api_src.count("\n", 0, m.start()) + 1
-            problems.append(f"api.py:{line}: {dups}")
-    assert not problems, "дубли ключей в словарях экспорта:\n  " + "\n  ".join(problems)
-
-
-def _brace_dict_source(text: str, start: int) -> str:
-    i = text.find("{", start)
-    if i < 0:
-        return ""
-    depth = 0
-    for j in range(i, len(text)):
-        if text[j] == "{":
-            depth += 1
-        elif text[j] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[i:j + 1]
-    return ""
-
-
-def test_known_lists_are_json_sane():
-    """Сами KNOWN-списки — отсортированы и без дублей (иначе сравнение бессмысленно)."""
-    for name, data in (("KNOWN_JS_ONLY", KNOWN_JS_ONLY), ("KNOWN_PY_ONLY", KNOWN_PY_ONLY)):
-        for tab, keys in data.items():
-            assert keys == sorted(set(keys)), f"{name}[{tab}] не отсортирован/с дублями"
-        assert json.dumps(data, ensure_ascii=False)  # сериализуемы (для будущих выгрузок)
+            problems.append("dicts[%s]: дубли %s" % (name, dups))
+    assert not problems, "columns.json испорчен:\n  " + "\n  ".join(problems)

@@ -22,18 +22,7 @@ def export_wb_detail_summary(
     df = sync_service.detail_summary_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like
     )
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "title": "Наименование", "sells": "Продано, шт",
-        "returns_qty": "Возвращено, шт", "revenue": "Реализовано, руб",
-        "commission": "Комиссия, руб", "for_pay": "К перечислению, руб",
-        "logistics": "Доставка, руб", "delivery_count": "Доставок, шт",
-        "return_delivery_count": "Возврат доставок, шт",
-        "storage": "Хранение, руб",
-        "pvz_compensation": "ПВЗ-компенсации, руб",
-        "payment_services": "Платёжные услуги, руб",
-        "services": "Услуги/штрафы, руб", "ops_count": "Операций",
-        "sources": "Источник",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_wb_detail_summary"), cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Детализация по артикулам")
     fname = f"wb_detail_summary_{from_}_{to_}.xlsx"
@@ -83,15 +72,7 @@ def export_wb_detail_rows(
                                       "retail_price", "retail_amount", "commission",
                                       "for_pay", "logistics", "storage", "services",
                                       "office", "srid", "source"])
-    df, ru = excel_io.project_export(df, {
-        "date": "Дата", "article": "Артикул", "title": "Наименование",
-        "doc_type": "Тип документа", "quantity": "Кол-во",
-        "retail_price": "Цена розничная", "retail_amount": "Реализовано, руб",
-        "commission": "Комиссия, руб", "for_pay": "К перечислению, руб",
-        "logistics": "Доставка, руб", "storage": "Хранение, руб",
-        "services": "Услуги/штрафы, руб", "office": "Склад",
-        "srid": "SRID", "source": "Источник",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_wb_detail_rows"), cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Строки детализации")
     fname = f"wb_detail_rows_{from_}_{to_}.xlsx"
@@ -115,11 +96,7 @@ def export_wb_cards(
         "chrt_id", "nm_id", "vendor_code", "brand", "subject", "size", "barcode",
         "volume_l", "composition", "name",
     ])
-    df, ru = excel_io.project_export(df, {
-        "chrt_id": "Код размера", "nm_id": "Артикул WB", "vendor_code": "Артикул продавца",
-        "brand": "Бренд", "subject": "Предмет", "size": "Размер", "barcode": "Баркод",
-        "volume_l": "Объём, л", "composition": "Состав", "name": "Наименование",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_wb_cards"), cols)
     df = df.rename(columns=ru)
     return _xlsx_response(df, "wb_cards.xlsx", payload["total"])
 
@@ -157,20 +134,11 @@ def export_wb_stock(
         ]
         df_cols = ["date", "marketplace", "article", "name", "warehouse", "quantity",
                    "quantity_full", "in_way"]
-        ru = {
-            "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
-            "name": "Наименование", "warehouse": "Склад", "quantity": "Доступно",
-            "quantity_full": "Всего на складах", "in_way": "В пути",
-        }
+        ru = export_cols("export_wb_stock")
     else:
         df_cols = ["date", "marketplace", "article", "name", "chrt_id", "size", "barcode",
                    "warehouse", "quantity", "quantity_full", "in_way"]
-        ru = {
-            "date": "Дата", "marketplace": "Маркетплейс", "article": "Артикул",
-            "name": "Наименование", "chrt_id": "Код размера", "size": "Размер",
-            "barcode": "Баркод", "warehouse": "Склад", "quantity": "Доступно",
-            "quantity_full": "Всего на складах", "in_way": "В пути",
-        }
+        ru = export_cols("export_wb_stock")
     df = pd.DataFrame(recs, columns=df_cols)
     df, ru = excel_io.project_export(df, ru, cols)
     df = df.rename(columns=ru)
@@ -186,11 +154,7 @@ def export_wb_prices(marketplace: str = "wb", article_like: Optional[str] = None
     df = pd.DataFrame(payload["rows"], columns=[
         "article", "nm_id", "size", "name", "price", "discounted_price", "discount",
     ])
-    df, ru = excel_io.project_export(df, {
-        "article": "Артикул", "nm_id": "Артикул WB", "size": "Размер",
-        "name": "Наименование", "price": "Цена без скидки",
-        "discounted_price": "Цена со скидкой", "discount": "Скидка, %",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_wb_prices"), cols)
     df = df.rename(columns=ru)
     fname = f"{marketplace}_prices.xlsx"
     return _xlsx_response(df, fname, payload["count"])
@@ -205,11 +169,7 @@ def export_wb_storage(article_like: Optional[str] = None, cols: Optional[str] = 
         "nm_id", "article", "name", "barcodes_count", "volume", "storage_price",
         "warehouse_price",
     ])
-    df, ru = excel_io.project_export(df, {
-        "nm_id": "Артикул WB", "article": "Артикул", "name": "Наименование",
-        "barcodes_count": "Баркодов", "volume": "Объём, л",
-        "storage_price": "Хранение за баркод", "warehouse_price": "Сумма хранения",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_wb_storage"), cols)
     df = df.rename(columns=ru)
     return _xlsx_response(df, "wb_storage.xlsx", payload["count"])
 
@@ -225,26 +185,7 @@ def export_wb_funnel(
     """Экспорт воронки продаж WB (funnel_metric) в Excel."""
     payload = api_funnel(date_from=date_from, date_to=date_to, article_like=article_like, db=db)
     df = pd.DataFrame(payload["rows"])
-    df, ru = excel_io.project_export(df, {
-        "date_from": "С", "date_to": "По", "nm_id": "Артикул WB", "article": "Артикул",
-        "name": "Наименование", "subject_name": "Предмет", "brand_name": "Бренд",
-        "product_rating": "Рейтинг карточки", "feedback_rating": "Рейтинг по отзывам",
-        "views": "Просмотры", "opens": "Открытия", "adds": "В корзину",
-        "orders": "Заказы", "cancelled": "Отмены", "cancel_sum": "Сумма отмен",
-        "buyouts": "Выкупы", "avg_price": "Ср. цена", "revenue": "Выручка",
-        "buyout_sum": "Сумма выкупа", "avg_orders_per_day": "Ср. заказов в день",
-        "share_order_percent": "Доля в выручке, %", "add_to_wishlist": "В отложенные",
-        "time_to_ready_min": "Время доставки, мин", "localization_percent": "Локальные заказы, %",
-        "conv_to_cart_percent": "В корзину, %", "conv_cart_to_order_percent": "К заказу, %",
-        "conv_buyout_percent": "К выкупу, %",
-        "wb_club_order_count": "WB Клуб: заказы", "wb_club_order_sum": "WB Клуб: заказы, ₽",
-        "wb_club_buyout_count": "WB Клуб: выкупы", "wb_club_buyout_sum": "WB Клуб: выкупы, ₽",
-        "wb_club_cancel_count": "WB Клуб: отмены", "wb_club_cancel_sum": "WB Клуб: отмены, ₽",
-        "wb_club_avg_price": "WB Клуб: ср. цена", "wb_club_buyout_percent": "WB Клуб: % выкупа",
-        "wb_club_avg_orders_per_day": "WB Клуб: заказов/день",
-        "stock_wb": "Остатки WB", "stock_mp": "Остатки свой склад",
-        "stock_balance_sum": "Сумма остатков",
-    }, cols)
+    df, ru = excel_io.project_export(df, export_cols("export_wb_funnel"), cols)
     df = df.rename(columns=ru)
     return _xlsx_response(df, f"wb_funnel_{payload['date_from']}_{payload['date_to']}.xlsx",
                           payload["count"])

@@ -26,8 +26,10 @@ if str(ROOT) not in sys.path:
 FILE_ROLES = {
     "app/api/": "пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py`",
     "app/static/app.js": "весь фронтенд (вкладки, таблицы, fetch к /api)",
+    "app/static/columns.json": "единый источник колонок: панель, подписи, Excel-словари",
     "app/static/index.html": "разметка: навигация `data-tab` + секции `tab-*`",
     "app/static/style.css": "стили (панели «Вид таблицы», тулбары, таблицы)",
+    "app/services/columns.py": "loader columns.json (`export_cols` для Python)",
     "app/models.py": "SQLAlchemy-модели (схема БД)",
     "app/database.py": "engine/session PostgreSQL",
     "app/config.py": "`Settings`, читается из `.env`",

@@ -93,6 +93,7 @@ const HTML_PATH = process.argv[3];
 const htmlSrc = fs.readFileSync(HTML_PATH, "utf8");
 const jsSrc = fs.readFileSync(APP_PATH, "utf8");
 const apiSrc = fs.readFileSync(process.argv[4], "utf8");
+const colsJson = JSON.parse(fs.readFileSync(process.argv[6], "utf8"));
 const ccTab2 = (tab) => {
   const [head, ...rest] = tab.split("-");
   return head + rest.map((s) => s[0].toUpperCase() + s.slice(1)).join("");
@@ -303,11 +304,10 @@ assert.ok((jsSrc.match(/\{ k: "to_sort", label: "Дослать"/g) || []).lengt
   "«Дослать» должна быть и в «По артикулам», и в «По размерам»");
 assert.ok(jsSrc.includes('to_sort: _footSum(rows, "to_sort")'),
   "в итогах Потребности нет суммы «Дослать»");
-assert.ok(apiSrc.includes('"to_sort": "Дослать на WB, шт"'),
-  "в Excel-выгрузке нет колонки «Дослать на WB, шт»");
-assert.strictEqual(
-  (apiSrc.match(/"to_sort": "Дослать на WB, шт"/g) || []).length, 2,
-  "«Дослать» должна выгружаться и в «По артикулам», и в «По размерам»");
+const toSortLabels = ["_REPLENISH_EXPORT", "_REPLENISH_EXPORT_SIZES"].map(
+  (n) => (colsJson.dicts[n] || []).find((c) => c.k === "to_sort")?.label);
+assert.deepStrictEqual(toSortLabels, ["Дослать", "Дослать"],
+  "в Excel-словарях columns.json нет колонки «Дослать» (article + sizes)");
 
 // Поля карточки PDF = колонки «Вида таблицы» (отдельного списка галочек нет).
 const pdfColsOf = sandbox.replenishPdfCols;
@@ -606,10 +606,12 @@ def test_js_helpers(node_bin, tmp_path):
         encoding="utf-8")
     css_path = Path(__file__).resolve().parents[2] / "app" / "static" / "style.css"
     assert css_path.exists(), str(css_path)
+    columns_path = Path(__file__).resolve().parents[2] / "app" / "static" / "columns.json"
+    assert columns_path.exists(), str(columns_path)
     harness = tmp_path / "harness.js"
     harness.write_text(HARNESS, encoding="utf-8")
     res = subprocess.run([node_bin, str(harness), str(APP_JS), str(html_path),
-                          str(api_path), str(css_path)],
+                          str(api_path), str(css_path), str(columns_path)],
                          capture_output=True, text=True)
     assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
     assert "JS_TESTS_OK" in res.stdout
