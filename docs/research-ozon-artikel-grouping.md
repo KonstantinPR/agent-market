@@ -47,7 +47,7 @@
 | Бэкфилл | `scripts/backfill_ozon_articles.py` (+ `--dry-run`) | |
 | Синк | `upsert_*` заполняют `base_article`/`size` при загрузке | `app/services/sync.py` |
 | Маржа | `ozon_margin_detail(by_size=...)` + свод `oz_detail_summary_dataframe` | `app/services/margin.py` |
-| API | `by_size` в марже, своде детализации, своде размещения + экспорт; поиск `article_like` по базе | `app/api.py` |
+| API | `by_size` в марже, своде детализации, своде размещения + экспорт; поиск `article_like` по базе | `app/api/` |
 | Дашборд | цены и остатки Ozon группируются по товару, в топах — `sizes_count`/`offers_count` | `app/services/dashboard.py` |
 | «Пополнить» | остаётся **по размерам**: закупка, штрихкоды и остатки нужны по карточкам | `app/services/replenish.py` |
 | UI | галочка «в разрезе размеров» в панели фильтров каждого свода — `marginOzBySize` (маржа Ozon), `ozDetailBySize` (детализация), `ozPlacementBySize` (размещение); режим у каждого свой: `localStorage['ozBySize:<tab>']`, default — по товарам; при режиме «Строками» галочка приглушена и не действует | `app/static/*` |

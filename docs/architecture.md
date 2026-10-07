@@ -10,8 +10,8 @@
 браузер (app/static/app.js + index.html)
         │  fetch() к /api/*
         ▼
-FastAPI router — app/api.py  (все эндпоинты, один модуль;
-        │                 карта — docs/api.md, перегенерировать скриптом)
+FastAPI router — app/api/  (пакет: роутеры по группам, общий багаж
+        │                 _common.py; карта — docs/api.md, генерить скриптом)
         │
         ├── app/providers/  — HTTP к маркетплейсам (wb.py, ozon.py)
         ├── app/services/   — бизнес-логика, единственное место расчётов
@@ -21,7 +21,7 @@ FastAPI router — app/api.py  (все эндпоинты, один модуль
         PostgreSQL (app/database.py)
 ```
 
-Правило слоёв: `api.py` не считает, сервисы не знают про HTTP-ответы,
+Правило слоёв: модули `app/api/` не считают, сервисы не знают про HTTP-ответы,
 провайдеры не пишут в БД. Логика живёт только в `app/services/`.
 
 ## Ключевые файлы
@@ -35,7 +35,7 @@ FastAPI router — app/api.py  (все эндпоинты, один модуль
 | Файл | Строк | Роль |
 |---|---|---|
 | `app/static/app.js` | 6603 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api.py` | 4167 | все HTTP-эндпоинты, один `APIRouter(prefix="/api")` |
+| `app/api/ (16 файлов)` | 4355 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/services/sync.py` | 2462 | запись выгрузок WB/Ozon в БД |
 | `app/services/pricing.py` | 1789 | автопилот цен: R1–R11, расчёт скидок |
 | `tests/api/test_endpoints.py` | 1340 | HTTP-эндпоинты через TestClient |
@@ -49,7 +49,7 @@ FastAPI router — app/api.py  (все эндпоинты, один модуль
 | `app/services/margin.py` | 772 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/models.py` | 673 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 623 | PDF «Потребность в товаре» |
-| `tests/js/test_js_helpers.py` | 609 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 616 | проверка app.js через Node `vm` |
 | `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/dashboard.py` | 501 | сводные панели дашборда |
 | `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
@@ -83,7 +83,8 @@ FastAPI router — app/api.py  (все эндпоинты, один модуль
 - расчёт, обогащение данных, любая логика → `app/services/<фича>.py`;
 - HTTP к маркетплейсу → `app/providers/` (через `factory.py`, чтобы тесты
   подменялись фейками);
-- новый эндпоинт → конец `app/api.py`, префикс `/api` уже у роутера;
+- новый эндпоинт → модуль `app/api/<группа>.py` (см. docstring
+  `app/api/__init__.py`; общее — `_common.py`), префикс `/api` у роутера пакета;
 - таблица во фронтенде → существующий `pagedTable` (памятка в `AGENTS.md`,
   раздел «UI таблиц»), колонки и `tip` — в `app/static/app.js`;
 - миграция колонки → идемпотентный `ALTER ... IF NOT EXISTS` в
@@ -176,5 +177,5 @@ python scripts\gen_api_map.py --check            # docs не протухли?
 
 Перед началом работы обязательно прочитать `TICKETS.md` и проверить
 `git status` — в проекте могут идти параллельные задачи, и файлы
-`app/api.py`, `app/static/app.js`, `app/services/replenish.py` пересекаются
+`app/api/*.py`, `app/static/app.js`, `app/services/replenish.py` пересекаются
 между ними.

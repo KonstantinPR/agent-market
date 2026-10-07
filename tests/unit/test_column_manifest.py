@@ -2,7 +2,7 @@
 """Сверка колонок JS ↔ Python: панель «Вид таблицы» и Excel-экспорт.
 
 Каждая вкладка хранит свои ключи колонок в двух местах: в `registerColView`
-(app.js — что видно на экране) и в словаре export-роута (app/api.py — что
+(app.js — что видно на экране) и в словаре export-роута (app/api/ — что
 попадает в Excel). Ключ, которого нет в export-словаре, молча не печатается
 в файле; ключ, которого нет в панели, не может быть включён пользователем.
 
@@ -20,10 +20,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 APP_JS = ROOT / "app" / "static" / "app.js"
-API_PY = ROOT / "app" / "api.py"
+API_DIR = ROOT / "app" / "api"
+
+# Граница между файлами пакета: тело последнего роута модуля не должно
+# «протекать» в шапку следующего модуля при конкатенации (BODY_END ловит её).
+_API_JOIN = "\n__API_FILE_BOUNDARY__ = None\n"
+
+
+def api_source() -> str:
+    """Источник всех модулей пакета app/api/ (бывший app/api.py)."""
+    files = sorted(API_DIR.glob("*.py"))
+    assert files, "нет модулей в %s" % API_DIR
+    return _API_JOIN.join(p.read_text(encoding="utf-8") for p in files)
+
 
 # Вкладка -> экспорт-роуты, чьи ключи обязаны покрывать колонки вкладки.
-# (Пути из app/api.py — без префикса /api; для режимов rows/summary — оба.)
+# (Пути из app/api/ — без префикса /api; для режимов rows/summary — оба.)
 TAB_EXPORT = {
     "margin-detail": ["/export/margin/detail"],
     "margin-funnel": ["/export/margin/funnel"],
@@ -210,7 +222,7 @@ def _diff(tab: str, js_keys: set, py_keys: set):
 def _load():
     return (
         js_colview_keys(APP_JS.read_text(encoding="utf-8")),
-        python_route_keys(API_PY.read_text(encoding="utf-8")),
+        python_route_keys(api_source()),
     )
 
 
@@ -246,7 +258,7 @@ def test_column_keys_match_between_ui_and_export():
 
 def test_export_dicts_have_no_duplicate_keys():
     """Дубль ключа в словаре экспорта: Python молча оставит первое значение."""
-    api_src = API_PY.read_text(encoding="utf-8")
+    api_src = api_source()
     problems = []
     for name in set(CONST_SUFFIX.findall(api_src)):
         m = re.search(r"(?m)^%s\s*=\s*\{" % re.escape(name), api_src)

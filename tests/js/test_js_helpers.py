@@ -160,7 +160,7 @@ assert.ok(jsSrc.includes('api("/products/price-settings"'), "нет GET /api/pro
 assert.ok(jsSrc.includes('"/api/export/products"'), "нет /api/export/products в app.js");
 assert.ok(jsSrc.includes('"products": ["products", "refresh", "#headerMsg"]'),
     "вкладка products в apiPullByTab пишет статус в шапку (#headerMsg)");
-assert.ok(apiSrc.includes('@router.post("/products/refresh")'), "в app/api.py нет POST /products/refresh");
+assert.ok(apiSrc.includes('@router.post("/products/refresh")'), "в app/api/ нет POST /products/refresh");
 
 // T-29: статус разделов один — в шапке рядом с «Применить» (#headerMsg).
 assert.ok(htmlSrc.includes('<span class="msg header-msg" id="headerMsg">'),
@@ -366,9 +366,9 @@ assert.ok(jsSrc.includes("Excel с правками: перетащите фай
 assert.ok(jsSrc.includes('"Скачать PDF из Excel"'),
   "кнопка подписывает режим файла");
 assert.ok(apiSrc.includes('@router.post("/replenish/import-excel")'),
-  "в app/api.py есть POST /replenish/import-excel");
+  "в app/api/ есть POST /replenish/import-excel");
 assert.ok(apiSrc.includes('@router.post("/export/replenish/pdf")'),
-  "в app/api.py есть POST /export/replenish/pdf для строк файла");
+  "в app/api/ есть POST /export/replenish/pdf для строк файла");
 assert.ok(apiSrc.includes("apply_sort_budget"),
   "бюджет «Итого дослать» применяется в PDF-сборке");
 const excelCss = fs.readFileSync(process.argv[5], "utf8"); // cssSrc объявится ниже
@@ -595,8 +595,15 @@ def test_js_helpers(node_bin, tmp_path):
     assert APP_JS.exists(), str(APP_JS)
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "index.html"
     assert html_path.exists(), str(html_path)
-    api_path = Path(__file__).resolve().parents[2] / "app" / "api.py"
-    assert api_path.exists(), str(api_path)
+    api_dir = Path(__file__).resolve().parents[2] / "app" / "api"
+    assert api_dir.is_dir(), str(api_dir)
+    # Один временный файл из всех модулей пакета: границы-сентинелы, чтобы
+    # тело роута не сливалось с шапкой соседнего модуля (как в api_source()).
+    api_path = tmp_path / "api_all.py"
+    api_path.write_text(
+        "\n__API_FILE_BOUNDARY__ = None\n".join(
+            p.read_text(encoding="utf-8") for p in sorted(api_dir.glob("*.py"))),
+        encoding="utf-8")
     css_path = Path(__file__).resolve().parents[2] / "app" / "static" / "style.css"
     assert css_path.exists(), str(css_path)
     harness = tmp_path / "harness.js"

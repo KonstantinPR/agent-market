@@ -22,9 +22,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # Файл -> роль (см. docs/architecture.md). Порядок не важен, таблица сортируется
-# по числу строк по убыванию.
+# по числу строк по убыванию. Ключ с «/» на конце — каталог: суммируются все .py.
 FILE_ROLES = {
-    "app/api.py": "все HTTP-эндпоинты, один `APIRouter(prefix=\"/api\")`",
+    "app/api/": "пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py`",
     "app/static/app.js": "весь фронтенд (вкладки, таблицы, fetch к /api)",
     "app/static/index.html": "разметка: навигация `data-tab` + секции `tab-*`",
     "app/static/style.css": "стили (панели «Вид таблицы», тулбары, таблицы)",
@@ -87,12 +87,21 @@ def file_stats_md() -> str:
     rows = []
     for rel, role in FILE_ROLES.items():
         p = ROOT / rel
-        if not p.exists():
-            raise SystemExit(f"нет файла из FILE_ROLES: {rel}")
-        rows.append((_count_lines(p), rel, role))
+        if rel.endswith("/"):
+            files = sorted(p.glob("*.py"))
+            if not files:
+                raise SystemExit(f"нет .py в каталоге из FILE_ROLES: {rel}")
+            n = sum(_count_lines(f) for f in files)
+            display = f"{rel} ({len(files)} файлов)"
+        else:
+            if not p.exists():
+                raise SystemExit(f"нет файла из FILE_ROLES: {rel}")
+            n = _count_lines(p)
+            display = rel
+        rows.append((n, display, role))
     rows.sort(reverse=True)
     lines = ["| Файл | Строк | Роль |", "|---|---|---|"]
-    lines += [f"| `{rel}` | {n} | {role} |" for n, rel, role in rows]
+    lines += [f"| `{disp}` | {n} | {role} |" for n, disp, role in rows]
     return "\n".join(lines)
 
 
@@ -123,7 +132,7 @@ def api_md() -> str:
         f"групп: **{len(groups)}**. Источник — реестр роутов FastAPI "
         "(`app.main:app`), поэтому список всегда совпадает с кодом.",
         "",
-        "Общий префикс и общие `Depends` заданы в `app/api.py`. "
+        "Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. "
         "Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); "
         "`response_model` сейчас почти не используется — схему смотреть "
         "в теле хендлера.",
