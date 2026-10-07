@@ -216,6 +216,13 @@ main { padding: 20px; }
 .btn:hover { border-color: #111; }
 .btn:disabled { opacity: .55; cursor: wait; }
 body.busy .btn { pointer-events: none; opacity: .6; }
+/* Кнопки в тулбарах — в одну высоту и шрифт с соседними селекторами и полями.
+   Нативные <select>/<input> не наследуют line-height 1.5 (как элементы <a>),
+   поэтому кнопки-ссылки («Экспорт в Excel») выбиваются на пару пикселей выше. */
+.toolbar .btn {
+  line-height: 1.2;
+  font-family: inherit;
+}
 .msg { font-size: 12px; color: #417505; }
 .msg.error { color: #c0392b; }
 .msg-warn { font-size: 12px; color: #8a6d1a; background: #fdf6e3; border: 1px solid #eadb9f; border-radius: 3px; padding: 2px 8px; }
