@@ -695,7 +695,6 @@ def test_import_custom_stock(api_client):
 # ------------------------------------------------------------------ Яндекс.Диск
 def test_yandex_requires_token(api_client, monkeypatch):
     from app.config import settings
-    from app.services import yandex_disk
 
     monkeypatch.setattr(settings, "yandex_disk_token", "")
     r = api_client.get("/api/yandex/list")

@@ -73,7 +73,7 @@ DETAIL_RU_COLUMNS = {
     "deduction": "Удержания", "additionalPayment": "Корректировка ВВ",
     "rebillLogisticCost": "Возмещение издержек по перевозке/складским операциям",
     "srid": "Уникальный идентификатор записи (SRID)",
-    "docTypeName": "Тип документа", "orderUid": "ID заказа",
+    "orderUid": "ID заказа",
 }
 
 # Русские заголовки файла WB «Детализация продаж» -> ключи финансового отчёта.
@@ -812,7 +812,7 @@ class WbProvider(BaseProvider):
                     resp = requests.get(
                         url, params={"quantity": 1, "nm": ",".join(chunk)}, timeout=30
                     )
-                except requests.RequestException as exc:
+                except requests.RequestException:
                     if attempt == 3:
                         return out
                     time.sleep(2)

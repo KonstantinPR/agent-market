@@ -1,6 +1,5 @@
 """Синхронизация данных провайдеров в PostgreSQL (upsert-логика)."""
 import json
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -1287,12 +1286,12 @@ def _wb_card_volume(v) -> float:
     if not isinstance(v, dict):
         return 0.0
     try:
-        l = float(v.get("length") or 0)
+        length = float(v.get("length") or 0)
         w = float(v.get("width") or 0)
         h = float(v.get("height") or 0)
     except (TypeError, ValueError):
         return 0.0
-    return round(l * w * h / 1_000_000, 3)
+    return round(length * w * h / 1_000_000, 3)
 
 
 def _catalog_subject(v) -> str:

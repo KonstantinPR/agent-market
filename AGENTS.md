@@ -415,18 +415,23 @@ git status --short
 git diff --stat
 
 # 2. Тикеты: метка/ветка/разделы согласованы (exit 1 = проблемы)
-.venv\Scripts\python.exe -m app.services.tickets validate
+venv\Scripts\python.exe -m app.services.tickets validate
 
-# 3. Синтаксис: Python и JS (node ставится отдельно от Python)
-.venv\Scripts\python.exe -m py_compile app\*.py app\services\*.py app\providers\*.py scripts\*.py
+# 3. Линт: ruff (минимальный набор правил — ruff.toml) + синтаксис JS (node ставится отдельно от Python)
+venv\Scripts\python.exe -m ruff check .
 node --check app\static\app.js
 
 # 4. Тесты — полный набор, обязательно в одиночку (общая тестовая БД)
-.venv\Scripts\python.exe -m pytest -q
+venv\Scripts\python.exe -m pytest -q
 
 # 5. Документы не протухли (нужно, если трогали api.py / services / providers / static)
-.venv\Scripts\python.exe scripts\gen_api_map.py --check
+venv\Scripts\python.exe scripts\gen_api_map.py --check
 ```
+
+Разово на машине: `venv\Scripts\pre-commit install` — тот же ruff будет
+запускаться автоматически перед каждым коммитом (`.pre-commit-config.yaml`,
+при необходимости чинит мелочь через `--fix`). Вместо него шаг 3 ручной —
+оба варианта равнозначны, хук не отменяет чек-лист.
 
 Ручная сверка:
 

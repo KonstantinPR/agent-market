@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import settings
 from app.services import funnel as funnel_service
 from app.services import ozon_article
 from app.services.common import like_col, like_re
@@ -340,7 +339,8 @@ def margin_detail_dataframe(
                 return q
         return None
 
-    is_ret = (lambda t: "возврат" in str(t or "").lower() or "return" in str(t or "").lower())
+    def is_ret(t) -> bool:
+        return "возврат" in str(t or "").lower() or "return" in str(t or "").lower()
     cells: dict = {}
     titles: dict = {}
     nms: dict = {}

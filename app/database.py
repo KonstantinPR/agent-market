@@ -121,7 +121,6 @@ def ensure_schema(seed: bool = True) -> None:
 def _seed_marketplace_counterparties() -> None:
     """WB и Ozon заводятся как контрагенты-маркетплейсы сразу (если справочник пуст)."""
     from sqlalchemy import select
-    from sqlalchemy.orm import Session
 
     from app import models
 

@@ -11,10 +11,8 @@
 Снимок намеренно полный: при разбиении api.py на роутеры префиксы и имена
 путей обязаны сохраниться байт в байт.
 """
-import re
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import select
 
 from app.config import settings
-from app.database import SessionLocal, engine
+from app.database import SessionLocal
 from app import models
 
 MOCK_DIR = settings.mock_dir

@@ -1,7 +1,6 @@
 """Резолвер базы/размера артикулов Ozon."""
 import datetime as dt
 
-import pytest
 from sqlalchemy import select
 
 from app import models

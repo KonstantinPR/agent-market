@@ -36,11 +36,11 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 |---|---|---|
 | `app/static/app.js` | 6538 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/static/columns.json` | 5496 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/api/ (16 файлов)` | 4087 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/services/sync.py` | 2462 | запись выгрузок WB/Ozon в БД |
+| `app/api/ (16 файлов)` | 4088 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/services/sync.py` | 2461 | запись выгрузок WB/Ozon в БД |
 | `app/services/pricing.py` | 1789 | автопилот цен: R1–R11, расчёт скидок |
-| `tests/api/test_endpoints.py` | 1340 | HTTP-эндпоинты через TestClient |
-| `app/services/refresh.py` | 1107 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
+| `tests/api/test_endpoints.py` | 1339 | HTTP-эндпоинты через TestClient |
+| `app/services/refresh.py` | 1103 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `app/static/style.css` | 1102 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `app/services/replenish.py` | 1025 | подсортировка WB, план дефицита, скорость продаж |
 | `app/providers/wb.py` | 976 | HTTP к Wildberries |
@@ -52,15 +52,15 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/pdf_demand.py` | 623 | PDF «Потребность в товаре» |
 | `tests/js/test_js_helpers.py` | 618 | проверка app.js через Node `vm` |
 | `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
-| `app/services/dashboard.py` | 501 | сводные панели дашборда |
+| `app/services/dashboard.py` | 500 | сводные панели дашборда |
 | `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 255 | индекс фото на диске, выбор папки, fallback по префиксу |
 | `scripts/load_sample.py` | 216 | демо-данные |
 | `app/services/base_price.py` | 178 | рекомендуемая (базовая) цена |
 | `app/services/thumbs.py` | 144 | миниатюры PDF в `data/thumbs/` |
-| `app/database.py` | 144 | engine/session PostgreSQL |
-| `app/services/excel_import.py` | 138 | разбор отредактированного Excel «Потребность» |
+| `app/database.py` | 143 | engine/session PostgreSQL |
+| `app/services/excel_import.py` | 137 | разбор отредактированного Excel «Потребность» |
 | `scripts/init_db.py` | 115 | создание схемы + идемпотентные ALTER |
 | `app/services/yandex_disk.py` | 108 | загрузка отчётов на Яндекс.Диск |
 | `app/services/funnel.py` | 98 | воронка продаж (агрегация) |

@@ -188,7 +188,7 @@ async def api_wh_todisk(kind: str = "docs", type: str = "receipt", db: Session =
         token = yandex_service.require_token()
         buf = warehouse_service.file_for(kind, db, doc_type=type)
         filename = f"{kind}_{type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx" if kind == "docs" else f"{kind}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        folder = f"/agent_market/Наш склад"
+        folder = "/agent_market/Наш склад"
         r = yandex_service.upload_bytes(token, folder, filename, buf.read())
         return {"ok": True, "path": r.get("path", f"{folder}/{filename}")}
     except yandex_service.YandexDiskError as e:

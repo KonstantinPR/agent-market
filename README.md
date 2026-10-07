@@ -159,11 +159,11 @@ venv\Scripts\python.exe -m pytest --cov=app          # с покрытием
 ### Проверка перед коммитом
 
 Единый чек-лист живёт в [AGENTS.md](AGENTS.md) (раздел «Перед коммитом»):
-`git status` → `tickets validate` → `py_compile` + `node --check` → `pytest`
+`git status` → `tickets validate` → `ruff check` + `node --check` → `pytest`
 → `scripts/gen_api_map.py --check`. Кратко:
 
 ```powershell
-venv\Scripts\python.exe -m py_compile app\*.py app\services\*.py app\providers\*.py
+venv\Scripts\python.exe -m ruff check .
 node --check app\static\app.js
 venv\Scripts\python.exe -m pytest
 ```

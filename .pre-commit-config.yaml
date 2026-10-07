@@ -1,0 +1,9 @@
+# pre-commit — этап 5 рефакторинга: ruff проверяет (и чинит) каждый коммит.
+# Разовая установка хука: venv\Scripts\pre-commit install
+# Правила и ignore — в ruff.toml; вручную: venv\Scripts\python.exe -m ruff check .
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff
+        args: [--fix]

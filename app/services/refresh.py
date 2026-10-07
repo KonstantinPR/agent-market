@@ -21,11 +21,9 @@ from sqlalchemy import select
 from app import models
 
 logger = logging.getLogger("agent_market.refresh")
-from app.config import settings
 from app.database import SessionLocal
 from app.providers import factory as provider_factory
-from app.providers.errors import (MarketError, OzonApiError, WbApiError,
-                                  translate_request_error)
+from app.providers.errors import (MarketError, translate_request_error)
 from app.providers.ozon import OzonProvider
 from app.providers.wb import WbProvider
 from app.services import sync as sync_service
@@ -298,7 +296,6 @@ def _wb_provider(with_fail_fast: bool = False) -> WbProvider:
 
 
 # ----------------------------------------------------------- экспорт карточек (разбивка полей)
-import json as _json
 
 
 def expand_wb_card_export(df: pd.DataFrame) -> pd.DataFrame:
@@ -690,7 +687,7 @@ def _enrich_oz_stock_barcode(db, sdf: pd.DataFrame):
     for vc, size, bc in rows:
         if not vc:
             continue
-        cur = info.setdefault(str(vc).strip().lower(), (size or "", bc or ""))
+        info.setdefault(str(vc).strip().lower(), (size or "", bc or ""))
     if not info:
         return
     keys = sdf["article"].astype(str).str.strip().str.lower()
@@ -707,7 +704,6 @@ def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = 
     df = prov.get_stock()
     n = 0
     if write_db and not df.empty:
-        qty = _col_num(df, ["free_to_sell_amount"])
         free = pd.to_numeric(df.get("free_to_sell_amount", 0), errors="coerce").fillna(0).astype(int) \
             if "free_to_sell_amount" in df.columns else pd.Series(0, index=df.index)
         reserved = pd.to_numeric(df.get("reserved_amount", 0), errors="coerce").fillna(0).astype(int) \

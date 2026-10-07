@@ -1,12 +1,11 @@
 """Тесты сервиса дашборда (app/services/dashboard.py)."""
 from datetime import date, timedelta
 
-import pandas as pd
 from sqlalchemy import select
 
 from app import models
 from app.services.dashboard import (
-    combined_detail, dashboard_kpis, top_products, prefix_margin, price_delta,
+    dashboard_kpis, top_products, prefix_margin, price_delta,
     stocks_summary, freshness, prefix_group,
 )
 

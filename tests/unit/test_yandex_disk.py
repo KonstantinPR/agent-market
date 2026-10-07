@@ -1,5 +1,4 @@
 import pytest
-import requests
 
 import app.services.yandex_disk as yd
 from app.config import settings

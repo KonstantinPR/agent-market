@@ -310,15 +310,15 @@ def test_size_view_splits_by_size(db):
     assert s["wb_def"] == 10
     assert s["to_sort"] == 10
     assert s["ship_wb"] == 10
-    l = by_size["L"]
-    assert l["barcode"] == "BCODE-L"
-    assert l["wb_vel"] == 1.0
-    assert l["wb_avail"] == 0
-    assert l["wb_def"] == 10
-    assert l["to_sort"] == 10
-    assert l["ship_wb"] == 10
+    sz_l = by_size["L"]
+    assert sz_l["barcode"] == "BCODE-L"
+    assert sz_l["wb_vel"] == 1.0
+    assert sz_l["wb_avail"] == 0
+    assert sz_l["wb_def"] == 10
+    assert sz_l["to_sort"] == 10
+    assert sz_l["ship_wb"] == 10
     # плоский разрез: «у нас» — по всему артикулу на каждой строке
-    assert s["our_stock"] == 100 and l["our_stock"] == 100
+    assert s["our_stock"] == 100 and sz_l["our_stock"] == 100
     assert r["meta"]["ship_total"] == 20
     assert r["meta"]["need_total"] == 0  # Ozon/докупка по размерам не считаются
 
@@ -387,12 +387,12 @@ def test_size_view_includes_card_sizes_without_sales_or_stock(db):
     assert r["meta"]["count"] == 2
     by_size = {x["size"]: x for x in r["rows"]}
     assert set(by_size) == {"S", "L"}
-    l = by_size["L"]
-    assert l["wb_sells"] == 0
-    assert l["wb_vel"] == 0.0
-    assert l["wb_avail"] == 0
-    assert l["barcode"] == "B-L"           # баркод мёртвого размера — из карточки
-    assert l["status"] == "normal"
+    sz_l = by_size["L"]
+    assert sz_l["wb_sells"] == 0
+    assert sz_l["wb_vel"] == 0.0
+    assert sz_l["wb_avail"] == 0
+    assert sz_l["barcode"] == "B-L"           # баркод мёртвого размера — из карточки
+    assert sz_l["status"] == "normal"
 
     r2 = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
                         view="sizes", hide_zero_sizes=True)

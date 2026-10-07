@@ -1,6 +1,5 @@
 """Юнит-тесты Excel-хелперов (sanitize + чтение)."""
 import pandas as pd
-import pytest
 
 from app.services.excel_io import read_excel_bytes, df_to_excel_stream
 

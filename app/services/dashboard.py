@@ -6,11 +6,10 @@
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 from sqlalchemy import desc, func, select
-from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
