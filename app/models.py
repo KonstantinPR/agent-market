@@ -636,6 +636,41 @@ class OzonAccrual(Base):
     )
 
 
+class User(Base):
+    """Пользователь приложения. Сейчас один (КонстантинPR), но структура
+    заведена на будущее: у пользователя несколько кабинетов маркетплейсов.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), default="")
+    last_cabinet_id: Mapped[Optional[int]] = mapped_column(Integer, default=None)
+
+
+class Cabinet(Base):
+    """Личный кабинет пользователя: набор ключей маркетплейсов и свои данные.
+
+    Данные кабинета живут в отдельной PG-схеме (schema), общий каталог/склад —
+    в public. creds — зашифрованный Fernet-JSON ключей по api:
+    {"wb": {"standard":..,"finance":..,"finance2":..}, "ozon": {"client_id":..,"api_key":..}}.
+    marketplaces — список кодов через запятую ("wb,ozon").
+    """
+
+    __tablename__ = "cabinets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    schema: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    marketplaces: Mapped[str] = mapped_column(String(60), default="")
+    creds: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class OzonBuyout(Base):
     """Выкупы Ozon (/v1/finance/products/buyout) по артикулам.
 

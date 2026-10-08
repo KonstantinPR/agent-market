@@ -37,6 +37,7 @@ TABLES = ", ".join([
     "ozon_accruals", "ozon_placements",
     "counterparties", "warehouse_docs", "warehouse_doc_items",
     "product_sizes", "product_aliases", "wb_promotions",
+    "users", "cabinets",
 ])
 
 
@@ -60,6 +61,14 @@ def _ensure_test_db():
 @pytest.fixture(scope="session")
 def db_engine():
     _ensure_test_db()
+    with engine.begin() as conn:
+        rows = conn.execute(text(
+            "select schema_name from information_schema.schemata "
+            "where schema_name like 'cab_%'"
+        )).scalars().all()
+        for s in rows:
+            conn.execute(text(f'drop schema if exists "{s}" cascade'))
+        conn.execute(text("drop table if exists app_schema_state cascade"))
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield engine
@@ -124,8 +133,9 @@ def _clean_refresh_state():
             if not any(refresh_service._RUNNING.values()):
                 break
         time.sleep(0.05)
-    refresh_service._RUNNING = {"wb": None, "ozon": None}
-    refresh_service._PENDING = {"wb": None, "ozon": None}
+    refresh_service._RUNNING = {}
+    refresh_service._PENDING = {}
+    refresh_service._BULK_PROV = {}
     refresh_service._JOBS = {}
     yield
 

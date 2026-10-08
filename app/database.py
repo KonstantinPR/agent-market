@@ -1,3 +1,5 @@
+
+from fastapi import Request
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -114,8 +116,38 @@ def ensure_schema(seed: bool = True) -> None:
             conn.execute(text(
                 f"ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS {ddl}"
             ))
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS app_schema_state (key text PRIMARY KEY, value text)"
+        ))
+    _ensure_cabinets(seed=seed)
     if seed:
         _seed_marketplace_counterparties()
+
+
+def _ensure_cabinets(seed: bool) -> None:
+    """Схемы кабинетов, одноразовая раскатка и уборка пустых теней из public.
+
+    При seed=False кабинеты не создаются, а только достраиваются схемы и
+    мигрируются данные для уже существующих (штатный старт сервера).
+    """
+    from sqlalchemy import select
+
+    from app import models
+    from app.services import cabinet_migrate
+    from app.services.cabinets import list_cabinets, seed_users_and_cabinets
+
+    with SessionLocal() as db:
+        cabs = seed_users_and_cabinets(db) if seed else []
+        if not seed:
+            user = db.execute(select(models.User).limit(1)).scalars().first()
+            if user is not None:
+                cabs = list_cabinets(db, user)
+    if not cabs:
+        return
+    cabinet_migrate.ensure_cabinet_schemas(engine, cabs)
+    cabinet_migrate.migrate_public_data(engine, cabs)
+    cabinet_migrate.cleanup_public_shadows(engine)
 
 
 def _seed_marketplace_counterparties() -> None:
@@ -135,9 +167,34 @@ def _seed_marketplace_counterparties() -> None:
         db.commit()
 
 
-def get_db():
+def get_db(request: Request = None):
+    """Сессия БД. Если в запросе есть кука agent_cabinet — открывает сессию
+    с `SET search_path TO "<schema_кабинета>", public` и выставляет активный
+    кабинет в contextvar (см. app/services/cabinets.py).
+
+    Вне HTTP (скрипты/тесты) активного кабинета нет — работа с общим public.
+    """
+    from app.services.cabinets import (
+        CABINET_COOKIE, apply_search_path, reset_active, resolve_active, set_active,
+    )
+
     db = SessionLocal()
+    token = None
+    search_path_applied = False
     try:
+        if request is not None:
+            info = resolve_active(db, request.cookies.get(CABINET_COOKIE))
+            if info is not None and info.schema:
+                apply_search_path(db, info.schema)
+                search_path_applied = True
+            token = set_active(info)
         yield db
     finally:
+        if token is not None:
+            reset_active(token)
+        if search_path_applied:
+            try:
+                db.execute(text("RESET search_path"))
+            except Exception:  # noqa: BLE001
+                pass
         db.close()
