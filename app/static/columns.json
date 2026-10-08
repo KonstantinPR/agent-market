@@ -3248,8 +3248,8 @@
        "def": true
       },
       {
-       "k": "product_rating",
-       "label": "Рейтинг товара",
+       "k": "feedback_rating",
+       "label": "Рейтинг по отзывам",
        "def": true
       },
       {
@@ -3447,7 +3447,7 @@
       "article",
       "nm_id",
       "name",
-      "product_rating",
+      "feedback_rating",
       "replenishable"
      ]
     },
