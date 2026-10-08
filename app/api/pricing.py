@@ -107,7 +107,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "doc", "velocity", "trend",
         "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
         "max_discount_item", "margin_pct_at_target", "replenishable",
-        "product_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
+        "feedback_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
         "add_to_wishlist", "stock_wb", "return_rate", "margin_pct", "margin_per_one",
         "revenue_per_one", "income_per_one", "commission_per_one",
         "logistics_per_one", "storage_per_one", "detail_sells", "detail_returns_qty",

@@ -4273,14 +4273,14 @@
     "k": "replenishable",
     "label": "Докупаемый"
    },
-   {
-    "k": "product_rating",
-    "label": "Рейтинг товара"
-   },
-   {
-    "k": "buyouts",
-    "label": "Выкупы, шт"
-   },
+{
+     "k": "feedback_rating",
+     "label": "Рейтинг по отзывам"
+    },
+    {
+     "k": "buyouts",
+     "label": "Выкупы, шт"
+    },
    {
     "k": "conv_buyout_percent",
     "label": "Конв. выкупа, %"

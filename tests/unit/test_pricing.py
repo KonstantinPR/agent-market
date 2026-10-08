@@ -384,7 +384,7 @@ def test_row_skip_has_enriched_defaults(db):
 def test_t14_low_rating_blocks_raise(db):
     _seed(db, "Q1", "PQ1", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
-          funnel_extra={"product_rating": 3.5})
+          funnel_extra={"feedback_rating": 3.5})
     rec = recommendations(db, prices_df=_prices(("PQ1", 1000, 20)), today=TODAY,
                           settings={"use_quality": True})
     row = _row(rec, "Q1")
@@ -396,7 +396,7 @@ def test_t14_low_rating_blocks_raise(db):
 def test_t14_low_buyout_conv_blocks_raise(db):
     _seed(db, "Q2", "PQ2", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
-          funnel_extra={"product_rating": 4.8, "conv_buyout_percent": 20.0})
+          funnel_extra={"feedback_rating": 4.8, "conv_buyout_percent": 20.0})
     rec = recommendations(db, prices_df=_prices(("PQ2", 1000, 20)), today=TODAY,
                           settings={"use_quality": True})
     row = _row(rec, "Q2")
@@ -407,7 +407,7 @@ def test_t14_low_buyout_conv_blocks_raise(db):
 def test_t14_high_cancel_ratio_blocks_raise(db):
     _seed(db, "Q3", "PQ3", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 3, 900),
-          funnel_extra={"product_rating": 4.8})
+          funnel_extra={"feedback_rating": 4.8})
     rec = recommendations(db, prices_df=_prices(("PQ3", 1000, 20)), today=TODAY,
                           settings={"use_quality": True})
     row = _row(rec, "Q3")
@@ -418,7 +418,7 @@ def test_t14_high_cancel_ratio_blocks_raise(db):
 def test_t14_detail_return_rate_blocks_raise(db):
     _seed(db, "Q4", "PQ4", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
-          funnel_extra={"product_rating": 4.8, "conv_buyout_percent": 50.0})
+          funnel_extra={"feedback_rating": 4.8, "conv_buyout_percent": 50.0})
     db.add_all([
         models.WbDetailRow(op_key="sr:sale-q4", source="excel", article="Q4",
                            doc_type_name="Продажа", sale_dt=TODAY - timedelta(days=2),
@@ -438,7 +438,7 @@ def test_t14_detail_return_rate_blocks_raise(db):
 def test_t14_strong_signals_apply_uplift(db):
     _seed(db, "B", "PB", stock=5, replenishable=True,
           sales=[(2, 12, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900),
-          funnel_extra={"product_rating": 4.9, "conv_buyout_percent": 85.0})
+          funnel_extra={"feedback_rating": 4.9, "conv_buyout_percent": 85.0})
     rec = recommendations(db, prices_df=_prices(("PB", 1000, 20)), today=TODAY,
                           settings={"use_quality": True})
     row = _row(rec, "B")
@@ -461,7 +461,7 @@ def test_t14_no_uplift_without_strong_signals(db):
 def test_t14_low_rating_does_not_block_lower(db):
     _seed(db, "Q5", "PQ5", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
-          funnel_extra={"product_rating": 2.5})
+          funnel_extra={"feedback_rating": 2.5})
     rec = recommendations(db, prices_df=_prices(("PQ5", 2000, 10)), today=TODAY,
                           settings={"use_quality": True})
     assert _row(rec, "Q5")["action"] == "LOWER"
@@ -862,7 +862,7 @@ def test_use_quality_off_default_allows_raise_with_bad_rating(db):
     """use_quality=False (дефолт): низкий рейтинг не блокирует повышение."""
     _seed(db, "Q0", "PQ0", stock=2, replenishable=False,
           sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()],
-          funnel=(100, 1, 1, 0, 900), funnel_extra={"product_rating": 1.0})
+          funnel=(100, 1, 1, 0, 900), funnel_extra={"feedback_rating": 1.0})
     rec = recommendations(db, prices_df=_prices(("PQ0", 1000, 10)), today=TODAY)
     assert _row(rec, "Q0")["action"] == "RAISE"
 

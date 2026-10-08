@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "77";
+const UI_VERSION = "78";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -5203,11 +5203,11 @@ const PRICING_LABELS = {
   min_rating_reviews: "Рейтинг по отзывам ≥, балл (ценный товар)",
   fallback_window_days: "Окно расчёта unit-экономики по факт., дн",
   raise_pct_replenishable: "Рост цены для докупаемых, %",
-  min_rating_for_raise: "Мин. рейтинг для роста цены, балл",
+  min_rating_for_raise: "Мин. рейтинг по отзывам для роста цены, балл",
   min_conv_buyout_for_raise: "Мин. конв. выкупа для роста цены, %",
   max_cancel_ratio_for_raise: "Макс. доля отмен для роста, 0..1",
   max_return_rate_for_raise: "Макс. возвраты для роста цены, %",
-  strong_rating: "Сильные сигналы: рейтинг ≥, балл",
+  strong_rating: "Сильные сигналы: рейтинг по отзывам ≥, балл",
   strong_buyout_conv: "Сильный сигнал: конв. выкупа ≥, %",
   strong_return_rate: "Сильный сигнал: возвраты ≤, %",
   strong_margin_pct: "Сильный сигнал: факт. маржа ≥, %",
@@ -5254,11 +5254,11 @@ const PRICING_HINTS = {
   min_rating_reviews: "Рейтинг по отзывам из воронки продаж (1..5): чем выше — тем меньше скидка при снижении, ведь товар ценный. При рейтинге ≥ этого порога снижение ограничивается, а при 5,0 скидка не увеличивается вовсе. 0 = нет данных — ограничений нет.",
   fallback_window_days: "Окно (дней), за которое берутся фактические продажи для расчёта unit-экономики: реальная цена, комиссия, маржа, возвраты.",
   raise_pct_replenishable: "Потолок повышения цены для докупаемых товаров, % — их поднимаем аккуратно, чтобы не потерять выкупы.",
-  min_rating_for_raise: "Повышение цены блокируется, если рейтинг магазина ниже этого значения (сигналы с 0 трактуются как «нет данных» и не блокируют).",
+  min_rating_for_raise: "Повышение цены блокируется, если рейтинг по отзывам из воронки (1..5) ниже этого значения (сигналы с 0 трактуются как «нет данных» и не блокируют).",
   min_conv_buyout_for_raise: "Повышение блокируется, если конверсия выкупа ниже этого %, % — низкая выкупаемость = цена на пределе.",
   max_cancel_ratio_for_raise: "Повышение блокируется, если отмены/заказы выше этой доли (0..1) — спрос «мыльный».",
   max_return_rate_for_raise: "Повышение блокируется, если возвраты из детализации выше этого %, % — брак/неликвид.",
-  strong_rating: "Сигнал «качества» для смелого повышения: рейтинг ≥ этого значения.",
+  strong_rating: "Сигнал «качества» для смелого повышения: рейтинг по отзывам (1..5) ≥ этого значения.",
   strong_buyout_conv: "Сигнал «качества»: конверсия выкупа ≥ этого значения, %.",
   strong_return_rate: "Сигнал «качества»: возвраты из детализации ≤ этого значения, %.",
   strong_margin_pct: "Сигнал «качества»: фактическая маржа из детализации ≥ этого значения, %.",
@@ -5390,7 +5390,7 @@ const pricingHeaders = [
   { k: "backlog", label: "В корзине", num: true, render: cellFmts.int , tip: "Добавления в корзину минус заказы, не меньше нуля: спрос есть, а сделки нет. Используется как сигнал «много в корзинах, но не покупают»."},
   { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct , tip: "Заказы ÷ просмотры × 100 по воронке. Ниже 0,7% автопилот не увеличивает скидку, при большом «в корзине» — пропускает товар."},
   { k: "margin_pct", label: "Маржа факт, % от выручки", num: true, render: cellFmts.pct , tip: "Рентабельность за окно по детализации: прибыль ÷ выручка × 100. Проверяйте согласованность с полем прибыли на единицу."},
-  { k: "product_rating", label: "Рейтинг товара", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1) , tip: "Рейтинг карточки WB 1..5 из воронки. Ниже порога качества автопилот не поднимает цену, даже при дефиците."},
+  { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(2) , tip: "Средняя оценка по отзывам покупателей 1..5 из воронки (product.feedbackRating). Ключевой сигнал качества: ниже порога автопилот не поднимает цену, высокому «ценному» товару не увеличивает скидку."},
   { k: "action", label: "Решение", render: actionCell , tip: "Итоговое действие: RAISE — снизить скидку (поднять цену), LOWER — увеличить скидку, HALVE — пополам для мёртвых товаров, HOLD — не менять, SKIP — пропустить (нет данных, кулдаун, отказы по качеству)."},
   { k: "reason", label: "Причина", render: cellFmts.text , tip: "Текстовое объяснение решения: покрытие остатка (DOC), конверсия, корзины, рейтинг, отказы качества, кулдаун после прошлой правки."},
   { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование товара из каталога products."},
@@ -6087,7 +6087,7 @@ const PRICING_FOOT = {
   stock: "sum", stock_wb: "sum", buyouts: "sum", backlog: "sum",
   add_to_wishlist: "sum", cancel_sum: "sum",
   delta_discount: "avg", target_discount: "avg", current_discount: "avg", target_vis: "avg", current_vis: "avg",
-  avg_price: "avg", net_cost: "avg", margin_pct: "avg", margin_per_one: "avg", product_rating: "avg",
+  avg_price: "avg", net_cost: "avg", margin_pct: "avg", margin_per_one: "avg", feedback_rating: "avg",
   margin_pct_at_target: "avg", conv_buyout_percent: "avg", return_rate: "avg", conv_pct: "avg",
   revenue_per_one: "avg", income_per_one: "avg", commission_per_one: "avg",
   logistics_per_one: "avg", storage_per_one: "avg", doc: "avg", velocity: "avg", trend: "avg",

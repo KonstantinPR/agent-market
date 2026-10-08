@@ -53,7 +53,8 @@ PRICING_DEFAULTS = {
     # ограничений нет.
     "min_rating_reviews": 4.0,
     "raise_pct_replenishable": 10.0,
-    # T-14: quality gates for RAISE
+    # T-14: качественные гейты для RAISE. Рейтинг здесь — «Рейтинг по отзывам»
+    # из воронки продаж (1..5): низкий рейтинг не даёт поднимать цену.
     "min_rating_for_raise": 4.2,
     "min_conv_buyout_for_raise": 40.0,
     "max_cancel_ratio_for_raise": 0.2,
@@ -774,9 +775,9 @@ def _raise_quality_gate(f: dict, s: dict) -> Optional[str]:
     Возвращает текст причины или None (повышать можно).
     Сигналы с нулевым значением трактуются как «нет данных» и не блокируют.
     """
-    rating = f.get("product_rating", 0)
+    rating = f.get("feedback_rating", 0)
     if rating > 0 and rating < _num(s["min_rating_for_raise"]):
-        return f"рейтинг {rating:.1f} — качество не позволяет поднимать цену"
+        return f"рейтинг по отзывам {rating:.1f} — качество не позволяет поднимать цену"
     buyout = f.get("conv_buyout_percent", 0)
     if buyout > 0 and buyout < _num(s["min_conv_buyout_for_raise"]):
         return f"конверсия выкупа {buyout:.1f}% — низкая выкупаемость"
@@ -796,7 +797,7 @@ def _raise_boost(f: dict, s: dict) -> float:
     Возвращает 1.0 при недостатке данных или слабых сигналах.
     """
     strong = 0
-    if f.get("product_rating", 0) >= _num(s["strong_rating"]):
+    if f.get("feedback_rating", 0) >= _num(s["strong_rating"]):
         strong += 1
     if f.get("conv_buyout_percent", 0) >= _num(s["strong_buyout_conv"]):
         strong += 1
