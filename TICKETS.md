@@ -103,6 +103,21 @@
   > карточка WB получает ≥1, «Отгрузить» покрывает план; дефицит по окну без WB-продаж
   > больше не «0»; при фильтре «только Ozon» — 0, как и было. Цена: план считает маржу за 180 дн)
 
+- [T-40] (high) Личные кабинеты: пользователь и переключение между кабинетами
+    > Готово на ветке t-40-kabinety-kabinet, 2026-10-08. Реализовано: схема PG на кабинет
+    > (cab_oo/cab_ip) + общий каталог в public; get_db() ставит SET search_path TO <cab>, public
+    > (в finally RESET); переключение кабинета по cookie agent_cabinet; ключи в cabinets.creds
+    > (Fernet, data/secrets.key, cryptography==50.0.2); провайдеры от creds кабинета; refresh
+    > по (cab_id, api) с очередью refresh_runs/api_pulls; одноразовая миграция public→схемы
+    > (маркер app_schema_state, скрипт scripts/migrate_cabinets.py, dev-БД раскатана:
+    > cab_oo.sales=260370, cab_ip.sales=146, 17 теней public убрано); API GET /api/cabinets,
+    > GET /api/cabinet/current, POST /api/cabinet/select, POST /api/refresh-all; UI-панель
+    > правой стороны (переключение, «Обновить всё», прогресс в #refreshModal, UI_VERSION 76).
+    > Тесты tests/test_cabinets.py — 8/8. Известные pre-existing failures (не T-40):
+    > 2×T-35 endpoints, 25×tickets, 1×manifest.
+    > Остаток (не входило в T-40): чекбоксы-заготовки в панели (инверсия продаж,
+    > автопилот цен, скрытие пустых кабинетов), документ docs/architecture.md.
+
 ## В работе
 
 _(пусто)_
