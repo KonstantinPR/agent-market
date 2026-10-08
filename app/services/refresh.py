@@ -16,7 +16,7 @@ from typing import Optional
 import pandas as pd
 import requests
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app import models
 
@@ -27,6 +27,8 @@ from app.providers.errors import (MarketError, translate_request_error)
 from app.providers.ozon import OzonProvider
 from app.providers.wb import WbProvider
 from app.services import sync as sync_service
+from app.services import cabinets
+from app.services.cabinets import active_credentials
 from app.services.window import parse_window
 
 
@@ -292,7 +294,11 @@ def _raw_json(df: pd.DataFrame) -> pd.Series:
 
 # ----------------------------------------------------------- привязка провайдеров
 def _wb_provider(with_fail_fast: bool = False) -> WbProvider:
-    return provider_factory.get_wb_provider(with_fail_fast=with_fail_fast)
+    """Провайдер WB активного кабинета (по creds кабинета, иначе из .env)."""
+    creds = active_credentials("wb")
+    return provider_factory.get_wb_provider(
+        with_fail_fast=with_fail_fast, credentials=creds or None
+    )
 
 
 # ----------------------------------------------------------- экспорт карточек (разбивка полей)
@@ -372,7 +378,10 @@ def expand_wb_card_export(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _oz_provider(with_fail_fast: bool = False) -> OzonProvider:
-    return provider_factory.get_oz_provider(with_fail_fast=with_fail_fast)
+    creds = active_credentials("ozon")
+    return provider_factory.get_oz_provider(
+        with_fail_fast=with_fail_fast, credentials=creds or None
+    )
 
 
 _WB_MESSAGES = {
@@ -896,41 +905,44 @@ _KIND_LABELS = {
 }
 
 
-def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None):
+def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None,
+                cab_id: Optional[int] = None):
     """Список (kind, label, callable) для массового обновления маркетплейса."""
     from_, to_ = resolve_range(date_from, date_to)
     steps = []
+    pkey_wb = (cab_id, "wb")
+    pkey_oz = (cab_id, "ozon")
     for kind, label in _KIND_LABELS[api]:
         if api == "wb":
             if kind == "funnel":
-                fn = lambda db: pull_wb_funnel(db, from_, to_, provider=_BULK_PROV["wb"])  # noqa: E731
+                fn = lambda db: pull_wb_funnel(db, from_, to_, provider=_BULK_PROV[pkey_wb])  # noqa: E731
             elif kind == "sales":
-                fn = lambda db: pull_wb_sales(db, from_, to_, provider=_BULK_PROV["wb"])  # noqa: E731
+                fn = lambda db: pull_wb_sales(db, from_, to_, provider=_BULK_PROV[pkey_wb])  # noqa: E731
             elif kind == "storage":
-                fn = lambda db: pull_wb_storage(db, 7, provider=_BULK_PROV["wb"])  # noqa: E731
+                fn = lambda db: pull_wb_storage(db, 7, provider=_BULK_PROV[pkey_wb])  # noqa: E731
             else:
-                fn = (lambda k: lambda db: _BULK_PULLS["wb"][k](db, provider=_BULK_PROV["wb"]))(kind)
+                fn = (lambda k: lambda db: _BULK_PULLS["wb"][k](db, provider=_BULK_PROV[pkey_wb]))(kind)
         else:
             if kind == "realization":
-                fn = lambda db: pull_oz_realizations(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
+                fn = lambda db: pull_oz_realizations(db, from_, to_, provider=_BULK_PROV[pkey_oz])  # noqa: E731
             elif kind == "cashflow":
-                fn = lambda db: pull_oz_cashflow(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
+                fn = lambda db: pull_oz_cashflow(db, from_, to_, provider=_BULK_PROV[pkey_oz])  # noqa: E731
             elif kind == "placement":
-                fn = lambda db: pull_oz_placements(db, from_, to_, provider=_BULK_PROV["ozon"])  # noqa: E731
+                fn = lambda db: pull_oz_placements(db, from_, to_, provider=_BULK_PROV[pkey_oz])  # noqa: E731
             else:
-                fn = (lambda k: lambda db: _BULK_PULLS["ozon"][k](db, provider=_BULK_PROV["ozon"]))(kind)
+                fn = (lambda k: lambda db: _BULK_PULLS["ozon"][k](db, provider=_BULK_PROV[pkey_oz]))(kind)
         steps.append((kind, label, fn))
     if include_detail:
         if api == "wb":
             steps.append(("detail", "Детализация (finance)",
-                          lambda db: pull_wb_detail(db, from_, to_, provider=_BULK_PROV["wb"])))
+                          lambda db: pull_wb_detail(db, from_, to_, provider=_BULK_PROV[pkey_wb])))
         else:
             steps.append(("detail", "Детализация продаж",
-                          lambda db: pull_oz_detail(db, from_, to_, provider=_BULK_PROV["ozon"])))
+                          lambda db: pull_oz_detail(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
             steps.append(("buyout", "Выкупы",
-                          lambda db: pull_oz_buyout(db, from_, to_, provider=_BULK_PROV["ozon"])))
+                          lambda db: pull_oz_buyout(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
             steps.append(("accrual", "Начисления (аккруалы)",
-                          lambda db: pull_oz_accrual(db, from_, to_, provider=_BULK_PROV["ozon"])))
+                          lambda db: pull_oz_accrual(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
     return steps
 
 
@@ -942,11 +954,14 @@ _BULK_PULLS = {
 
 
 # ------------------------------------------------------------------ фоновые задания
-_RUNNING = {"wb": None, "ozon": None}
-_PENDING = {"wb": None, "ozon": None}
+# Ключи очередей — (cab_id, api): у каждого кабинета свои обновления и
+# провайдеры (creds кабинета). cab_id=None — «без кабинета» (скрипты/тесты).
+_RUNNING = {}  # (cab_id, api) -> job_id
+_PENDING = {}  # (cab_id, api) -> job_id
 _LOCK = threading.Lock()
 _SEQ = 0
 _JOBS = {}  # job_id -> state dict
+_BULK_PROV = {}  # (cab_id, api) -> provider, выставляется воркером перед шагами
 
 
 def _next_id() -> int:
@@ -955,19 +970,34 @@ def _next_id() -> int:
     return _SEQ
 
 
+def _cab_info(db, cab_id: Optional[int]) -> Optional[object]:
+    if cab_id is None:
+        return None
+    return cabinets.info_by_id(db, cab_id)
+
+
 def start_refresh(api: str, include_detail: bool = False,
-                  date_from=None, date_to=None) -> dict:
-    """Запускает фоновое обновление. Возвращает {job_id, queued}."""
-    global _JOBS
+                  date_from=None, date_to=None,
+                  cab_id: Optional[int] = None) -> dict:
+    """Запускает фоновое обновление. Возвращает {job_id, queued}.
+
+    cab_id=None — активный кабинет запроса (contextvar get_db) или «как раньше»
+    (public, без кабинета) для скриптов/тестов.
+    """
+    global _RUNNING, _PENDING
+    if cab_id is None:
+        active = cabinets.get_active()
+        cab_id = active.id if active else None
     with _LOCK:
-        if _PENDING[api]:
+        if _PENDING.get((cab_id, api)):
             return {"job_id": None, "queued": False, "rejected": "уже поставлено в очередь"}
         job_id = _next_id()
-        steps = _plan_steps(api, include_detail, date_from, date_to)
+        steps = _plan_steps(api, include_detail, date_from, date_to, cab_id)
         job = {
-            "id": job_id, "api": api, "include_detail": bool(include_detail),
+            "id": job_id, "api": api, "cab_id": cab_id, "cab_name": "",
+            "include_detail": bool(include_detail),
             "date_from": date_from, "date_to": date_to,
-            "status": "running" if _RUNNING[api] is None else "queued",
+            "status": "running" if not _RUNNING.get((cab_id, api)) else "queued",
             "started_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
             "finished_at": None,
             "ok": 0, "failed": 0,
@@ -976,34 +1006,47 @@ def start_refresh(api: str, include_detail: bool = False,
                       for k, lbl, _ in steps],
         }
         _JOBS[job_id] = job
-        queued = _RUNNING[api] is not None
+        queued = bool(_RUNNING.get((cab_id, api)))
         if queued:
-            _PENDING[api] = job_id
+            _PENDING[(cab_id, api)] = job_id
             return {"job_id": job_id, "queued": True}
-        _RUNNING[api] = job_id
+        _RUNNING[(cab_id, api)] = job_id
         threading.Thread(
-            target=_refresh_worker, args=(api, job_id, date_from, date_to, steps),
+            target=_refresh_worker,
+            args=(api, job_id, date_from, date_to, steps, cab_id),
             daemon=True,
         ).start()
         return {"job_id": job_id, "queued": False}
 
 
-def _refresh_worker(api: str, job_id: int, date_from, date_to, steps):
+def _refresh_worker(api: str, job_id: int, date_from, date_to, steps,
+                    cab_id: Optional[int]):
+    from app.services.cabinets import apply_search_path
+
     db = SessionLocal()
     job = _JOBS[job_id]
     job["status"] = "running"
-    run = models.RefreshRun(api=api, status="running", results="[]")
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    job["run_id"] = run.id
+    run = None
     results = []
     fatal = None
     try:
-        prov_wb = _wb_provider(with_fail_fast=True)
-        prov_oz = _oz_provider(with_fail_fast=True)
-        _BULK_PROV["wb"] = prov_wb
-        _BULK_PROV["ozon"] = prov_oz
+        info = _cab_info(db, cab_id)
+        if info is not None:
+            apply_search_path(db, info.schema)
+            job["cab_name"] = info.name
+        run = models.RefreshRun(api=api, status="running", results="[]")
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        job["run_id"] = run.id
+        creds_wb = info.creds_for("wb") if info else {}
+        creds_oz = info.creds_for("ozon") if info else {}
+        prov_wb = provider_factory.get_wb_provider(
+            with_fail_fast=True, credentials=creds_wb or None)
+        prov_oz = provider_factory.get_oz_provider(
+            with_fail_fast=True, credentials=creds_oz or None)
+        _BULK_PROV[(cab_id, "wb")] = prov_wb
+        _BULK_PROV[(cab_id, "ozon")] = prov_oz
         for kind, label, fn in steps:
             step = next(s for s in job["steps"] if s["kind"] == kind)
             step["status"] = "running"
@@ -1028,58 +1071,67 @@ def _refresh_worker(api: str, job_id: int, date_from, date_to, steps):
     except Exception as e:  # noqa: BLE001 — падение самого воркера не должно замораживать очередь
         fatal = str(e)[:300]
         for step in job["steps"]:
-            if step["status"] == "running":
+            if step["status"] == "pending" or step["status"] == "running":
                 step["status"] = "failed"
                 step["error"] = fatal
         job["failed"] = job["failed"] or 1
     finally:
         job["status"] = "done"
         job["finished_at"] = datetime.now().isoformat(sep=" ", timespec="seconds")
-        if fatal is not None:
-            run.status = "failed"
-            results.append({"kind": "_", "status": "failed", "rows": 0, "db_rows": 0,
-                            "window": "", "error": fatal})
-        else:
-            run.status = "ok" if job["failed"] == 0 else "partial" if job["ok"] > 0 else "failed"
-        run.finished_at = datetime.now()
-        run.results = json.dumps(results, ensure_ascii=False)
-        db.commit()
+        if run is not None:
+            if fatal is not None:
+                run.status = "failed"
+                results.append({"kind": "_", "status": "failed", "rows": 0,
+                                "db_rows": 0, "window": "", "error": fatal})
+            else:
+                run.status = "ok" if job["failed"] == 0 else \
+                    "partial" if job["ok"] > 0 else "failed"
+            run.finished_at = datetime.now()
+            run.results = json.dumps(results, ensure_ascii=False)
+            try:
+                db.commit()
+            except Exception:  # noqa: BLE001
+                db.rollback()
+        try:
+            db.execute(text("RESET search_path"))
+        except Exception:  # noqa: BLE001
+            pass
         db.close()
-        _advance_queue(api)
+        _advance_queue(api, cab_id)
 
 
-def _advance_queue(api: str):
+def _advance_queue(api: str, cab_id: Optional[int]):
     with _LOCK:
-        _RUNNING[api] = None
-        next_id = _PENDING[api]
-        _PENDING[api] = None
+        _RUNNING[(cab_id, api)] = None
+        next_id = _PENDING.get((cab_id, api))
+        _PENDING[(cab_id, api)] = None
         if next_id:
             j = _JOBS[next_id]
             j["status"] = "running"
-            _RUNNING[api] = next_id
+            _RUNNING[(cab_id, api)] = next_id
             threading.Thread(
                 target=_refresh_worker,
                 args=(api, next_id, j["date_from"], j["date_to"],
-                      _plan_steps(api, j["include_detail"], j["date_from"], j["date_to"])),
+                      _plan_steps(api, j["include_detail"], j["date_from"],
+                                  j["date_to"], cab_id), cab_id),
                 daemon=True,
             ).start()
-
-
-_BULK_PROV = {"wb": None, "ozon": None}
 
 
 def job_state(job_id: int) -> Optional[dict]:
     job = _JOBS.get(job_id)
     if job is None:
         return None
-    return {k: job[k] for k in ("id", "api", "include_detail", "status",
+    return {k: job[k] for k in ("id", "api", "cab_id", "cab_name",
+                                "include_detail", "status",
                                 "started_at", "finished_at", "ok", "failed", "steps")}
 
 
 def active_jobs() -> list:
     out = []
     for job in _JOBS.values():
-        out.append({k: job[k] for k in ("id", "api", "include_detail", "status",
+        out.append({k: job[k] for k in ("id", "api", "cab_id", "cab_name",
+                                        "include_detail", "status",
                                         "started_at", "finished_at", "ok", "failed")})
     return sorted(out, key=lambda j: j["id"], reverse=True)[:20]
 
