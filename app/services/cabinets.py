@@ -8,7 +8,7 @@
 Вне HTTP-запросов (скрипты, тесты) активного кабинета нет — сессии работают
 по public (общий каталог и поведение «как раньше»).
 """
-from contextvars import ContextVar, Token
+from contextvars import ContextVar
 from typing import Optional
 
 from sqlalchemy import select, text
@@ -157,12 +157,18 @@ def resolve_active(db: Session, cookie_value: Optional[str] = None,
     return None
 
 
-def set_active(info: Optional[CabinetInfo]) -> Token:
-    return _active.set(info)
+def set_active(info: Optional[CabinetInfo]) -> None:
+    _active.set(info)
 
 
-def reset_active(token: Token) -> None:
-    _active.reset(token)
+def reset_active(info: Optional[CabinetInfo] = None) -> None:
+    """Сброс активного кабинета.
+
+    Используем set(None), а не token.reset(): set_active() вызывается в
+    contextvar'е воркера threadpool (FastAPI), а reset сработает в context-е
+    finally — token из другого контекста нельзя ресетнуть (ValueError).
+    """
+    _active.set(None)
 
 
 def get_active() -> Optional[CabinetInfo]:

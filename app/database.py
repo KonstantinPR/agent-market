@@ -175,11 +175,10 @@ def get_db(request: Request = None):
     Вне HTTP (скрипты/тесты) активного кабинета нет — работа с общим public.
     """
     from app.services.cabinets import (
-        CABINET_COOKIE, apply_search_path, reset_active, resolve_active, set_active,
+        CABINET_COOKIE, apply_search_path, resolve_active, set_active,
     )
 
     db = SessionLocal()
-    token = None
     search_path_applied = False
     try:
         if request is not None:
@@ -187,11 +186,9 @@ def get_db(request: Request = None):
             if info is not None and info.schema:
                 apply_search_path(db, info.schema)
                 search_path_applied = True
-            token = set_active(info)
+            set_active(info)
         yield db
     finally:
-        if token is not None:
-            reset_active(token)
         if search_path_applied:
             try:
                 db.execute(text("RESET search_path"))
