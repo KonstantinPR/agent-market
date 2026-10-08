@@ -143,13 +143,18 @@ def api_sync(code: str, date_from: Optional[str] = None, date_to: Optional[str] 
 # ------------------------------------------------------- массовое обновление (кнопка)
 @router.post("/refresh")
 def api_refresh(api: str, detail: int = 0, date_from: Optional[str] = None,
-                date_to: Optional[str] = None):
-    """Запускает фоновое обновление маркетплейса (wb|ozon). Ошибки изолированы по видам."""
+                date_to: Optional[str] = None, cab_id: Optional[int] = None,
+                db: Session = Depends(get_db)):
+    """Запускает фоновое обновление маркетплейса (wb|ozon). Ошибки изолированы по видам.
+
+    cab_id — кабинет, по умолчанию активный в запросе (кука agent_cabinet).
+    """
     if api not in ("wb", "ozon"):
         raise HTTPException(status_code=400, detail='Параметр api должен быть "wb" или "ozon"')
     try:
         return refresh_service.start_refresh(api, include_detail=bool(detail),
-                                             date_from=date_from, date_to=date_to)
+                                             date_from=date_from, date_to=date_to,
+                                             cab_id=cab_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Некорректная дата: {e}")
 

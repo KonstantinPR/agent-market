@@ -42,8 +42,15 @@ from app.services import (
     warehouse as warehouse_service,
     yandex_disk as yandex_service,
 )
+from app.services.cabinets import active_credentials
 from app.services.window import parse_window
 from app.services.columns import export_cols
+
+
+def _wb_creds():
+    """WB-ключи активного кабинета для провайдера (None — фолбэк на .env)."""
+    creds = active_credentials("wb")
+    return creds or None
 
 
 router = APIRouter()

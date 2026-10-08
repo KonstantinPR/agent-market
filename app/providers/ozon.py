@@ -14,6 +14,7 @@
 import io
 import time
 from datetime import date
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -38,13 +39,26 @@ OZON_RU_COLUMNS = {
 class OzonProvider(BaseProvider):
     """Данные Ozon (FBO/FBS) через API."""
 
+    def __init__(self, testing_mode=None, credentials: Optional[dict] = None,
+                 fail_fast_429=False):
+        super().__init__(testing_mode)
+        # Creds кабинета {"client_id":..,"api_key":..}; пустые -> settings.
+        self.creds = credentials or {}
+        self.fail_fast_429 = fail_fast_429
+
     # ---------------------------------------------------------------- helpers
     def _headers(self) -> dict:
-        if not settings.ozon_client_id or not settings.ozon_api_key:
+        client_id = self.creds.get("client_id")
+        api_key = self.creds.get("api_key")
+        if not client_id:
+            client_id = settings.ozon_client_id
+        if not api_key:
+            api_key = settings.ozon_api_key
+        if not client_id or not api_key:
             raise RuntimeError("OZON_CLIENT_ID / OZON_API_KEY не заданы в .env. Реальные вызовы Ozon API невозможны.")
         return {
-            "Client-Id": str(settings.ozon_client_id),
-            "Api-Key": settings.ozon_api_key,
+            "Client-Id": str(client_id),
+            "Api-Key": api_key,
             "Content-Type": "application/json",
         }
 

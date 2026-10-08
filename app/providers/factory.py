@@ -8,13 +8,15 @@ from app.providers.ozon import OzonProvider
 from app.providers.wb import WbProvider
 
 
-def get_wb_provider(with_fail_fast: bool = False, testing_mode=None) -> WbProvider:
-    prov = WbProvider(testing_mode=testing_mode)
-    prov.fail_fast_429 = with_fail_fast
+def get_wb_provider(with_fail_fast: bool = False, testing_mode=None,
+                    credentials=None) -> WbProvider:
+    prov = WbProvider(testing_mode=testing_mode, credentials=credentials,
+                      fail_fast_429=with_fail_fast)
     return prov
 
 
-def get_oz_provider(with_fail_fast: bool = False, testing_mode=None) -> OzonProvider:
-    prov = OzonProvider(testing_mode=testing_mode)
-    prov.fail_fast_429 = with_fail_fast
+def get_oz_provider(with_fail_fast: bool = False, testing_mode=None,
+                    credentials=None) -> OzonProvider:
+    prov = OzonProvider(testing_mode=testing_mode, credentials=credentials,
+                        fail_fast_429=with_fail_fast)
     return prov

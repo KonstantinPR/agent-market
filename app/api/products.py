@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Прайс/импорт товаров: /api/products/*."""
 from app.api._common import *  # noqa: F401,F403
+from app.api._common import _wb_creds  # noqa: F401  (импорт * не тащит _-имена)
 from app.api._common import (
     _catalog_price_fields,
     _eff_net_cost,
@@ -112,7 +113,7 @@ def products_prices_apply(payload: dict = Body(default={}), db: Session = Depend
     if not items:
         return {"ok": True, "pushed": 0, "skipped": len(skipped),
                 "note": "Ни один из видимых товаров не заведён в WB (нет nm_id)."}
-    prov = provider_factory.get_wb_provider()
+    prov = provider_factory.get_wb_provider(credentials=_wb_creds())
     if mode == "min":
         wb_min_prices = {}
         try:

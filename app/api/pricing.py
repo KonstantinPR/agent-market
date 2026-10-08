@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Автопилот цен: /api/pricing/*."""
 from app.api._common import *  # noqa: F401,F403
+from app.api._common import _wb_creds  # noqa: F401  (импорт * не тащит _-имена)
 
 router = APIRouter()
 
@@ -34,7 +35,7 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
     применяет ровно их (то, что видит пользователь с учётом фильтров поиска и
     скрытых колонок). Иначе пересчитывает рекомендации и применяет всё.
     """
-    prov = provider_factory.get_wb_provider()
+    prov = provider_factory.get_wb_provider(credentials=_wb_creds())
     ui_rows = payload.get("ui_rows")
     try:
         if ui_rows:

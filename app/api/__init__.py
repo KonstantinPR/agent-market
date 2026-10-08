@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from . import (
     _common,
+    cabinets,
     export_wb,
     export_ozon,
     export_reports,
@@ -23,6 +24,7 @@ from . import (
 router = APIRouter(prefix="/api")
 for _mod in (
     _common,
+    cabinets,
     export_wb,
     export_ozon,
     export_reports,

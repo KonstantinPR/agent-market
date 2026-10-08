@@ -20,6 +20,13 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.providers import factory as provider_factory
+from app.services.cabinets import active_credentials
+
+
+def _cab_provider():
+    """Провайдер WB с creds активного кабинета (иначе из .env)."""
+    creds = active_credentials("wb")
+    return provider_factory.get_wb_provider(credentials=creds or None)
 
 PRICING_DEFAULTS = {
     "window_days": 14,
@@ -216,7 +223,7 @@ def resolve_prices(
         return df, updated_at, "db"
     if not allow_network:
         return None, None, "db"
-    prov = provider or provider_factory.get_wb_provider()
+    prov = provider or _cab_provider()
     return prov.get_prices(), None, "wb_api"
 
 
@@ -1707,7 +1714,7 @@ def apply_recommendations(
 
     items = _pushed_items(rows, s, applied_past)
     now = datetime.now()
-    prov = provider or provider_factory.get_wb_provider()
+    prov = provider or _cab_provider()
 
     if not items:
         _record(db, rows, applied_at=now)
@@ -1764,7 +1771,7 @@ def apply_rows(
         )
     ).all())
     items = _pushed_items(rows, s, applied_past)
-    prov = provider or provider_factory.get_wb_provider()
+    prov = provider or _cab_provider()
 
     if not items:
         _record(db, rows, applied_at=now)

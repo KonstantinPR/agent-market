@@ -139,8 +139,19 @@ V5_RU_COLUMNS = {
 class WbProvider(BaseProvider):
     """Реальные данные Wildberries через API."""
 
+    def __init__(self, testing_mode=None, credentials: Optional[dict] = None,
+                 fail_fast_429=False):
+        super().__init__(testing_mode)
+        # Creds кабинета: {"standard":..,"finance":..,"finance2":..}.
+        # Пустые -> фолбэк на settings (старое поведение; тесты/скрипты).
+        self.creds = credentials or {}
+        self.fail_fast_429 = fail_fast_429
+
     # ---------------------------------------------------------------- helpers
     def _headers(self, finance: bool = False, key: Optional[str] = None) -> dict:
+        if key is None:
+            key = (self.creds.get("finance") or self.creds.get("finance2")
+                   if finance else self.creds.get("standard"))
         if key is None:
             key = settings.wb_finance_api_key if finance else settings.wb_api_key
         if not key:
@@ -181,7 +192,9 @@ class WbProvider(BaseProvider):
             resp = requests.post(url, headers=self._headers(finance, key),
                                  json=payload, timeout=60)
             if resp.status_code == 429:
-                alt = settings.wb_finance_api_key_2 if finance else None
+                alt = self.creds.get("finance2")
+                if alt is None:
+                    alt = settings.wb_finance_api_key_2 if finance else None
                 if alt:
                     resp = requests.post(
                         url,
@@ -488,7 +501,9 @@ class WbProvider(BaseProvider):
         Права на analytics/v3/sales-funnel могут быть только у одного из них;
         квитируем 403 (нет прав) и переходим к следующему.
         """
-        candidates = [settings.wb_finance_api_key_2, settings.wb_api_key,
+        candidates = [self.creds.get("finance2"), self.creds.get("standard"),
+                      self.creds.get("finance"),
+                      settings.wb_finance_api_key_2, settings.wb_api_key,
                       settings.wb_finance_api_key]
         payload = {
             "selectedPeriod": {"start": "2026-01-01", "end": "2026-01-02"},
