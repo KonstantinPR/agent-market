@@ -2,12 +2,14 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **111**, групп: **23**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **116**, групп: **27**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
+- [cabinet](#cabinet) — 2 шт.
+- [cabinets](#cabinets) — 1 шт.
 - [cards](#cards) — 1 шт.
 - [custom-stock](#custom-stock) — 1 шт.
 - [dashboard](#dashboard) — 1 шт.
@@ -19,9 +21,11 @@
 - [prices](#prices) — 1 шт.
 - [pricing](#pricing) — 5 шт.
 - [products](#products) — 6 шт.
+- [progress](#progress) — 1 шт.
 - [promo](#promo) — 2 шт.
 - [pulls](#pulls) — 1 шт.
 - [refresh](#refresh) — 4 шт.
+- [refresh-all](#refresh-all) — 1 шт.
 - [replenish](#replenish) — 2 шт.
 - [sales](#sales) — 1 шт.
 - [stocks](#stocks) — 1 шт.
@@ -31,6 +35,19 @@
 - [warehouse](#warehouse) — 14 шт.
 - [wb](#wb) — 10 шт.
 - [yandex](#yandex) — 4 шт.
+
+## cabinet
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| GET | `/api/cabinet/current` | `api_cabinet_current` | Активный кабинет (по куке agent_cabinet). None — «как раньше» (public). |
+| POST | `/api/cabinet/select` | `api_cabinet_select` | Выбирает активный кабинет (кука agent_cabinet + last_cabinet_id). |
+
+## cabinets
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| GET | `/api/cabinets` | `api_cabinets` | Список кабинетов текущего пользователя (с признаком активного). |
 
 ## cards
 
@@ -149,6 +166,12 @@
 | POST | `/api/products/refresh` | `products_refresh` | Обновляет общий каталог из карточек WB+Ozon (pull_catalog). |
 | POST | `/api/products/replenishable` | `product_replenishable` | Переключает флаг «докупаемый» у товара (влияет на автопилот цен WB). |
 
+## progress
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| GET | `/api/progress` | `api_progress` | Прогресс текущей выкачки для зелёной строки состояния. |
+
 ## promo
 
 | Метод | Путь | Функция | Описание |
@@ -170,6 +193,12 @@
 | POST | `/api/refresh` | `api_refresh` | Запускает фоновое обновление маркетплейса (wb\|ozon). Ошибки изолированы по видам. |
 | GET | `/api/refresh/history` | `api_refresh_history` |  |
 | GET | `/api/refresh/{job_id}` | `api_refresh_state` |  |
+
+## refresh-all
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| POST | `/api/refresh-all` | `api_refresh_all` | «Обновить всё»: по очереди запускает обновление всех кабинетов |
 
 ## replenish
 

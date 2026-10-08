@@ -15,6 +15,7 @@ import requests
 from app.config import settings
 from app.providers.base import BaseProvider
 from app.providers.errors import WbApiError
+from app.services import progress
 
 
 def _upload_error_detail(resp) -> Optional[str]:
@@ -279,6 +280,7 @@ class WbProvider(BaseProvider):
 
         limit, updated_at, nm_id = 100, None, None
         cards = []
+        progress.report(label="Карточки WB", stage="запрос API", unit="тов.")
         while True:
             payload = {
                 "settings": {
@@ -294,6 +296,10 @@ class WbProvider(BaseProvider):
             if total == 0:
                 break
             cards += data.get("cards", [])
+            # cursor.total — общее число карточек: единственный случай, где
+            # выкачка WB даёт честный процент сразу после первой страницы.
+            progress.report(stage="стр. " + str(len(cards) // limit + 1),
+                            done=len(cards), total=total)
             updated_at = cursor.get("updatedAt", updated_at)
             nm_id = cursor.get("nmID", nm_id)
             if len(data.get("cards", [])) < limit:
@@ -336,6 +342,7 @@ class WbProvider(BaseProvider):
             {"limit": 250000, "offset": 0},
         )
         items = resp.json().get("data", {}).get("items", [])
+        progress.report(label="Остатки WB", done=len(items))
         return pd.DataFrame(items)
 
     # --------------------------------------------------------- воронка продаж
@@ -470,6 +477,7 @@ class WbProvider(BaseProvider):
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         key = self._pick_funnel_key(url)
         chunk, offset, frames, raw_rows = 1000, 0, [], []
+        progress.report(label="Воронка WB", stage="запрос API", unit="стр.")
         while True:
             payload = {
                 "selectedPeriod": {"start": str(date_from), "end": str(date_to)},
@@ -485,6 +493,8 @@ class WbProvider(BaseProvider):
             frames.append(pd.json_normalize(products, errors="ignore"))
             raw_rows.extend(products)
             offset += chunk
+            # общий объём неизвестен — показываем страницы и строки без %
+            progress.report(stage=f"стр. {len(frames)}", done=len(raw_rows))
             if len(products) < chunk:
                 break
             time.sleep(20)
@@ -557,6 +567,7 @@ class WbProvider(BaseProvider):
 
         url = "https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter"
         limit, offset, goods = 1000, 0, []
+        progress.report(label="Цены WB", stage="запрос API", unit="поз.")
         while True:
             params = {"limit": limit, "offset": offset}
             resp = self._session_get(url, params=params)
@@ -566,6 +577,7 @@ class WbProvider(BaseProvider):
                 break
             goods += items
             offset += limit
+            progress.report(stage=f"стр. {offset // limit}", done=len(goods))
             if len(items) < limit:
                 break
             if offset > 0:
@@ -652,6 +664,7 @@ class WbProvider(BaseProvider):
     def _promo_paginate(self, path: str, key: str, params: dict, chunk: int = 1000):
         """GET-страницы календаря акций с паузой под rate-limit. Возвращает list."""
         items, offset = [], 0
+        progress.report(label="Акции WB", stage="запрос API", unit="стр.")
         while True:
             p = dict(params)
             p["limit"] = chunk
@@ -662,6 +675,7 @@ class WbProvider(BaseProvider):
                 break
             items += page
             offset += len(page)
+            progress.report(stage=f"стр. {offset // chunk + 1}", done=len(items))
             if len(page) < chunk:
                 break
             time.sleep(0.7)
@@ -881,6 +895,7 @@ class WbProvider(BaseProvider):
         )
         task_id = resp.json()["data"]["taskId"]
 
+        progress.report(label="Хранение WB", stage="формируется отчёт…")
         while True:
             status_resp = self._session_get(
                 f"https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{task_id}/status"
@@ -891,6 +906,7 @@ class WbProvider(BaseProvider):
             if status == "error":
                 raise RuntimeError("WB: не удалось сформировать отчёт по хранению")
             time.sleep(10)
+        progress.report(stage="скачивание…")
 
         download_resp = self._session_get(
             f"https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{task_id}/download"
@@ -933,11 +949,15 @@ class WbProvider(BaseProvider):
             "rrdid": 0,
             "limit": 100000,
         }
+        # один запрос на весь период: отдельной страницы нет, но этап «запрос
+        # отчёта» длительный — держим его в строке состояния
+        progress.report(label="Продажи WB", stage="запрос отчёта…", unit="стр.")
         resp = self._session_get(
             "https://statistics-api.wildberries.ru/api/v5/supplier/reportDetailByPeriod",
             params=params,
         )
         df = pd.DataFrame(resp.json())
+        progress.report(stage="получено", done=len(df))
         if "supplierArticle" in df.columns and "vendorCode" in df.columns:
             df["supplierArticle"] = df["supplierArticle"].fillna(df["vendorCode"])
         return df
@@ -972,6 +992,7 @@ class WbProvider(BaseProvider):
 
         url = "https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed"
         all_rows, rrd_id = [], 0
+        progress.report(label="Детализация WB", stage="запрос API", unit="стр.")
         while True:
             payload = {"dateFrom": str(date_from), "dateTo": str(date_to),
                        "limit": 100000, "rrdId": rrd_id}
@@ -982,6 +1003,8 @@ class WbProvider(BaseProvider):
             if not data:
                 break
             all_rows += data
+            progress.report(stage=f"стр. {len(all_rows) // 100000 + 1}",
+                            done=len(all_rows))
             if "rrdId" in data[-1]:
                 rrd_id = data[-1]["rrdId"]
             else:

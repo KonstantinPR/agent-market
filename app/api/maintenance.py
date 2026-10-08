@@ -8,6 +8,21 @@ from app.api._common import (
 router = APIRouter()
 
 
+@router.get("/progress")
+async def api_progress(op: Optional[str] = None):
+    """Прогресс текущей выкачки для зелёной строки состояния.
+
+    Фронтенд шлёт op-id заголовком X-Progress-Id и опрашивает этот роут раз в
+    секунду, пока висит синхронный запрос; пустая строка = прогресса нет
+    (показываем прошедшее время). Без БД и threadpool — отвечает мгновенно
+    даже при загруженных выкачками воркерах.
+    """
+    from app.services import progress as progress_service
+
+    snap = progress_service.snapshot(op or "")
+    return {"text": snap["text"] if snap else ""}
+
+
 
 @router.get("/pulls")
 def api_pulls(db: Session = Depends(get_db)):

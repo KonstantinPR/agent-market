@@ -37,6 +37,7 @@ FILE_ROLES = {
     "app/services/sync.py": "запись выгрузок WB/Ozon в БД",
     "app/services/pricing.py": "автопилот цен: R1–R11, расчёт скидок",
     "app/services/refresh.py": "`pull_*`-функции, фоновые задания, «Обновить WB/Ozon»",
+    "app/services/progress.py": "прогресс длительных выкачек: ContextVar + реестр, GET /api/progress",
     "app/services/margin.py": "маржинальность по детализациям, группировка артикулоразмеров",
     "app/services/replenish.py": "подсортировка WB, план дефицита, скорость продаж",
     "app/services/dashboard.py": "сводные панели дашборда",

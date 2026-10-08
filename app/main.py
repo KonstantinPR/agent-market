@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.api import router
 from app.config import BASE_DIR
+from app.services import progress as progress_service
 
 STATIC_DIR = BASE_DIR / "app" / "static"
 
@@ -24,6 +25,20 @@ async def lifespan(_app):
 
 app = FastAPI(title="Agent Market", lifespan=lifespan)
 app.include_router(router)
+
+
+@app.middleware("http")
+async def progress_op_middleware(request, call_next):
+    """Прокидывает op-id выкачки (X-Progress-Id) в ContextVar на время запроса.
+
+    Контекст anyio передаёт его и в sync-эндпоинты (threadpool), откуда его
+    читает services/progress.report() в циках пагинации провайдеров.
+    """
+    progress_service.set_op(request.headers.get(progress_service.HEADER, ""))
+    try:
+        return await call_next(request)
+    finally:
+        progress_service.set_op("")
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

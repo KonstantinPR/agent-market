@@ -23,6 +23,7 @@ import requests
 from app.config import settings
 from app.providers.base import BaseProvider
 from app.providers.errors import OzonApiError
+from app.services import progress
 
 OZON_API = "https://api-seller.ozon.ru"
 OZON_RU_COLUMNS = {
@@ -103,8 +104,10 @@ class OzonProvider(BaseProvider):
         })
         code = resp.json()["result"]["code"]
 
+        progress.report(label="Карточки Ozon", stage="формируется отчёт…", unit="карт.")
         for attempt in range(25):
             time.sleep(20)
+            progress.report(stage=f"формируется отчёт ({attempt + 1}/25)…")
             info = self._post(f"{OZON_API}/v1/report/info", {"code": code})
             result = info.json()["result"]
             status = result.get("status")
@@ -136,6 +139,7 @@ class OzonProvider(BaseProvider):
             return pd.DataFrame(rows)
 
         all_rows, offset = [], 0
+        progress.report(label="Остатки Ozon", stage="запрос API", unit="ров.")
         while True:
             resp = self._post(f"{OZON_API}/v2/analytics/stock_on_warehouses",
                               {"limit": 1000, "offset": offset, "warehouse_type": "ALL"})
@@ -143,6 +147,7 @@ class OzonProvider(BaseProvider):
             if not rows:
                 break
             all_rows.extend(rows)
+            progress.report(stage=f"стр. {offset // 1000 + 1}", done=len(all_rows))
             if len(rows) < 1000:
                 break
             offset += 1000
@@ -168,6 +173,7 @@ class OzonProvider(BaseProvider):
             })
 
         items, cursor = [], ""
+        progress.report(label="Цены Ozon", stage="запрос API", unit="поз.")
         while True:
             resp = self._post(f"{OZON_API}/v5/product/info/prices", {
                 "cursor": cursor,
@@ -178,6 +184,7 @@ class OzonProvider(BaseProvider):
             page = data.get("items", [])
             items += page
             cursor = data.get("cursor", "") or ""
+            progress.report(stage=f"стр. {len(items) // 1000 + 1}", done=len(items))
             if not cursor or not page:
                 break
         if not items:
@@ -282,10 +289,13 @@ class OzonProvider(BaseProvider):
         end_d = pd.Timestamp(date_to).date()
         frames = []
         month = date(start_d.year, start_d.month, 1)
+        progress.report(label="Реализация Ozon", stage="запрос API", unit="стр.")
         while month <= end_d:
             df = self.get_realization(month.month, month.year)
             if not df.empty:
                 frames.append(df)
+            progress.report(stage=f"{month.year:04d}.{month.month:02d}",
+                            done=sum(len(f) for f in frames))
             if month.month == 12:
                 month = date(month.year + 1, 1, 1)
             else:
@@ -318,6 +328,7 @@ class OzonProvider(BaseProvider):
             "date": {"from": f"{date_from}T00:00:00.000Z", "to": f"{date_to}T23:59:59.999Z"},
             "page": page, "page_size": 1000, "with_details": True,
         }
+        progress.report(label="ДС Ozon", stage="запрос API", unit="стр.")
         while True:
             resp = self._post(f"{OZON_API}/v1/finance/cash-flow-statement/list", params)
             result = resp.json().get("result", {})
@@ -326,6 +337,7 @@ class OzonProvider(BaseProvider):
                 break
             all_details += details
             params["page"] += 1
+            progress.report(stage=f"стр. {params['page'] - 1}", done=len(all_details))
             if len(details) < 1000:
                 break
         rows = []
@@ -416,6 +428,7 @@ class OzonProvider(BaseProvider):
                 return 0.0
 
         out = []
+        progress.report(label="Аккруалы Ozon", stage="запрос API", unit="запис.")
         for d in _iter_days():
             page = 1
             while True:
@@ -490,6 +503,7 @@ class OzonProvider(BaseProvider):
                 if len(accruals) < 100:
                     break
                 page += 1
+            progress.report(stage=str(d), done=len(out))
         df = pd.DataFrame(out, columns=["op_key", "date", "accrual_id", "unit_number",
                                         "bucket", "type_id", "sku", "quantity", "amount",
                                         "seller_price", "sale_price"])
@@ -772,10 +786,13 @@ class OzonProvider(BaseProvider):
         end_d = pd.Timestamp(date_to).date()
         frames = []
         month = date(start_d.year, start_d.month, 1)
+        progress.report(label="Детализация Ozon", stage="запрос API", unit="стр.")
         while month <= end_d:
             df = self.get_realization_posting(month.month, month.year)
             if not df.empty:
                 frames.append(df)
+            progress.report(stage=f"{month.year:04d}.{month.month:02d}",
+                            done=sum(len(f) for f in frames))
             if month.month == 12:
                 month = date(month.year + 1, 1, 1)
             else:
@@ -865,6 +882,7 @@ class OzonProvider(BaseProvider):
         end_d = pd.Timestamp(date_to).date()
         frames = []
         month = date(start_d.year, start_d.month, 1)
+        progress.report(label="Размещение Ozon", stage="запрос API", unit="стр.")
         while month <= end_d:
             m_from = max(start_d, month).isoformat()
             m_to = min(end_d, date(month.year, month.month + 1, 1)
@@ -872,6 +890,8 @@ class OzonProvider(BaseProvider):
             df = self._placement_month(m_from, m_to)
             if not df.empty:
                 frames.append(df)
+            progress.report(stage=f"{month.year:04d}.{month.month:02d}",
+                            done=sum(len(f) for f in frames))
             if month.month == 12:
                 month = date(month.year + 1, 1, 1)
             else:

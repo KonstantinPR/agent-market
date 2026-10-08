@@ -830,12 +830,6 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   align-items: center;
   flex-wrap: wrap;
 }
-.pricing-summary {
-  font-size: 13px;
-  color: #333;
-  margin-bottom: 10px;
-  font-variant-numeric: tabular-nums;
-}
 .p-tag { border-radius: 3px; padding: 1px 7px; font-weight: 600; }
 .p-raise { background: #f0faf2; color: #1a7f37; border: 1px solid #ccebd2; }
 .p-lower { background: #fdeaea; color: #a40e26; border: 1px solid #f3c1c1; }

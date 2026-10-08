@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "76";
+const UI_VERSION = "77";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -50,6 +50,40 @@ function busyRun(fn) {
         document.body.classList.remove("busy");
       }
     });
+}
+
+// -------------------------------------------------- прогресс длительных операций
+// Синхронный fetch не присылает промежуточных данных, но бэкенд умеет отдавать
+// этапы/проценты выкачки (app/services/progress.py): пока висит запрос, тикер
+// раз в секунду опрашивает /api/progress?op=<X-Progress-Id> и пишет в строку
+// состояния; без прогресса показывает прошедшее время. Последняя полученная
+// строка остаётся (дополняется секундами) — нет мерцания при паузах между
+// страницами. stop() ставит флаг: отложенные ответы не перезапишут финальный
+// статус, который будет написан после остановки тикера.
+function startProgress(msg, label) {
+  const op = "op" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const t0 = Date.now();
+  let stopped = false;
+  let lastText = "";
+  if (msg) msg.textContent = label + "… (0 с)";
+  const timer = setInterval(async () => {
+    if (stopped || !msg) return;
+    const sec = Math.round((Date.now() - t0) / 1000) + " с";
+    let text = lastText ? lastText + " · " + sec : label + "… (" + sec + ")";
+    try {
+      const r = await fetch("/api/progress?op=" + encodeURIComponent(op));
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.text) {
+          lastText = j.text;
+          text = lastText + " · " + sec;
+        }
+      }
+    } catch (err) { /* нет сети/роута — остаёмся на прошедшем времени */ }
+    if (stopped || !msg) return;
+    msg.textContent = text;
+  }, 1000);
+  return { op, stop() { stopped = true; clearInterval(timer); } };
 }
 
 function writeDbStorage(api, kind) {
@@ -3034,7 +3068,18 @@ async function uploadFile(url, input, msgSel, tab) {
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const resp = await fetch("/api" + url, { method: "POST", body: fd });
+    const msgEl = document.querySelector(msgSel);
+    const prog = startProgress(msgEl, "Импортирую " + (file.name || "файл"));
+    let resp;
+    try {
+      resp = await fetch("/api" + url, {
+        method: "POST",
+        body: fd,
+        headers: { "X-Progress-Id": prog.op },
+      });
+    } finally {
+      prog.stop();
+    }
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || resp.status);
     let msg = "Импортировано строк: " + data.imported;
@@ -3085,9 +3130,17 @@ async function apiDownload(api, kind, msgSel, jsonMode) {
   if (overwriteEl) params.overwrite = overwriteEl.checked ? 1 : 0;
   if (jsonMode) params.excel = 0;
   const msg = document.querySelector(msgSel);
-  msg.textContent = "Обновляю…";
+  const prog = startProgress(msg, "Обновляю");
+  let resp;
   try {
-    const resp = await fetch("/api/" + api + "/" + kind + qs(params), { method: "POST" });
+    resp = await fetch("/api/" + api + "/" + kind + qs(params), {
+      method: "POST",
+      headers: { "X-Progress-Id": prog.op },
+    });
+  } finally {
+    prog.stop();
+  }
+  try {
     if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
     if (jsonMode) {
       const j = await resp.json();
@@ -3145,9 +3198,17 @@ async function apiUploadDisk(api, kind, msgSel) {
   if (writeDb) params.write_db = writeDb.checked ? 1 : 0;
   if (bySize) params.by_size = bySize.checked ? 1 : 0;
   const msg = document.querySelector(msgSel);
-  msg.textContent = "Формирую файл…";
+  const prog = startProgress(msg, "Формирую файл");
+  let resp;
   try {
-    const resp = await fetch("/api/" + api + "/" + kind + qs(params), { method: "POST" });
+    resp = await fetch("/api/" + api + "/" + kind + qs(params), {
+      method: "POST",
+      headers: { "X-Progress-Id": prog.op },
+    });
+  } finally {
+    prog.stop();
+  }
+  try {
     if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
     const blob = await resp.blob();
     const name = filenameFromDisposition(resp.headers.get("Content-Disposition"));
@@ -4897,6 +4958,28 @@ function jobRefreshLabel(j) {
   return [cab, mp].filter(Boolean).join(" \u00b7 ") || "Задание #" + j.jobId;
 }
 
+// Свод прогресса заданий одной строкой для зелёной строки состояния в шапке —
+// видно, даже когда модалка «Обновление» закрыта. Короче HEADER_MSG_MAX не
+// обязательно: обрезка с тултипом — общая для всех писателей.
+function refreshHeaderText() {
+  const parts = [];
+  let error = false;
+  for (const j of refreshJobs) {
+    const lbl = jobRefreshLabel(j);
+    if (j.rejected) { error = true; parts.push(lbl + ": " + j.msg); continue; }
+    if (!j.state) { parts.push(lbl + ": ожидание…"); continue; }
+    const total = j.state.steps.length;
+    const ok = j.state.steps.filter((s) => s.status === "ok").length;
+    const run = j.state.steps.find((s) => s.status === "running");
+    const failed = j.state.steps.filter((s) => s.status === "failed").length;
+    let line = lbl + ": " + ok + "/" + total;
+    if (run) line += " · " + run.label + "…";
+    if (failed) { line += " · ошибок: " + failed; error = true; }
+    parts.push(line);
+  }
+  return { text: parts.join(" · "), error };
+}
+
 function renderRefresh() {
   let h = "";
   let summary = "";
@@ -4923,6 +5006,8 @@ function renderRefresh() {
   }
   $("#refreshList").innerHTML = h;
   if (summary) $("#refreshSummary").textContent = summary;
+  const hdr = refreshHeaderText();
+  if (hdr.text) setStatus(hdr.text, { error: hdr.error });
 }
 
 async function loadRefreshHistory() {
@@ -6056,9 +6141,17 @@ async function refreshPricingPrices() {
   const btn = $("#pricingPriceRefresh");
   const prev = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Обновляю цены…"; }
-  msg.textContent = "Загружаю цены и скидки WB…";
+  const prog = startProgress(msg, "Загружаю цены WB");
+  let resp;
   try {
-    const resp = await fetch("/api/wb/prices?excel=0", { method: "POST" });
+    resp = await fetch("/api/wb/prices?excel=0", {
+      method: "POST",
+      headers: { "X-Progress-Id": prog.op },
+    });
+  } finally {
+    prog.stop();
+  }
+  try {
     const j = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error((j.detail || resp.status) || "не удалось загрузить цены");
     msg.textContent = "Цены WB загружены: " + fmt(j.count || 0) + " позиций. Пересчитываю…";
@@ -6116,8 +6209,10 @@ async function renderPricing(apply) {
     if (data.settings && data.settings.mode === "old") summary += " · старая модель (не рекомендуется)";
     if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
     if (data.as_of) summary += " · на " + data.as_of;
-    $("#pricingSummary").textContent = summary;
-    msg.textContent = data.note || "";
+    if (data.note) summary += " · " + data.note;
+    // Сводка — в общую зелёную строку состояния шапки (как везде); полный
+    // текст длиннее HEADER_MSG_MAX — уходит в тултип через normalizeStatus.
+    msg.textContent = summary;
     pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows, pricingFooters(rows), null, colViewPinKeys("pricing"));
     await renderPricingHistory();
     refreshApplyButton();

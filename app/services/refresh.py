@@ -27,6 +27,7 @@ from app.providers.errors import (MarketError, translate_request_error)
 from app.providers.ozon import OzonProvider
 from app.providers.wb import WbProvider
 from app.services import sync as sync_service
+from app.services import progress as progress_service
 from app.services import cabinets
 from app.services.cabinets import active_credentials
 from app.services.window import parse_window
@@ -428,6 +429,7 @@ def pull_wb_cards(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
     n_nm = 0
     n_sk = 0
     if write_db:
+        progress_service.report(stage="запись в БД")
         pdf = df.rename(columns={"vendorCode": "article", "title": "name", "skus": "barcode"})
         n = sync_service.upsert_products(db, pdf)
         n_nm = sync_service.upsert_nm_articles(db, df)
@@ -482,6 +484,7 @@ def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
         sdf["article"] = sdf["article"].astype(str).str.strip()
         sdf = sdf[["date", "article", "chrt_id", "size", "barcode", "warehouse", "quantity", "quantity_full", "in_way"]]
         if write_db:
+            progress_service.report(stage="запись в БД")
             n = sync_service.upsert_stocks(db, sdf, "wb")
     else:
         sdf = raw
@@ -496,6 +499,7 @@ def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None,
     df = prov.get_sales_funnel(from_, to_)
     n = 0
     if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
         fdf = _funnel_to_db(df, from_, to_)
         n = sync_service.upsert_funnel(db, fdf)
     window = f"{from_.isoformat()} — {to_.isoformat()}"
@@ -508,6 +512,7 @@ def pull_wb_prices(db, provider: Optional[WbProvider] = None, write_db: bool = T
     df = prov.get_prices()
     n = 0
     if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
         n = sync_service.upsert_price_snapshots(db, df)
     sync_service.record_api_pull(db, "wb", "prices", len(df), n, "сейчас")
     return {"df": df, "count": n if write_db else len(df), "db_rows": n,
@@ -558,6 +563,7 @@ def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None,
     df = prov.get_sales_realization(from_, to_)
     n = 0
     if write_db:
+        progress_service.report(stage="запись в БД")
         sdf = sync_service.normalize_wb_sales(df)
         n = sync_service.upsert_sales(db, sdf, "wb") if sdf is not None else 0
     window = f"{from_.isoformat()} — {to_.isoformat()}"
@@ -571,6 +577,7 @@ def pull_wb_detail(db, from_, to_, provider: Optional[WbProvider] = None,
     df = prov.get_sales_detail(from_, to_)
     n = 0
     if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
         rdf = sync_service.normalize_wb_detail(df, source="api")
         if rdf is not None and not rdf.empty:
             sync_service.upsert_wb_detail_rows(db, rdf, source="api")
@@ -586,6 +593,7 @@ def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = 
     n = 0
     n_sk = 0
     if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
         pdf = df.rename(columns={
             "Артикул": "article", "Offer ID": "article",
             "Название товара": "name", "Name": "name",
@@ -713,6 +721,7 @@ def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = 
     df = prov.get_stock()
     n = 0
     if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
         free = pd.to_numeric(df.get("free_to_sell_amount", 0), errors="coerce").fillna(0).astype(int) \
             if "free_to_sell_amount" in df.columns else pd.Series(0, index=df.index)
         reserved = pd.to_numeric(df.get("reserved_amount", 0), errors="coerce").fillna(0).astype(int) \
@@ -740,6 +749,7 @@ def pull_oz_prices(db, provider: Optional[OzonProvider] = None, write_db: bool =
     df = prov.get_prices()
     n = 0
     if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
         n = sync_service.upsert_ozon_price_snapshots(db, df)
     sync_service.record_api_pull(db, "ozon", "prices", len(df), n, "сейчас")
     return {"df": df, "count": n if write_db else len(df), "db_rows": n,
@@ -814,6 +824,7 @@ def pull_oz_detail(db, from_, to_, provider: Optional[OzonProvider] = None,
     df = prov.get_sales_detail(from_, to_)
     n = 0
     if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
         rdf = sync_service.normalize_ozon_detail(df, source="api")
         if rdf is not None and not rdf.empty:
             n = sync_service.upsert_ozon_detail_rows(db, rdf, source="api")
