@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "78";
+const UI_VERSION = "79";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -514,6 +514,38 @@ function mountXBar(container, scroll) {
   bar.scrollLeft = scroll.scrollLeft;
   scroll.onscroll = () => { bar.scrollLeft = scroll.scrollLeft; };
   fit();
+}
+
+// Подсветка «пересечения» под курсором в таблицах: строка подсвечивается
+// чистым CSS (tr:hover), столбец — классом hl-col на всех ячейках колонки
+// (заголовок, «Итого» и тело; класс ставит JS-делегирование на document).
+// Класс пересчитывается только при смене колонки — движение вверх-вниз по
+// той же колонке DOM не трогает; на выходе из таблицы подсветка снимается.
+function initTableHover() {
+  let prevTable = null, prevIdx = -1;
+  let marked = [];
+  const unmark = () => {
+    for (const cell of marked) cell.classList.remove("hl-col");
+    marked = [];
+    prevTable = null;
+    prevIdx = -1;
+  };
+  document.addEventListener("mouseover", (e) => {
+    const td = e.target.closest ? e.target.closest("td") : null;
+    const tbl = td ? td.closest("table") : null;
+    if (!td || !tbl) { unmark(); return; }
+    tbl.classList.add("data-hl");
+    const idx = td.cellIndex;
+    if (tbl === prevTable && idx === prevIdx) return;
+    unmark();
+    prevTable = tbl;
+    prevIdx = idx;
+    for (const tr of tbl.rows) {
+      const cell = tr.cells[idx];
+      if (cell) { cell.classList.add("hl-col"); marked.push(cell); }
+    }
+  });
+  document.addEventListener("mouseout", (e) => { if (!e.relatedTarget) unmark(); });
 }
 
 function tabLike(id) {
@@ -6430,6 +6462,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initOzBySize();
   initHelp();
   initYandexTab();
+  initTableHover();
   await loadCabinets();
   if (localStorage.getItem("cab-auto-refresh") === "1") {
     setTimeout(() => refreshAllCabinets(), 300);
