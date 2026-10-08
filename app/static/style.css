@@ -41,6 +41,59 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 .links > .nav-link,
 .links > .dropdown > .dropbtn { height: 32px; line-height: 1; }
 
+.navbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.cab-btn .cab-ico { margin-right: 6px; font-size: 13px; }
+.cab-btn .caret { margin-left: 6px; color: #888; }
+.cab-btn { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Шторка «Личные кабинеты» (справа) */
+.drawer-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0, 0, 0, .35);
+}
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 95;
+  width: min(92vw, 420px);
+  background: #fff;
+  border-left: 1px solid #ddd;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, .12);
+  display: flex; flex-direction: column;
+  animation: drawerIn .16s ease-out;
+}
+@keyframes drawerIn { from { transform: translateX(30px); opacity: .6; } to { transform: none; opacity: 1; } }
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid #eee;
+}
+.drawer-head h3 { font-size: 15px; }
+.drawer-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+.cab-user { font-size: 13px; color: #555; margin-bottom: 10px; }
+.cab-list { display: grid; gap: 8px; }
+.cab-item {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid #ddd; border-radius: 8px; padding: 10px 12px;
+  cursor: pointer; background: #fff;
+}
+.cab-item:hover { border-color: #111; }
+.cab-item.active { border-color: #111; background: #f7f7f7; box-shadow: inset 3px 0 0 #111; }
+.cab-item .row1 { display: flex; align-items: center; gap: 8px; }
+.cab-item .name { flex: 1; font-weight: 600; font-size: 13px; }
+.cab-item .mps { display: flex; gap: 4px; }
+.cab-mp {
+  font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 4px;
+  background: #eee; color: #333;
+}
+.cab-mp.off { opacity: .4; }
+.cab-item .refresh-one {
+  border: 1px solid #ddd; border-radius: 5px; background: #fff;
+  padding: 3px 8px; cursor: pointer; font-size: 12px; color: #333;
+}
+.cab-item .refresh-one:hover { border-color: #111; }
+.cab-actions { margin-top: 14px; }
+.cab-settings { margin-top: 12px; display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid #eee; }
+.cab-opt { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
+.cab-opt.is-disabled { opacity: .45; cursor: not-allowed; }
+
 .dropdown { position: relative; }
 .dropdown-menu {
   display: none;

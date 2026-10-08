@@ -6,7 +6,7 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "75";
+const UI_VERSION = "76";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -4768,6 +4768,119 @@ const STEP_STATUS = {
 
 let refreshPoll = null;
 let refreshJobs = [];   // [{api, jobId, rejected, msg, state, done}]
+let refreshCabId = null;      // кабинет, который обновляет модалка (иначе активный)
+let refreshAllMode = false;   // «Обновить всё» (все кабинеты, /api/refresh-all)
+let cabState = { cabinets: [], current: null, user: null };
+const CABINET_COOKIE = "agent_cabinet";
+
+async function loadCabinets() {
+  try {
+    cabState = await api("/cabinets");
+  } catch (err) {
+    return;
+  }
+  const label = $("#cabBtnLabel");
+  if (label) {
+    const cur = cabState.current;
+    label.textContent = cur ? (shortUserName(cabState.user) + " \u00b7 " + cur.name) : "Личный кабинет";
+  }
+  renderCabinets();
+}
+
+function shortUserName(u) {
+  const n = (u && u.display_name) || "";
+  return n.split(" ")[0] || (u && u.username) || "…";
+}
+
+function renderCabinets() {
+  const userBox = $("#cabUser");
+  if (userBox) userBox.textContent = (cabState.user && cabState.user.display_name) || "";
+  const box = $("#cabList");
+  if (!box) return;
+  const list = cabState.cabinets || [];
+  if (!list.length) {
+    box.innerHTML = '<div class="empty">Кабинетов нет</div>';
+    return;
+  }
+  let h = "";
+  for (const c of list) {
+    const mps = (c.marketplaces || []).map((m) =>
+      '<span class="cab-mp' + (c.has_keys ? "" : " off") + '" title="' +
+      (c.has_keys ? "" : "ключи не заданы") + '">' + escapeHtml(MP_LABELS[m] || m) + "</span>"
+    ).join("");
+    h += '<div class="cab-item' + (c.active ? " active" : "") + '" data-cab="' + c.id + '">' +
+      '<div class="row1"><span class="name">' + escapeHtml(c.name) + "</span>" +
+      '<span class="mps">' + mps + "</span>" +
+      '<button class="refresh-one" title="Обновить кабинет" data-refresh="' + c.id + '">&#8635;</button>' +
+      "</div></div>";
+  }
+  box.innerHTML = h;
+}
+
+function openCabinets() {
+  $("#cabDrawer").classList.remove("hidden");
+  $("#cabDrawerOverlay").classList.remove("hidden");
+  loadCabinets();
+}
+
+function closeCabinets() {
+  $("#cabDrawer").classList.add("hidden");
+  $("#cabDrawerOverlay").classList.add("hidden");
+}
+
+async function selectCabinet(id) {
+  try {
+    await apiPost("/cabinet/select", { id });
+    document.cookie = CABINET_COOKIE + "=" + id +
+      "; path=/; max-age=31536000; samesite=lax";
+    closeCabinets();
+    await loadCabinets();
+    pullsCache = null;
+    loadTab(currentTab);
+  } catch (err) {
+    alert("Не удалось переключить кабинет: " + err.message);
+  }
+}
+
+function refreshCabinetById(id) {
+  const c = (cabState.cabinets || []).find((x) => x.id === id);
+  if (!c) return;
+  refreshCabId = id;
+  openRefresh((c.marketplaces && c.marketplaces.length) ? c.marketplaces : []);
+  $("#refreshTitle").textContent = "Обновление: " + c.name;
+}
+
+async function refreshAllCabinets() {
+  refreshAllMode = true;
+  openRefresh([]);
+  $("#refreshTitle").textContent = "Обновить всё (все кабинеты)";
+  await startRefreshAll();
+}
+
+async function startRefreshAll() {
+  const startBtn = $("#refreshStart");
+  startBtn.disabled = true;
+  $("#refreshSummary").textContent = "Запуск…";
+  refreshJobs = [];
+  const detail = $("#refreshDetail");
+  try {
+    const data = await apiPost("/refresh-all", { include_detail: detail.checked });
+    const ids = ((data.jobs || []).map((j) => j.job_id)).filter(Boolean);
+    for (const id of ids) refreshJobs.push({ api: "", jobId: id, state: null });
+    renderRefresh();
+    if (!ids.length) {
+      $("#refreshSummary").textContent = "Нечего обновлять";
+      startBtn.disabled = false;
+      return;
+    }
+    detail.disabled = true;
+    pollRefresh();
+  } catch (err) {
+    refreshJobs.push({ api: "", rejected: true, msg: err.message });
+    renderRefresh();
+    startBtn.disabled = false;
+  }
+}
 let refreshApis = [];
 
 function stepText(s) {
@@ -4777,11 +4890,18 @@ function stepText(s) {
   return STEP_STATUS[s.status] || s.status;
 }
 
+function jobRefreshLabel(j) {
+  const st = j.state || {};
+  const mp = MP_LABELS[st.api || j.api] || (j.api && MP_LABELS[j.api]) || "";
+  const cab = st.cab_name || "";
+  return [cab, mp].filter(Boolean).join(" \u00b7 ") || "Задание #" + j.jobId;
+}
+
 function renderRefresh() {
   let h = "";
   let summary = "";
   for (const j of refreshJobs) {
-    const lbl = MP_LABELS[j.api] || j.api;
+    const lbl = jobRefreshLabel(j);
     h += '<div class="refresh-api">' + escapeHtml(lbl) + "</div>";
     if (j.rejected) {
       h += '<div class="refresh-step failed"><span class="rs-name">Отклонено</span><span class="rs-status">' + escapeHtml(j.msg) + "</span></div>";
@@ -4828,6 +4948,8 @@ async function loadRefreshHistory() {
 }
 
 async function openRefresh(apis) {
+  refreshCabId = null;
+  refreshAllMode = false;
   const modal = $("#refreshModal");
   modal.classList.remove("hidden");
   if (refreshPoll) { clearInterval(refreshPoll); refreshPoll = null; }
@@ -4857,6 +4979,8 @@ async function startRefreshJob() {
   for (const api of apis) {
     const params = { api };
     if (detail.checked) params.detail = 1;
+    if (refreshCabId) params.cab_id = refreshCabId;
+    else if (cabState.current) params.cab_id = cabState.current.id;
     if ($("#fFrom").value) params.date_from = $("#fFrom").value;
     if ($("#fTo").value) params.date_to = $("#fTo").value;
     try {
@@ -6211,6 +6335,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   initOzBySize();
   initHelp();
   initYandexTab();
+  await loadCabinets();
+  if (localStorage.getItem("cab-auto-refresh") === "1") {
+    setTimeout(() => refreshAllCabinets(), 300);
+  }
   updateCrumb("dashboard");
 
   const menuBtn = $("#menuBtn");
@@ -6373,7 +6501,31 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#magicRefreshWb").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("wb"); });
   $("#magicRefreshOz").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("ozon"); });
   $("#magicRefreshAll").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh(["wb", "ozon"]); });
-  $("#refreshStart").addEventListener("click", () => startRefreshJob());
+  const cabBtn = $("#cabBtn");
+  if (cabBtn) cabBtn.addEventListener("click", (e) => { e.stopPropagation(); openCabinets(); });
+  const cabClose = $("#cabDrawerClose");
+  if (cabClose) cabClose.addEventListener("click", closeCabinets);
+  const cabOverlay = $("#cabDrawerOverlay");
+  if (cabOverlay) cabOverlay.addEventListener("click", closeCabinets);
+  const cabList = $("#cabList");
+  if (cabList) cabList.addEventListener("click", (e) => {
+    const rb = e.target.closest("[data-refresh]");
+    if (rb) { e.stopPropagation(); refreshCabinetById(parseInt(rb.dataset.refresh, 10)); return; }
+    const item = e.target.closest("[data-cab]");
+    if (item) selectCabinet(parseInt(item.dataset.cab, 10));
+  });
+  const cabRefreshAll = $("#cabRefreshAll");
+  if (cabRefreshAll) cabRefreshAll.addEventListener("click", () => refreshAllCabinets());
+  const cabAuto = $("#cabAutoRefresh");
+  if (cabAuto) {
+    cabAuto.checked = localStorage.getItem("cab-auto-refresh") === "1";
+    cabAuto.addEventListener("change", () =>
+      localStorage.setItem("cab-auto-refresh", cabAuto.checked ? "1" : "0"));
+  }
+  $("#refreshStart").addEventListener("click", () => {
+    if (refreshAllMode) startRefreshAll();
+    else startRefreshJob();
+  });
   $("#refreshClose").addEventListener("click", () => {
     $("#refreshModal").classList.add("hidden");
     if (refreshPoll) { clearInterval(refreshPoll); refreshPoll = null; }

@@ -76,6 +76,13 @@
     </div>
     <a class="nav-link" data-tab="tickets" href="#">Тикеты</a>
   </div>
+  <div class="navbar-right">
+    <button class="dropbtn cab-btn" id="cabBtn" aria-label="Личные кабинеты" title="Личные кабинеты">
+      <span class="cab-ico">&#128100;</span>
+      <span id="cabBtnLabel">…</span>
+      <span class="caret">&#9662;</span>
+    </button>
+  </div>
 </nav>
 <header class="filters">
   <span class="crumb" id="crumb"></span>
@@ -850,6 +857,26 @@
     <div id="ticketsBoard"></div>
   </section>
 </main>
+<div id="cabDrawerOverlay" class="drawer-overlay hidden"></div>
+<aside id="cabDrawer" class="drawer hidden" aria-label="Личные кабинеты">
+  <div class="drawer-head">
+    <h3>Личные кабинеты</h3>
+    <button id="cabDrawerClose" class="modal-close" aria-label="Закрыть">&times;</button>
+  </div>
+  <div class="drawer-body">
+    <div id="cabUser" class="cab-user"></div>
+    <div id="cabList" class="cab-list"></div>
+    <div class="cab-actions">
+      <button id="cabRefreshAll" class="btn btn-primary">Обновить всё</button>
+    </div>
+    <div class="cab-settings">
+      <label class="cab-opt" title="При старте приложения запустить последние кабинеты на обновление"><input type="checkbox" id="cabAutoRefresh"> Автообновление при старте</label>
+      <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Сравнение продаж между кабинетами</label>
+      <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Синхронизация автопилота цен</label>
+      <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Скрывать кабинеты без ключей</label>
+    </div>
+  </div>
+</aside>
 <div id="refreshModal" class="modal hidden">
   <div class="modal-box">
     <div class="modal-head">
@@ -904,7 +931,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=75"></script>
+<script src="/static/app.js?v=76"></script>
 </body>
 </html>
 
