@@ -139,6 +139,14 @@ def seed_users_and_cabinets(db: Session) -> list[models.Cabinet]:
         "client_id": settings.ozon_client_id,
         "api_key": settings.ozon_api_key,
     }}
+    # WB-связка ИП: ключей может не быть (пустой dict → кабинет «без ключей»).
+    creds_ip_wb = {}
+    if settings.wb_api_token_ip_2:
+        creds_ip_wb = {"wb": {
+            "standard": settings.wb_api_token_ip_2,
+            "finance": settings.wb_api_token_ip_2,
+            "finance2": settings.wb_api_token_ip_2,
+        }}
     cabs = [
         models.Cabinet(
             user_id=user.id, company_id=oo.id, code="oo_joinco",
@@ -156,7 +164,7 @@ def seed_users_and_cabinets(db: Session) -> list[models.Cabinet]:
             user_id=user.id, company_id=ip.id, code="ip_prudnikov_wb",
             name="ИП Прудников Константин Григорьевич",
             schema="cab_ip_wb", marketplace="wb",
-            creds=secrets.encrypt({}), enabled=True, position=3,
+            creds=secrets.encrypt(creds_ip_wb), enabled=True, position=3,
         ),
     ]
     db.add_all(cabs)

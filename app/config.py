@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     wb_api_key: str = ""
     wb_finance_api_key: str = ""
     wb_finance_api_key_2: str = ""
+    # Токен WB для связки «ИП Прудников · WB» (полный доступ: контент, аналитика,
+    # статистика, финансы, цены). Один токен закрывает standard/finance/finance2.
+    wb_api_token_ip_2: str = ""
     ozon_client_id: str = ""
     ozon_api_key: str = ""
     yandex_disk_token: str = ""
