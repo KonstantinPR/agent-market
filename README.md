@@ -102,22 +102,18 @@ venv\Scripts\python.exe app\main.py   # http://127.0.0.1:8000
   — группировка артикулоразмеров Ozon;
 - [docs/research-ozon-card-sizes.md](docs/research-ozon-card-sizes.md)
   — почему у карточек Ozon пустой размер;
-- `TICKETS.md` — очередь задач проекта.
+- `TICKETS.md` — очередь задач проекта;
+- `LICENSE` — MIT.
 
 ## Разработка
 
-### Git (только локальный)
+### Git (GitHub)
 
-```powershell
-git init
-git add -A
-git commit -m "Initial commit"
-```
-
-Ветка `main`, история хранится локально. В `.gitignore` исключены `venv/`,
-`__pycache__/` и `*.pyc`, `.env`, `data/mock/`, `data/thumbs/`, `*.xlsx`,
-`*.xls`, `*.db`, `*.log`, `.pytest_cache/`, `.coverage`, `htmlcov/`, `.idea/`,
-`.DS_Store`.
+Репозиторий — на GitHub: https://github.com/KonstantinPR/agent-market.
+Ветка `main` — актуальное рабочее состояние, история хранится в облаке.
+В `.gitignore` исключены `venv/`, `__pycache__/` и `*.pyc`, `.env`,
+`data/mock/`, `data/thumbs/`, `data/secrets.key`, `*.xlsx`, `*.xls`, `*.db`,
+`*.log`, `.pytest_cache/`, `.coverage`, `htmlcov/`, `.idea/`, `.DS_Store`.
 
 Работа идёт через тикеты (`TICKETS.md`): номер выдаёт git-ветка
 `t-<N>-<слаг>`, а подробности — в [docs/](docs/). Проверка перед коммитом:
