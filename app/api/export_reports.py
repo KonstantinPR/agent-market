@@ -580,7 +580,7 @@ def export_sales(
 ):
     payload = api_sales(marketplace, date_from, date_to, db)
     df = pd.DataFrame(payload["rows"])
-    if article_like:
+    if article_like and not df.empty:
         keep = df["article"].str.lower().str.contains(
             common_service.like_to_regex(article_like), regex=True, na=False
         )

@@ -636,9 +636,23 @@ class OzonAccrual(Base):
     )
 
 
+class Company(Base):
+    """Компания (фирма) пользователя. У компании может быть несколько связок —
+    `cabinets` (компания × маркетплейс), см. Cabinet.marketplace."""
+
+    __tablename__ = "companies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class User(Base):
     """Пользователь приложения. Сейчас один (КонстантинPR), но структура
-    заведена на будущее: у пользователя несколько кабинетов маркетплейсов.
+    заведена на будущее: у пользователя несколько фирм (companies), у фирмы —
+    связки-маркетплейсы (cabinets).
     """
 
     __tablename__ = "users"
@@ -650,22 +664,23 @@ class User(Base):
 
 
 class Cabinet(Base):
-    """Личный кабинет пользователя: набор ключей маркетплейсов и свои данные.
+    """Связка «фирма × маркетплейс» = личный кабинет пользователя.
 
-    Данные кабинета живут в отдельной PG-схеме (schema), общий каталог/склад —
+    Одна строка = один маркетплейс одной компании (company_id + marketplace).
+    Данные связки живут в отдельной PG-схеме (schema), общий каталог/склад —
     в public. creds — зашифрованный Fernet-JSON ключей по api:
     {"wb": {"standard":..,"finance":..,"finance2":..}, "ozon": {"client_id":..,"api_key":..}}.
-    marketplaces — список кодов через запятую ("wb,ozon").
     """
 
     __tablename__ = "cabinets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     schema: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
-    marketplaces: Mapped[str] = mapped_column(String(60), default="")
+    marketplace: Mapped[str] = mapped_column(String(20), default="")
     creds: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     position: Mapped[int] = mapped_column(Integer, default=0)

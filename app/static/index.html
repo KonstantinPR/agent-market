@@ -59,16 +59,7 @@
         <a class="nav-link" data-tab="oz-cashflow" href="#">Движение средств</a>
       </div>
     </div>
-    <div class="dropdown" id="magicDropdown">
-      <button class="dropbtn" id="magicMenuBtn">Магия &#9662;</button>
-      <div class="dropdown-menu" id="magicMenu">
-        <a class="nav-link" id="magicRefreshWb" href="#">Обновить WB</a>
-        <a class="nav-link" id="magicRefreshOz" href="#">Обновить Ozon</a>
-        <a class="nav-link" id="magicRefreshAll" href="#">Обновить ВСЁ</a>
-        <a class="nav-link is-disabled" id="magicDoAll" href="#" title="Сделать ВСЕ будет доступно позже: объединит обновление данных с операциями по ценам и другими действиями">Сделать ВСЕ</a>
-      </div>
-    </div>
-  <div class="dropdown" id="ydDropdown">
+    <div class="dropdown" id="ydDropdown">
       <button class="dropbtn" id="ydMenuBtn">Яндекс.Диск &#9662;</button>
       <div class="dropdown-menu" id="ydMenu">
         <a class="nav-link" data-tab="yandex" href="#">Файлы отчётов</a>
@@ -870,7 +861,7 @@
     </div>
     <div class="cab-settings">
       <label class="cab-opt" title="При старте приложения запустить последние кабинеты на обновление"><input type="checkbox" id="cabAutoRefresh"> Автообновление при старте</label>
-      <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Сравнение продаж между кабинетами</label>
+      <label class="cab-opt" title="Сравнение связок в «Обзоре» и «Прибыльности»: отметьте связки в списке выше, данные сольются с колонкой «Владелец»"><input type="checkbox" id="cabCompare"> Сравнение продаж между кабинетами</label>
       <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Синхронизация автопилота цен</label>
       <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Скрывать кабинеты без ключей</label>
     </div>
@@ -930,7 +921,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=79"></script>
+<script src="/static/app.js?v=80"></script>
 </body>
 </html>
 

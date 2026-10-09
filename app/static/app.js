@@ -6,7 +6,52 @@ const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
 
-const UI_VERSION = "79";
+// ── Сравнение продаж между кабинетами (связками) ───────────────────────────
+// Глобально включается галкой «Сравнение продаж между кабинетами» в списке
+// связок; участие конкретной связки — её чекбокс data-compare. Страница
+// собирает links= только из связок своего маркетплейса (WB — wb-связки,
+// OZON — ozon; «Обзор» без выбранного МП — все отмеченные).
+const CAB_COMPARE_KEY = "cab-compare";
+const CAB_COMPARE_LINKS_KEY = "cab-compare-links";
+
+function cabCompareOn() {
+  return localStorage.getItem(CAB_COMPARE_KEY) === "1";
+}
+
+function cabCompareLinks() {
+  try {
+    return String(localStorage.getItem(CAB_COMPARE_LINKS_KEY) || "")
+      .split(",").map((x) => parseInt(x, 10))
+      .filter((x) => Number.isFinite(x) && x > 0);
+  } catch (e) { return []; }
+}
+
+function cabToggleCompareLink(id, on) {
+  const set = cabCompareLinks();
+  let next = on
+    ? (set.includes(id) ? set : set.concat([id]))
+    : set.filter((x) => x !== id);
+  localStorage.setItem(CAB_COMPARE_LINKS_KEY, next.join(","));
+}
+
+function _cabLinksFiltered(mp) {
+  const ids = [];
+  for (const comp of (cabState.companies || [])) {
+    for (const lk of (comp.links || [])) {
+      if (!mp || lk.marketplace === mp) ids.push(lk.id);
+    }
+  }
+  if (ids.length < 2) return undefined;
+  const chosen = cabCompareLinks();
+  let picked = chosen.length ? ids.filter((id) => chosen.includes(id)) : ids.slice();
+  if (picked.length < 2) return undefined;
+  return picked.join(",");
+}
+
+function cabLinksAll() { return _cabLinksFiltered(null); }
+function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
+
+const UI_VERSION = "80";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -721,13 +766,13 @@ async function loadTabInner(name, f) {
   try {
     if (name === "dashboard") await renderDashboard(qs(f));
     else if (name === "margin-funnel") {
-      await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined }));
+      await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined, links: cabLinksFor("wb") }));
     } else if (name === "margin-detail") {
       const cmpEl = $("#marginDetailCompare");
-      await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined }));
+      await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined, links: cabLinksFor("wb") }));
     } else if (name === "margin-ozon-detail") {
       const cmpEl = $("#marginOzonDetailCompare");
-      await renderMarginOzonDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginOzonDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined }));
+      await renderMarginOzonDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginOzonDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined, links: cabLinksFor("ozon") }));
     } else if (name === "sales") await renderSales(qs(f));
     else if (name === "stocks") await renderStocks(f.marketplace);
     else if (name === "ours") await renderOurs();
@@ -777,6 +822,8 @@ function dashQuery() {
   const mp = $("#dashMarketplace").value;
   if (mp) q.marketplace = mp;
   if ($("#dashCompare").checked) q.compare = 1;
+  const links = cabLinksAll();
+  if (links) q.links = links;
   return q;
 }
 
@@ -959,7 +1006,7 @@ function paintDashKpis(k) {
   const cards = [k.total, ...k.per_mp];
   $("#dashKpis").innerHTML = cards.map((c) => {
     const mpc = c.marketplace || "";
-    const label = mpc ? MP_LABELS[mpc] : "Итого";
+    const label = c.owner || (mpc ? MP_LABELS[mpc] : "Итого");
     const ret = c.returns_qty || 0;
     const retRate = (ret + (c.sells || 0)) > 0
       ? Math.round(ret / (ret + (c.sells || 0)) * 1000) / 10 : 0;
@@ -1027,7 +1074,7 @@ function dashChartA() {
     return { labels, values, colors, m };
   }
   const rows = dashData && dashData.kpis ? dashData.kpis.per_mp : [];
-  const labels = rows.map((x) => MP_LABELS[x.marketplace] || x.marketplace);
+  const labels = rows.map((x) => x.owner || MP_LABELS[x.marketplace] || x.marketplace);
   const values = rows.map((x) => x[metric] || 0);
   const colors = rows.map((x) => MP_COLORS[x.marketplace] || "#999");
   return { labels, values, colors, m };
@@ -1140,9 +1187,11 @@ function paintDashStocks(s) {
   const codes = Object.keys(s);
   $("#dashStocks").innerHTML = codes.map((code) => {
     const st = s[code];
+    const mpCode = st.code || code;
+    const title = st.owner || MP_LABELS[mpCode] || mpCode || code;
     return `
-      <div class="kpi ${code}" style="border-left-color:${MP_COLORS[code]}">
-        <div class="title">${MP_LABELS[code] || code}</div>
+      <div class="kpi ${code}" style="border-left-color:${MP_COLORS[mpCode] || "#999"}">
+        <div class="title">${escapeHtml(title)}</div>
         <div class="lines">
           <div class="line"><span>Остаток, шт</span><span class="kvalue">${fmt(st.quantity_full)}</span></div>
           <div class="line"><span>В пути, шт</span><span class="kvalue">${fmt(st.in_way)}</span></div>
@@ -1164,13 +1213,16 @@ function paintDashFreshness(rows) {
 
 async function renderDashboard() {
   dashData = await api("/dashboard" + qs(dashQuery()));
+  const markOwned = (rows) => (cabLinksAll() ? (rows || []).map((r) => r.owner
+    ? Object.assign({}, r, { name: (r.name ? r.name + " \u00b7 " : "") + r.owner })
+    : r) : (rows || []));
   paintDashKpis(dashData.kpis);
   paintDashCharts(dashData);
-  paintDashColviewTable("dashProfit", dashHeaders.tops, dashData.tops.profit.rows, dashData.tops.profit.count, "dash-profit");
-  paintDashColviewTable("dashLoss", dashHeaders.tops, dashData.tops.loss.rows, dashData.tops.loss.count, "dash-loss");
-  paintDashColviewTable("dashPriceUp", dashHeaders.price, dashData.price.up.rows, dashData.price.up.count, "dash-price", false);
-  paintDashColviewTable("dashPriceDown", dashHeaders.price, dashData.price.down.rows, dashData.price.down.count, "dash-price", false);
-  paintDashColviewTable("dashPrefix", dashHeaders.prefix, dashData.prefixes.rows, dashData.prefixes.count, "dash-prefix");
+  paintDashColviewTable("dashProfit", dashHeaders.tops, markOwned(dashData.tops.profit.rows), dashData.tops.profit.count, "dash-profit");
+  paintDashColviewTable("dashLoss", dashHeaders.tops, markOwned(dashData.tops.loss.rows), dashData.tops.loss.count, "dash-loss");
+  paintDashColviewTable("dashPriceUp", dashHeaders.price, markOwned(dashData.price.up.rows), dashData.price.up.count, "dash-price", false);
+  paintDashColviewTable("dashPriceDown", dashHeaders.price, markOwned(dashData.price.down.rows), dashData.price.down.count, "dash-price", false);
+  paintDashColviewTable("dashPrefix", dashHeaders.prefix, markOwned(dashData.prefixes.rows), dashData.prefixes.count, "dash-prefix");
   paintDashStocks(dashData.stocks);
   paintDashFreshness(dashData.freshness);
   const exp = $("#exportDashboard");
@@ -1907,9 +1959,16 @@ const funnelHeaders = [
   { k: "dy_avg_price", label: "Динамика ср. цены, %", num: true, render: cellFmts.signedPct , tip: "Изменение средней цены заказа к предыдущему периоду, % — метрика WB."},
 ];
 
+function ownerCol() {
+  return { k: "owner", label: "Владелец", render: cellFmts.text, tip: "Фирма · маркетплейс. Видна при сравнении продаж между кабинетами (links)." };
+}
+
 async function renderMarginFunnel(p) {
+  const linked = /links=/.test(p || "");
   const data = await api("/margin/funnel" + p);
-  pagedTable($("#marginFunnelTable"), colViewHeaders("margin-funnel", funnelHeaders), data.rows || [], null, null, colViewPinKeys("margin-funnel"));
+  let headers = colViewHeaders("margin-funnel", funnelHeaders);
+  if (linked) headers = [ownerCol()].concat(headers);
+  pagedTable($("#marginFunnelTable"), headers, data.rows || [], null, null, colViewPinKeys("margin-funnel"));
   const cp = colViewParam("margin-funnel");
   $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p + (cp ? (p ? "&" : "?") + cp : "");
   const msg = statusEl();
@@ -1936,8 +1995,10 @@ async function renderMarginFunnel(p) {
 
 async function renderMarginDetail(p) {
   const compare = /compare=1/.test(p || "");
+  const linked = /links=/.test(p || "");
   const data = await api("/margin/detail" + p);
   let headers = colViewHeaders("margin-detail", marginHeaders);
+  if (linked) headers = [ownerCol()].concat(headers);
   if (compare) {
     headers = headers.concat([
       { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int },
@@ -1957,7 +2018,7 @@ async function renderMarginDetail(p) {
   const cmpMsg = (compare && data.prev_window) ?
     "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
     (compare ? "для сравнения нужны даты «С» и «По»" : "");
-  const tail = cmpMsg ? " · " + cmpMsg : "";
+  const tail = cmpMsg ? " · " + cmpMsg : (linked ? " · сравнение связок" : "");
   if ((data.rows || []).length === 0) {
     setStatus("Нет данных. Финансовый отчёт WB скачивается отдельным ключом (finance): WB API ▸ Детализация продаж. " +
       "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день." + tail);
@@ -1968,9 +2029,11 @@ async function renderMarginDetail(p) {
 
 async function renderMarginOzonDetail(p) {
   const compare = /compare=1/.test(p || "");
+  const linked = /links=/.test(p || "");
   const bySize = ozBySize("margin-ozon-detail");
   const data = await api("/margin/ozon-detail" + ozBySizeParam("margin-ozon-detail", p));
   let headers = colViewHeaders("margin-ozon-detail", ozonMarginHeaders);
+  if (linked) headers = [ownerCol()].concat(headers);
   if (compare) {
     headers = headers.concat([
       { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int },
@@ -1989,7 +2052,7 @@ async function renderMarginOzonDetail(p) {
   const cmpMsg = (compare && data.prev_window) ?
     "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
     (compare ? "для сравнения нужны даты «С» и «По»" : "");
-  const tail = cmpMsg ? " · " + cmpMsg : "";
+  const tail = cmpMsg ? " · " + cmpMsg : (linked ? " · сравнение связок" : "");
   if ((data.rows || []).length === 0) {
     // Раньше здесь был зашитый текст с периодом 2026-02-21 … 2026-08-30:
     // он не зависел ни от выбранного окна, ни от базы и сбивал с толку.
@@ -4863,7 +4926,7 @@ let refreshPoll = null;
 let refreshJobs = [];   // [{api, jobId, rejected, msg, state, done}]
 let refreshCabId = null;      // кабинет, который обновляет модалка (иначе активный)
 let refreshAllMode = false;   // «Обновить всё» (все кабинеты, /api/refresh-all)
-let cabState = { cabinets: [], current: null, user: null };
+let cabState = { companies: [], current: null, user: null };
 const CABINET_COOKIE = "agent_cabinet";
 
 async function loadCabinets() {
@@ -4875,9 +4938,12 @@ async function loadCabinets() {
   const label = $("#cabBtnLabel");
   if (label) {
     const cur = cabState.current;
-    label.textContent = cur ? (shortUserName(cabState.user) + " \u00b7 " + cur.name) : "Личный кабинет";
+    label.textContent = cur
+      ? (cur.owner || (shortUserName(cabState.user) + " \u00b7 " + cur.name))
+      : "Личный кабинет";
   }
   renderCabinets();
+  updateMpNav();
 }
 
 function shortUserName(u) {
@@ -4885,27 +4951,63 @@ function shortUserName(u) {
   return n.split(" ")[0] || (u && u.username) || "…";
 }
 
+// Показываем меню WB API / OZON API только если у активной связки есть
+// соответствующий маркетплейс («Обзор», «Наш склад», «Прибыльность» всегда).
+function updateMpNav() {
+  const mp = cabState && cabState.current ? cabState.current.marketplace : null;
+  const set = (sel, force) => {
+    const el = $(sel);
+    if (el) el.style.display = (mp && mp !== force) ? "none" : "";
+  };
+  set("#wbDropdown", "wb");
+  set("#ozDropdown", "ozon");
+}
+
+function cabLinksByMp(mp) {
+  const out = [];
+  for (const comp of (cabState.companies || [])) {
+    for (const lk of (comp.links || [])) {
+      if (lk.marketplace === mp) out.push(lk);
+    }
+  }
+  return out;
+}
+
 function renderCabinets() {
   const userBox = $("#cabUser");
   if (userBox) userBox.textContent = (cabState.user && cabState.user.display_name) || "";
   const box = $("#cabList");
   if (!box) return;
-  const list = cabState.cabinets || [];
-  if (!list.length) {
-    box.innerHTML = '<div class="empty">Кабинетов нет</div>';
+  const companies = cabState.companies || [];
+  let total = 0;
+  for (const comp of companies) total += (comp.links || []).length;
+  if (!total) {
+    box.innerHTML = '<div class="empty">Связок нет</div>';
     return;
   }
+  const chosen = cabCompareLinks();
+  const linked = cabCompareOn();
   let h = "";
-  for (const c of list) {
-    const mps = (c.marketplaces || []).map((m) =>
-      '<span class="cab-mp' + (c.has_keys ? "" : " off") + '" title="' +
-      (c.has_keys ? "" : "ключи не заданы") + '">' + escapeHtml(MP_LABELS[m] || m) + "</span>"
-    ).join("");
-    h += '<div class="cab-item' + (c.active ? " active" : "") + '" data-cab="' + c.id + '">' +
-      '<div class="row1"><span class="name">' + escapeHtml(c.name) + "</span>" +
-      '<span class="mps">' + mps + "</span>" +
-      '<button class="refresh-one" title="Обновить кабинет" data-refresh="' + c.id + '">&#8635;</button>' +
-      "</div></div>";
+  for (const comp of companies) {
+    const links = comp.links || [];
+    if (!links.length) continue;
+    h += '<div class="cab-group">' +
+      '<div class="cab-group-name">' + escapeHtml(comp.name || "Без фирмы") + "</div>";
+    for (const c of links) {
+      const on = chosen.includes(c.id);
+      const mp = MP_LABELS[c.marketplace] || c.marketplace || "";
+      const mps = '<span class="cab-mp' + (c.has_keys ? "" : " off") + '" title="' +
+        (c.has_keys ? "" : "ключи не заданы") + '">' + escapeHtml(mp) + "</span>";
+      const cmpBox = '<label class="cab-compare" title="' +
+        (linked ? "Включить в сравнение (' + escapeHtml(mp) + ')" : "Включить сравнение продаж, чтобы отмечать связки") + '">' +
+        '<input type="checkbox" data-compare="' + c.id + '"' + (on ? " checked" : "") + "></label>";
+      h += '<div class="cab-item' + (c.active ? " active" : "") + '" data-cab="' + c.id + '">' +
+        '<div class="row1"><span class="name">' + escapeHtml(c.owner || c.name) + "</span>" +
+        '<span class="mps">' + mps + cmpBox + "</span>" +
+        '<button class="refresh-one" title="Обновить связку" data-refresh="' + c.id + '">&#8635;</button>' +
+        "</div></div>";
+    }
+    h += "</div>";
   }
   box.innerHTML = h;
 }
@@ -4929,18 +5031,29 @@ async function selectCabinet(id) {
     closeCabinets();
     await loadCabinets();
     pullsCache = null;
-    loadTab(currentTab);
+    const mp = cabState.current && cabState.current.marketplace;
+    const wbPage = mp && mp !== "wb" && currentTab.indexOf("wb-") === 0;
+    const ozPage = mp && mp !== "ozon" && currentTab.indexOf("oz-") === 0;
+    loadTab((wbPage || ozPage) ? "dashboard" : currentTab);
   } catch (err) {
     alert("Не удалось переключить кабинет: " + err.message);
   }
 }
 
+function findCabLink(id) {
+  for (const comp of (cabState.companies || [])) {
+    const lk = (comp.links || []).find((x) => x.id === id);
+    if (lk) return lk;
+  }
+  return null;
+}
+
 function refreshCabinetById(id) {
-  const c = (cabState.cabinets || []).find((x) => x.id === id);
+  const c = findCabLink(id);
   if (!c) return;
   refreshCabId = id;
-  openRefresh((c.marketplaces && c.marketplaces.length) ? c.marketplaces : []);
-  $("#refreshTitle").textContent = "Обновление: " + c.name;
+  openRefresh(c.marketplace ? [c.marketplace] : []);
+  $("#refreshTitle").textContent = "Обновление: " + (c.owner || c.name);
 }
 
 async function refreshAllCabinets() {
@@ -6626,9 +6739,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   initDashCollapse();
   initDashDrag();
-  $("#magicRefreshWb").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("wb"); });
-  $("#magicRefreshOz").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh("ozon"); });
-  $("#magicRefreshAll").addEventListener("click", (e) => { e.preventDefault(); closeNav(); openRefresh(["wb", "ozon"]); });
   const cabBtn = $("#cabBtn");
   if (cabBtn) cabBtn.addEventListener("click", (e) => { e.stopPropagation(); openCabinets(); });
   const cabClose = $("#cabDrawerClose");
@@ -6637,6 +6747,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (cabOverlay) cabOverlay.addEventListener("click", closeCabinets);
   const cabList = $("#cabList");
   if (cabList) cabList.addEventListener("click", (e) => {
+    const cb = e.target.closest("[data-compare]");
+    if (cb) {
+      e.stopPropagation();
+      cabToggleCompareLink(parseInt(cb.dataset.compare, 10), cb.checked);
+      if (["dashboard", "margin-funnel", "margin-detail", "margin-ozon-detail"].indexOf(currentTab) !== -1) {
+        loadTab(currentTab);
+      }
+      return;
+    }
     const rb = e.target.closest("[data-refresh]");
     if (rb) { e.stopPropagation(); refreshCabinetById(parseInt(rb.dataset.refresh, 10)); return; }
     const item = e.target.closest("[data-cab]");
@@ -6649,6 +6768,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     cabAuto.checked = localStorage.getItem("cab-auto-refresh") === "1";
     cabAuto.addEventListener("change", () =>
       localStorage.setItem("cab-auto-refresh", cabAuto.checked ? "1" : "0"));
+  }
+  const cabCmp = $("#cabCompare");
+  if (cabCmp) {
+    cabCmp.checked = cabCompareOn();
+    cabCmp.addEventListener("change", () => {
+      localStorage.setItem(CAB_COMPARE_KEY, cabCmp.checked ? "1" : "0");
+      renderCabinets();
+      if (["dashboard", "margin-funnel", "margin-detail", "margin-ozon-detail"].indexOf(currentTab) !== -1) {
+        loadTab(currentTab);
+      }
+    });
   }
   $("#refreshStart").addEventListener("click", () => {
     if (refreshAllMode) startRefreshAll();

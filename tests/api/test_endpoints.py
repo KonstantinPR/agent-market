@@ -35,8 +35,20 @@ def test_ozon_cards_maps_offer_id(api_client):
     assert {"OZ-1", "OZ-2"} <= articles
 
 
-def test_wb_sales_fills_sales_and_dashboard(api_client):
+def test_wb_sales_fills_sales_and_dashboard(api_client, db):
+    from datetime import date
+    from app import models
+    from app.services.sync import marketplace_id
+
     api_client.post("/api/wb/cards")
+    wb_id = marketplace_id(db, "wb")
+    db.add_all([
+        models.WbDetailRow(op_key="sr:w1", source="api", article="TST-1", quantity=2,
+                           retail_amount=2200.0, for_pay=2000.0, sale_dt=date(2026, 9, 5)),
+        models.WbDetailRow(op_key="sr:w2", source="api", article="TST-2", quantity=3,
+                           retail_amount=2700.0, for_pay=2500.0, sale_dt=date(2026, 9, 6)),
+    ])
+    db.commit()
     r = api_client.post("/api/wb/sales", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
     assert r.status_code == 200
     assert r.headers["X-Count"] == "2"
@@ -118,12 +130,24 @@ def test_write_db_off_cards_does_not_write(api_client):
     assert p["db_rows"] == 0
 
 
-def test_write_db_off_sales_does_not_write(api_client):
+def test_write_db_off_sales_does_not_write(api_client, db):
+    """Продажи WB пересчитываются из детализации; write_db=0 не пишет в БД."""
+    from datetime import date
+    from app import models
+
     api_client.post("/api/wb/cards")  # товары нужны для join в /api/sales
+    from app.services.sync import marketplace_id
+    wb_id = marketplace_id(db, "wb")
+    db.add(models.WbDetailRow(
+        op_key="sr:w1", source="api", article="TST-1",
+        quantity=2, retail_amount=2200.0, for_pay=2000.0,
+        ppvz_sales_commission=-100.0, delivery_service=-50.0,
+        paid_storage=-10.0, sale_dt=date(2026, 9, 5)))
+    db.commit()
     r = api_client.post("/api/wb/sales", params={"write_db": 0,
                                                  "date_from": "2026-09-01", "date_to": "2026-09-10"})
     assert r.status_code == 200
-    assert r.headers["X-Count"] == "2"
+    assert r.headers["X-Count"] == "1"
     sales = api_client.get("/api/sales", params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
     assert sales["count"] == 0
     pulls = api_client.get("/api/pulls").json()
@@ -850,8 +874,20 @@ def test_export_wb_storage_article_like(api_client):
     assert _read_xlsx(r)["Артикул"].tolist() == ["TST-1"]
 
 
-def test_export_sales_article_like(api_client):
+def test_export_sales_article_like(api_client, db):
+    from datetime import date
+    from app import models
+    from app.services.sync import marketplace_id
+
     api_client.post("/api/wb/cards")
+    wb_id = marketplace_id(db, "wb")
+    db.add_all([
+        models.WbDetailRow(op_key="sr:w1", source="api", article="TST-1", quantity=2,
+                           retail_amount=2200.0, for_pay=2000.0, sale_dt=date(2026, 9, 5)),
+        models.WbDetailRow(op_key="sr:w2", source="api", article="TST-2", quantity=3,
+                           retail_amount=2700.0, for_pay=2500.0, sale_dt=date(2026, 9, 6)),
+    ])
+    db.commit()
     api_client.post("/api/wb/sales", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
     r = api_client.get("/api/export/sales", params={"article_like": "TST-2"})
     assert r.status_code == 200

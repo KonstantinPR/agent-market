@@ -559,13 +559,13 @@ def pull_wb_promotions(db, provider: Optional[WbProvider] = None,
 
 def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None,
                   write_db: bool = True) -> dict:
-    prov = provider or _wb_provider()
-    df = prov.get_sales_realization(from_, to_)
+    """Продажи WB пересчитываются из детализации (finance-API): статистический
+    отчёт v5 (statistics-api/reportDetailByPeriod) отключён WB 15.07.2026."""
+    df = sync_service.sales_from_detail_df(db, from_, to_)
     n = 0
-    if write_db:
-        progress_service.report(stage="запись в БД")
-        sdf = sync_service.normalize_wb_sales(df)
-        n = sync_service.upsert_sales(db, sdf, "wb") if sdf is not None else 0
+    if write_db and not df.empty:
+        progress_service.report(stage="пересчёт из детализации")
+        n = sync_service.upsert_sales(db, df, "wb", source="v5")
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "sales", len(df), n, window)
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
@@ -581,7 +581,8 @@ def pull_wb_detail(db, from_, to_, provider: Optional[WbProvider] = None,
         rdf = sync_service.normalize_wb_detail(df, source="api")
         if rdf is not None and not rdf.empty:
             sync_service.upsert_wb_detail_rows(db, rdf, source="api")
-            n = sync_service.rebuild_sales_from_detail(db, sale_from=from_, sale_to=to_)
+            n = sync_service.rebuild_sales_from_detail(
+                db, sale_from=from_, sale_to=to_, source="v5")
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "detail", len(df), n, window)
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
@@ -1032,7 +1033,7 @@ def start_refresh(api: str, include_detail: bool = False,
 
 def _refresh_worker(api: str, job_id: int, date_from, date_to, steps,
                     cab_id: Optional[int]):
-    from app.services.cabinets import apply_search_path
+    from app.services.cabinets import apply_search_path, pin_search_path
 
     db = SessionLocal()
     job = _JOBS[job_id]
@@ -1044,6 +1045,9 @@ def _refresh_worker(api: str, job_id: int, date_from, date_to, steps,
         info = _cab_info(db, cab_id)
         if info is not None:
             apply_search_path(db, info.schema)
+            # commit внутри шагов отдаёт соединение в пул и откатывает SET —
+            # без pin следующий шаг/refresh падал на «refresh_runs не существует»
+            pin_search_path(db, info.schema)
             job["cab_name"] = info.name
         run = models.RefreshRun(api=api, status="running", results="[]")
         db.add(run)

@@ -184,7 +184,7 @@ async def wb_detail_upload(
     if write_db:
         try:
             sync_service.upsert_wb_detail_rows(db, ndf, source="excel")
-            n = sync_service.rebuild_sales_from_detail(db)
+            n = sync_service.rebuild_sales_from_detail(db, source="v5")
         except Exception as e:  # noqa: BLE001
             db.rollback()
             raise HTTPException(status_code=500,

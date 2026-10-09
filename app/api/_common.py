@@ -24,6 +24,7 @@ from app.providers.ozon import OZON_RU_COLUMNS
 from app.providers.wb import DETAIL_RU_COLUMNS, DETAIL_UPLOAD_RENAME, SALES_RU_COLUMNS, V5_RU_COLUMNS
 from app.services import (
     base_price as base_price_service,
+    cabinets as cabinet_service,
     common as common_service,
     dashboard as dashboard_service,
     excel_import,
@@ -63,6 +64,36 @@ def _parse_window400(date_from=None, date_to=None):
         return parse_window(date_from, date_to)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Некорректная дата: {e}")
+
+
+def _resolve_links_param(db, links_param, mp_code=None):
+    """Параметр `links=id,id,…` → список включённых связок (CabinetInfo).
+
+    Связки отфильтровываются по marketplace (mp_code), иначе — только «свои»
+    для запрошенного МП. Возвращает [] при пустом/невалидном параметре.
+    Сравнение запускается только если связок больше одной.
+    """
+    if not links_param:
+        return []
+    out = []
+    for part in str(links_param).split(","):
+        part = part.strip()
+        if not part.isdigit():
+            continue
+        info = cabinet_service.info_by_id(db, int(part))
+        if info is None or not info.enabled or not info.schema:
+            continue
+        if mp_code and info.marketplace != mp_code:
+            continue
+        out.append(info)
+    uniq = []
+    seen = set()
+    for i in out:
+        if i.id in seen:
+            continue
+        seen.add(i.id)
+        uniq.append(i)
+    return uniq
 
 
 def _df_totals(df: pd.DataFrame, extra_skip=None) -> dict:
@@ -166,6 +197,12 @@ def _margin_detail_totals(df: pd.DataFrame) -> dict:
     фронт рендерит их как «≈ среднее по видимым строкам».
     """
     totals = _df_totals(df)
+    # margin_accrued хранится dtype=object (float + None) и _df_totals его
+    # пропускает — суммируем вручную (без None).
+    if "margin_accrued" in df.columns:
+        s = pd.to_numeric(df["margin_accrued"], errors="coerce").dropna()
+        if len(s):
+            totals["margin_accrued"] = round(float(s.sum()), 2)
     # Колонки сравнения периодов: суммы (артикулы без данных пред. периода дают None).
     for c in ("sells_pp", "margin_pp", "delta_ru"):
         if c not in df.columns:

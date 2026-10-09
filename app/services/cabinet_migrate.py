@@ -239,10 +239,10 @@ def _copy_all(conn, src: str, dst: str) -> int:
 
 
 def _cab_schema_for(cabinets: list, api: str) -> Optional[str]:
-    """Схема кабинета, у которого в marketplaces есть api (wb/ozon)."""
+    """Схема связки, у которой marketplace == api (wb/ozon)."""
     for c in cabinets:
-        mps = (getattr(c, "marketplaces", "") or "").split(",")
-        if api in [m.strip() for m in mps if m.strip()]:
+        mp = (getattr(c, "marketplace", "") or "").strip()
+        if mp == api:
             return getattr(c, "schema")
     return None
 

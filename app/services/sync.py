@@ -649,8 +649,9 @@ def _is_goods_row(doc_type=None, retail_amount=0, for_pay=0) -> bool:
     return abs(float(retail_amount or 0)) >= 0.005 or abs(float(for_pay or 0)) >= 0.005
 
 
-def rebuild_sales_from_detail(db, sale_from=None, sale_to=None, source: str = "detail") -> int:
-    """Пересчитывает продажи source='detail' из wb_detail_rows (сумма по дата+артикул).
+def sales_from_detail_df(db, sale_from=None, sale_to=None) -> pd.DataFrame:
+    """Свод «Продажи» из строк детализации WB (wb_detail_rows): сумма по
+    дата+артикул. Возвращает датафрейм в схеме sales (готов к upsert_sales).
 
     Каждая строка wb_detail_rows — операция (SRID уже сведён из основной строки
     и строк логистики). Знак: возвраты вычитают кол-во/выручку/к перечислению,
@@ -662,8 +663,6 @@ def rebuild_sales_from_detail(db, sale_from=None, sale_to=None, source: str = "d
     if sale_to is not None:
         q = q.where(models.WbDetailRow.sale_dt <= sale_to)
     rows = db.execute(q).scalars().all()
-    if not rows:
-        return 0
     recs = []
     for r in rows:
         if r.sale_dt is None or not r.article:
@@ -688,9 +687,20 @@ def rebuild_sales_from_detail(db, sale_from=None, sale_to=None, source: str = "d
                           + _f(r.additional_payment) + _f(r.rebill_logistic_cost)),
             "income": _f(r.for_pay) * sign,
         })
-    if not recs:
+    return pd.DataFrame(recs)
+
+
+def rebuild_sales_from_detail(db, sale_from=None, sale_to=None, source: str = "detail") -> int:
+    """Пересчитывает продажи source='<source>' из wb_detail_rows (сумма по дата+артикул).
+
+    Устаревший статистический отчёт v5 (statistics-api/reportDetailByPeriod)
+    отключён WB 15.07.2026 — с тех пор единственный источник продаж WB — это
+    строки детализации (finance-API), поэтому пересчёт идёт из них.
+    """
+    df = sales_from_detail_df(db, sale_from, sale_to)
+    if df is None or df.empty:
         return 0
-    return upsert_sales(db, pd.DataFrame(recs), "wb", source=source)
+    return upsert_sales(db, df, "wb", source=source)
 
 
 def storage_split(
@@ -2445,15 +2455,13 @@ def record_api_pull(db, api: str, kind: str, rows: int, db_rows: int, window: st
 
 
 def sync_sales_window(code: str, date_from, date_to) -> dict:
-    """Вытягивает продажи у провайдера и пишет в БД. Возвращает статистику."""
+    """Свежие продажи по маркетплейсу. WB: пересчёт из детализации (finance-API),
+    Ozon: реальный запрос провайдера. Возвращает статистику."""
     from app.providers.ozon import OzonProvider
-    from app.providers.wb import WbProvider
 
     with SessionLocal() as db:
         if code == "wb":
-            df = WbProvider().get_sales_realization(date_from, date_to)
-            norm = normalize_wb_sales(df)
-            count = upsert_sales(db, norm, "wb") if norm is not None else 0
+            count = rebuild_sales_from_detail(db, date_from, date_to, source="v5")
         else:
             df = OzonProvider().get_sales(date_from, date_to)
             norm = normalize_ozon_realization(df)

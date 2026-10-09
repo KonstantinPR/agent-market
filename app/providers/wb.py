@@ -919,9 +919,12 @@ class WbProvider(BaseProvider):
             df["storagePricePerBarcode"] = df["warehousePrice"] / df["barcodesCount"]
         return df
 
-    # --------------------------------------------- продажи (v5 реализация)
+    # --------------------------------------------- продажи (v5 были отключены WB 15.07.2026)
     def get_sales_realization(self, date_from, date_to) -> pd.DataFrame:
-        """Отчёт о реализации WB (statistics-api/v5/supplier/reportDetailByPeriod)."""
+        """DEPRECATED: statistics-api v5/supplier/reportDetailByPeriod отключён
+        WB (release-notes#498). Продажи WB теперь пересчитываются из строк
+        детализации (finance-API) — см. sync.rebuild_sales_from_detail/sales_from_detail_df.
+        Метод оставлен только для обратной совместимости (моки тестов, старые скрипты)."""
         if self.testing:
             arts = self._mock_articles()
             days = self._mock_dates(date_from, date_to)

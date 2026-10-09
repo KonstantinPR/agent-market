@@ -730,11 +730,13 @@ def ozon_margin_detail_dataframe(
     ]
     # Прибыль по начислениям: точная сумма «на р/с» минус себестоимость проданного.
     # Заполняется только там, где по артикулу есть начисления за окно (coverage=1).
+    # dtype=object обязателен: смесь float и None без него даёт float64,
+    # None превращается в NaN и роняет JSON (allow_nan=False) в 500.
     _acc_net = out["accrued_net"] - out["net_cost"] * out["sells"].clip(lower=0)
-    out["margin_accrued"] = [
-        round(float(v), 2) if cov else None
-        for v, cov in zip(_acc_net, out["accrued_coverage"])
-    ]
+    out["margin_accrued"] = pd.Series(
+        [round(float(v), 2) if cov else None
+         for v, cov in zip(_acc_net, out["accrued_coverage"])],
+        index=out.index, dtype=object)
     out = out[OZON_DETAIL_MARGIN_COLUMNS].sort_values(
         "margin", ascending=False).reset_index(drop=True)
     return out
