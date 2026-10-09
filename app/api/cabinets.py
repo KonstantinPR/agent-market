@@ -21,6 +21,15 @@ def _current_user(db: Session):
     return cabinet_service.seed_user(db)
 
 
+def _active_info(request: Request, db: Session):
+    user = _current_user(db)
+    info = cabinet_service.resolve_active(
+        db, request.cookies.get(cabinet_service.CABINET_COOKIE), user)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Активная связка не найдена")
+    return info
+
+
 @router.get("/cabinets")
 def api_cabinets(db: Session = Depends(get_db)):
     """Список фирм со связками текущего пользователя (с признаком активной связки)."""
@@ -85,6 +94,40 @@ def api_cabinet_select(payload: dict = Body(default={}), response: Response = No
     if info is None:
         raise HTTPException(status_code=404, detail="Связка не найдена")
     return info.to_dict(active=True, mp_names=cabinet_service.marketplace_names(db))
+
+
+@router.get("/cabinet/pricing-settings")
+def api_pricing_settings_get(request: Request, db: Session = Depends(get_db)):
+    """Настройки автопилота цен активной связки (JSON) — {} если не заданы."""
+    info = _active_info(request, db)
+    return {"settings": cabinet_service.get_pricing_settings(db, info.id)}
+
+
+@router.put("/cabinet/pricing-settings")
+def api_pricing_settings_put(request: Request, payload: dict = Body(default={}),
+                             db: Session = Depends(get_db)):
+    """Сохраняет настройки автопилота цен за активной связкой."""
+    info = _active_info(request, db)
+    data = payload.get("settings") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        data = {}
+    cabinet_service.save_pricing_settings(db, info.id, data)
+    return {"settings": data}
+
+
+@router.post("/cabinet/pricing-settings/copy")
+def api_pricing_settings_copy(request: Request, payload: dict = Body(default={}),
+                              db: Session = Depends(get_db)):
+    """Копирует настройки автопилота текущей связки в другие связки.
+
+    targets — список id; без него копируется во все связки пользователя.
+    """
+    info = _active_info(request, db)
+    targets = payload.get("targets") if isinstance(payload, dict) else None
+    if not isinstance(targets, list):
+        targets = None
+    n = cabinet_service.copy_pricing_settings(db, info.id, targets)
+    return {"copied": n}
 
 
 @router.post("/refresh-all")

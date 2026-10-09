@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=43">
+<link rel="stylesheet" href="/static/style.css?v=45">
 </head>
 <body>
 <nav class="navbar">
@@ -69,7 +69,6 @@
   </div>
   <div class="navbar-right">
     <button class="dropbtn cab-btn" id="cabBtn" aria-label="Личные кабинеты" title="Личные кабинеты">
-      <span class="cab-ico">&#128100;</span>
       <span id="cabBtnLabel">…</span>
       <span class="caret">&#9662;</span>
     </button>
@@ -91,6 +90,7 @@
   <button id="btnUpdateWbDetail" class="hidden">Обновить базу</button>
   <span class="spinner hidden" id="busySpinner"></span>
   <span class="msg header-msg" id="headerMsg"></span>
+  <button id="refreshBadge" class="refresh-badge hidden" title="Открыть прогресс обновления">Идёт обновление…</button>
 </header>
 <main>
   <section id="tab-dashboard" class="pane active">
@@ -860,10 +860,11 @@
       <button id="cabRefreshAll" class="btn btn-primary">Обновить всё</button>
     </div>
     <div class="cab-settings">
-      <label class="cab-opt" title="При старте приложения запустить последние кабинеты на обновление"><input type="checkbox" id="cabAutoRefresh"> Автообновление при старте</label>
-      <label class="cab-opt" title="Сравнение связок в «Обзоре» и «Прибыльности»: отметьте связки в списке выше, данные сольются с колонкой «Владелец»"><input type="checkbox" id="cabCompare"> Сравнение продаж между кабинетами</label>
-      <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Синхронизация автопилота цен</label>
-      <label class="cab-opt is-disabled" title="Будет доступно позже"><input type="checkbox" disabled> Скрывать кабинеты без ключей</label>
+      <label class="cab-opt" title="При старте приложения тихо запустить обновление всех связок; прогресс — в строке шапки"><input type="checkbox" id="cabAutoRefresh"> Автообновление при старте</label>
+      <label class="cab-opt" title="Сравнение связок в «Обзоре» и «Прибыльности»: отметьте не менее двух связок одного МП в списке выше, данные сольются с колонкой «Владелец»"><input type="checkbox" id="cabCompare"> Сравнение продаж между кабинетами</label>
+      <label class="cab-opt" title="Хранить настройки автопилота цен на каждый кабинет (на сервере) и копировать их между кабинетами"><input type="checkbox" id="cabSyncPricing"> Синхронизация автопилота цен</label>
+      <label class="cab-opt" title="Не показывать в списке связки без заданных ключей"><input type="checkbox" id="cabHideNoKeys"> Скрывать кабинеты без ключей</label>
+      <button id="cabCopyPricing" class="btn cab-copy-pricing hidden" title="Скопировать настройки автопилота текущего кабинета во все связки">Скопировать настройки автопилота во все кабинеты</button>
     </div>
   </div>
 </aside>
@@ -921,7 +922,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=80"></script>
+<script src="/static/app.js?v=82"></script>
 </body>
 </html>
 

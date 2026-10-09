@@ -219,6 +219,30 @@ def test_api_refresh_skips_link_without_keys(api_client, db):
     assert "ключей" in r.json().get("detail", "")
 
 
+def test_api_pricing_settings_roundtrip_and_copy(api_client, db):
+    _drop_cab_schemas()
+    user = cabinet_service.seed_user(db)
+    comp = _mk_company(db, name="Фирма А")
+    c1 = _mk_cab(db, code="ps1", name="Каб 1", schema=CAB_OO, company=comp, user=user)
+    c2 = _mk_cab(db, code="ps2", name="Каб 2", schema=CAB_IP, company=comp, user=user)
+    assert api_client.post("/api/cabinet/select", json={"id": c1.id}).status_code == 200
+    # нет ключей-связки или пустые настройки — отдаёт {}
+    assert api_client.get("/api/cabinet/pricing-settings").json()["settings"] == {}
+    payload = {"mode": "new", "markup": 5, "nested": {"a": 1}}
+    r = api_client.put("/api/cabinet/pricing-settings", json={"settings": payload})
+    assert r.status_code == 200
+    assert r.json()["settings"] == payload
+    assert api_client.get("/api/cabinet/pricing-settings").json()["settings"] == payload
+    # копирование во все связки пользователя (источник не считается)
+    r = api_client.post("/api/cabinet/pricing-settings/copy", json={})
+    assert r.status_code == 200
+    assert r.json()["copied"] == 1
+    db.expire_all()
+    assert cabinet_service.get_pricing_settings(db, c1.id) == payload
+    assert cabinet_service.get_pricing_settings(db, c2.id) == payload
+
+
+
 # ---------------------------------------------------------------------------
 # Сравнение между связками (dashboard, margin/detail)
 # ---------------------------------------------------------------------------

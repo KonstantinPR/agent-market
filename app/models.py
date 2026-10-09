@@ -682,6 +682,9 @@ class Cabinet(Base):
     schema: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     marketplace: Mapped[str] = mapped_column(String(20), default="")
     creds: Mapped[str] = mapped_column(Text, default="")
+    # Настройки автопилота цен (JSON) в разрезе этой связки — включаются галкой
+    # «Синхронизация автопилота цен» в панели кабинетов; пусто = не заданы.
+    pricing_settings: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     position: Mapped[int] = mapped_column(Integer, default=0)
 

@@ -116,6 +116,12 @@ def ensure_schema(seed: bool = True) -> None:
             conn.execute(text(
                 f"ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS {ddl}"
             ))
+        # Настройки автопилота цен в разрезе связки (галкой «Синхронизация
+        # автопилота цен» в панели кабинетов): create_all колонку к уже
+        # существующей таблице cabinets не добавляет.
+        conn.execute(text(
+            "ALTER TABLE cabinets ADD COLUMN IF NOT EXISTS pricing_settings text DEFAULT ''"
+        ))
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE TABLE IF NOT EXISTS app_schema_state (key text PRIMARY KEY, value text)"

@@ -15,6 +15,8 @@
 from contextvars import ContextVar
 from typing import Callable, Optional
 
+import json
+
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -327,3 +329,53 @@ def link_owner(db: Session, info: CabinetInfo) -> str:
     if not info.company_name:
         info.company_name = _company_name(db, info.company_id)
     return info.owner(marketplace_names(db))
+
+
+def get_pricing_settings(db: Session, cabinet_id: int) -> dict:
+    """Настройки автопилота цен связки (JSON) или {} (пусто/битый JSON)."""
+    row = cabinet_by_id(db, cabinet_id)
+    if row is None:
+        return {}
+    raw = getattr(row, "pricing_settings", "") or ""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_pricing_settings(db: Session, cabinet_id: int, data: dict) -> dict:
+    """Сохраняет настройки автопилота цен за связкой."""
+    row = cabinet_by_id(db, cabinet_id)
+    if row is None:
+        raise ValueError("Связка не найдена")
+    row.pricing_settings = json.dumps(data or {}, ensure_ascii=False)
+    db.commit()
+    return data or {}
+
+
+def copy_pricing_settings(db: Session, source_id: int,
+                          target_ids: Optional[list] = None) -> int:
+    """Копирует настройки автопилота source-связки в целевые.
+
+    target_ids=None — во все связки того же пользователя. Возвращает число
+    обновлённых связок (источник не считается).
+    """
+    src = cabinet_by_id(db, source_id)
+    if src is None:
+        raise ValueError("Связка-источник не найдена")
+    q = select(models.Cabinet).where(models.Cabinet.user_id == src.user_id)
+    if target_ids:
+        q = q.where(models.Cabinet.id.in_(list(target_ids)))
+    rows = db.execute(q).scalars().all()
+    payload = getattr(src, "pricing_settings", "") or ""
+    n = 0
+    for r in rows:
+        if r.id == src.id:
+            continue
+        r.pricing_settings = payload
+        n += 1
+    db.commit()
+    return n

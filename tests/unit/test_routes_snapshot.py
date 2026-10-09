@@ -23,6 +23,9 @@ SNAPSHOT = """
 DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
+GET /api/cabinet/current
+GET /api/cabinet/pricing-settings
+GET /api/cabinets
 GET /api/cards
 GET /api/custom-stock
 GET /api/dashboard
@@ -85,6 +88,8 @@ GET /api/wb/detail-rows
 GET /api/wb/detail-summary
 GET /api/yandex/download
 GET /api/yandex/list
+POST /api/cabinet/pricing-settings/copy
+POST /api/cabinet/select
 POST /api/export/replenish/pdf
 POST /api/import/cards
 POST /api/import/custom-stock
@@ -108,6 +113,7 @@ POST /api/products/refresh
 POST /api/products/replenishable
 POST /api/promo/refresh
 POST /api/refresh
+POST /api/refresh-all
 POST /api/replenish/import-excel
 POST /api/sync/{code}
 POST /api/tickets
@@ -132,6 +138,7 @@ POST /api/wb/sales
 POST /api/wb/stock
 POST /api/wb/storage
 POST /api/yandex/upload
+PUT /api/cabinet/pricing-settings
 """
 
 

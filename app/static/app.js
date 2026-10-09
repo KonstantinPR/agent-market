@@ -34,7 +34,24 @@ function cabToggleCompareLink(id, on) {
   localStorage.setItem(CAB_COMPARE_LINKS_KEY, next.join(","));
 }
 
+// Чистим выбор от id удалённых/отключённых связок, чтобы мусор не копился
+// и «отмечено N» не расходилось с реальными связками.
+function cabPruneCompareLinks() {
+  const valid = new Set();
+  for (const comp of (cabState.companies || [])) {
+    for (const lk of (comp.links || [])) valid.add(lk.id);
+  }
+  const next = cabCompareLinks().filter((id) => valid.has(id));
+  localStorage.setItem(CAB_COMPARE_LINKS_KEY, next.join(","));
+}
+
+// «Скрывать кабинеты без ключей» — настройка списка связок в дровере.
+function cabHideNoKeys() {
+  return localStorage.getItem("cab-hide-nokeys") === "1";
+}
+
 function _cabLinksFiltered(mp) {
+  if (!cabCompareOn()) return undefined;
   const ids = [];
   for (const comp of (cabState.companies || [])) {
     for (const lk of (comp.links || [])) {
@@ -51,7 +68,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "80";
+const UI_VERSION = "82";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -166,6 +183,11 @@ const LS_KEYS = {
   "pricing_hide_skip": "скрыть «держать»/«пропустить» в автопилоте",
   "pricing_settings_visible": "меню «Настройки» автопилота развёрнуто",
   "pricing_open_groups": "раскрытые группы настроек автопилота (JSON)",
+  "cab-auto-refresh": "автообновление связок при старте приложения",
+  "cab-compare": "сравнение продаж между кабинетами включено",
+  "cab-compare-links": "связки, выбранные для сравнения продаж (id через запятую)",
+  "cab-hide-nokeys": "скрывать в списке связки без ключей",
+  "cab-sync-pricing": "настройки автопилота цен хранятся на каждый кабинет (синхронизация включена)",
 };
 // «Вид таблицы»: storageKey каждой вкладки из registerColView (плюс "_<mode>"
 // у режимных, например wbDetailCols_rows) — видимость, порядок, закрепление
@@ -4937,13 +4959,14 @@ async function loadCabinets() {
   }
   const label = $("#cabBtnLabel");
   if (label) {
-    const cur = cabState.current;
-    label.textContent = cur
-      ? (cur.owner || (shortUserName(cabState.user) + " \u00b7 " + cur.name))
-      : "Личный кабинет";
+    const who = (cabState.user && cabState.user.display_name)
+      || shortUserName(cabState.user) || "";
+    label.textContent = ("Кабинет " + who).trim();
   }
   renderCabinets();
   updateMpNav();
+  updateCabPricingControls();
+  if (cabSyncPricingOn()) await ensurePricingSettings();
 }
 
 function shortUserName(u) {
@@ -4985,11 +5008,24 @@ function renderCabinets() {
     box.innerHTML = '<div class="empty">Связок нет</div>';
     return;
   }
+  // Мусор в выборе сравнения (удалённые связки) чистим при каждой загрузке.
+  cabPruneCompareLinks();
   const chosen = cabCompareLinks();
   const linked = cabCompareOn();
+  const hideNoKeys = cabHideNoKeys();
+  // Активную связку показываем всегда, даже если она без ключей и их прячем.
+  const visible = (c) => !hideNoKeys || c.has_keys || c.active;
+  let eligible = 0;
+  for (const comp of companies) {
+    for (const c of (comp.links || [])) if (visible(c)) eligible++;
+  }
+  if (!eligible) {
+    box.innerHTML = '<div class="empty">Все связки без ключей скрыты</div>';
+    return;
+  }
   let h = "";
   for (const comp of companies) {
-    const links = comp.links || [];
+    const links = (comp.links || []).filter(visible);
     if (!links.length) continue;
     h += '<div class="cab-group">' +
       '<div class="cab-group-name">' + escapeHtml(comp.name || "Без фирмы") + "</div>";
@@ -4998,9 +5034,10 @@ function renderCabinets() {
       const mp = MP_LABELS[c.marketplace] || c.marketplace || "";
       const mps = '<span class="cab-mp' + (c.has_keys ? "" : " off") + '" title="' +
         (c.has_keys ? "" : "ключи не заданы") + '">' + escapeHtml(mp) + "</span>";
-      const cmpBox = '<label class="cab-compare" title="' +
-        (linked ? "Включить в сравнение (' + escapeHtml(mp) + ')" : "Включить сравнение продаж, чтобы отмечать связки") + '">' +
-        '<input type="checkbox" data-compare="' + c.id + '"' + (on ? " checked" : "") + "></label>";
+      const cmpBox = linked
+        ? '<label class="cab-compare" title="Включить в сравнение (' + escapeHtml(mp) + ')">' +
+          '<input type="checkbox" data-compare="' + c.id + '"' + (on ? " checked" : "") + "></label>"
+        : "";
       h += '<div class="cab-item' + (c.active ? " active" : "") + '" data-cab="' + c.id + '">' +
         '<div class="row1"><span class="name">' + escapeHtml(c.owner || c.name) + "</span>" +
         '<span class="mps">' + mps + cmpBox + "</span>" +
@@ -5008,6 +5045,10 @@ function renderCabinets() {
         "</div></div>";
     }
     h += "</div>";
+  }
+  if (linked && eligible < 2) {
+    h += '<div class="cab-note">Отметьте не менее двух связок одного маркетплейса — ' +
+      'без этого сравнение продаж не запускается.</div>';
   }
   box.innerHTML = h;
 }
@@ -5031,6 +5072,13 @@ async function selectCabinet(id) {
     closeCabinets();
     await loadCabinets();
     pullsCache = null;
+    if (cabSyncPricingOn()) {
+      const newId = cabState.current && cabState.current.id;
+      if (newId != null) {
+        delete _pricingSettingsByCab[newId];
+        await ensurePricingSettings();
+      }
+    }
     const mp = cabState.current && cabState.current.marketplace;
     const wbPage = mp && mp !== "wb" && currentTab.indexOf("wb-") === 0;
     const ozPage = mp && mp !== "ozon" && currentTab.indexOf("oz-") === 0;
@@ -5088,6 +5136,42 @@ async function startRefreshAll() {
   }
 }
 let refreshApis = [];
+
+// Фоновое автообновление при старте: без всплывающей модалки, но с кликабельной
+// плашкой «Идёт обновление…» в шапке (прогресс пишет renderRefresh).
+function setRefreshBadge(on) {
+  const el = $("#refreshBadge");
+  if (el) el.classList.toggle("hidden", !on);
+}
+
+function showRefreshModal() {
+  $("#refreshModal").classList.remove("hidden");
+  const title = $("#refreshTitle");
+  if (title) title.textContent = "Обновление (все кабинеты)";
+  renderRefresh();
+  loadRefreshHistory();
+}
+
+async function autoRefreshAtStart() {
+  refreshAllMode = true;
+  refreshJobs = [];
+  setRefreshBadge(true);
+  try {
+    const data = await apiPost("/refresh-all", { include_detail: false });
+    const ids = ((data.jobs || []).map((j) => j.job_id)).filter(Boolean);
+    if (!ids.length) {
+      setRefreshBadge(false);
+      setStatus("Автообновление: нечего обновлять");
+      return;
+    }
+    for (const id of ids) refreshJobs.push({ api: "", jobId: id, state: null });
+    renderRefresh();
+    pollRefresh();
+  } catch (err) {
+    setRefreshBadge(false);
+    setStatus("Автообновление: " + err.message, { error: true });
+  }
+}
 
 function stepText(s) {
   if (s.status === "ok") {
@@ -5261,6 +5345,7 @@ function pollRefresh() {
       pullsCache = null;
       updateLastPull(currentTab);
       loadRefreshHistory();
+      setRefreshBadge(false);
       $("#refreshStart").disabled = false;
       $("#refreshDetail").disabled = false;
     }
@@ -5787,16 +5872,109 @@ function pricingEffectiveColFilters() {
   return out;
 }
 
-function loadPricingSettings() {
+// ── Синхронизация автопилота цен: настройки на каждый кабинет (на сервере) ──
+// Галка «Синхронизация автопилота цен» в панели кабинетов. Включена — настройки
+// читаются/пишутся по активной связке (GET/PUT /api/cabinet/pricing-settings) и
+// копируются во все связки кнопкой; выключена — как раньше, localStorage.
+function cabSyncPricingOn() {
+  return localStorage.getItem("cab-sync-pricing") === "1";
+}
+
+let _pricingSettingsByCab = {};
+let _pricingSaveTimer = null;
+
+function _cabId() {
+  return (cabState && cabState.current) ? cabState.current.id : null;
+}
+
+function _localPricingSettings() {
+  try { return JSON.parse(localStorage.getItem("pricing_settings") || "{}"); }
+  catch (e) { return {}; }
+}
+
+async function loadPricingSettingsFor(cabId) {
+  if (cabId == null) return {};
   try {
-    return JSON.parse(localStorage.getItem("pricing_settings") || "{}");
-  } catch (e) {
+    const data = await api("/cabinet/pricing-settings");
+    const s = (data && data.settings) || {};
+    _pricingSettingsByCab[cabId] = s;
+    return s;
+  } catch (err) {
+    _pricingSettingsByCab[cabId] = {};
     return {};
   }
 }
 
+async function ensurePricingSettings() {
+  if (!cabSyncPricingOn()) return;
+  const id = _cabId();
+  if (id == null || _pricingSettingsByCab[id] !== undefined) return;
+  await loadPricingSettingsFor(id);
+}
+
+function updateCabPricingControls() {
+  const btn = $("#cabCopyPricing");
+  if (btn) btn.classList.toggle("hidden", !(cabSyncPricingOn() && _cabId() != null));
+}
+
+async function setCabSyncPricingOn(on) {
+  localStorage.setItem("cab-sync-pricing", on ? "1" : "0");
+  updateCabPricingControls();
+  if (!on) {
+    if (currentTab === "pricing") loadTab("pricing");
+    return;
+  }
+  const id = _cabId();
+  if (id == null) return;
+  const server = await loadPricingSettingsFor(id);
+  const local = _localPricingSettings();
+  if ((!server || !Object.keys(server).length) && local && Object.keys(local).length) {
+    // Первое включение: сервер пуст — забираем текущие локальные настройки.
+    _pricingSettingsByCab[id] = local;
+    try { await apiPost("/cabinet/pricing-settings", { settings: local }); } catch (e) { /* ignore */ }
+  }
+  if (currentTab === "pricing") loadTab("pricing");
+}
+
+async function copyPricingSettingsAll() {
+  const btn = $("#cabCopyPricing");
+  if (_cabId() == null) return;
+  let settings = null;
+  try { settings = collectPricingSettings(); } catch (e) { /* ignore */ }
+  if (btn) btn.disabled = true;
+  try {
+    // Сначала фиксируем текущие настройки источника (обгоняем debounce),
+    // затем копируем их во все связки.
+    if (settings) await apiPost("/cabinet/pricing-settings", { settings });
+    const data = await apiPost("/cabinet/pricing-settings/copy", {});
+    setStatus("Настройки автопилота скопированы в связки: " + ((data && data.copied) || 0));
+  } catch (err) {
+    setStatus("Не удалось скопировать настройки: " + err.message, { error: true });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function loadPricingSettings() {
+  if (cabSyncPricingOn()) {
+    const id = _cabId();
+    return (id != null && _pricingSettingsByCab[id]) || {};
+  }
+  return _localPricingSettings();
+}
+
 function savePricingSettings(s) {
+  // localStorage держим зеркалом всегда: при выключении синхронизации
+  // последние настройки остаются на месте.
   localStorage.setItem("pricing_settings", JSON.stringify(s));
+  if (!cabSyncPricingOn()) return;
+  const id = _cabId();
+  if (id == null) return;
+  _pricingSettingsByCab[id] = s;
+  if (_pricingSaveTimer) clearTimeout(_pricingSaveTimer);
+  _pricingSaveTimer = setTimeout(() => {
+    apiPost("/cabinet/pricing-settings", { settings: s }).catch(() => {});
+  }, 500);
 }
 
 let _pricingModeInited = false;
@@ -6089,6 +6267,9 @@ function pricingParamRow(key, cur) {
 }
 
 async function buildPricingSettings() {
+  // Режим («новая/старая версия») — часть настроек связки: пересобираем его
+  // из saved при каждом построении панели (в т.ч. после смены кабинета).
+  pricingModeCurrent = null;
   if (!pricingDefaults) {
     try {
       const d = await api("/pricing/defaults");
@@ -6098,6 +6279,7 @@ async function buildPricingSettings() {
       return;
     }
   }
+  await ensurePricingSettings();
   const saved = loadPricingSettings();
   const box = $("#pricingSettings");
   box.innerHTML = "";
@@ -6578,7 +6760,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initTableHover();
   await loadCabinets();
   if (localStorage.getItem("cab-auto-refresh") === "1") {
-    setTimeout(() => refreshAllCabinets(), 300);
+    setTimeout(() => autoRefreshAtStart(), 300);
   }
   updateCrumb("dashboard");
 
@@ -6747,19 +6929,23 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (cabOverlay) cabOverlay.addEventListener("click", closeCabinets);
   const cabList = $("#cabList");
   if (cabList) cabList.addEventListener("click", (e) => {
-    const cb = e.target.closest("[data-compare]");
-    if (cb) {
-      e.stopPropagation();
-      cabToggleCompareLink(parseInt(cb.dataset.compare, 10), cb.checked);
-      if (["dashboard", "margin-funnel", "margin-detail", "margin-ozon-detail"].indexOf(currentTab) !== -1) {
-        loadTab(currentTab);
-      }
-      return;
-    }
+    // Клик по плашке/чекбоксу сравнения не должен выбирать кабинет (target
+    // бывает LABEL — раньше он проваливался в ветку [data-cab] и переключал
+    // связку, закрывая дровер). Само сравнение ловим на change ниже.
+    if (e.target.closest(".cab-compare")) return;
     const rb = e.target.closest("[data-refresh]");
     if (rb) { e.stopPropagation(); refreshCabinetById(parseInt(rb.dataset.refresh, 10)); return; }
     const item = e.target.closest("[data-cab]");
     if (item) selectCabinet(parseInt(item.dataset.cab, 10));
+  });
+  if (cabList) cabList.addEventListener("change", (e) => {
+    const input = e.target.closest ? e.target.closest("input[data-compare]") : null;
+    if (!input) return;
+    e.stopPropagation();
+    cabToggleCompareLink(parseInt(input.dataset.compare, 10), input.checked);
+    if (["dashboard", "margin-funnel", "margin-detail", "margin-ozon-detail"].indexOf(currentTab) !== -1) {
+      loadTab(currentTab);
+    }
   });
   const cabRefreshAll = $("#cabRefreshAll");
   if (cabRefreshAll) cabRefreshAll.addEventListener("click", () => refreshAllCabinets());
@@ -6780,6 +6966,23 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   }
+  const cabHide = $("#cabHideNoKeys");
+  if (cabHide) {
+    cabHide.checked = cabHideNoKeys();
+    cabHide.addEventListener("change", () => {
+      localStorage.setItem("cab-hide-nokeys", cabHide.checked ? "1" : "0");
+      renderCabinets();
+    });
+  }
+  const cabSyncPricing = $("#cabSyncPricing");
+  if (cabSyncPricing) {
+    cabSyncPricing.checked = cabSyncPricingOn();
+    cabSyncPricing.addEventListener("change", () => {
+      setCabSyncPricingOn(cabSyncPricing.checked);
+    });
+  }
+  const cabCopyPricing = $("#cabCopyPricing");
+  if (cabCopyPricing) cabCopyPricing.addEventListener("click", () => copyPricingSettingsAll());
   $("#refreshStart").addEventListener("click", () => {
     if (refreshAllMode) startRefreshAll();
     else startRefreshJob();
@@ -6791,6 +6994,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#refreshModal").addEventListener("click", (e) => {
     if (e.target.id === "refreshModal") $("#refreshModal").classList.add("hidden");
   });
+  const refreshBadge = $("#refreshBadge");
+  if (refreshBadge) refreshBadge.addEventListener("click", showRefreshModal);
   [["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"], ["marginOzonDetailLike", "margin-ozon-detail"]]
     .forEach(([id, tab]) => onTabInput(id, tab));
   onTabChange("marginDetailCompare", "margin-detail");

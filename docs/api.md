@@ -2,13 +2,13 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **116**, групп: **27**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **119**, групп: **27**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
-- [cabinet](#cabinet) — 2 шт.
+- [cabinet](#cabinet) — 5 шт.
 - [cabinets](#cabinets) — 1 шт.
 - [cards](#cards) — 1 шт.
 - [custom-stock](#custom-stock) — 1 шт.
@@ -40,14 +40,17 @@
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
-| GET | `/api/cabinet/current` | `api_cabinet_current` | Активный кабинет (по куке agent_cabinet). None — «как раньше» (public). |
-| POST | `/api/cabinet/select` | `api_cabinet_select` | Выбирает активный кабинет (кука agent_cabinet + last_cabinet_id). |
+| GET | `/api/cabinet/current` | `api_cabinet_current` | Активная связка (по куке agent_cabinet). None — «как раньше» (public). |
+| GET | `/api/cabinet/pricing-settings` | `api_pricing_settings_get` | Настройки автопилота цен активной связки (JSON) — {} если не заданы. |
+| PUT | `/api/cabinet/pricing-settings` | `api_pricing_settings_put` | Сохраняет настройки автопилота цен за активной связкой. |
+| POST | `/api/cabinet/pricing-settings/copy` | `api_pricing_settings_copy` | Копирует настройки автопилота текущей связки в другие связки. |
+| POST | `/api/cabinet/select` | `api_cabinet_select` | Выбирает активную связку (кука agent_cabinet + last_cabinet_id). |
 
 ## cabinets
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
-| GET | `/api/cabinets` | `api_cabinets` | Список кабинетов текущего пользователя (с признаком активного). |
+| GET | `/api/cabinets` | `api_cabinets` | Список фирм со связками текущего пользователя (с признаком активной связки). |
 
 ## cards
 
@@ -198,7 +201,7 @@
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
-| POST | `/api/refresh-all` | `api_refresh_all` | «Обновить всё»: по очереди запускает обновление всех кабинетов |
+| POST | `/api/refresh-all` | `api_refresh_all` | «Обновить всё»: по очереди запускает обновление всех связок по их |
 
 ## replenish
 
