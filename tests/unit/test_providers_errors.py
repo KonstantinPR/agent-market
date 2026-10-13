@@ -18,6 +18,36 @@ def test_subclasses_are_market_errors():
     assert issubclass(OzonApiError, MarketError)
 
 
+def test_retry_after_seconds_reads_headers():
+    from app.providers.errors import retry_after_seconds
+
+    assert retry_after_seconds({"Retry-After": "12"}) == 12
+    assert retry_after_seconds({"X-Ratelimit-Reset": "60.5"}) == 60
+    assert retry_after_seconds({"X-Ratelimit-Retry": "3600"}) == 3600
+    assert retry_after_seconds({}) is None
+    assert retry_after_seconds(None) is None
+
+
+def test_ozon_fail_fast_429_carries_retry_after(monkeypatch):
+    from app.providers.ozon import OzonProvider
+
+    provider = OzonProvider(credentials={"client_id": "1", "api_key": "k"},
+                            fail_fast_429=True)
+
+    class FakeResp:
+        status_code = 429
+        headers = {"Retry-After": "42"}
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr("requests.post", lambda *a, **k: FakeResp())
+    with pytest.raises(OzonApiError) as exc:
+        provider._post("https://example.invalid/x", {})
+    assert exc.value.status_code == 429
+    assert exc.value.retry_after == 42
+
+
 def _http_error(status_code: int, text: str = "boom") -> requests.HTTPError:
     resp = requests.Response()
     resp.status_code = status_code

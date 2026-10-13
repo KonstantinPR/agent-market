@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=45">
+<link rel="stylesheet" href="/static/style.css?v=53">
 </head>
 <body>
 <nav class="navbar">
@@ -84,10 +84,11 @@
       <option value="ozon">Ozon</option>
     </select>
   </label>
-  <label>С <input type="date" id="fFrom"></label>
-  <label>По <input type="date" id="fTo"></label>
+  <label id="fFromWrap">С <input type="date" id="fFrom"></label>
+  <label id="fToWrap">По <input type="date" id="fTo"></label>
   <button id="btnApply">Применить</button>
   <button id="btnUpdateWbDetail" class="hidden">Обновить базу</button>
+  <button type="button" id="wbGapsCheck" class="btn hidden" title="Показать отчёты WB из finance-API, которые ещё не загружены в базу">Проверить пропущенные детализации</button>
   <span class="spinner hidden" id="busySpinner"></span>
   <span class="msg header-msg" id="headerMsg"></span>
   <button id="refreshBadge" class="refresh-badge hidden" title="Открыть прогресс обновления">Идёт обновление…</button>
@@ -122,9 +123,9 @@
             <option value="prefix">По группам товаров</option>
           </select>
           <select id="chartAMetric" title="Показатель">
-            <option value="income">Доход</option>
-            <option value="margin">Прибыль</option>
-            <option value="margin_gross">Маржа до себестоимости</option>
+            <option value="income" title="Доход (к перечислению): у WB — forPay без вычета комиссии, у Ozon — income с уже вычтенной комиссией.">Доход</option>
+            <option value="margin" title="Прибыль = Доход − расходы МП (логистика, хранение, услуги) − себестоимость × продано.">Прибыль</option>
+            <option value="margin_gross" title="Маржа до себестоимости = Доход − расходы МП, но ещё БЕЗ себестоимости товара.">Маржа до себестоимости</option>
           </select>
         </div>
         <div class="chart-sm"><canvas id="chartMpIncome"></canvas></div>
@@ -133,9 +134,9 @@
         <div class="chart-cap">Динамика за период</div>
         <div class="chart-cfg">
           <select id="chartMetric" title="Показатель">
-            <option value="revenue">Выручка</option>
-            <option value="income">Доход</option>
-            <option value="profit">Прибыль</option>
+            <option value="revenue" title="Выручка — сумма реализации за интервал (WB retailAmount, Ozon цена продавца × количество).">Выручка</option>
+            <option value="income" title="Доход — сумма «к перечислению» от маркетплейса за интервал.">Доход</option>
+            <option value="profit" title="Прибыль в графике = Доход − |комиссия| − |логистика| − |хранение|, БЕЗ себестоимости. Отличается от карточки «Прибыль» (там себестоимость вычтена) — будет унифицировано.">Прибыль</option>
           </select>
           <select id="chartGran" title="Группировка">
             <option value="day">По дням</option>
@@ -614,6 +615,13 @@
         <span class="dz-label">Перетащите сюда Excel-файлы или zip-архив с детализацией Wildberries</span>
       </div>
     </div>
+    <div class="detail-gaps">
+      <div class="detail-gaps-bar">
+        <button type="button" id="wbGapsDownload" class="btn hidden">Догрузить пропущенные</button>
+        <span id="wbGapsInfo" class="hint">Проверка пропущенных детализаций — кнопка в шапке</span>
+      </div>
+      <div id="wbGapsBox" class="table-wrap hidden"></div>
+    </div>
     <div class="toolbar">
       <input id="wbDetailLike" placeholder="Поиск: артикул, название… * = любая часть">
       <label class="chk"><input type="checkbox" id="wbDetailRaw"> Строками</label>
@@ -856,6 +864,17 @@
   <div class="drawer-body">
     <div id="cabUser" class="cab-user"></div>
     <div id="cabList" class="cab-list"></div>
+    <div id="cabEditor" class="cab-editor hidden">
+      <div class="cab-editor-head">
+        <span id="cabEditorTitle" class="cab-editor-title"></span>
+        <button id="cabEditorClose" class="modal-close" aria-label="Закрыть настройки">&times;</button>
+      </div>
+      <div id="cabEditorFields" class="cab-editor-fields"></div>
+      <div class="cab-editor-actions">
+        <button id="cabEditorSave" class="btn btn-primary">Сохранить</button>
+        <span id="cabEditorMsg" class="msg"></span>
+      </div>
+    </div>
     <div class="cab-actions">
       <button id="cabRefreshAll" class="btn btn-primary">Обновить всё</button>
     </div>
@@ -882,6 +901,7 @@
       </label>
       <div class="modal-actions">
         <button id="refreshStart" class="btn btn-primary">Запустить</button>
+        <button id="refreshRetry" class="btn" title="Повторить только те виды выгрузки, что не докачались в последнем запуске (связки без ключей пропускаются)">Дозагрузить недокачанное</button>
       </div>
     </div>
     <div class="modal-head">
@@ -922,7 +942,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=82"></script>
+<script src="/static/app.js?v=99"></script>
 </body>
 </html>
 

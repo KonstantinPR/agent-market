@@ -38,10 +38,8 @@ def test_ozon_cards_maps_offer_id(api_client):
 def test_wb_sales_fills_sales_and_dashboard(api_client, db):
     from datetime import date
     from app import models
-    from app.services.sync import marketplace_id
 
     api_client.post("/api/wb/cards")
-    wb_id = marketplace_id(db, "wb")
     db.add_all([
         models.WbDetailRow(op_key="sr:w1", source="api", article="TST-1", quantity=2,
                            retail_amount=2200.0, for_pay=2000.0, sale_dt=date(2026, 9, 5)),
@@ -136,8 +134,6 @@ def test_write_db_off_sales_does_not_write(api_client, db):
     from app import models
 
     api_client.post("/api/wb/cards")  # товары нужны для join в /api/sales
-    from app.services.sync import marketplace_id
-    wb_id = marketplace_id(db, "wb")
     db.add(models.WbDetailRow(
         op_key="sr:w1", source="api", article="TST-1",
         quantity=2, retail_amount=2200.0, for_pay=2000.0,
@@ -877,10 +873,8 @@ def test_export_wb_storage_article_like(api_client):
 def test_export_sales_article_like(api_client, db):
     from datetime import date
     from app import models
-    from app.services.sync import marketplace_id
 
     api_client.post("/api/wb/cards")
-    wb_id = marketplace_id(db, "wb")
     db.add_all([
         models.WbDetailRow(op_key="sr:w1", source="api", article="TST-1", quantity=2,
                            retail_amount=2200.0, for_pay=2000.0, sale_dt=date(2026, 9, 5)),
@@ -889,7 +883,8 @@ def test_export_sales_article_like(api_client, db):
     ])
     db.commit()
     api_client.post("/api/wb/sales", params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
-    r = api_client.get("/api/export/sales", params={"article_like": "TST-2"})
+    r = api_client.get("/api/export/sales", params={
+        "article_like": "TST-2", "date_from": "2026-09-01", "date_to": "2026-09-10"})
     assert r.status_code == 200
     assert r.headers["X-Count"] == "1"
     df = _read_xlsx(r)
@@ -954,9 +949,10 @@ def test_ozon_detail_excel_zero_only_updates_db(api_client):
     assert data["ok"] is True
     assert data["rows"] == 2
     # свод по умолчанию — одна строка на товар (OZ-1 и OZ-2 = размеры 1 и 2)
-    assert api_client.get("/api/ozon/detail-summary").json()["count"] == 1
+    window = {"date_from": "2026-09-01", "date_to": "2026-09-10"}
+    assert api_client.get("/api/ozon/detail-summary", params=window).json()["count"] == 1
     assert api_client.get(
-        "/api/ozon/detail-summary", params={"by_size": 1}).json()["count"] == 2
+        "/api/ozon/detail-summary", params={**window, "by_size": 1}).json()["count"] == 2
 
 
 def test_export_ozon_detail_summary_and_rows(api_client):
@@ -1278,7 +1274,8 @@ def test_dashboard_blocks_full(api_client, db):
     k = body["kpis"]
     assert k["total"]["margin"] == pytest.approx(2600.0)          # 800+1600-100-250+550
     assert k["total"]["income"] == pytest.approx(4200.0)
-    assert k["total"]["margin_pct"] == pytest.approx(61.9, abs=0.1)
+    assert k["total"]["margin_pct"] == pytest.approx(54.17, abs=0.1)  # ROS: 2600/4800
+    assert k["total"]["margin_roi_pct"] == pytest.approx(118.18, abs=0.1)  # ROI: 2600/(4800-2600)
     assert k["total"]["sells"] == 6
     assert k["total"]["articles"] == 5
     by_mp = {m_["marketplace"]: m_ for m_ in k["per_mp"]}
@@ -1337,7 +1334,7 @@ def test_dashboard_no_params_ok(api_client, db):
 
 
 def test_dashboard_daily_has_profit(api_client, db):
-    """daily по таблице Продажи обогащён операционной прибылью (income−комиссии−логистика−хранение)."""
+    """daily по таблице Продажи обогащён прибылью (income−комиссии−логистика−хранение−себестоимость)."""
     _seed_dashboard(db)
     body = api_client.get("/api/dashboard", params={
         "date_from": "2026-09-13", "date_to": "2026-09-20",
@@ -1347,11 +1344,12 @@ def test_dashboard_daily_has_profit(api_client, db):
     for d in body["daily"]:
         assert "profit" in d
     # WB-продажа 2026-09-15: income 1800 − комиссия 200 − логистика 100 − хранение 10
+    # − себестоимость 100 × 4 шт = 1090
     key = "2026-09-15"
     assert key in by_date
-    assert by_date[key]["profit"] == pytest.approx(1490.0)
-    # Ozon 2026-09-16: income 1000 − комиссия 120
-    assert by_date["2026-09-16"]["profit"] == pytest.approx(880.0)
+    assert by_date[key]["profit"] == pytest.approx(1090.0)
+    # Ozon 2026-09-16: income 1000 − комиссия 120 − себестоимость 300 × 2 шт = 280
+    assert by_date["2026-09-16"]["profit"] == pytest.approx(280.0)
 
 
 def test_dashboard_export_xlsx_multi_sheet(api_client, db):

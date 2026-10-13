@@ -61,10 +61,20 @@ def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
     """
     if link_mp:
         mp_param = link_mp
+    # Себестоимость проданного: net_cost товара по UPPER-матчингу артикула.
+    # Справочник маленький — читаем его в память и умножаем в Python. Это
+    # принципиально: коррелированный подзапрос в SQL делал по индексу/сканированию
+    # products на каждую строку продаж (O(n²)) и вешал дневной график на Postgres.
+    cost_map = {
+        (a or "").strip().upper(): float(c or 0.0)
+        for a, c in db.execute(
+            select(models.Product.article, models.Product.net_cost))
+    }
     query = (
         select(
             models.Marketplace.code.label("marketplace"),
             models.Sale.date,
+            models.Sale.article,
             func.sum(models.Sale.quantity).label("sells"),
             func.sum(models.Sale.revenue).label("revenue"),
             func.sum(models.Sale.income).label("income"),
@@ -76,7 +86,7 @@ def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
         .join(models.Marketplace, models.Sale.marketplace_id == models.Marketplace.id)
         .where(models.Sale.date >= from_, models.Sale.date <= to_,
                models.Sale.source != "detail")
-        .group_by(models.Marketplace.code, models.Sale.date)
+        .group_by(models.Marketplace.code, models.Sale.date, models.Sale.article)
     )
     per_mp = {}
     total = {"sells": 0, "revenue": 0.0, "income": 0.0}
@@ -97,17 +107,21 @@ def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
         p["commission"] += float(r.commission or 0)
         p["logistics"] += float(r.logistics or 0)
         p["storage"] += float(r.storage or 0)
+        cogs = int(r.sells or 0) * cost_map.get(
+            (r.article or "").strip().upper(), 0.0)
         dk = str(r.date)
         daily.setdefault(dk, {"date": dk, "revenue": 0.0, "income": 0.0, "sells": 0, "profit": 0.0})
         daily[dk]["revenue"] += float(r.revenue or 0)
         daily[dk]["income"] += float(r.income or 0)
         daily[dk]["sells"] += int(r.sells or 0)
-        # Операционная прибыль = доход минус комиссия/логистика/хранение.
-        # Знак затрат в данных бывает разным (WB пишет «+», Ozon «−») — нормируем abs().
+        # Прибыль = доход − комиссия/логистика/хранение − себестоимость
+        # проданного. Знак затрат в данных бывает разным (WB пишет «+»,
+        # Ozon «−») — нормируем abs().
         daily[dk]["profit"] += (float(r.income or 0)
                                 - abs(float(r.commission or 0))
                                 - abs(float(r.logistics or 0))
-                                - abs(float(r.storage or 0)))
+                                - abs(float(r.storage or 0))
+                                - cogs)
     for d in daily.values():
         d["profit"] = round(d["profit"], 2)
     if per_mp:
@@ -340,6 +354,35 @@ def api_refresh(api: str, detail: int = 0, date_from: Optional[str] = None,
                                              cab_id=cab_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Некорректная дата: {e}")
+
+
+@router.post("/refresh/retry-failed")
+def api_refresh_retry_failed(payload: dict = Body(default={}),
+                             db: Session = Depends(get_db)):
+    """«Дозагрузить недокачанное»: повторяет только упавшие виды выгрузки.
+
+    По последнему фоновому заданию каждой связки берутся шаги со статусом
+    failed и запускаются заново (выкачки идемпотентны). cab_id в теле
+    ограничивает дозагрузку одной связкой; без него — все.
+    """
+    cab_id = payload.get("cab_id") if isinstance(payload, dict) else None
+    if cab_id is not None:
+        try:
+            cab_id = int(cab_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Некорректный cab_id")
+    pending = refresh_service.failed_steps_last()
+    if cab_id is not None:
+        pending = [p for p in pending if p["cab_id"] == cab_id]
+    jobs = []
+    for p in pending:
+        res = refresh_service.start_refresh(
+            p["api"], include_detail=p["include_detail"],
+            date_from=p["date_from"], date_to=p["date_to"],
+            cab_id=p["cab_id"], kinds=p["kinds"])
+        if res.get("job_id"):
+            jobs.append({"cab_id": p["cab_id"], "api": p["api"], **res})
+    return {"jobs": jobs, "count": len(jobs)}
 
 
 @router.get("/refresh")

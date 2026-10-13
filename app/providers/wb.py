@@ -14,7 +14,7 @@ import requests
 
 from app.config import settings
 from app.providers.base import BaseProvider
-from app.providers.errors import WbApiError
+from app.providers.errors import WbApiError, retry_after_seconds
 from app.services import progress
 
 
@@ -177,6 +177,7 @@ class WbProvider(BaseProvider):
                         "Превышен лимит запросов WB API: доступен 1 запрос в "
                         f"{self._retry_hint(resp)}. Попробуйте позже.",
                         status_code=429,
+                        retry_after=retry_after_seconds(resp.headers),
                     )
                 self._wait_rate_limit(resp)
                 continue
@@ -191,13 +192,18 @@ class WbProvider(BaseProvider):
                       key: Optional[str] = None):
         for attempt in range(num_retries):
             resp = requests.post(url, headers=self._headers(finance, key),
-                                 json=payload, timeout=60)
+                                 json=payload, timeout=600)
             if resp.status_code == 429:
+                # Лимит запроса занят. Пытаемся ротироваться на запасной
+                # finance-ключ; если и он отдал 429 — берём подсказку из ответа
+                # с МЕНЬШИМ ожиданием (истощённый запасной ключ не должен
+                # маскировать реальное состояние «1 запрос в минуту» основного).
+                resp_primary = resp
                 alt = self.creds.get("finance2")
                 if alt is None:
                     alt = settings.wb_finance_api_key_2 if finance else None
                 if alt:
-                    resp = requests.post(
+                    resp_alt = requests.post(
                         url,
                         headers={
                             "Authorization": alt,
@@ -205,17 +211,28 @@ class WbProvider(BaseProvider):
                             "accept": "application/json",
                         },
                         json=payload,
-                        timeout=60,
+                        timeout=600,
                     )
-                    if resp.status_code != 429:
-                        resp.raise_for_status()
-                        return resp
-                if finance or self.fail_fast_429:
+                    if resp_alt.status_code != 429:
+                        resp_alt.raise_for_status()
+                        return resp_alt
+                    resp = min(
+                        (resp_alt, resp_primary),
+                        key=lambda r: retry_after_seconds(r.headers) or 0,
+                    )
+                if self.fail_fast_429:
+                    prefix = ("finance-api превысил лимит" if finance
+                              else "Превышен лимит запросов WB API")
+                    suffix = (" Финансовый отчёт обновлять редко."
+                              if finance else " Попробуйте позже.")
                     raise WbApiError(
-                        "finance-api превысил лимит: доступен 1 запрос в "
-                        f"{self._retry_hint(resp)}. Финансовый отчёт обновлять редко.",
+                        f"{prefix}: доступен 1 запрос в {self._retry_hint(resp)}."
+                        + suffix,
                         status_code=429,
+                        retry_after=retry_after_seconds(resp.headers),
                     )
+                # Не fail-fast (эндпоинты догрузки): ждём столько, сколько просит
+                # WB, и повторяем тем же токеном.
                 self._wait_rate_limit(resp)
                 continue
             resp.raise_for_status()
@@ -865,6 +882,75 @@ class WbProvider(BaseProvider):
         return out
 
     # ---------------------------------------------------------------- хранение
+    # ---------------------------------------------------------------- хранение
+    def _fetch_paid_storage(self, date_from: str, date_to: str) -> pd.DataFrame:
+        """Сырой отчёт paid_storage за диапазон (ежедневные строки nm × склад)."""
+        resp = self._session_get(
+            "https://seller-analytics-api.wildberries.ru/api/v1/paid_storage",
+            params={"dateFrom": date_from, "dateTo": date_to},
+        )
+        task_id = resp.json()["data"]["taskId"]
+
+        progress.report(label="Хранение WB", stage="формируется отчёт…")
+        while True:
+            status_resp = self._session_get(
+                f"https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{task_id}/status"
+            )
+            status = status_resp.json()["data"]["status"]
+            if status == "done":
+                break
+            if status == "error":
+                raise RuntimeError("WB: не удалось сформировать отчёт по хранению")
+            time.sleep(10)
+        progress.report(stage="скачивание…")
+
+        download_resp = self._session_get(
+            f"https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{task_id}/download"
+        )
+        return pd.DataFrame(download_resp.json())
+
+    def get_storage_charges(self, date_from, date_to) -> pd.DataFrame:
+        """Сырые дневные начисления хранения (nm_id × дата × склад).
+
+        Колонки отчёта paid_storage: date, vendorCode, nmId, warehouse,
+        volume, warehousePrice, barcodesCount. Не усредняются — нужны для
+        точного распределения хранения по артикулам за период.
+
+        WB ограничивает один запрос 8 днями разницы дат, поэтому длинное окно
+        разбивается на куски и результаты склеиваются.
+        """
+        if self.testing:
+            arts = self._mock_articles()
+            rng = np.random.default_rng(7)
+            rows = []
+            for a in arts:
+                for day in ("2026-09-01", "2026-09-02"):
+                    rows.append({
+                        "date": day, "vendorCode": a, "nmId": 530000 + int(a) - 1000,
+                        "warehouse": "Коледино", "volume": round(rng.uniform(0.1, 0.6), 3),
+                        "warehousePrice": round(rng.uniform(0.05, 0.9), 4),
+                        "barcodesCount": int(rng.integers(1, 5)),
+                    })
+            return pd.DataFrame(rows)
+        return self._fetch_paid_storage_chunked(date_from, date_to)
+
+    def _fetch_paid_storage_chunked(self, date_from, date_to,
+                                    max_span_days: int = 8) -> pd.DataFrame:
+        """paid_storage кусками по max_span_days (лимит WB: разница ≤ 8 дней)."""
+        start = datetime.strptime(str(date_from), "%Y-%m-%d").date()
+        end = datetime.strptime(str(date_to), "%Y-%m-%d").date()
+        if end < start:
+            return pd.DataFrame()
+        frames = []
+        cur = start
+        while cur <= end:
+            chunk_end = min(cur + timedelta(days=max_span_days), end)
+            frames.append(self._fetch_paid_storage(
+                cur.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
+            cur = chunk_end + timedelta(days=1)
+        frames = [f for f in frames if f is not None and not f.empty]
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
     def get_storage_cost(self, number_last_days: int = 7, is_mean: bool = True) -> pd.DataFrame:
         """Стоимость хранения (seller-analytics-api/v1/paid_storage, асинхронный отчёт)."""
         if self.testing:
@@ -889,29 +975,7 @@ class WbProvider(BaseProvider):
         date_from = (datetime.now() - timedelta(days=number_last_days)).strftime("%Y-%m-%d")
         date_to = datetime.now().strftime("%Y-%m-%d")
 
-        resp = self._session_get(
-            "https://seller-analytics-api.wildberries.ru/api/v1/paid_storage",
-            params={"dateFrom": date_from, "dateTo": date_to},
-        )
-        task_id = resp.json()["data"]["taskId"]
-
-        progress.report(label="Хранение WB", stage="формируется отчёт…")
-        while True:
-            status_resp = self._session_get(
-                f"https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{task_id}/status"
-            )
-            status = status_resp.json()["data"]["status"]
-            if status == "done":
-                break
-            if status == "error":
-                raise RuntimeError("WB: не удалось сформировать отчёт по хранению")
-            time.sleep(10)
-        progress.report(stage="скачивание…")
-
-        download_resp = self._session_get(
-            f"https://seller-analytics-api.wildberries.ru/api/v1/paid_storage/tasks/{task_id}/download"
-        )
-        df = pd.DataFrame(download_resp.json())
+        df = self._fetch_paid_storage(date_from, date_to)
         if is_mean and {"vendorCode", "warehousePrice", "barcodesCount"} <= set(df.columns):
             df = df.groupby("vendorCode").agg(
                 {"warehousePrice": "mean", "barcodesCount": "mean", "volume": "mean", "nmId": "first"}
@@ -994,24 +1058,88 @@ class WbProvider(BaseProvider):
             return pd.DataFrame(rows)
 
         url = "https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed"
-        all_rows, rrd_id = [], 0
+        all_rows, seen = [], set()
         progress.report(label="Детализация WB", stage="запрос API", unit="стр.")
-        while True:
-            payload = {"dateFrom": str(date_from), "dateTo": str(date_to),
-                       "limit": 100000, "rrdId": rrd_id}
-            resp = self._session_post(url, payload, finance=True)
-            if resp.status_code == 204:
-                break
-            data = resp.json()
-            if not data:
-                break
-            all_rows += data
-            progress.report(stage=f"стр. {len(all_rows) // 100000 + 1}",
-                            done=len(all_rows))
-            if "rrdId" in data[-1]:
-                rrd_id = data[-1]["rrdId"]
-            else:
-                break
+        d0 = date.fromisoformat(str(date_from))
+        d1 = date.fromisoformat(str(date_to))
+        if d1 < d0:
+            d0, d1 = d1, d0
+        # WB формирует ответ синхронно — окно больше ~6 мес. рискует не уложиться
+        # даже в 600 c таймаута. Режем на полугодовые окна; между запросами
+        # _session_post сам ждёт X-Ratelimit-Retry (детализация: 1 запрос/мин).
+        max_span = timedelta(days=184)
+        windows = []
+        cur0 = d0
+        while cur0 <= d1:
+            cur1 = min(cur0 + max_span - timedelta(days=1), d1)
+            windows.append((cur0, cur1))
+            cur0 = cur1 + timedelta(days=1)
+        for w0, w1 in windows:
+            rrd_id = 0
+            while True:
+                payload = {"dateFrom": str(w0), "dateTo": str(w1),
+                           "limit": 100000, "rrdId": rrd_id}
+                resp = self._session_post(url, payload, finance=True)
+                if resp.status_code == 204:
+                    break
+                data = resp.json()
+                if not data:
+                    break
+                for row in data:
+                    rid = row.get("rrdId")
+                    if rid is None or rid not in seen:
+                        all_rows.append(row)
+                        if rid is not None:
+                            seen.add(rid)
+                progress.report(stage=f"стр. {len(all_rows) // 100000 + 1}",
+                                done=len(all_rows))
+                if "rrdId" in data[-1]:
+                    rrd_id = data[-1]["rrdId"]
+                else:
+                    break
         if not all_rows:
             return pd.DataFrame()
         return pd.DataFrame(all_rows)
+
+    def get_sales_reports_list(self, date_from, date_to,
+                               period: str = "weekly") -> pd.DataFrame:
+        """Список отчётов о продажах WB (finance-api/v1/sales-reports/list).
+
+        Отчёты, сформированные WB за окно [date_from, date_to]: reportId,
+        dateFrom, dateTo, createDate, reportType, суммы. Пагинация по offset
+        (limit <= 1000). Нужен для поиска пропущенных (недогруженных)
+        детализаций: reportId из списка минус уже загруженные в wb_detail_rows.
+        """
+        if self.testing:
+            start = date.fromisoformat(str(date_from))
+            end = date.fromisoformat(str(date_to))
+            rows, rid, cur = [], 900000, start
+            while cur <= end:
+                rows.append({
+                    "reportId": rid, "dateFrom": str(cur),
+                    "dateTo": str(cur + timedelta(days=6)),
+                    "createDate": str(cur + timedelta(days=7)),
+                    "currency": "RUB", "reportType": 1,
+                })
+                rid += 1
+                cur += timedelta(days=7)
+            return pd.DataFrame(rows)
+
+        url = "https://finance-api.wildberries.ru/api/finance/v1/sales-reports/list"
+        out, offset = [], 0
+        progress.report(label="Отчёты WB", stage="запрос списка", unit="шт.")
+        while True:
+            payload = {"dateFrom": str(date_from), "dateTo": str(date_to),
+                       "limit": 1000, "offset": offset, "period": period}
+            resp = self._session_post(url, payload, finance=True)
+            if resp.status_code == 204:
+                break
+            data = resp.json() or []
+            if not data:
+                break
+            out += data
+            if len(data) < 1000:
+                break
+            offset += len(data)
+            progress.report(stage=f"получено {len(out)}", done=len(out))
+        return pd.DataFrame(out)

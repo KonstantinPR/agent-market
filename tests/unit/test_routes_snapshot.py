@@ -25,6 +25,7 @@ DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
 GET /api/cabinet/current
 GET /api/cabinet/pricing-settings
+GET /api/cabinet/{cabinet_id}/settings
 GET /api/cabinets
 GET /api/cards
 GET /api/custom-stock
@@ -84,6 +85,7 @@ GET /api/warehouse/docs/{doc_id}/items
 GET /api/warehouse/export/{kind}
 GET /api/warehouse/stock
 GET /api/warehouse/turnover
+GET /api/wb/detail-gaps
 GET /api/wb/detail-rows
 GET /api/wb/detail-summary
 GET /api/yandex/download
@@ -114,6 +116,7 @@ POST /api/products/replenishable
 POST /api/promo/refresh
 POST /api/refresh
 POST /api/refresh-all
+POST /api/refresh/retry-failed
 POST /api/replenish/import-excel
 POST /api/sync/{code}
 POST /api/tickets
@@ -139,6 +142,7 @@ POST /api/wb/stock
 POST /api/wb/storage
 POST /api/yandex/upload
 PUT /api/cabinet/pricing-settings
+PUT /api/cabinet/{cabinet_id}/settings
 """
 
 

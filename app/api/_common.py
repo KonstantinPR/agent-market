@@ -182,7 +182,7 @@ def ozon_detail_range(db) -> dict:
 
 # Удельные/процентные колонки детализации маржинальности: в «Итого» — среднее.
 _MARGIN_AVG_TOTALS = (
-    "margin_per_one", "margin_pct", "commission_per_one",
+    "margin_per_one", "margin_pct", "margin_roi_pct", "commission_per_one",
     "logistics_per_one", "logistics_out_per_one", "logistics_in_per_one",
     "storage_per_one", "income_per_one", "revenue_per_one",
     "margin_gross_per_one", "services_per_one", "return_rate", "delta_pct",

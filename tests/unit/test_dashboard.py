@@ -73,7 +73,8 @@ def test_dashboard_kpis_combines_wb_and_ozon(db):
     assert tot["revenue"] == 3000.0
     assert tot["income"] == 2650.0
     assert tot["margin"] == 2150.0              # 1600 + 550
-    assert tot["margin_pct"] == 81.13           # 2150/2650*100
+    assert tot["margin_pct"] == 71.67           # ROS: 2150/3000*100
+    assert tot["margin_roi_pct"] == 252.94      # ROI: 2150/(3000-2150)*100
     assert tot["margin_gross"] == 2650.0        # 1800 + 850 (до себестоимости)
     assert tot["articles"] == 2
     by_mp = {m["marketplace"]: m for m in k["per_mp"]}

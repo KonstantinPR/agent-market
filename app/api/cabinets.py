@@ -31,10 +31,14 @@ def _active_info(request: Request, db: Session):
 
 
 @router.get("/cabinets")
-def api_cabinets(db: Session = Depends(get_db)):
+def api_cabinets(request: Request, db: Session = Depends(get_db)):
     """Список фирм со связками текущего пользователя (с признаком активной связки)."""
     user = _current_user(db)
-    active = cabinet_service.get_active()
+    # Активную связку резолвим ИЗ ЗАПРОСА (кука → last_cabinet_id), а не из
+    # contextvar: синхронный эндпоинт может выполниться в другом потоке, чем
+    # зависимость get_db, и тогда contextvar пуст — UI не видел активную связку.
+    active = cabinet_service.resolve_active(
+        db, request.cookies.get(cabinet_service.CABINET_COOKIE), user)
     active_id = active.id if active is not None else None
     mp_names = cabinet_service.marketplace_names(db)
     companies = cabinet_service.companies_of(db, user)
@@ -94,6 +98,37 @@ def api_cabinet_select(payload: dict = Body(default={}), response: Response = No
     if info is None:
         raise HTTPException(status_code=404, detail="Связка не найдена")
     return info.to_dict(active=True, mp_names=cabinet_service.marketplace_names(db))
+
+
+@router.get("/cabinet/{cabinet_id}/settings")
+def api_cabinet_settings_get(cabinet_id: int, db: Session = Depends(get_db)):
+    """Ключи и параметры связки (значения замаскированы) — для формы в UI."""
+    user = _current_user(db)
+    info = cabinet_service.info_by_id(db, cabinet_id, user)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Связка не найдена")
+    return cabinet_service.creds_public(info)
+
+
+@router.put("/cabinet/{cabinet_id}/settings")
+def api_cabinet_settings_put(cabinet_id: int, payload: dict = Body(default={}),
+                             db: Session = Depends(get_db)):
+    """Сохраняет ключи связки: {creds:{key:value}, enabled?:bool}.
+
+    Пустое значение ключа удаляет его. Секреты не возвращаются — только маска.
+    """
+    user = _current_user(db)
+    info = cabinet_service.info_by_id(db, cabinet_id, user)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Связка не найдена")
+    mp = info.marketplace
+    values = payload.get("creds") if isinstance(payload.get("creds"), dict) else {}
+    enabled = payload.get("enabled") if "enabled" in payload else None
+    updated = cabinet_service.update_cabinet_creds(
+        db, cabinet_id, mp, values, enabled, user)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Связка не найдена")
+    return cabinet_service.creds_public(updated)
 
 
 @router.get("/cabinet/pricing-settings")

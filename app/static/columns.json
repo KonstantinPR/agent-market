@@ -1779,7 +1779,12 @@
       },
       {
        "k": "margin_pct",
-       "label": "Рентаб., %",
+       "label": "Рентаб. продаж, %",
+       "def": true
+      },
+      {
+       "k": "margin_roi_pct",
+       "label": "Рентаб. затрат, %",
        "def": true
       }
      ]
@@ -1835,7 +1840,12 @@
       },
       {
        "k": "margin_pct",
-       "label": "Рентаб., %",
+       "label": "Рентаб. продаж, %",
+       "def": true
+      },
+      {
+       "k": "margin_roi_pct",
+       "label": "Рентаб. затрат, %",
        "def": true
       }
      ]
@@ -1932,7 +1942,12 @@
       },
       {
        "k": "margin_pct",
-       "label": "Рентаб., %",
+       "label": "Рентаб. продаж, %",
+       "def": true
+      },
+      {
+       "k": "margin_roi_pct",
+       "label": "Рентаб. затрат, %",
        "def": true
       }
      ]
@@ -2355,6 +2370,16 @@
        "def": true
       },
       {
+       "k": "value",
+       "label": "Ценность",
+       "def": true
+      },
+      {
+       "k": "supplier",
+       "label": "Поставщик",
+       "def": true
+      },
+      {
        "k": "margin_gross",
        "label": "Маржа, до себестоимости",
        "def": true
@@ -2372,6 +2397,11 @@
       {
        "k": "margin_pct",
        "label": "Прибыль, %",
+       "def": true
+      },
+      {
+       "k": "margin_roi_pct",
+       "label": "Рентаб. затрат, %",
        "def": true
       },
       {
@@ -2608,6 +2638,11 @@
        "def": true
       },
       {
+       "k": "margin_roi_pct",
+       "label": "Рентаб. затрат, %",
+       "def": true
+      },
+      {
        "k": "commission_per_one",
        "label": "Комиссия/ед.",
        "def": false
@@ -2819,6 +2854,11 @@
       {
        "k": "margin_pct",
        "label": "Прибыль, %",
+       "def": true
+      },
+      {
+       "k": "margin_roi_pct",
+       "label": "Рентаб. затрат, %",
        "def": true
       },
       {
@@ -3218,6 +3258,16 @@
        "def": true
       },
       {
+       "k": "value",
+       "label": "Ценность",
+       "def": true
+      },
+      {
+       "k": "supplier",
+       "label": "Поставщик",
+       "def": true
+      },
+      {
        "k": "avg_price",
        "label": "Ср. цена факт, руб",
        "def": true
@@ -3442,14 +3492,15 @@
    },
    "groups": [
     {
-     "title": "Товар",
-     "keys": [
-      "article",
-      "nm_id",
-      "name",
-      "feedback_rating",
-      "replenishable"
-     ]
+      "title": "Товар",
+      "keys": [
+       "article",
+       "nm_id",
+       "name",
+       "supplier",
+       "feedback_rating",
+       "replenishable"
+      ]
     },
     {
      "title": "Цена и скидка",
@@ -3493,16 +3544,17 @@
      ]
     },
     {
-     "title": "Экономика на единицу",
-     "keys": [
-      "margin_pct",
-      "net_cost",
-      "revenue_per_one",
-      "income_per_one",
-      "commission_per_one",
-      "logistics_per_one",
-      "storage_per_one"
-     ]
+      "title": "Экономика на единицу",
+      "keys": [
+       "margin_pct",
+       "net_cost",
+       "value",
+       "revenue_per_one",
+       "income_per_one",
+       "commission_per_one",
+       "logistics_per_one",
+       "storage_per_one"
+      ]
     },
     {
      "title": "Акции WB",
@@ -3593,14 +3645,22 @@
     "k": "income",
     "label": "К перечислению"
    },
-   {
-    "k": "net_cost",
-    "label": "Себестоимость"
-   },
-   {
-    "k": "margin_gross",
-    "label": "Маржа, до себестоимости"
-   },
+    {
+     "k": "net_cost",
+     "label": "Себестоимость"
+    },
+    {
+     "k": "value",
+     "label": "Ценность"
+    },
+    {
+     "k": "supplier",
+     "label": "Поставщик"
+    },
+    {
+     "k": "margin_gross",
+     "label": "Маржа, до себестоимости"
+    },
    {
     "k": "margin",
     "label": "Прибыль"
@@ -3610,11 +3670,15 @@
     "label": "Прибыль на ед."
    },
    {
-    "k": "margin_pct",
-    "label": "Прибыль, %"
-   },
-   {
-    "k": "margin_pct_income",
+     "k": "margin_pct",
+     "label": "Прибыль, %"
+    },
+    {
+     "k": "margin_roi_pct",
+     "label": "Рентаб. затрат, %"
+    },
+    {
+     "k": "margin_pct_income",
     "label": "Прибыль % (к перечисл.)"
    },
    {
@@ -4014,11 +4078,15 @@
     "label": "Прибыль на ед."
    },
    {
-    "k": "margin_pct",
-    "label": "Прибыль, %"
-   },
-   {
-    "k": "amount",
+     "k": "margin_pct",
+     "label": "Прибыль, %"
+    },
+    {
+     "k": "margin_roi_pct",
+     "label": "Рентаб. затрат, %"
+    },
+    {
+     "k": "amount",
     "label": "Сумма продажи"
    },
    {
@@ -4209,14 +4277,22 @@
     "k": "delta_discount",
     "label": "Дельта скидки"
    },
-   {
-    "k": "net_cost",
-    "label": "Себестоимость"
-   },
-   {
-    "k": "action",
-    "label": "Решение"
-   },
+    {
+     "k": "net_cost",
+     "label": "Себестоимость"
+    },
+    {
+     "k": "value",
+     "label": "Ценность"
+    },
+    {
+     "k": "supplier",
+     "label": "Поставщик"
+    },
+    {
+     "k": "action",
+     "label": "Решение"
+    },
    {
     "k": "status",
     "label": "Статус"

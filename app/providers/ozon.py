@@ -22,7 +22,7 @@ import requests
 
 from app.config import settings
 from app.providers.base import BaseProvider
-from app.providers.errors import OzonApiError
+from app.providers.errors import OzonApiError, retry_after_seconds
 from app.services import progress
 
 OZON_API = "https://api-seller.ozon.ru"
@@ -71,6 +71,7 @@ class OzonProvider(BaseProvider):
                     raise OzonApiError(
                         "Превышен лимит запросов Ozon API, попробуйте позже.",
                         status_code=429,
+                        retry_after=retry_after_seconds(resp.headers),
                     )
                 time.sleep(5 + attempt * 10)
                 continue

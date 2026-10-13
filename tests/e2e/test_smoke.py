@@ -26,7 +26,7 @@ def test_full_panel_and_refresh_cycle(api_client):
                  "/api/wb/storage", "/api/ozon/cards", "/api/ozon/stock",
                  "/api/ozon/prices"):
         assert api_client.post(path).status_code == 200
-    for path in ("/api/wb/funnel", "/api/wb/sales", "/api/ozon/cashflow"):
+    for path in ("/api/wb/funnel", "/api/wb/detail", "/api/wb/sales", "/api/ozon/cashflow"):
         r = api_client.post(path, params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
         assert r.status_code == 200
     assert api_client.post("/api/ozon/realization", params={"month": 8, "year": 2026}).status_code == 200

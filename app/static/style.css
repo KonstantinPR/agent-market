@@ -43,7 +43,13 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 
 .navbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .cab-btn .caret { margin-left: 6px; color: #888; }
-.cab-btn { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cab-btn { white-space: nowrap; }
+.cab-btn-mp {
+  display: inline-block; margin-left: 6px; padding: 1px 7px;
+  border-radius: 9px; background: #eef2ff; color: #3b47a8;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+  vertical-align: middle;
+}
 
 /* Шторка «Личные кабинеты» (справа) */
 .drawer-overlay {
@@ -74,7 +80,6 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
   cursor: pointer; background: #fff;
 }
 .cab-item:hover { border-color: #111; }
-.cab-item.active { border-color: #111; background: #f7f7f7; box-shadow: inset 3px 0 0 #111; }
 .cab-item .row1 { display: flex; align-items: center; gap: 8px; }
 .cab-item .name { flex: 1; font-weight: 600; font-size: 13px; }
 .cab-item .mps { display: flex; gap: 4px; }
@@ -88,7 +93,52 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
   padding: 3px 8px; cursor: pointer; font-size: 12px; color: #333;
 }
 .cab-item .refresh-one:hover { border-color: #111; }
-.cab-group { display: grid; gap: 8px; }
+/* Кнопка «шестерёнка» — настройки связки (ключи API и параметры) */
+.cab-item .cab-edit {
+  border: 1px solid #ddd; background: #fff; color: #333;
+  border-radius: 6px; font-size: 13px; line-height: 1;
+  padding: 3px 6px; cursor: pointer;
+}
+.cab-item .cab-edit:hover { border-color: #111; background: #f3f6ff; }
+/* Активная связка — явная рамка + метка, чтобы было видно, где мы находимся */
+.cab-item.active {
+  border: 1px solid #1a7f37;
+  background: #f5fbf6;
+}
+.cab-active-badge {
+  font-size: 11px; font-weight: 600; color: #0a6b2b;
+  background: #e3f5e8; border: 1px solid #9bd3ac; border-radius: 10px;
+  padding: 1px 8px; white-space: nowrap;
+}
+.cab-edit { font-size: 13px; }
+.cab-editor {
+  margin-top: 12px; padding: 12px;
+  border: 1px solid #ddd; border-radius: 8px; background: #fafafa;
+}
+.cab-editor.hidden { display: none; }
+.cab-editor-head { display: flex; align-items: center; gap: 8px; }
+.cab-editor-head .modal-close { margin-left: auto; }
+.cab-editor-title { font-weight: 600; font-size: 13px; }
+.cab-editor-meta { font-size: 12px; color: #666; margin: 6px 0; }
+.cab-editor-meta b { color: #333; }
+.cab-editor-chk { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; cursor: pointer; }
+.cab-editor-fields { display: grid; gap: 8px; margin: 8px 0; }
+.cab-editor-field { display: grid; gap: 3px; }
+.cab-editor-label { font-size: 12px; color: #555; }
+.cab-editor-label em { color: #999; font-style: normal; font-size: 11px; }
+.cab-editor-inputwrap { display: flex; gap: 6px; align-items: center; }
+.cab-editor-inputwrap input {
+  flex: 1; min-width: 0; padding: 6px 8px; font-size: 13px;
+  border: 1px solid #ccc; border-radius: 6px;
+}
+.cab-editor-clear {
+  border: 1px solid #ddd; background: #fff; color: #c0392b;
+  border-radius: 6px; cursor: pointer; padding: 0 8px; font-size: 14px;
+  width: 30px;
+}
+.cab-editor-clear:hover { background: #f7e8e8; border-color: #c0392b; }
+.cab-editor-note { font-size: 12px; color: #888; margin: 6px 0; }
+.cab-editor-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .cab-group-name { font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: .04em; }
 .cab-compare { display: flex; align-items: center; cursor: pointer; }
 .cab-compare input { cursor: pointer; }
@@ -345,6 +395,18 @@ body.busy .btn { pointer-events: none; opacity: .6; }
   background: #fff;
   color: #111;
 }
+/* Текстовые поля форм — в едином стиле с остальными формами проекта. */
+.wb-form textarea {
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: #fff;
+  color: #111;
+  font-family: inherit;
+  line-height: 1.4;
+  resize: vertical;
+}
 .wb-dl { border-color: #111; }
 
 .kpis { display: flex; gap: 40px; margin-bottom: 24px; flex-wrap: wrap; }
@@ -575,7 +637,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .modal-close:hover { color: #000; }
 .modal-body { padding: 14px 18px; }
 .modal-scroll { max-height: 160px; overflow-y: auto; }
-.modal-actions { margin-top: 12px; display: flex; justify-content: flex-end; }
+.modal-actions { margin-top: 12px; display: flex; justify-content: flex-end; gap: 8px; }
 .btn-primary { background: #111; border-color: #111; color: #fff; }
 
 .refresh-summary { margin-bottom: 12px; font-size: 13px; color: #333; }
@@ -598,6 +660,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .refresh-step .rs-name { color: #333; }
 .refresh-step.failed .rs-status { color: #a40e26; }
 .refresh-step-error { font-size: 12px; color: #a40e26; margin: 0 0 4px 10px; word-break: break-word; }
+.refresh-step-note { font-size: 12px; color: #8a6d3b; margin: 0 0 4px 10px; word-break: break-word; }
 .refresh-detail { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: #555; }
 .refresh-run {
   display: flex;
@@ -755,6 +818,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   border-radius: 3px;
 }
 .view-menu-panel .menu-item:hover { background: #eef4fb; }
+.view-menu-panel .menu-item.active { background: #e7f0fb; font-weight: 600; }
 .tip {
   position: relative;
   display: inline-block;
@@ -1052,6 +1116,14 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   font-variant-numeric: tabular-nums;
 }
 .kpi-cell .kpi-label { font-size: 11px; color: #777; }
+.kpi-cell .kpi-label .tip {
+  width: 12px;
+  height: 12px;
+  line-height: 11px;
+  font-size: 9px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
 .kpi-cell .kpi-val { font-size: 15px; font-weight: 600; color: #111; }
 .kpi-cell .kpi-val.small { font-size: 13px; }
 .kpi-card .kpi-delta {
@@ -1181,3 +1253,13 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 }
 .fresh-kind { color: #333; flex: 1; }
 .fresh-time { color: #666; font-variant-numeric: tabular-nums; }
+
+.detail-gaps { margin: 8px 0; }
+.detail-gaps-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.detail-gaps-bar .hint { color: #666; font-size: 13px; }
+#wbGapsBox { margin-top: 8px; }

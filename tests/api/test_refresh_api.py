@@ -22,28 +22,46 @@ def test_refresh_wb_success(api_client):
 
     st = _wait_done(api_client, body["job_id"])
     assert st["status"] == "done"
-    assert st["ok"] == 7
+    assert st["ok"] == 6
     assert st["failed"] == 0
-    assert {s["kind"] for s in st["steps"]} == {
-        "cards", "stock", "funnel", "sales", "prices", "storage", "promotions",
-    }
+    assert [s["kind"] for s in st["steps"]] == [
+        "cards", "stock", "funnel", "prices", "storage", "promotions"]
     assert all(s["status"] == "ok" for s in st["steps"])
 
     pulls = api_client.get("/api/pulls").json()
-    assert any(p["api"] == "wb" and p["kind"] == "sales" for p in pulls)
+    assert any(p["api"] == "wb" and p["kind"] == "funnel" for p in pulls)
 
     hist = api_client.get("/api/refresh/history").json()["runs"]
     assert hist and hist[0]["status"] == "ok"
     assert hist[0]["results"][0]["kind"] == "cards"
 
 
-def test_refresh_wb_with_detail_has_seven_steps(api_client):
+def test_refresh_wb_with_detail_has_eight_steps(api_client):
     r = api_client.post("/api/refresh", params={"api": "wb", "detail": 1})
     body = r.json()
     st = _wait_done(api_client, body["job_id"])
     kinds = [s["kind"] for s in st["steps"]]
-    assert kinds[-1] == "detail"
+    assert kinds[-1] == "storage_charges"
     assert len(kinds) == 8
+
+
+def test_refresh_wb_detail_persists_storage_charges(api_client):
+    from sqlalchemy import select
+
+    from app import models
+    from app.database import SessionLocal
+
+    r = api_client.post("/api/refresh", params={
+        "api": "wb", "detail": 1,
+        "date_from": "2026-09-01", "date_to": "2026-09-02"})
+    st = _wait_done(api_client, r.json()["job_id"])
+    assert st["status"] == "done"
+    assert st["steps"][-1]["kind"] == "storage_charges"
+    assert st["steps"][-1]["status"] == "ok"
+    with SessionLocal() as s:
+        rows = s.execute(select(models.StorageCharge)).scalars().all()
+    assert rows, "шаг storage_charges должен записать начисления в БД"
+    assert {x.article for x in rows} == {"TST-1", "TST-2"}
 
 
 def test_refresh_ozon_success(api_client):
@@ -68,7 +86,7 @@ def test_refresh_isolates_failed_step(api_client, stub_wb):
     body = r.json()
     st = _wait_done(api_client, body["job_id"])
     assert st["status"] == "done"
-    assert st["ok"] == 6
+    assert st["ok"] == 5
     assert st["failed"] == 1
     failed = next(s for s in st["steps"] if s["status"] == "failed")
     assert failed["kind"] == "prices"
@@ -100,8 +118,8 @@ def test_refresh_queues_second_job(api_client, stub_wb):
 
     st1 = _wait_done(api_client, r1["job_id"])
     st2 = _wait_done(api_client, r2["job_id"])
-    assert st1["ok"] == 7
-    assert st2["ok"] == 7
+    assert st1["ok"] == 6
+    assert st2["ok"] == 6
     assert st1["status"] == "done" and st2["status"] == "done"
 
 
@@ -123,8 +141,33 @@ def test_refresh_worker_fatal_error_releases_queue(api_client, monkeypatch):
     monkeypatch.setattr(provider_factory, "get_wb_provider", orig)
     r2 = api_client.post("/api/refresh", params={"api": "wb"}).json()
     st2 = _wait_done(api_client, r2["job_id"])
-    assert st2["ok"] == 7
+    assert st2["ok"] == 6
 
 
 def test_refresh_state_missing_returns_404(api_client):
     assert api_client.get("/api/refresh/99999").status_code == 404
+
+
+def test_refresh_retry_failed_restarts_only_failed_step(api_client, stub_wb):
+    stub_wb.prices_error = requests.HTTPError("boom")
+    r = api_client.post("/api/refresh", params={"api": "wb"}).json()
+    st = _wait_done(api_client, r["job_id"])
+    assert st["failed"] == 1
+    # починили провайдер — «дозагрузить недокачанное» должно пройти
+    stub_wb.prices_error = None
+    rr = api_client.post("/api/refresh/retry-failed", json={})
+    assert rr.status_code == 200
+    body = rr.json()
+    assert body["count"] == 1
+    retry_st = _wait_done(api_client, body["jobs"][0]["job_id"])
+    assert [s["kind"] for s in retry_st["steps"]] == ["prices"]
+    assert retry_st["ok"] == 1
+    assert retry_st["failed"] == 0
+
+
+def test_refresh_retry_failed_nothing_when_all_ok(api_client):
+    r = api_client.post("/api/refresh", params={"api": "wb"}).json()
+    _wait_done(api_client, r["job_id"])
+    rr = api_client.post("/api/refresh/retry-failed", json={})
+    assert rr.status_code == 200
+    assert rr.json()["count"] == 0

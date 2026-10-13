@@ -636,10 +636,10 @@ def replenish_rows(
         sell_oz = int(_num(oz_d.get("sells")))
         ret_oz = int(_num(oz_d.get("returns_qty")))
 
-        # WB: sells уже нетто (продажи минус возвраты, знак учтён). Ozon:
-        # sells — гросс, возвраты отдельной колонкой return_qty.
+        # WB и Ozon: sells уже нетто (продажи минус возвраты, знак учтён),
+        # возвраты лежат отдельной колонкой return_qty — вычитать их снова нельзя.
         net_wb = max(0, sell_wb)
-        net_oz = max(0, sell_oz - ret_oz)
+        net_oz = max(0, sell_oz)
         net = net_wb + net_oz
         vel_wb = net_wb / span
         vel_oz = net_oz / span

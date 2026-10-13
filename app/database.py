@@ -192,6 +192,9 @@ def get_db(request: Request = None):
             if info is not None and info.schema:
                 apply_search_path(db, info.schema)
                 search_path_applied = True
+            # Contextvar виден только в треде get_db; эндпоинт (другой тред
+            # threadpool) его не увидит — дублируем инфо на сессии.
+            db._active_info = info
             set_active(info)
         yield db
     finally:

@@ -2,13 +2,13 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **119**, групп: **27**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **123**, групп: **27**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
-- [cabinet](#cabinet) — 5 шт.
+- [cabinet](#cabinet) — 7 шт.
 - [cabinets](#cabinets) — 1 шт.
 - [cards](#cards) — 1 шт.
 - [custom-stock](#custom-stock) — 1 шт.
@@ -24,7 +24,7 @@
 - [progress](#progress) — 1 шт.
 - [promo](#promo) — 2 шт.
 - [pulls](#pulls) — 1 шт.
-- [refresh](#refresh) — 4 шт.
+- [refresh](#refresh) — 5 шт.
 - [refresh-all](#refresh-all) — 1 шт.
 - [replenish](#replenish) — 2 шт.
 - [sales](#sales) — 1 шт.
@@ -33,7 +33,7 @@
 - [sync](#sync) — 1 шт.
 - [tickets](#tickets) — 8 шт.
 - [warehouse](#warehouse) — 14 шт.
-- [wb](#wb) — 10 шт.
+- [wb](#wb) — 11 шт.
 - [yandex](#yandex) — 4 шт.
 
 ## cabinet
@@ -45,6 +45,8 @@
 | PUT | `/api/cabinet/pricing-settings` | `api_pricing_settings_put` | Сохраняет настройки автопилота цен за активной связкой. |
 | POST | `/api/cabinet/pricing-settings/copy` | `api_pricing_settings_copy` | Копирует настройки автопилота текущей связки в другие связки. |
 | POST | `/api/cabinet/select` | `api_cabinet_select` | Выбирает активную связку (кука agent_cabinet + last_cabinet_id). |
+| GET | `/api/cabinet/{cabinet_id}/settings` | `api_cabinet_settings_get` | Ключи и параметры связки (значения замаскированы) — для формы в UI. |
+| PUT | `/api/cabinet/{cabinet_id}/settings` | `api_cabinet_settings_put` | Сохраняет ключи связки: {creds:{key:value}, enabled?:bool}. |
 
 ## cabinets
 
@@ -195,6 +197,7 @@
 | GET | `/api/refresh` | `api_refresh_list` |  |
 | POST | `/api/refresh` | `api_refresh` | Запускает фоновое обновление маркетплейса (wb\|ozon). Ошибки изолированы по видам. |
 | GET | `/api/refresh/history` | `api_refresh_history` |  |
+| POST | `/api/refresh/retry-failed` | `api_refresh_retry_failed` | «Дозагрузить недокачанное»: повторяет только упавшие виды выгрузки. |
 | GET | `/api/refresh/{job_id}` | `api_refresh_state` |  |
 
 ## refresh-all
@@ -272,6 +275,7 @@
 |---|---|---|---|
 | POST | `/api/wb/cards` | `wb_cards` |  |
 | POST | `/api/wb/detail` | `wb_detail` |  |
+| GET | `/api/wb/detail-gaps` | `api_wb_detail_gaps` | Пропущенные (недогруженные) отчёты WB о продажах. |
 | GET | `/api/wb/detail-rows` | `api_wb_detail_rows` | Сырые строки «Детализации продаж» WB (wb_detail_rows) с фильтрами и пагинацией. |
 | GET | `/api/wb/detail-summary` | `api_wb_detail_summary` | Свод «Детализации продаж» WB по артикулам (сырые деньги операций, без маржи). |
 | POST | `/api/wb/detail-upload` | `wb_detail_upload` | Ручная загрузка детализации продаж WB из Excel/zip (без finance-api, без лимита). |

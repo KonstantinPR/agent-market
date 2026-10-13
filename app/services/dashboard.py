@@ -141,24 +141,29 @@ def _kpi_row(df: pd.DataFrame, label: str = "") -> dict:
     if df is None or df.empty:
         row = dict.fromkeys(
             ("sells", "returns_qty", "revenue", "income", "margin_gross",
-             "margin", "margin_per_one", "margin_pct", "articles",
-             "net_cost_est"), 0)
+             "margin", "margin_per_one", "margin_pct", "margin_roi_pct",
+             "articles", "net_cost_est"), 0)
         row["marketplace"] = label
         return row
     sells = int(df["sells"].sum())
     income = float(df["income"].sum() or 0)
     margin = float(df["margin"].sum() or 0)
+    revenue = float(df["revenue"].sum() or 0)
     return {
         "marketplace": label,
         "sells": sells,
         "returns_qty": int(df["returns_qty"].sum()),
-        "revenue": round(float(df["revenue"].sum() or 0), 2),
+        "revenue": round(revenue, 2),
         "income": round(income, 2),
         "margin_gross": round(float(df["margin_gross"].sum() or 0), 2)
         if "margin_gross" in df else 0.0,
         "margin": round(margin, 2),
         "margin_per_one": round(margin / sells, 2) if sells else 0.0,
-        "margin_pct": round(margin / income * 100, 2) if income else 0.0,
+        # Рентабельность продаж (ROS): прибыль к выручке.
+        "margin_pct": round(margin / revenue * 100, 2) if revenue else 0.0,
+        # Рентабельность затрат (ROI): прибыль к полным затратам (выручка − прибыль).
+        "margin_roi_pct": round(margin / (revenue - margin) * 100, 2)
+        if (revenue - margin) > 0 else 0.0,
         "articles": int(df["article"].nunique()) if "article" in df else 0,
         "net_cost_est": int(df["net_cost_est"].sum()) if "net_cost_est" in df else 0,
     }
@@ -213,8 +218,11 @@ def _by_article(df: pd.DataFrame) -> pd.DataFrame:
     g["margin_per_one"] = g.apply(
         lambda r: round(r["margin"] / r["sells"], 2) if r["sells"] else 0.0, axis=1)
     g["margin_pct"] = g.apply(
-        lambda r: round(r["margin"] / r["income"] * 100, 2) if r["income"] else 0.0,
+        lambda r: round(r["margin"] / r["revenue"] * 100, 2) if r["revenue"] else 0.0,
         axis=1)
+    g["margin_roi_pct"] = g.apply(
+        lambda r: round(r["margin"] / (r["revenue"] - r["margin"]) * 100, 2)
+        if (r["revenue"] - r["margin"]) > 0 else 0.0, axis=1)
     g = g.sort_values("margin", ascending=False).reset_index(drop=True)
     return g
 
@@ -234,6 +242,7 @@ def top_products(db, date_from, date_to, marketplace=None, limit=None, offset=0,
     out = rows[[
         "article", "name", "marketplace", "sells", "returns_qty",
         "revenue", "income", "margin", "margin_per_one", "margin_pct",
+        "margin_roi_pct",
     ]].to_dict("records")
     for rec, (_, src) in zip(out, rows.iterrows()):
         # колонки группировки есть только у Ozon — отдаём 0 для WB
@@ -265,8 +274,11 @@ def prefix_margin(db, date_from, date_to, marketplace=None, limit=None, offset=0
     g["margin_per_one"] = g.apply(
         lambda r: round(r["margin"] / r["sells"], 2) if r["sells"] else 0.0, axis=1)
     g["margin_pct"] = g.apply(
-        lambda r: round(r["margin"] / r["income"] * 100, 2) if r["income"] else 0.0,
+        lambda r: round(r["margin"] / r["revenue"] * 100, 2) if r["revenue"] else 0.0,
         axis=1)
+    g["margin_roi_pct"] = g.apply(
+        lambda r: round(r["margin"] / (r["revenue"] - r["margin"]) * 100, 2)
+        if (r["revenue"] - r["margin"]) > 0 else 0.0, axis=1)
     g = g.sort_values("margin", ascending=False).reset_index(drop=True)
     rows = g.iloc[offset:(None if limit is None else offset + limit)]
     return {

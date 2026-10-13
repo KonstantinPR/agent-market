@@ -218,7 +218,8 @@ def test_storage_split_uses_nearest_stock_for_missing_day(db):
                            paid_storage=100.0),
     ])
     db.commit()
-    out = storage_split(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5))
+    out = storage_split(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5),
+                        target_articles={"A1"})
     assert out == {"A1": 100.0}
 
 
@@ -251,18 +252,19 @@ def test_storage_split_prefers_weighty_snapshot_in_window(db):
     """Если в окне ±7 дней лежит более «полный» срез — берётся он, а не соседний пустой."""
     db.add_all([
         models.StorageCost(nm_id="1", article="A1", volume=2.0),
-        _stock("A1", 10, day=date(2026, 9, 2)),     # вес 20
-        _stock("B2", 100, day=date(2026, 9, 7)),    # вес 1*100? B2 нет в vol_rate -> пусто
+        _stock("A1", 10, day=date(2026, 9, 2)),     # вес 2*10 = 20
+        _stock("B2", 100, day=date(2026, 9, 7)),    # нет в vol_rate -> fallback-вес
         models.StorageCost(nm_id="3", article="B3", volume=1.0),
-        _stock("B3", 100, day=date(2026, 9, 7)),    # вес 1*100 = 100 (более полный)
+        _stock("B3", 100, day=date(2026, 9, 7)),    # вес 1*100 = 100
         models.WbDetailRow(op_key="sr:st1", source="excel", article="",
                            doc_type_name="Хранение", sale_dt=date(2026, 9, 4),
                            paid_storage=100.0),
     ])
     db.commit()
-    # срез 09-07 (вес 100) полнее 09-02 (вес 20) → используем его
+    # fallback-вес = средний (2+1)/2 = 1.5; срез 09-07 (B2 150 + B3 100 = 250)
+    # полнее среза 09-02 (A1 20) → берём 09-07.
     out = storage_split(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5))
-    assert out == {"B3": 100.0}
+    assert out == {"B2": 60.0, "B3": 40.0}  # 100 * 150/250, 100 * 100/250
 
 
 def test_margin_detail_includes_storage_est(db):
@@ -460,6 +462,39 @@ def test_storage_split_sold_fraction_adds_to_existing_stock(db):
     # sold_fraction=0 → старое поведение, только остаток (10): вес 20
     assert storage_split(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5),
                          sold_fraction=0.0) == {"A1": 100.0}
+
+
+def test_storage_split_uses_actual_charges(db):
+    """При наличии storage_charges за день плата делится по фактическим суммам."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:c1", source="excel", article="",
+                           doc_type_name="Хранение", sale_dt=date(2026, 9, 1),
+                           paid_storage=300.0),
+        models.StorageCharge(nm_id=1, article="A1", date=date(2026, 9, 1),
+                             amount=10.0),
+        models.StorageCharge(nm_id=2, article="B2", date=date(2026, 9, 1),
+                             amount=20.0),
+    ])
+    db.commit()
+    out = storage_split(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5))
+    assert out == {"A1": 100.0, "B2": 200.0}
+
+
+def test_storage_split_charges_respect_target(db):
+    """Реальные начисления фильтруются по target_articles и нормируются."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:t1", source="excel", article="",
+                           doc_type_name="Хранение", sale_dt=date(2026, 9, 1),
+                           paid_storage=300.0),
+        models.StorageCharge(nm_id=1, article="A1", date=date(2026, 9, 1),
+                             amount=10.0),
+        models.StorageCharge(nm_id=2, article="B2", date=date(2026, 9, 1),
+                             amount=90.0),
+    ])
+    db.commit()
+    out = storage_split(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5),
+                        target_articles={"A1"})
+    assert out == {"A1": 300.0}
 
 
 def test_margin_detail_logistics_split_and_per_unit(db):
@@ -687,12 +722,12 @@ def test_ozon_margin_detail_aggregates_and_sorts(db):
     out = ozon_margin_detail_dataframe(db, default_net_cost=0.0)
     rec = {r["article"]: r for r in out.to_dict("records")}
     a = rec["oz-a"]
-    assert a["sells"] == 3
+    assert a["sells"] == 2          # нетто: 3 гросс − 1 возврат
     assert a["returns_qty"] == 1
     assert a["revenue"] == 3000.0
     assert a["income"] == 2500.0
     assert a["postings"] == 2
-    assert a["return_rate"] == 25.0  # 1 / (3+1) * 100
+    assert a["return_rate"] == 33.3  # 1 / (2+1) * 100
     assert out.iloc[0]["article"] == "oz-a"  # 2500 > 900
 
 

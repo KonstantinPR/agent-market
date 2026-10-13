@@ -1,9 +1,13 @@
 """Тесты ручной загрузки детализации продаж WB (Excel/zip)."""
+import base64
 import io
+import json
 import zipfile
 
 import pandas as pd
 import pytest
+
+from app import models
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -75,6 +79,35 @@ def test_upload_detail_zip(api_client):
     assert r.status_code == 200
     assert r.json()["rows"] == 2
     assert r.json()["imported"] == 2
+
+
+def test_report_number_helper_parses_filename():
+    from app.api.wb import _report_number
+    assert _report_number(
+        "Еженедельный детализированный отчет №841044697_29077.zip") == "841044697"
+    assert _report_number(
+        "Еженедельный детализированный отчет №841044697_29077 - 1.xlsx") == "841044697"
+    assert _report_number("Детализация продаж №588041777.zip") == "588041777"
+    assert _report_number("no-number.xlsx") == ""
+
+
+def test_upload_detail_stores_report_id_from_filename(api_client, db):
+    # В Excel ЛК нет колонки с номером отчёта — он только в имени файла. Без
+    # этого проверка пропущенных детализаций считает загруженное «пропущенным».
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "Еженедельный детализированный отчет №841044697_29077 - 1.xlsx",
+            _xlsx(_detail_df()))
+    buf.seek(0)
+    r = api_client.post("/api/wb/detail-upload", files={
+        "files": ("Еженедельный детализированный отчет №841044697_29077.zip",
+                  buf.getvalue(), "application/zip"),
+    })
+    assert r.status_code == 200
+    assert r.json()["imported"] == 2
+    report_ids = {row.report_id for row in db.query(models.WbDetailRow).all()}
+    assert report_ids == {"841044697"}
 
 
 def test_upload_detail_bad_structure_rejected(api_client):
@@ -385,6 +418,82 @@ def test_margin_detail_totals_row(api_client):
     assert t["sells"] == 3
     assert t["revenue"] == 3000.0
     assert t["income"] == 2550.0
+
+
+def _jwt(oid):
+    raw = base64.urlsafe_b64encode(json.dumps({"oid": oid}).encode()).rstrip(b"=").decode()
+    return "hdr." + raw + ".sig"
+
+
+def _seed_two_wb_cabinets(db):
+    from app import models
+    from app.services import secrets
+    u = models.User(username="konstantin.pr", display_name="Константин Прудников")
+    db.add(u)
+    db.flush()
+    oo = models.Company(user_id=u.id, name="ООО «Джоинс & Компани»", position=1)
+    ip = models.Company(user_id=u.id, name="ИП Прудников К. Г.", position=2)
+    db.add_all([oo, ip])
+    db.flush()
+    c_oo = models.Cabinet(
+        user_id=u.id, company_id=oo.id, code="oo_wb", name="ООО",
+        schema="cab_oo", marketplace="wb",
+        creds=secrets.encrypt({"wb": {"standard": _jwt(29077)}}),
+        enabled=True, position=1)
+    c_ip = models.Cabinet(
+        user_id=u.id, company_id=ip.id, code="ip_wb", name="ИП",
+        schema="cab_ip_wb", marketplace="wb",
+        creds=secrets.encrypt({"wb": {"standard": _jwt(250147786)}}),
+        enabled=True, position=2)
+    db.add_all([c_oo, c_ip])
+    db.commit()
+    return c_oo, c_ip
+
+
+def _zip_with(name_inside, df):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(name_inside, _xlsx(df))
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def test_upload_detail_rejects_foreign_cabinet_by_oid(api_client, db):
+    c_oo, c_ip = _seed_two_wb_cabinets(db)
+    blob = _zip_with("Еженедельный детализированный отчет №1_29077 - 1.xlsx", _detail_df())
+
+    # активна связка ИП, а файл принадлежит ООО (oid 29077) → отказ
+    r = api_client.post(
+        "/api/wb/detail-upload",
+        files={"files": ("отчет №1_29077.zip", blob, "application/zip")},
+        cookies={"agent_cabinet": str(c_ip.id)},
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "другой связки" in detail
+    assert "Джоинс" in detail
+
+    # тот же файл в родной связке ООО → принимаем
+    r2 = api_client.post(
+        "/api/wb/detail-upload",
+        files={"files": ("отчет №2_29077.zip", blob, "application/zip")},
+        cookies={"agent_cabinet": str(c_oo.id)},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["imported"] == 2
+
+
+def test_upload_detail_allows_file_without_owner_marker(api_client, db):
+    _, c_ip = _seed_two_wb_cabinets(db)
+    # старый формат без oid в имени — проверить нечем, пропускаем (fail-open)
+    r = api_client.post(
+        "/api/wb/detail-upload",
+        files={"files": ("Детализация отчета 10098390.zip",
+                         _zip_with("0.xlsx", _detail_df()), "application/zip")},
+        cookies={"agent_cabinet": str(c_ip.id)},
+    )
+    assert r.status_code == 200
+    assert r.json()["imported"] == 2
 
 
 def test_detail_summary_new_fields(api_client):

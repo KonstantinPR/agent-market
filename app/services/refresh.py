@@ -6,6 +6,7 @@
 - фоновые задания (threading): последовательно по видам, ошибка вида не
   блокирует остальные; история запусков пишется в refresh_runs.
 """
+import bisect
 import json
 import logging
 import threading
@@ -16,7 +17,7 @@ from typing import Optional
 import pandas as pd
 import requests
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from app import models
 
@@ -294,9 +295,16 @@ def _raw_json(df: pd.DataFrame) -> pd.Series:
 
 
 # ----------------------------------------------------------- привязка провайдеров
-def _wb_provider(with_fail_fast: bool = False) -> WbProvider:
-    """Провайдер WB активного кабинета (по creds кабинета, иначе из .env)."""
+def _wb_provider(with_fail_fast: bool = False, db=None) -> WbProvider:
+    """Провайдер WB активного кабинета (по creds кабинета, иначе из .env).
+
+    creds берём из contextvar активной связки; если он не виден (эндпоинт
+    выполняется в другом треде threadpool, чем get_db) — из Базы через db.
+    """
     creds = active_credentials("wb")
+    if not creds and db is not None:
+        info = cabinets.db_active_info(db)
+        creds = info.creds_for("wb") if info else {}
     return provider_factory.get_wb_provider(
         with_fail_fast=with_fail_fast, credentials=creds or None
     )
@@ -531,6 +539,25 @@ def pull_wb_storage(db, days: int = 7, provider: Optional[WbProvider] = None,
             "rows": len(df), "window": f"{days} дней"}
 
 
+def pull_wb_storage_charges(db, from_, to_, provider: Optional[WbProvider] = None,
+                            write_db: bool = True) -> dict:
+    """Дневные начисления хранения WB за [from_, to_] → storage_charges.
+
+    Точные суммы по артикулам (paid_storage, nm×дата), которыми заменяется
+    эвристическое распределение «Хранения» в детализации за это окно.
+    """
+    prov = provider or _wb_provider()
+    df = prov.get_storage_charges(from_, to_)
+    n = 0
+    if write_db and not df.empty:
+        progress_service.report(stage="запись в БД")
+        n = sync_service.upsert_storage_charges(db, df)
+    sync_service.record_api_pull(db, "wb", "storage_charges", len(df), n,
+                                 f"{from_}..{to_}")
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n,
+            "rows": len(df), "window": f"{from_}..{to_}"}
+
+
 def pull_wb_promotions(db, provider: Optional[WbProvider] = None,
                        write_db: bool = True) -> dict:
     """Акции WB (Календарь акций): окно [−30 дн, +90 дн], доступные для участия.
@@ -567,15 +594,21 @@ def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None,
         progress_service.report(stage="пересчёт из детализации")
         n = sync_service.upsert_sales(db, df, "wb", source="v5")
     window = f"{from_.isoformat()} — {to_.isoformat()}"
+    note = ""
+    if df.empty:
+        note = ("продажи считаются из детализации (finance) за это окно — "
+                "её нет; включите «Детализацию продаж» или дозагрузите её")
     sync_service.record_api_pull(db, "wb", "sales", len(df), n, window)
-    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
+    return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df),
+            "window": window, "note": note}
 
 
 def pull_wb_detail(db, from_, to_, provider: Optional[WbProvider] = None,
                    write_db: bool = True) -> dict:
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     df = prov.get_sales_detail(from_, to_)
     n = 0
+    window = f"{from_.isoformat()} — {to_.isoformat()}"
     if write_db and not df.empty:
         progress_service.report(stage="запись в БД")
         rdf = sync_service.normalize_wb_detail(df, source="api")
@@ -583,9 +616,120 @@ def pull_wb_detail(db, from_, to_, provider: Optional[WbProvider] = None,
             sync_service.upsert_wb_detail_rows(db, rdf, source="api")
             n = sync_service.rebuild_sales_from_detail(
                 db, sale_from=from_, sale_to=to_, source="v5")
-    window = f"{from_.isoformat()} — {to_.isoformat()}"
+            # Продажи WB производны от детализации (v5-отчёт отключён WB),
+            # поэтому метку свежести wb/sales обновляет шаг детализации.
+            sync_service.record_api_pull(db, "wb", "sales", len(rdf), n, window)
     sync_service.record_api_pull(db, "wb", "detail", len(df), n, window)
     return {"df": df, "count": n if write_db else len(df), "db_rows": n, "rows": len(df), "window": window}
+
+
+def _gap_date(value, field: str) -> date:
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise HTTPException(status_code=400,
+                            detail=f"Некорректная дата {field}: {value}")
+
+
+def _gap_str(value) -> str:
+    if value is None:
+        return ""
+    s = str(value).strip()
+    return "" if s.lower() in ("nan", "nat", "none") else s
+
+
+def wb_detail_gaps(db, date_from=None, date_to=None, period: str = "weekly",
+                   provider: Optional[WbProvider] = None) -> dict:
+    """Пропущенные (недогруженные) отчёты WB о продажах.
+
+    Берёт список отчётов из finance-API за окно и вычитает report_id, уже
+    загруженные в wb_detail_rows. Возвращает первый/последний период, сколько
+    доступно/загружено и перечень пропущенных отчётов (с периодом), чтобы их
+    можно было догрузить. Отчёт считается загруженным также, если за его период
+    в базе есть строки детализации (номер отчёта в Excel ЛК отсутствует).
+
+    Окно по умолчанию: от самой ранней загруженной детализации (минус неделя)
+    до сегодня; если данных нет — последние 90 дней.
+    """
+    prov = provider or _wb_provider(db=db)
+    have_min, have_max = db.execute(
+        select(func.min(models.WbDetailRow.sale_dt),
+               func.max(models.WbDetailRow.sale_dt))
+    ).one()
+    today = date.today()
+    if date_from:
+        d_from = _gap_date(date_from, "date_from")
+    else:
+        d_from = (have_min - timedelta(days=7)) if have_min else (today - timedelta(days=90))
+    if date_to:
+        d_to = _gap_date(date_to, "date_to")
+    else:
+        d_to = today
+
+    reports = prov.get_sales_reports_list(d_from, d_to, period=period)
+    if reports is None or reports.empty:
+        reports = pd.DataFrame()
+
+    downloaded = {
+        str(rid).strip()
+        for (rid,) in db.execute(
+            select(models.WbDetailRow.report_id).where(
+                models.WbDetailRow.report_id != "")
+        ).all()
+        if str(rid).strip()
+    }
+
+    # Ручная загрузка Excel-выгрузки ЛК не содержит номера отчёта (он только в
+    # имени файла), поэтому исторические строки могут иметь пустой report_id.
+    # Дополнительно считаем отчёт загруженным, если за его период в базе есть
+    # строки детализации — иначе проверка вечно показывает их «пропущенными».
+    loaded_days = sorted({
+        d for (d,) in db.execute(
+            select(models.WbDetailRow.sale_dt).where(
+                models.WbDetailRow.sale_dt.isnot(None)).distinct()
+        ).all()
+    })
+
+    def _period_covered(date_from: str, date_to: str) -> bool:
+        if not loaded_days or not date_from or not date_to:
+            return False
+        try:
+            f = date.fromisoformat(date_from)
+            t = date.fromisoformat(date_to)
+        except ValueError:
+            return False
+        i = bisect.bisect_left(loaded_days, f)
+        return i < len(loaded_days) and loaded_days[i] <= t
+
+    available, missing, seen = [], [], set()
+    for _, row in reports.iterrows():
+        rid = _gap_str(row.get("reportId"))
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        item = {
+            "report_id": rid,
+            "date_from": _gap_str(row.get("dateFrom")),
+            "date_to": _gap_str(row.get("dateTo")),
+            "create_date": _gap_str(row.get("createDate")),
+        }
+        available.append(item)
+        if rid not in downloaded and not _period_covered(
+                item["date_from"], item["date_to"]):
+            missing.append(item)
+    missing.sort(key=lambda x: (x["date_from"], x["report_id"]))
+    froms = [a["date_from"] for a in available if a["date_from"]]
+    tos = [a["date_to"] for a in available if a["date_to"]]
+    return {
+        "from": min(froms) if froms else d_from.isoformat(),
+        "to": max(tos) if tos else d_to.isoformat(),
+        "period": period,
+        "available": len(available),
+        "downloaded": len(available) - len(missing),
+        "missing": missing,
+        "checked_from": d_from.isoformat(),
+        "checked_to": d_to.isoformat(),
+    }
 
 
 def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
@@ -904,7 +1048,7 @@ def pull_oz_accrual(db, from_, to_, provider: Optional[OzonProvider] = None,
 _KIND_LABELS = {
     "wb": [
         ("cards", "Карточки товара"), ("stock", "Остатки"),
-        ("funnel", "Воронка продаж"), ("sales", "Продажи"),
+        ("funnel", "Воронка продаж"),
         ("prices", "Цены"), ("storage", "Хранение"),
         ("promotions", "Акции (календарь)"),
     ],
@@ -918,18 +1062,23 @@ _KIND_LABELS = {
 
 
 def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None,
-                cab_id: Optional[int] = None):
-    """Список (kind, label, callable) для массового обновления маркетплейса."""
+                cab_id: Optional[int] = None, kinds: Optional[list] = None):
+    """Список (kind, label, callable) для массового обновления маркетплейса.
+
+    kinds — необязательный белый список видов (для «дозагрузить недокачанное»):
+    планируются только эти шаги.
+    """
     from_, to_ = resolve_range(date_from, date_to)
+    wanted = set(kinds) if kinds else None
     steps = []
     pkey_wb = (cab_id, "wb")
     pkey_oz = (cab_id, "ozon")
     for kind, label in _KIND_LABELS[api]:
+        if wanted is not None and kind not in wanted:
+            continue
         if api == "wb":
             if kind == "funnel":
                 fn = lambda db: pull_wb_funnel(db, from_, to_, provider=_BULK_PROV[pkey_wb])  # noqa: E731
-            elif kind == "sales":
-                fn = lambda db: pull_wb_sales(db, from_, to_, provider=_BULK_PROV[pkey_wb])  # noqa: E731
             elif kind == "storage":
                 fn = lambda db: pull_wb_storage(db, 7, provider=_BULK_PROV[pkey_wb])  # noqa: E731
             else:
@@ -946,15 +1095,23 @@ def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None,
         steps.append((kind, label, fn))
     if include_detail:
         if api == "wb":
-            steps.append(("detail", "Детализация (finance)",
-                          lambda db: pull_wb_detail(db, from_, to_, provider=_BULK_PROV[pkey_wb])))
+            if wanted is None or "detail" in wanted:
+                steps.append(("detail", "Детализация (finance)",
+                              lambda db: pull_wb_detail(db, from_, to_, provider=_BULK_PROV[pkey_wb])))
+            if wanted is None or "storage_charges" in wanted:
+                steps.append(("storage_charges", "Хранение по артикулам",
+                              lambda db: pull_wb_storage_charges(  # noqa: E731
+                                  db, from_, to_, provider=_BULK_PROV[pkey_wb])))
         else:
-            steps.append(("detail", "Детализация продаж",
-                          lambda db: pull_oz_detail(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
-            steps.append(("buyout", "Выкупы",
-                          lambda db: pull_oz_buyout(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
-            steps.append(("accrual", "Начисления (аккруалы)",
-                          lambda db: pull_oz_accrual(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
+            if wanted is None or "detail" in wanted:
+                steps.append(("detail", "Детализация продаж",
+                              lambda db: pull_oz_detail(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
+            if wanted is None or "buyout" in wanted:
+                steps.append(("buyout", "Выкупы",
+                              lambda db: pull_oz_buyout(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
+            if wanted is None or "accrual" in wanted:
+                steps.append(("accrual", "Начисления (аккруалы)",
+                              lambda db: pull_oz_accrual(db, from_, to_, provider=_BULK_PROV[pkey_oz])))
     return steps
 
 
@@ -963,6 +1120,50 @@ _BULK_PULLS = {
            "promotions": pull_wb_promotions},
     "ozon": {"cards": pull_oz_cards, "stock": pull_oz_stock, "prices": pull_oz_prices},
 }
+
+
+# ── Автоповтор шага при лимите запросов API (429) ──────────────────────────
+# Все выкачки идемпотентны (upsert), поэтому повтор шага безопасен. Ждём
+# Retry-After из заголовка ответа, иначе экспоненциальную паузу.
+RATE_LIMIT_ATTEMPTS = 4
+RATE_LIMIT_BASE_WAIT = 30
+RATE_LIMIT_MAX_WAIT = 300
+
+
+def _is_rate_limit(exc) -> bool:
+    return isinstance(exc, MarketError) and getattr(exc, "status_code", None) == 429
+
+
+def _rate_limit_wait(exc, attempt: int) -> float:
+    """Пауза перед повтором: из Retry-After, иначе экспоненциальный бэкофф."""
+    backoff = RATE_LIMIT_BASE_WAIT * (2 ** (attempt - 1))
+    hinted = getattr(exc, "retry_after", None) or backoff
+    return float(min(max(hinted, 5), RATE_LIMIT_MAX_WAIT))
+
+
+def _run_step(fn, db, step, sleep=time.sleep):
+    """Выполняет шаг, повторяя его при 429 (лимит запросов API).
+
+    Пауза и число попыток — RATE_LIMIT_*; прогресс пишется в step["note"].
+    """
+    for attempt in range(1, RATE_LIMIT_ATTEMPTS + 1):
+        try:
+            return fn(db)
+        except MarketError as e:
+            if not _is_rate_limit(e) or attempt >= RATE_LIMIT_ATTEMPTS:
+                raise
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            wait = _rate_limit_wait(e, attempt)
+            step["note"] = (
+                f"лимит запросов API — ждём {int(wait)} с и повторяем "
+                f"(попытка {attempt + 1} из {RATE_LIMIT_ATTEMPTS})"
+            )
+            logger.info("Шаг %s: 429, повтор через %s с", step.get("kind"), int(wait))
+            sleep(wait)
+    raise  # pragma: no cover — недостижимо, цикл либо вернёт, либо бросит
 
 
 # ------------------------------------------------------------------ фоновые задания
@@ -990,11 +1191,13 @@ def _cab_info(db, cab_id: Optional[int]) -> Optional[object]:
 
 def start_refresh(api: str, include_detail: bool = False,
                   date_from=None, date_to=None,
-                  cab_id: Optional[int] = None) -> dict:
+                  cab_id: Optional[int] = None,
+                  kinds: Optional[list] = None) -> dict:
     """Запускает фоновое обновление. Возвращает {job_id, queued}.
 
     cab_id=None — активный кабинет запроса (contextvar get_db) или «как раньше»
     (public, без кабинета) для скриптов/тестов.
+    kinds — необязательный список видов шагов (для «дозагрузить недокачанное»).
     """
     global _RUNNING, _PENDING
     if cab_id is None:
@@ -1003,18 +1206,21 @@ def start_refresh(api: str, include_detail: bool = False,
     with _LOCK:
         if _PENDING.get((cab_id, api)):
             return {"job_id": None, "queued": False, "rejected": "уже поставлено в очередь"}
+        steps = _plan_steps(api, include_detail, date_from, date_to, cab_id, kinds=kinds)
+        if not steps:
+            return {"job_id": None, "queued": False, "rejected": "нечего дозагружать"}
         job_id = _next_id()
-        steps = _plan_steps(api, include_detail, date_from, date_to, cab_id)
         job = {
             "id": job_id, "api": api, "cab_id": cab_id, "cab_name": "",
             "include_detail": bool(include_detail),
+            "kinds": list(kinds) if kinds else None,
             "date_from": date_from, "date_to": date_to,
             "status": "running" if not _RUNNING.get((cab_id, api)) else "queued",
             "started_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
             "finished_at": None,
             "ok": 0, "failed": 0,
             "steps": [{"kind": k, "label": lbl, "status": "pending",
-                       "rows": 0, "db_rows": 0, "window": "", "error": ""}
+                       "rows": 0, "db_rows": 0, "window": "", "error": "", "note": ""}
                       for k, lbl, _ in steps],
         }
         _JOBS[job_id] = job
@@ -1066,8 +1272,9 @@ def _refresh_worker(api: str, job_id: int, date_from, date_to, steps,
             step = next(s for s in job["steps"] if s["kind"] == kind)
             step["status"] = "running"
             try:
-                res = fn(db)
+                res = _run_step(fn, db, step)
                 step["status"] = "ok"
+                step["note"] = res.get("note", "")
                 step["rows"] = int(res["rows"])
                 step["db_rows"] = int(res["db_rows"])
                 step["window"] = res["window"]
@@ -1079,6 +1286,9 @@ def _refresh_worker(api: str, job_id: int, date_from, date_to, steps,
             except Exception as e:  # noqa: BLE001
                 err = str(e)[:300]
                 step["status"] = "failed"
+                # Сохраняем подсказку о повторах (сколько раз ждали лимит).
+                if step.get("note"):
+                    err = step["note"] + "; ошибка: " + err
                 step["error"] = err
                 job["failed"] += 1
                 results.append({"kind": kind, "status": "failed", "rows": 0,
@@ -1128,7 +1338,7 @@ def _advance_queue(api: str, cab_id: Optional[int]):
                 target=_refresh_worker,
                 args=(api, next_id, j["date_from"], j["date_to"],
                       _plan_steps(api, j["include_detail"], j["date_from"],
-                                  j["date_to"], cab_id), cab_id),
+                                  j["date_to"], cab_id, kinds=j.get("kinds")), cab_id),
                 daemon=True,
             ).start()
 
@@ -1138,8 +1348,35 @@ def job_state(job_id: int) -> Optional[dict]:
     if job is None:
         return None
     return {k: job[k] for k in ("id", "api", "cab_id", "cab_name",
-                                "include_detail", "status",
+                                "include_detail", "date_from", "date_to", "status",
                                 "started_at", "finished_at", "ok", "failed", "steps")}
+
+
+def failed_steps_last() -> list:
+    """Незавершённые шаги последнего запуска по каждой связке/маркетплейсу.
+
+    Для кнопки «Дозагрузить недокачанное»: по каждой паре (cab_id, api) берётся
+    самое свежее задание; если в нём были упавшие шаги — возвращается запись с
+    их видами и параметрами окна, чтобы перезапустить только их.
+    """
+    latest = {}
+    for job in _JOBS.values():
+        key = (job["cab_id"], job["api"])
+        cur = latest.get(key)
+        if cur is None or job["id"] > cur["id"]:
+            latest[key] = job
+    out = []
+    for job in sorted(latest.values(), key=lambda j: j["id"], reverse=True):
+        kinds = [s["kind"] for s in job["steps"] if s["status"] == "failed"]
+        if not kinds:
+            continue
+        out.append({
+            "cab_id": job["cab_id"], "cab_name": job.get("cab_name", ""),
+            "api": job["api"], "kinds": kinds,
+            "date_from": job["date_from"], "date_to": job["date_to"],
+            "include_detail": job["include_detail"],
+        })
+    return out
 
 
 def active_jobs() -> list:

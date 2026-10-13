@@ -133,6 +133,18 @@ class FakeWb:
             "storagePricePerBarcode": [500.0, 450.0],
         })
 
+    def get_storage_charges(self, date_from, date_to):
+        if self.storage_error:
+            raise self.storage_error
+        return pd.DataFrame({
+            "date": [str(date_from), str(date_from)],
+            "vendorCode": ["TST-1", "TST-2"],
+            "nmId": [1001, 1002],
+            "warehousePrice": [5000.0, 5400.0],
+            "volume": [0.200, 0.350],
+            "barcodesCount": [10, 12],
+        })
+
     def get_sales_realization(self, date_from, date_to):
         if self.sales_error:
             raise self.sales_error
@@ -168,6 +180,21 @@ class FakeWb:
             "penalty": [10, 0],
             "deduction": [0, 5],
         })
+
+    reports_list = None
+    reports_list_error = None
+
+    def get_sales_reports_list(self, date_from, date_to, period="weekly"):
+        if self.reports_list_error:
+            raise self.reports_list_error
+        if self.reports_list is not None:
+            return self.reports_list
+        return pd.DataFrame([
+            {"reportId": "900001", "dateFrom": str(D1), "dateTo": str(D1),
+             "createDate": str(D1)},
+            {"reportId": "900002", "dateFrom": "2026-09-08",
+             "dateTo": "2026-09-14", "createDate": "2026-09-15"},
+        ])
 
 
 class FakeOz:

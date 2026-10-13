@@ -89,7 +89,7 @@ def test_replenish_wb_ship_and_buy(db):
 
 
 def test_replenish_returns_net_demand(db):
-    """Возвраты вычитаются: WB — уже в sells, Ozon — отдельным полем."""
+    """Возвраты вычтены из sells у обоих МП (нетто); в return_rate — отдельно."""
     db.add(models.Product(article="NET-1", name="Нетто", net_cost=100.0))
     _card(db, "wb", vendor="NET-1")
     _card(db, "ozon", vendor="NET-1")
@@ -106,7 +106,7 @@ def test_replenish_returns_net_demand(db):
     assert row["demand_oz"] == 2.0          # (90 − 30)/30
     assert row["demand"] == 4.0
     assert row["wb_sells"] == 60           # нетто WB: 100 продаж − 40 возвратов
-    assert row["return_rate"] == round(70 / 220 * 100, 1)
+    assert row["return_rate"] == round(70 / 190 * 100, 1)  # 70 / ((60 + 60) + 70)
     assert row["need_buy"] == 120           # 30 × 4, остатков нет нигде
 
 

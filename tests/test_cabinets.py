@@ -197,6 +197,63 @@ def test_api_cabinet_select_unknown_404(api_client, db):
     assert r.status_code == 404
 
 
+def test_api_cabinets_reports_active_after_select(api_client, db):
+    _drop_cab_schemas()
+    user = cabinet_service.seed_user(db)
+    _mk_cab(db, code="ac1", schema=CAB_OO, user=user, marketplace="wb")
+    c2 = _mk_cab(db, code="ac2", schema=CAB_IP, user=user, marketplace="ozon")
+    # активная резолвится из куки/last_cabinet_id, а не из contextvar
+    assert api_client.post("/api/cabinet/select", json={"id": c2.id}).status_code == 200
+    body = api_client.get("/api/cabinets").json()
+    assert body["current"] is not None
+    assert body["current"]["id"] == c2.id
+    assert body["current"]["marketplace"] == "ozon"
+    links = {lk["code"]: lk for comp in body["companies"] for lk in comp["links"]}
+    assert links["ac2"]["active"] is True
+    assert links["ac1"]["active"] is False
+
+
+def test_api_cabinet_settings_get_and_update(api_client, db):
+    user = cabinet_service.seed_user(db)
+    creds = secrets.encrypt({"wb": {"standard": "abc12345secret", "finance": "fin"}})
+    c = _mk_cab(db, user=user, marketplace="wb", creds=creds)
+    data = api_client.get(f"/api/cabinet/{c.id}/settings").json()
+    assert data["marketplace"] == "wb"
+    assert data["has_keys"] is True
+    by_key = {f["key"]: f for f in data["fields"]}
+    assert set(by_key) == {"standard", "finance", "finance2"}
+    assert by_key["standard"]["set"] is True
+    assert by_key["standard"]["secret"] is True
+    assert by_key["standard"]["masked"] == "abc1…cret"
+    assert by_key["finance2"]["set"] is False
+    # обновление: новый токен + удаление finance + выключение связки (лишний ключ игнорим)
+    r = api_client.put(f"/api/cabinet/{c.id}/settings",
+                       json={"creds": {"standard": "new-token-value", "finance": "",
+                                       "bogus": "x"},
+                             "enabled": False})
+    assert r.status_code == 200
+    assert r.json()["enabled"] is False
+    db.expire_all()
+    stored = secrets.decrypt(db.execute(
+        text("select creds from cabinets where id=:i"), {"i": c.id}).scalar())
+    assert stored == {"wb": {"standard": "new-token-value"}}
+    # повторное чтение через API тоже видит новое значение (finance удалён)
+    data2 = api_client.get(f"/api/cabinet/{c.id}/settings").json()
+    by_key2 = {f["key"]: f for f in data2["fields"]}
+    assert by_key2["standard"]["set"] is True
+    assert by_key2["standard"]["masked"] == "new-…alue"
+    assert by_key2["finance"]["set"] is False
+    assert by_key2["finance2"]["set"] is False
+
+
+def test_api_cabinet_settings_unknown_404(api_client, db):
+    cabinet_service.seed_user(db)
+    _mk_cab(db)
+    assert api_client.get("/api/cabinet/9999/settings").status_code == 404
+    r = api_client.put("/api/cabinet/9999/settings", json={"creds": {}})
+    assert r.status_code == 404
+
+
 def test_api_refresh_all_returns_job_ids(api_client, db, patch_factory):
     user = cabinet_service.seed_user(db)
     creds = secrets.encrypt({"wb": {"standard": "x", "finance": "y", "finance2": "z"}})

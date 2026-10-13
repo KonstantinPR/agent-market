@@ -94,7 +94,21 @@ def funnel_dataframe(
         .order_by(models.FunnelMetric.revenue.desc(), models.FunnelMetric.article)
     )
 
-    storage_est_map = storage_split(db, date_from=from_, date_to=to_)
+    storage_est_map = storage_split(
+        db,
+        date_from=from_,
+        date_to=to_,
+        target_articles={
+            (a or "").strip().upper()
+            for (a,) in db.execute(
+                select(models.FunnelMetric.article)
+                .where(models.FunnelMetric.date_from == from_,
+                       models.FunnelMetric.date_to == to_)
+                .distinct()
+            )
+            if (a or "").strip()
+        },
+    )
 
     art_check = like_re(article_like)
     seen = set()
@@ -184,7 +198,8 @@ DETAIL_MARGIN_COLUMNS = [
     "stock_qty", "stock_total", "stock_in_way",
     "revenue", "commission", "logistics", "logistics_out", "logistics_in",
     "storage", "services", "income", "margin_gross", "net_cost", "net_cost_est",
-    "margin", "margin_per_one", "margin_pct", "margin_pct_income",
+    "value", "supplier",
+    "margin", "margin_per_one", "margin_pct", "margin_pct_income", "margin_roi_pct",
     "commission_per_one", "logistics_per_one",
     "logistics_out_per_one", "logistics_in_per_one",
     "storage_per_one", "income_per_one", "revenue_per_one",
@@ -265,7 +280,9 @@ def margin_detail_dataframe(
             "stock_qty", "stock_total", "stock_in_way",
             "revenue", "commission", "logistics", "logistics_out", "logistics_in",
             "storage", "services", "income", "margin_gross", "net_cost",
-            "net_cost_est", "margin", "margin_per_one", "margin_pct", "margin_pct_income",
+            "net_cost_est", "value", "supplier",
+            "margin", "margin_per_one", "margin_pct", "margin_pct_income",
+            "margin_roi_pct",
             "commission_per_one", "logistics_per_one",
             "logistics_out_per_one", "logistics_in_per_one",
             "storage_per_one", "income_per_one", "revenue_per_one",
@@ -288,12 +305,20 @@ def margin_detail_dataframe(
 
     # Распределение безартикульных плат «Хранение» по товарам продаж пропорц.
     # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
-    # продажи периода). Распределение идёт по всем товарам окна; отфильтрованный
-    # вид показывает только их доли.
+    # продажи периода). Распределение идёт внутри артикулов окна (target_articles):
+    # 100% платы разносится по видимым строкам детализации. Артикулы без объёма в
+    # storage_costs получают fallback-вес по среднему объёму — иначе почти 60%
+    # проданных товаров уходили с «Хранением» = 0.
+    target_articles = {
+        (r.article or "").strip().upper()
+        for r in rows
+        if (r.article or "").strip() and r.sale_dt is not None
+    }
     storage_est = storage_split(
         db,
         date_from=date_from,
         date_to=date_to,
+        target_articles=target_articles,
     )
 
     # Остатки WB на конец окна: последний срез стоков <= date_to.
@@ -406,6 +431,8 @@ def margin_detail_dataframe(
             est = True
         else:
             est = False
+        prod_value = float(prod.value or 0) if prod else 0.0
+        prod_supplier = (prod.supplier or "") if prod else ""
         # Хранение: фактическое по артикулу (обычно 0 — платы безартикульные)
         # + распределённая оценка (объём × тариф × остаток).
         storage_full = storage + storage_est.get(art.strip().upper(), 0.0)
@@ -414,6 +441,9 @@ def margin_detail_dataframe(
         margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
         margin_pct = round(margin / revenue * 100, 2) if revenue > 0 and sells > 0 else 0.0
         margin_pct_income = round(margin / income * 100, 2) if income > 0 and sells > 0 else 0.0
+        # Рентабельность затрат (ROI): прибыль к полным затратам (Выручка − Прибыль).
+        _roi_denom = revenue - margin
+        margin_roi_pct = round(margin / _roi_denom * 100, 2) if _roi_denom > 0 and sells > 0 else 0.0
         # Пересчитанные на единицу
         _s = sells if sells > 0 else 0
         commission_per_one = round(commission / _s, 2) if _s else 0.0
@@ -441,8 +471,10 @@ def margin_detail_dataframe(
             "income": round(income, 2), "margin_gross": margin_gross,
             "net_cost": round(net_cost, 2),
             "net_cost_est": est, "margin": margin,
+            "value": round(prod_value, 2), "supplier": prod_supplier,
             "margin_per_one": margin_per_one, "margin_pct": margin_pct,
             "margin_pct_income": margin_pct_income,
+            "margin_roi_pct": margin_roi_pct,
             "commission_per_one": commission_per_one,
             "logistics_per_one": logistics_per_one,
             "logistics_out_per_one": logistics_out_per_one,
@@ -464,6 +496,7 @@ OZON_DETAIL_MARGIN_COLUMNS = [
     "revenue", "amount", "commission", "services", "income",
     "margin_gross", "storage",
     "net_cost", "net_cost_est", "margin", "margin_per_one", "margin_pct",
+    "margin_roi_pct",
     "commission_per_one", "services_per_one", "storage_per_one",
     "income_per_one", "revenue_per_one", "return_rate",
     "accrued_sale", "accrued_commission", "accrued_logistics",
@@ -635,15 +668,16 @@ def ozon_margin_detail_dataframe(
             continue
         key = group_of.get(art) or art
         if key not in cells:
-            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         c = cells[key]
-        c[0] += int(r.quantity or 0)                         # sells (гросс)
+        c[0] += int(r.quantity or 0)                         # продано гросс
         c[1] += int(r.return_qty or 0)                       # returns_qty
-        c[2] += float(r.seller_price or 0) * int(r.quantity or 0)   # revenue
+        c[2] += float(r.seller_price or 0) * int(r.quantity or 0)   # выручка гросс
         c[3] += float(r.commission or 0)                     # commission (в минус)
         c[4] += float(r.standard_fee or 0)                   # services (в минус)
         c[5] += float(r.income or 0)                         # income
         c[6] += float(r.amount or 0)                         # amount (бизнес-база)
+        c[7] += float(r.return_total or 0)                   # сумма возвратов
         postings.setdefault(key, set()).add(str(r.posting_number or ""))
         detail_ops[key] = detail_ops.get(key, 0) + 1
         if (r.name or "").strip():
@@ -660,11 +694,16 @@ def ozon_margin_detail_dataframe(
     # показываем отдельной строкой, чтобы итог по начислениям сходился.
     for key in accrual_by_key:
         if key not in cells:
-            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     recs = []
     for key, c in cells.items():
-        (sells, returns_qty, revenue, commission, services, income, amount) = c
+        (sells_gross, returns_qty, revenue_gross, commission, services,
+         income, amount, return_total) = c
+        # Нетто-продажи и нетто-выручка (возвраты вычитаются) — как у WB,
+        # чтобы «Продано, шт» и рентабельность были сопоставимы между МП.
+        sells = sells_gross - returns_qty
+        revenue = revenue_gross - return_total
         offers = sorted(group_offers.get(key) or ([key] if by_size else []))
         art0 = offers[0] if offers else key
         prod = _find_product(art0, key)
@@ -682,6 +721,8 @@ def ozon_margin_detail_dataframe(
         margin_gross = round(income + storage, 2)   # до себестоимости: margin + net_cost * sells
         margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
         margin_pct = margin / revenue * 100 if revenue > 0 and sells > 0 else 0.0
+        _roi_denom = revenue - margin
+        margin_roi_pct = margin / _roi_denom * 100 if _roi_denom > 0 and sells > 0 else 0.0
         _s = sells if sells > 0 else 0
         commission_per_one = round(commission / _s, 2) if _s else 0.0
         services_per_one = round(services / _s, 2) if _s else 0.0
@@ -704,7 +745,7 @@ def ozon_margin_detail_dataframe(
             "margin_gross": margin_gross, "storage": storage,
             "net_cost": round(net_cost, 2), "net_cost_est": est,
             "margin": margin, "margin_per_one": margin_per_one,
-            "margin_pct": margin_pct,
+            "margin_pct": margin_pct, "margin_roi_pct": margin_roi_pct,
             "commission_per_one": commission_per_one,
             "services_per_one": services_per_one,
             "storage_per_one": storage_per_one,

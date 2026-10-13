@@ -2,6 +2,7 @@
 
 const $ = (s) => document.querySelector(s);
 const MP_LABELS = { wb: "Wildberries", ozon: "Ozon", yandex: "Яндекс.Маркет" };
+const MP_SHORT = { wb: "WB", ozon: "Ozon", yandex: "Яндекс.Маркет" };
 const MP_COLORS = { wb: "#6f4bff", ozon: "#3b6cff", yandex: "#b59a3e" };
 let currentTab = "dashboard";
 const charts = {};
@@ -68,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "82";
+const UI_VERSION = "99";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -322,11 +323,49 @@ async function api(path) {
   return resp.json();
 }
 
+// «Красивое» сообщение об ошибке API: из FastAPI {"detail": "..."} берём текст,
+// а не сырой JSON. Сетевые/таймаут-ошибки — как есть.
+function apiErrorMessage(err) {
+  if (err && typeof err.message === "string") {
+    const m = err.message.trim();
+    try {
+      const j = JSON.parse(m);
+      if (j && typeof j.detail === "string") return j.detail;
+      if (j && typeof j.detail === "object" && j.detail) return JSON.stringify(j.detail);
+    } catch (e) { /* не json */ }
+    return m;
+  }
+  return err ? String(err) : "Неизвестная ошибка";
+}
+
 async function apiPost(path, body) {
   let resp;
   try {
     resp = await fetch("/api" + path, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+      signal: apiSignal(),
+    });
+  } catch (e) {
+    throw apiErr(e);
+  }
+  if (!resp.ok) {
+    let detail = "";
+    try {
+      const j = await resp.json();
+      detail = j.detail || "";
+    } catch (e) { /* не Json */ }
+    throw new Error(resp.status + " " + detail);
+  }
+  return resp.json();
+}
+
+async function apiPut(path, body) {
+  let resp;
+  try {
+    resp = await fetch("/api" + path, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
       signal: apiSignal(),
@@ -967,12 +1006,13 @@ const dashHeaders = {
     { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика. Строка = артикул по всем выбранным МП сразу: если товар продавался и на WB, и на Ozon, будет одна строка."},
     { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров; если оно пустое — берётся из строки детализации продаж."},
     { k: "marketplace", label: "МП", num: true, render: dashTag , tip: "Список маркетплейсов, где артикул продавался в периоде. У Ozon строка — это товар, артикулы размеров свёрнуты в один."},
-    { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Количество проданных за период. WB — за вычетом возвратов (со знаком минус), Ozon — гросс-продажи, возвраты здесь не вычтены."},
-    { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма реализации за период: WB — retailAmount, Ozon — цена продавца × количество. Возвраты вычитаются со знаком минус."},
+    { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Количество проданных за период за вычетом возвратов (нетто) — одинаково для WB и Ozon."},
+    { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма реализации за период: WB — retailAmount, Ozon — цена продавца × количество; у обоих возвраты вычтены."},
     { k: "income", label: "Доход", num: true, render: cellFmts.money , tip: "К перечислению от маркетплейса. У WB это forPay, у Ozon — income: у Ozon комиссия и услуги уже вычтены, у WB нет."},
     { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Прибыль = к перечислению − расходы МП (логистика, хранение, услуги) − себестоимость × продано. Сумма по всем МП артикула."},
     { k: "margin_per_one", label: "Прибыль/шт", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ проданное количество, ₽/шт. Если продаж не было — 0."},
-    { k: "margin_pct", label: "Рентаб., %", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ к перечислению × 100. База — доход, а не выручка (отличается от детализации WB)."},
+    { k: "margin_pct", label: "Рентаб. продаж, %", num: true, render: cellFmts.pct , tip: "Рентабельность продаж (ROS): прибыль ÷ выручка × 100."},
+    { k: "margin_roi_pct", label: "Рентаб. затрат, %", num: true, render: cellFmts.pct , tip: "Рентабельность затрат (ROI): прибыль ÷ (выручка − прибыль) × 100 — сколько прибыли на каждый вложенный рубль."},
   ],
   price: [
     { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул поставщика. Сравниваются только те артикулы, которые продавались и в текущем, и в предыдущем окне."},
@@ -986,12 +1026,13 @@ const dashHeaders = {
   prefix: [
     { k: "prefix", label: "Группа", render: cellFmts.text , tip: "Группа товара по карте префиксов артикулов (SHK→SH, SOHO-FRNT отдельно от SOHO и т.п.). Без совпадения — «остальные»."},
     { k: "articles", label: "Товаров", num: true, render: cellFmts.int , tip: "Сколько артикулов попало в группу. Товары без продаж в периоде в подсчёт не идут."},
-    { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Сумма проданных единиц по всем артикулам группы за период."},
+    { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Сумма проданных единиц (нетто, минус возвраты) по всем артикулам группы за период."},
     { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма реализации по артикулам группы за период."},
     { k: "income", label: "Доход", num: true, render: cellFmts.money , tip: "Сумма «к перечислению» по артикулам группы."},
     { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Суммарная прибыль группы. Группы отсортированы по ней по убыванию."},
     { k: "margin_per_one", label: "Прибыль/шт", num: true, render: cellFmts.moneyCls , tip: "Прибыль группы ÷ проданное количество, ₽/шт."},
-    { k: "margin_pct", label: "Рентаб., %", num: true, render: cellFmts.pct , tip: "Рентабельность группы: прибыль ÷ к перечислению × 100."},
+    { k: "margin_pct", label: "Рентаб. продаж, %", num: true, render: cellFmts.pct , tip: "Рентабельность продаж группы: прибыль ÷ выручка × 100."},
+    { k: "margin_roi_pct", label: "Рентаб. затрат, %", num: true, render: cellFmts.pct , tip: "Рентабельность затрат группы: прибыль ÷ (выручка − прибыль) × 100."},
   ],
 };
 
@@ -1001,15 +1042,17 @@ function dashTotals(rows) {
   const sells = sum("sells");
   const income = sum("income");
   const margin = sum("margin");
+  const revenue = sum("revenue");
   const t = {
     sells,
     returns_qty: sum("returns_qty"),
-    revenue: sum("revenue"),
+    revenue,
     income,
     margin,
     articles: sum("articles"),
     margin_per_one: sells ? { avg: margin / sells } : null,
-    margin_pct: income ? { avg: margin / income * 100 } : null,
+    margin_pct: revenue ? { avg: margin / revenue * 100 } : null,
+    margin_roi_pct: (revenue - margin) > 0 ? { avg: margin / (revenue - margin) * 100 } : null,
   };
   Object.keys(t).forEach((k) => { if (t[k] == null) delete t[k]; });
   return t;
@@ -1023,6 +1066,41 @@ function paintDashColviewTable(containerId, baseHeaders, rows, count, tab, showT
   if (cnt) cnt.textContent = count ? "· " + fmt(count) : "";
 }
 
+// Пояснения к KPI-карточкам дашборда (общие для WB и Ozon). Показываются
+// по наведению на «?» рядом с подписью. Базы расчёта — как в _kpi_row.
+const KPI_HELP = {
+  revenue: "Выручка (₽) — сумма реализации за период: WB — retailAmount, "
+    + "Ozon — цена продавца × количество; у обоих возвраты вычтены. Это оборот, "
+    + "а не деньги «на руки».",
+  income: "Доход (₽) — «к перечислению» от маркетплейса. У WB это forPay — "
+    + "комиссия ещё НЕ вычтена; у Ozon — income, где комиссия и услуги уже вычтены. "
+    + "Не путать с выручкой.",
+  margin: "Прибыль (₽) — что осталось после расходов МП и себестоимости: "
+    + "Доход − логистика − хранение − прочие услуги − себестоимость × продано.",
+  margin_gross: "Маржа до себестоимости (₽) — Доход за вычетом расходов маркетплейса "
+    + "(логистика, хранение, услуги), но ещё БЕЗ себестоимости товара. Показывает, "
+    + "сколько даёт торговля до закупки.",
+  margin_pct: "Рентабельность продаж (ROS, %) = Прибыль ÷ Выручка × 100: сколько копеек "
+    + "прибыли с каждого рубля оборота. Единая база (выручка) во всех разделах.",
+  margin_roi_pct: "Рентабельность затрат (ROI, %) = Прибыль ÷ Затраты × 100, где затраты — "
+    + "всё вложенное: себестоимость проданного + расходы МП (= Выручка − Прибыль). "
+    + "Сколько прибыли на каждый вложенный рубль.",
+  margin_per_one: "Прибыль на единицу (₽/шт) = Прибыль ÷ проданное количество. "
+    + "Средний заработок с одной проданной штуки.",
+  sells: "Продано, шт — нетто: проданное количество за вычетом возвратов (у WB и Ozon "
+    + "считается одинаково). Возвраты показаны отдельной строкой.",
+  returns_qty: "Возвраты, шт — вернувшиеся единицы за период. В скобках доля возвратов = "
+    + "возвраты ÷ (продано + возвраты) × 100.",
+  articles: "Товаров — число уникальных артикулов (nmId) с продажами в периоде.",
+};
+
+function kpiHelpTip(key, lbl) {
+  const text = key && KPI_HELP[key];
+  if (!text) return "";
+  return `<span class="tip" tabindex="0" role="tooltip" aria-label="Пояснение: ${escapeHtml(lbl)}">?`
+    + `<span class="tip-text">${text}</span></span>`;
+}
+
 function paintDashKpis(k) {
   const showCompare = $("#dashCompare").checked && k.compare;
   const cards = [k.total, ...k.per_mp];
@@ -1032,24 +1110,25 @@ function paintDashKpis(k) {
     const ret = c.returns_qty || 0;
     const retRate = (ret + (c.sells || 0)) > 0
       ? Math.round(ret / (ret + (c.sells || 0)) * 1000) / 10 : 0;
-    const cell = (lbl, val, extraCls, valCls) => `
+    const cell = (lbl, val, extraCls, valCls, key) => `
       <div class="kpi-cell">
-        <div class="kpi-label">${lbl}</div>
+        <div class="kpi-label">${lbl}${kpiHelpTip(key, lbl)}</div>
         <div class="kpi-val ${extraCls || ""} ${valCls || ""}">${val}</div>
       </div>`;
     let html = `
       <div class="kpi-card ${mpc}" ${mpc ? `style="border-left-color:${MP_COLORS[mpc]}"` : ""}>
         <div class="kpi-card-title">${label}</div>
         <div class="kpi-card-grid">
-          ${cell("Выручка", fmtMoney(c.revenue))}
-          ${cell("Доход", fmtMoney(c.income))}
-          ${cell("Прибыль", fmtMoney(c.margin), cls(c.margin))}
-          ${cell("Рентабельность", fmtPct(c.margin_pct), cls(c.margin_pct))}
-          ${cell("Маржа до себестоимости", fmtMoney(c.margin_gross != null ? c.margin_gross : 0))}
-          ${cell("Прибыль / шт", fmtMoney(c.margin_per_one), cls(c.margin_per_one), "small")}
-          ${cell("Продано, шт", fmt(c.sells))}
-          ${cell("Возвраты", ret ? `${fmt(ret)} (${fmtPct(retRate)})` : "0")}
-          ${cell("Товаров", fmt(c.articles))}
+          ${cell("Выручка", fmtMoney(c.revenue), "", "", "revenue")}
+          ${cell("Доход", fmtMoney(c.income), "", "", "income")}
+          ${cell("Прибыль", fmtMoney(c.margin), cls(c.margin), "", "margin")}
+          ${cell("Рентабельность продаж", fmtPct(c.margin_pct), cls(c.margin_pct), "", "margin_pct")}
+          ${cell("Рентабельность затрат", fmtPct(c.margin_roi_pct), cls(c.margin_roi_pct), "", "margin_roi_pct")}
+          ${cell("Маржа до себестоимости", fmtMoney(c.margin_gross != null ? c.margin_gross : 0), "", "", "margin_gross")}
+          ${cell("Прибыль / шт", fmtMoney(c.margin_per_one), cls(c.margin_per_one), "small", "margin_per_one")}
+          ${cell("Продано, шт", fmt(c.sells), "", "", "sells")}
+          ${cell("Возвраты", ret ? `${fmt(ret)} (${fmtPct(retRate)})` : "0", "", "", "returns_qty")}
+          ${cell("Товаров", fmt(c.articles), "", "", "articles")}
         </div>`;
     if (showCompare && !mpc) {
       const cmp = k.compare;
@@ -1206,6 +1285,14 @@ function repaintDashCharts() {
 }
 
 function paintDashStocks(s) {
+  const STOCK_HELP = {
+    quantity_full: "Товар на складах маркетплейса по последнему срезу стоков на конец периода.",
+    in_way: "Количество в поставке, ещё не принятое на склад, по последнему срезу.",
+    value: "Оценка остатка: себестоимость × количество на складе.",
+    date: "Дата последнего среза стоков, по которому взяты эти цифры.",
+  };
+  const cell = (lbl, val, key) => `<div class="line"><span>${lbl}`
+    + `${kpiHelpTip(key, lbl)}</span><span class="kvalue">${val}</span></div>`;
   const codes = Object.keys(s);
   $("#dashStocks").innerHTML = codes.map((code) => {
     const st = s[code];
@@ -1215,10 +1302,10 @@ function paintDashStocks(s) {
       <div class="kpi ${code}" style="border-left-color:${MP_COLORS[mpCode] || "#999"}">
         <div class="title">${escapeHtml(title)}</div>
         <div class="lines">
-          <div class="line"><span>Остаток, шт</span><span class="kvalue">${fmt(st.quantity_full)}</span></div>
-          <div class="line"><span>В пути, шт</span><span class="kvalue">${fmt(st.in_way)}</span></div>
-          <div class="line"><span>Оценка, ₽</span><span class="kvalue">${fmtMoney(st.value)}</span></div>
-          <div class="line"><span>Срез</span><span class="kvalue">${st.date || "—"}</span></div>
+          ${cell("Остаток, шт", fmt(st.quantity_full), "quantity_full")}
+          ${cell("В пути, шт", fmt(st.in_way), "in_way")}
+          ${cell("Оценка, ₽", fmtMoney(st.value), "value")}
+          ${cell("Срез", st.date || "—", "date")}
         </div>
       </div>`;
   }).join("") || '<div class="empty">Остатков нет за период</div>';
@@ -1269,11 +1356,14 @@ const marginHeaders = [
   { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Прочие удержания WB: штрафы, удержания, доплаты и перерасчёт логистики. В безартикульных строках разносятся по весу статьи."},
   { k: "income",  label: "К перечислению", num: true, render: cellFmts.money , tip: "forPay за период с учётом знака возвратов: сколько WB перечислит за товар после всех удержаний."},
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога: сначала по артикулу, иначе по баркоду строки детализации. Нет в каталоге — значение по умолчанию, строка помечается как оценка."},
+  { k: "value", label: "Ценность", num: true, render: cellFmts.money , tip: "Ценность единицы (pure_value) из каталога товаров (import products.xlsx). Отношение ценность/себестоимость влияет на решение автопилота цен: чем ценнее товар, тем меньше скидка при снижении."},
+  { k: "supplier", label: "Поставщик", render: cellFmts.text , tip: "Поставщик товара из каталога (колонка «Поставщик» файла products.xlsx)."},
   { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.moneyCls , tip: "К перечислению − логистика − хранение − услуги. Показывает прибыль до списания себестоимости проданного."},
   { k: "margin",  label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Маржа до себестоимости − себестоимость × проданное. Себестоимость списывается только за проданное, за возвращённое — нет."},
   { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ проданное количество, ₽/шт."},
-  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ выручка (реализация) × 100. База — выручка, а в дашборде — к перечислению."},
-  { k: "margin_pct_income", label: "Прибыль % (к перечисл.)", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ к перечислению × 100. База — доход после всех удержаний (как в прежнем разделе «Маржинальность»)."},
+  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность продаж (ROS): прибыль ÷ выручка (реализация) × 100."},
+  { k: "margin_roi_pct", label: "Рентаб. затрат, %", num: true, render: cellFmts.pct , tip: "Рентабельность затрат (ROI): прибыль ÷ (выручка − прибыль) × 100 — сколько прибыли на каждый вложенный рубль."},
+  { k: "margin_pct_income", label: "Прибыль % (к перечисл.)", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ к перечислению × 100. База — доход после всех удержаний."},
   { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls , tip: "Комиссия КВВ, делённая на количество проданных, ₽/шт."},
   { k: "logistics_per_one", label: "Логистика/ед.", num: true, render: cellFmts.moneyCls , tip: "Вся логистика (туда + обратно) ÷ проданное количество, ₽/шт."},
   { k: "logistics_out_per_one", label: "Логистика туда/ед.", num: true, render: cellFmts.moneyCls , tip: "Логистика туда ÷ проданное количество, ₽/шт."},
@@ -1298,10 +1388,10 @@ const ozonMarginHeaders = [
   { k: "offers_count", label: "Артикулов", num: true, render: cellFmts.int , tip: "Сколько карточек Ozon (offer_id) попало в строку товара."},
   { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB, подтянутый из карточек Ozon по совпадению vendor_code с offer_id. Пусто, если карточка не найдена."},
   { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров по базовому артикулу; при пустом — из строки детализации Ozon."},
-  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Гросс-продажи (quantity из детализации). Возвраты здесь НЕ вычитаются — смотрите отдельную колонку."},
-  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int , tip: "Возвраты (returnQty) за период. Их деньги уже учтены в «К перечислению» со знаком минус."},
+  { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Нетто-продажи: количество из детализации за вычетом возвратов (как у WB). Возвраты — отдельной колонкой."},
+  { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int , tip: "Возвраты (returnQty) за период. Уже вычтены из «Продано, шт» и из «К перечислению»."},
   { k: "postings", label: "Постинги", num: true, render: cellFmts.int , tip: "Сколько уникальных постингов (отгрузок) было у товара за период — косвенный признак частоты поставок."},
-  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Цена продавца × количество (sellerPrice × quantity), суммой по товару за период."},
+  { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Цена продавца × количество за вычетом возвратов (нетто), суммой по товару за период."},
   { k: "amount", label: "Сумма продажи", num: true, render: cellFmts.money , tip: "Поле amount отчёта Ozon: своя база начислений, может отличаться от выручки. Расхождение — признак разной учётной базы Ozon."},
   { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls , tip: "Комиссия Ozon, в отчёте идёт со знаком минус. Справочно: уже вычтена из «к перечислению», в прибыли не вычитается повторно."},
   { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Прочие услуги Ozon (standardFee), знак минус. Также справочно: уже учтены в «к перечислению»."},
@@ -1318,13 +1408,14 @@ const ozonMarginHeaders = [
   { k: "has_detail", label: "Детализация", render: (v) => v ? "да" : "нет" , tip: "Есть ли строки детализации продаж по товару за окно. «нет» — доверять можно только начислениям."},
   { k: "storage", label: "Хранение", num: true, render: cellFmts.moneyCls , tip: "Стоимость размещения за период по отчёту Ozon, хранится со знаком минус. В прибыли прибавляется, то есть уменьшает её как расход."},
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы: ищем по базовому артикулу, затем по артикулу размера, затем по баркоду строки. Нет в каталоге — значение по умолчанию, строка помечена как оценка."},
-  { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "К перечислению + хранение (минус) − себестоимость × продано. Себестоимость списывается за гросс-продажи, возвраты уже в перечислении."},
-  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ гросс-продажи, ₽/шт. При возвратах завышает реальную прибыль с выкупленного товара."},
-  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность: прибыль ÷ выручка (цена продавца × количество) × 100."},
-  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls , tip: "Комиссия Ozon ÷ гросс-продажи, ₽/шт."},
-  { k: "services_per_one", label: "Услуги/ед.", num: true, render: cellFmts.moneyCls , tip: "Услуги Ozon ÷ гросс-продажи, ₽/шт."},
-  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls , tip: "К перечислению ÷ гросс-продажи, ₽/шт."},
-  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls , tip: "Выручка ÷ гросс-продажи, ₽/шт."},
+  { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "К перечислению + хранение (минус) − себестоимость × нетто-продажи. Себестоимость списывается за нетто (выкупленное), возвраты уже в перечислении."},
+  { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ нетто-продажи, ₽/шт — заработок с фактически выкупленной штуки."},
+  { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность продаж (ROS): прибыль ÷ выручка (нетто) × 100."},
+  { k: "margin_roi_pct", label: "Рентаб. затрат, %", num: true, render: cellFmts.pct , tip: "Рентабельность затрат (ROI): прибыль ÷ (выручка − прибыль) × 100 — прибыль на каждый вложенный рубль."},
+  { k: "commission_per_one", label: "Комиссия/ед.", num: true, render: cellFmts.moneyCls , tip: "Комиссия Ozon ÷ нетто-продажи, ₽/шт."},
+  { k: "services_per_one", label: "Услуги/ед.", num: true, render: cellFmts.moneyCls , tip: "Услуги Ozon ÷ нетто-продажи, ₽/шт."},
+  { k: "income_per_one", label: "К перечисл./ед.", num: true, render: cellFmts.moneyCls , tip: "К перечислению ÷ нетто-продажи, ₽/шт."},
+  { k: "revenue_per_one", label: "Средняя цена", num: true, render: cellFmts.moneyCls , tip: "Выручка (нетто) ÷ нетто-продажи — средняя цена продажи, ₽/шт."},
   { k: "return_rate", label: "Доля возвратов, %", num: true, render: cellFmts.pct , tip: "Возвраты ÷ (продажи + возвраты) × 100 за период."},
   { k: "accrued_coverage", label: "Есть начисления", render: (v) => v ? "да" : "нет" , tip: "1/0: есть ли по артикулу строки отчёта начислений Ozon за окно. Без них «Прибыль (нач.)» пустая."},
   { k: "margin_gross", label: "Маржа, до себестоимости, руб", num: true, render: cellFmts.moneyCls , tip: "К перечислению + хранение (минус) — прибыль до списания себестоимости."},
@@ -2023,10 +2114,10 @@ async function renderMarginDetail(p) {
   if (linked) headers = [ownerCol()].concat(headers);
   if (compare) {
     headers = headers.concat([
-      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int },
-      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls },
-      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls },
-      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct },
+      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано, шт за предыдущий период той же длительности."},
+      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период: Доход − расходы МП − себестоимость × продано."},
+      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Изменение прибыли, ₽: текущий период минус предыдущий."},
+      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли в % к предыдущему периоду. Пусто, если в прошлом периоде прибыли не было."},
     ].filter((h) => !headers.some((x) => x.k === h.k)));
   }
   pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-detail"));
@@ -2058,10 +2149,10 @@ async function renderMarginOzonDetail(p) {
   if (linked) headers = [ownerCol()].concat(headers);
   if (compare) {
     headers = headers.concat([
-      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int },
-      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls },
-      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls },
-      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct },
+      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано, шт за предыдущий период той же длительности."},
+      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период: Доход − расходы МП − себестоимость × продано."},
+      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Изменение прибыли, ₽: текущий период минус предыдущий."},
+      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли в % к предыдущему периоду. Пусто, если в прошлом периоде прибыли не было."},
     ].filter((h) => !headers.some((x) => x.k === h.k)));
   }
   pagedTable($("#marginOzonDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-ozon-detail"));
@@ -4219,6 +4310,98 @@ async function renderWbDetail() {
   }
 }
 
+async function checkWbDetailGaps() {
+  const btn = document.getElementById("wbGapsCheck");
+  const info = document.getElementById("wbGapsInfo");
+  const box = document.getElementById("wbGapsBox");
+  const dl = document.getElementById("wbGapsDownload");
+  const msg = statusEl();
+  const say = (t) => {
+    if (info) info.textContent = t;
+    if (msg) msg.textContent = t;
+  };
+  if (btn) btn.disabled = true;
+  if (box) box.classList.add("hidden");
+  if (dl) dl.classList.add("hidden");
+  // Обратная связь — сразу при нажатии, ещё до начала запроса.
+  say("Проверка пропущенных детализаций…");
+  try {
+    const f = filters();
+    const data = await api("/wb/detail-gaps" + qs({
+      date_from: f.date_from || undefined,
+      date_to: f.date_to || undefined,
+    }));
+    const missing = data.missing || [];
+    const range = (data.from || data.to) ? (data.from + " — " + data.to) : "—";
+    if (!missing.length) {
+      say("Пропущенных отчётов нет: загружено " +
+        fmt(data.available || 0) + " из " + fmt(data.available || 0) +
+        " (период " + range + ").");
+      return;
+    }
+    say("Не загружено отчётов: " + fmt(missing.length) +
+      " из " + fmt(data.available || 0) + " (период " + range + ").");
+    if (box) {
+      const rows = missing.map((m) => ({
+        report_id: m.report_id,
+        period: (m.date_from || "?") + " — " + (m.date_to || "?"),
+        create_date: m.create_date || "",
+      }));
+      pagedTable(box, [
+        { k: "report_id", label: "Отчёт", render: cellFmts.text },
+        { k: "period", label: "Период", render: cellFmts.text },
+        { k: "create_date", label: "Сформирован", render: cellFmts.text },
+      ], rows, null, null, []);
+      box.classList.remove("hidden");
+    }
+    if (dl) dl.classList.remove("hidden");
+  } catch (err) {
+    // Любая ошибка (ключи/права/502/сеть/таймаут) обязана быть видна.
+    say("Не удалось проверить пропуски: " + apiErrorMessage(err));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function downloadMissingWbDetail() {
+  const btn = document.getElementById("wbGapsDownload");
+  const info = document.getElementById("wbGapsInfo");
+  const msg = statusEl();
+  const say = (t) => {
+    if (info) info.textContent = t;
+    if (msg) msg.textContent = t;
+  };
+  if (btn) btn.disabled = true;
+  try {
+    say("Проверяю, какие отчёты нужно догрузить…");
+    const f = filters();
+    const data = await api("/wb/detail-gaps" + qs({
+      date_from: f.date_from || undefined,
+      date_to: f.date_to || undefined,
+    }));
+    const missing = data.missing || [];
+    if (!missing.length) {
+      say("Пропущенных отчётов нет.");
+      return;
+    }
+    // Одним запросом окон (пагинация rrdId внутри сервера): историю за годы WB
+    // отдаёт за минуты, а не по одному отчёту (для него лимит 1 запрос/мин).
+    say("Догружаю пропущенные отчёты за " + data.from + " — " + data.to +
+      " (" + missing.length + " шт). Это ~5-10 минут, вкладку можно не закрывать — " +
+      "данные пишутся по мере получения…");
+    await apiPost("/wb/detail" + qs({
+      date_from: data.from, date_to: data.to, write_db: 1, excel: 0,
+    }), {});
+    say("Догружено пропущенных отчётов: " + missing.length + ".");
+    await renderWbDetail();
+    await checkWbDetailGaps();
+  } catch (err) {
+    say("Ошибка догрузки: " + apiErrorMessage(err));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function wbDetailExportUrl() {
   const rawEl = document.getElementById("wbDetailRaw");
   const likeEl = document.getElementById("wbDetailLike");
@@ -4959,9 +5142,18 @@ async function loadCabinets() {
   }
   const label = $("#cabBtnLabel");
   if (label) {
+    // current может не прийти (нет активной связки) — берём из списка активную.
+    const cur = cabState.current || cabLinkActive();
     const who = (cabState.user && cabState.user.display_name)
       || shortUserName(cabState.user) || "";
-    label.textContent = ("Кабинет " + who).trim();
+    const mp = cur && cur.marketplace;
+    const mpShort = mp ? (MP_SHORT[mp] || MP_LABELS[mp] || mp) : "";
+    // Трёхсоставная подпись: пользователь * фирма * маркетплейс.
+    const parts = [escapeHtml(who)];
+    if (cur && cur.company_name) parts.push(escapeHtml(cur.company_name));
+    label.innerHTML = parts.join(" * ") +
+      (mpShort ? ' <span class="cab-btn-mp">' + escapeHtml(mpShort) + "</span>" : "");
+    label.title = (cur && cur.owner) || who;
   }
   renderCabinets();
   updateMpNav();
@@ -4972,6 +5164,13 @@ async function loadCabinets() {
 function shortUserName(u) {
   const n = (u && u.display_name) || "";
   return n.split(" ")[0] || (u && u.username) || "…";
+}
+
+function cabLinkActive() {
+  for (const comp of (cabState.companies || [])) {
+    for (const lk of (comp.links || [])) if (lk.active) return lk;
+  }
+  return null;
 }
 
 // Показываем меню WB API / OZON API только если у активной связки есть
@@ -5040,8 +5239,10 @@ function renderCabinets() {
         : "";
       h += '<div class="cab-item' + (c.active ? " active" : "") + '" data-cab="' + c.id + '">' +
         '<div class="row1"><span class="name">' + escapeHtml(c.owner || c.name) + "</span>" +
+        (c.active ? '<span class="cab-active-badge">активна</span>' : "") +
         '<span class="mps">' + mps + cmpBox + "</span>" +
         '<button class="refresh-one" title="Обновить связку" data-refresh="' + c.id + '">&#8635;</button>' +
+        '<button class="cab-edit" title="Ключи и настройки связки" data-cab-edit="' + c.id + '">&#9881;</button>' +
         "</div></div>";
     }
     h += "</div>";
@@ -5051,6 +5252,11 @@ function renderCabinets() {
       'без этого сравнение продаж не запускается.</div>';
   }
   box.innerHTML = h;
+  const act = box.querySelector(".cab-item.active");
+  const drawer = $("#cabDrawer");
+  if (act && drawer && !drawer.classList.contains("hidden")) {
+    act.scrollIntoView({ block: "nearest" });
+  }
 }
 
 function openCabinets() {
@@ -5088,6 +5294,105 @@ async function selectCabinet(id) {
   }
 }
 
+// ---- Настройки связки (ключи API и параметры) --------------------------
+let cabEditorId = null;
+let cabEditorData = null;
+
+function cabEditorMpName(mp) {
+  return mp ? (MP_SHORT[mp] || MP_LABELS[mp] || mp) : "";
+}
+
+async function openCabEditor(id) {
+  const box = $("#cabEditor");
+  if (!box) return;
+  cabEditorId = id;
+  const info = findCabLink(id);
+  const title = $("#cabEditorTitle");
+  if (title) {
+    const mp = cabEditorMpName(info && info.marketplace);
+    title.textContent = "Настройки: " +
+      (info ? (info.owner || info.name) : ("связка #" + id)) + (mp ? " \u00B7 " + mp : "");
+  }
+  $("#cabEditorMsg").textContent = "Загрузка…";
+  $("#cabEditorFields").innerHTML = "";
+  box.classList.remove("hidden");
+  box.scrollIntoView({ block: "nearest" });
+  try {
+    renderCabEditor(await api("/cabinet/" + id + "/settings"));
+  } catch (err) {
+    $("#cabEditorMsg").textContent = "Ошибка: " + err.message;
+  }
+}
+
+function closeCabEditor() {
+  cabEditorId = null;
+  cabEditorData = null;
+  const box = $("#cabEditor");
+  if (box) box.classList.add("hidden");
+}
+
+function renderCabEditor(data) {
+  cabEditorData = data || {};
+  const host = $("#cabEditorFields");
+  if (!host) return;
+  const mp = cabEditorData.marketplace || "";
+  let h = '<div class="cab-editor-meta">Маркетплейс: <b>' +
+    escapeHtml(MP_LABELS[mp] || mp || "?") + "</b>" +
+    (cabEditorData.oid ? ' &nbsp; oid&nbsp;' + escapeHtml(String(cabEditorData.oid)) : "") +
+    "</div>" +
+    '<label class="cab-editor-chk"><input type="checkbox" id="cabEditorEnabled"' +
+    (cabEditorData.enabled ? " checked" : "") + "> Связка включена (участвует в «Обновить всё»)</label>";
+  const fields = cabEditorData.fields || [];
+  if (!fields.length) {
+    h += '<div class="cab-editor-note">Для маркетплейса «' +
+      escapeHtml(mp || "?") + '» поля ключей не заданы.</div>';
+  }
+  for (const f of fields) {
+    const ph = f.set
+      ? ("задано: " + (f.masked || "•••") + " — пусто = не менять")
+      : "не задано";
+    h += '<label class="cab-editor-field">' +
+      '<span class="cab-editor-label">' + escapeHtml(f.label) +
+      (f.oid ? ' <em>oid ' + escapeHtml(String(f.oid)) + "</em>" : "") + "</span>" +
+      '<span class="cab-editor-inputwrap">' +
+      '<input type="' + (f.secret ? "password" : "text") +
+        '" data-cred="' + escapeHtml(f.key) + '" placeholder="' + escapeHtml(ph) +
+        '" autocomplete="off" spellcheck="false">' +
+      (f.set ? '<button type="button" class="cab-editor-clear" data-clear="' +
+        escapeHtml(f.key) + '" title="Удалить ключ">\u00D7</button>' : "") +
+      "</span></label>";
+  }
+  host.innerHTML = h;
+  $("#cabEditorMsg").textContent = "";
+}
+
+async function saveCabEditor() {
+  if (cabEditorId == null) return;
+  const host = $("#cabEditorFields");
+  const creds = {};
+  host.querySelectorAll("input[data-cred]").forEach((inp) => {
+    const key = inp.dataset.cred;
+    const val = (inp.value || "").trim();
+    if (inp.dataset.cleared === "1") creds[key] = "";
+    else if (val) creds[key] = val;
+  });
+  const enabledBox = $("#cabEditorEnabled");
+  const payload = { creds }; 
+  if (enabledBox) payload.enabled = enabledBox.checked;
+  const btn = $("#cabEditorSave");
+  if (btn) btn.disabled = true;
+  $("#cabEditorMsg").textContent = "Сохранение…";
+  try {
+    renderCabEditor(await apiPut("/cabinet/" + cabEditorId + "/settings", payload));
+    $("#cabEditorMsg").textContent = "Сохранено";
+    await loadCabinets();
+  } catch (err) {
+    $("#cabEditorMsg").textContent = "Ошибка: " + err.message;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function findCabLink(id) {
   for (const comp of (cabState.companies || [])) {
     const lk = (comp.links || []).find((x) => x.id === id);
@@ -5114,6 +5419,8 @@ async function refreshAllCabinets() {
 async function startRefreshAll() {
   const startBtn = $("#refreshStart");
   startBtn.disabled = true;
+  const retryBtn = $("#refreshRetry");
+  if (retryBtn) retryBtn.disabled = true;
   $("#refreshSummary").textContent = "Запуск…";
   refreshJobs = [];
   const detail = $("#refreshDetail");
@@ -5133,6 +5440,33 @@ async function startRefreshAll() {
     refreshJobs.push({ api: "", rejected: true, msg: err.message });
     renderRefresh();
     startBtn.disabled = false;
+  }
+}
+
+// «Дозагрузить недокачанное»: сервер по последнему запуску каждой связки сам
+// определяет упавшие виды выгрузки и перезапускает только их (идемпотентно).
+async function retryFailedRefresh() {
+  const btn = $("#refreshRetry");
+  if (btn) btn.disabled = true;
+  $("#refreshSummary").textContent = "Дозагрузка…";
+  const body = {};
+  if (!refreshAllMode && refreshCabId) body.cab_id = refreshCabId;
+  try {
+    const data = await apiPost("/refresh/retry-failed", body);
+    const jobs = data.jobs || [];
+    if (!jobs.length) {
+      $("#refreshSummary").textContent = "Докачивать нечего";
+      if (btn) btn.disabled = false;
+      return;
+    }
+    refreshAllMode = true;
+    refreshJobs = [];
+    for (const j of jobs) refreshJobs.push({ api: "", jobId: j.job_id, state: null });
+    renderRefresh();
+    pollRefresh();
+  } catch (err) {
+    setStatus("Ошибка дозагрузки: " + err.message, { error: true });
+    if (btn) btn.disabled = false;
   }
 }
 let refreshApis = [];
@@ -5228,6 +5562,7 @@ function renderRefresh() {
       h += '<div class="refresh-step ' + s.status + '">' +
         '<span class="rs-name">' + escapeHtml(s.label) + "</span>" +
         '<span class="rs-status">' + escapeHtml(stepText(s)) + "</span></div>";
+      if (s.note) h += '<div class="refresh-step-note">' + escapeHtml(s.note) + "</div>";
       if (s.error) h += '<div class="refresh-step-error">' + escapeHtml(s.error) + "</div>";
     }
     const ok = j.state.steps.filter((s) => s.status === "ok").length;
@@ -5277,6 +5612,8 @@ async function openRefresh(apis) {
   detail.parentElement.style.display =
     (refreshApis.includes("wb") || refreshApis.includes("ozon")) ? "" : "none";
   $("#refreshStart").disabled = false;
+  const retry = $("#refreshRetry");
+  if (retry) retry.disabled = false;
   $("#refreshSummary").textContent = "";
   $("#refreshList").innerHTML = "";
   loadRefreshHistory();
@@ -5286,6 +5623,8 @@ async function startRefreshJob() {
   const apis = refreshApis;
   const startBtn = $("#refreshStart");
   startBtn.disabled = true;
+  const retryBtn = $("#refreshRetry");
+  if (retryBtn) retryBtn.disabled = true;
   $("#refreshSummary").textContent = "Запуск…";
   const detail = $("#refreshDetail");
   refreshJobs = [];
@@ -5348,6 +5687,8 @@ function pollRefresh() {
       setRefreshBadge(false);
       $("#refreshStart").disabled = false;
       $("#refreshDetail").disabled = false;
+      const rb = $("#refreshRetry");
+      if (rb) rb.disabled = false;
     }
   }, 1500);
 }
@@ -5367,10 +5708,19 @@ function updateCrumb(name) {
 
 function syncHeaderForTab(name) {
   const mp = document.getElementById("fMarketplaceWrap");
+  const fromWrap = document.getElementById("fFromWrap");
+  const toWrap = document.getElementById("fToWrap");
+  const applyBtn = document.getElementById("btnApply");
   const upd = document.getElementById("btnUpdateWbDetail");
+  const gaps = document.getElementById("wbGapsCheck");
   const isApi = !!name && (name.startsWith("wb-") || name.startsWith("oz-") || name === "products");
-  if (mp) mp.classList.toggle("hidden", isApi);
+  const isAuto = !!name && name.startsWith("automation");
+  if (mp) mp.classList.toggle("hidden", isApi || isAuto);
+  if (fromWrap) fromWrap.classList.toggle("hidden", isAuto);
+  if (toWrap) toWrap.classList.toggle("hidden", isAuto);
+  if (applyBtn) applyBtn.classList.toggle("hidden", isAuto);
   if (upd) upd.classList.toggle("hidden", !isApi);
+  if (gaps) gaps.classList.toggle("hidden", name !== "wb-detail");
   const tip = document.getElementById("hintTip");
   const tipText = document.getElementById("hintTipText");
   if (tip && tipText) {
@@ -5482,6 +5832,8 @@ const PRICING_HINTS = {
   dead_stock_days: "Если продаж не было столько дней подряд → мёртвый запас, цену снижаем.",
   low_conv_pct: "Много «в корзине», но конверсия ниже этого %, % — интерес без покупок; товар пропускаем.",
   min_rating_reviews: "Рейтинг по отзывам из воронки продаж (1..5): чем выше — тем меньше скидка при снижении, ведь товар ценный. При рейтинге ≥ этого порога снижение ограничивается, а при 5,0 скидка не увеличивается вовсе. 0 = нет данных — ограничений нет.",
+  value_ratio_low: "Нижний порог отношения «ценность/себестоимость» (value из каталога ÷ себестоимость). Пока отношение ≤ этого значения — ограничения по ценности нет, скидка снижается как обычно. По умолчанию 1,0: при ценности ≤ себестоимости скидку не тормозим.",
+  value_ratio_high: "Верхний порог отношения «ценность/себестоимость»: при нём и выше автопилот вовсе не увеличивает скидку — товар слишком ценный, дёшево отдавать невыгодно. Между нижним и верхним порогами ограничение растёт линейно. По умолчанию 4,0.",
   fallback_window_days: "Окно (дней), за которое берутся фактические продажи для расчёта unit-экономики: реальная цена, комиссия, маржа, возвраты.",
   raise_pct_replenishable: "Потолок повышения цены для докупаемых товаров, % — их поднимаем аккуратно, чтобы не потерять выкупы.",
   min_rating_for_raise: "Повышение цены блокируется, если рейтинг по отзывам из воронки (1..5) ниже этого значения (сигналы с 0 трактуются как «нет данных» и не блокируют).",
@@ -5614,6 +5966,8 @@ const pricingHeaders = [
   { k: "margin_per_one", label: "Прибыль/шт, руб", num: true, render: profitCell , tip: "Фактическая прибыль с единицы по детализации продаж WB за окно: прибыль ÷ проданные штуки. Рядом в скобках — рентабельность от выручки."},
   { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money , tip: "Действующая цена покупателя = базовая цена WB × (1 − текущая скидка/100). Сравните с целевой ценой, чтобы увидеть эффект решения."},
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.moneyZero , tip: "Себестоимость единицы из каталога. Ноль = не заведена: тогда пол безубыточности считается от нуля и решение принимается вслепую."},
+  { k: "value", label: "Ценность", num: true, render: cellFmts.moneyZero , tip: "Ценность единицы (pure_value) из каталога товаров. Отношение ценность/себестоимость тормозит снижение цены: чем ценнее товар относительно себестоимости, тем меньше автопилот увеличивает скидку (при value ≥ value_ratio_high × себестоимости — не увеличивает вовсе)."},
+  { k: "supplier", label: "Поставщик", render: cellFmts.text , tip: "Поставщик товара из каталога (колонка «Поставщик» файла products.xlsx)."},
   { k: "avg_price", label: "Ср. цена факт, руб", num: true, render: cellFmts.money , tip: "Средняя цена заказа из воронки продаж WB за срез. Если воронки нет, в расчётах она заменяется витринной ценой, и защита «цена ниже себестоимости» ослабевает."},
   { k: "stock", label: "Остаток", num: true, render: cellFmts.int , tip: "Остаток WB по последнему срезу стоков: quantity + в пути. Нет данных об остатках = автопилот пропускает товар (SKIP)."},
   { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int , tip: "Выкупы за срез воронки продаж: заказы, которые покупатель забрал. Отличаются от заказов из-за отмен и невыкупов."},
@@ -6200,7 +6554,8 @@ const PRICING_GROUPS = [
       "min_delta_pp", "raise_pct_replenishable", "dead_min_discount",
   ] },
   { title: "Спрос и воронка", col: 1, keys: [
-      "min_rating_reviews", "hot_conv_pct", "hot_backlog_factor",
+      "min_rating_reviews", "value_ratio_low", "value_ratio_high",
+      "hot_conv_pct", "hot_backlog_factor",
       "low_conv_pct", "return_penalty",
   ] },
   { title: "Качество и рост", col: 1, keys: [
@@ -6258,6 +6613,7 @@ function pricingParamRow(key, cur) {
     input.type = "number";
     input.step = (key === "return_penalty" || key === "season_damp" || key === "prefer_raise_bias"
       || key === "min_rating_reviews" || key === "promo_push_pct"
+      || key === "value_ratio_low" || key === "value_ratio_high"
       || key === "promo_protect_velocity"
       || key === "promo_max_beyond_floor_pp") ? "0.1" : "1";
     input.value = cur;

@@ -15,6 +15,7 @@
 from contextvars import ContextVar
 from typing import Callable, Optional
 
+import base64
 import json
 
 from sqlalchemy import select, text
@@ -95,6 +96,50 @@ def marketplace_names(db: Session) -> dict:
     """{код мп: название} по справочнику marketplaces."""
     rows = db.execute(select(models.Marketplace.code, models.Marketplace.name)).all()
     return {code: name for code, name in rows}
+
+
+def token_oid(token: str) -> Optional[int]:
+    """oid продавца WB из payload JWT-токена; None, если не разобрать.
+
+    В отчётах WB владелец «вшит» в имя файла как `_<oid>` (напр.
+    `..._29077.zip`), где oid — это поле `oid` из токена продавца.
+    """
+    if not token:
+        return None
+    parts = token.strip().split(".")
+    if len(parts) < 2:
+        return None
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload))
+    except (ValueError, TypeError):
+        return None
+    oid = data.get("oid") if isinstance(data, dict) else None
+    try:
+        return int(oid)
+    except (TypeError, ValueError):
+        return None
+
+
+def wb_oid(info: "CabinetInfo") -> Optional[int]:
+    """oid продавца WB для связки (по любому из её WB-токенов)."""
+    creds = info.creds_for("wb")
+    for key in ("standard", "finance", "finance2"):
+        oid = token_oid(creds.get(key, "") or "")
+        if oid is not None:
+            return oid
+    return None
+
+
+def wb_oids_by_cabinet(db: Session, user: models.User) -> dict:
+    """{oid: CabinetInfo} для всех WB-связок пользователя (для распознавания)."""
+    out: dict = {}
+    for row in list_cabinets(db, user):
+        info = CabinetInfo.from_row(row, company_name=_company_name(db, row.company_id))
+        oid = wb_oid(info)
+        if oid is not None:
+            out[oid] = info
+    return out
 
 
 def seed_user(db: Session) -> models.User:
@@ -211,12 +256,119 @@ def _company_name(db: Session, company_id) -> str:
     return name or ""
 
 
-def info_by_id(db: Session, cabinet_id: int) -> Optional[CabinetInfo]:
-    row = cabinet_by_id(db, cabinet_id)
+def info_by_id(db: Session, cabinet_id: int,
+               user: Optional[models.User] = None) -> Optional[CabinetInfo]:
+    row = cabinet_by_id(db, cabinet_id, user)
     if row is None:
         return None
     info = CabinetInfo.from_row(row, company_name=_company_name(db, row.company_id))
     return info
+
+
+# --- Ключи/настройки связки для UI -----------------------------------------
+# Поля ключей по маркетплейсу: (ключ, подпись, секрет ли).
+CRED_FIELDS: dict = {
+    "wb": [
+        ("standard", "Токен (основной API)", True),
+        ("finance", "Токен Finance API", True),
+        ("finance2", "Finance API — резервный токен", True),
+    ],
+    "ozon": [
+        ("client_id", "Client-Id", False),
+        ("api_key", "Api-Key", True),
+    ],
+    "yandex": [
+        ("token", "Токен Яндекс.Диска", True),
+    ],
+}
+
+
+def cred_fields(marketplace: str) -> list:
+    return list(CRED_FIELDS.get((marketplace or "").strip(), []))
+
+
+def mask_secret(value: str, secret: bool = True) -> str:
+    """Маскирует секрет для отдачи в UI (показывает начало/конец)."""
+    s = (value or "").strip()
+    if not s:
+        return ""
+    if not secret:
+        return s
+    if len(s) <= 8:
+        return "•" * len(s)
+    return s[:4] + "…" + s[-4:]
+
+
+def creds_public(info: "CabinetInfo") -> dict:
+    """Ключи связки для UI: значения замаскированы, секреты не раскрываются.
+
+    Для WB добавляет `oid` (продавец из токена) — чтобы в форме было видно,
+    чьи это ключи.
+    """
+    mp = info.marketplace
+    section = info.creds_for(mp)
+    known = {f[0] for f in cred_fields(mp)}
+    fields = []
+    for key, label, secret in cred_fields(mp):
+        val = (section.get(key) or "").strip()
+        item = {
+            "key": key, "label": label, "secret": secret,
+            "set": bool(val), "masked": mask_secret(val, secret),
+        }
+        if mp == "wb" and val:
+            oid = token_oid(val)
+            if oid is not None:
+                item["oid"] = oid
+        fields.append(item)
+    return {
+        "id": info.id,
+        "code": info.code,
+        "name": info.name,
+        "company_name": info.company_name,
+        "marketplace": mp,
+        "schema": info.schema,
+        "enabled": info.enabled,
+        "has_keys": bool(info.creds),
+        "oid": wb_oid(info) if mp == "wb" else None,
+        "fields": fields,
+        "extra_keys": [k for k in section if k not in known],
+    }
+
+
+def update_cabinet_creds(db: Session, cabinet_id: int, marketplace: str,
+                         values: dict, enabled: Optional[bool] = None,
+                         user: Optional[models.User] = None) -> Optional["CabinetInfo"]:
+    """Обновляет ключи связки (idempotentно): {key: value}.
+
+    Пустая строка/None в значении УДАЛЯЕТ ключ (секцию целиком, если пусто).
+    `enabled` (если передан) переключает связку. Возвращает CabinetInfo или None.
+    """
+    row = cabinet_by_id(db, cabinet_id, user)
+    if row is None:
+        return None
+    mp = (marketplace or "").strip()
+    allowed = {f[0] for f in cred_fields(mp)}
+    creds = secrets.decrypt(row.creds or "")
+    section = dict(creds.get(mp) or {})
+    for key, val in (values or {}).items():
+        if key not in allowed:
+            continue
+        sval = "" if val is None else str(val).strip()
+        if sval:
+            section[key] = sval
+        else:
+            section.pop(key, None)
+    if section:
+        creds[mp] = section
+    else:
+        creds.pop(mp, None)
+    row.creds = secrets.encrypt(creds)
+    if enabled is not None:
+        row.enabled = bool(enabled)
+    db.commit()
+    db.refresh(row)
+    return CabinetInfo.from_row(row, company_name=_company_name(db, row.company_id))
+
 
 
 def resolve_active(db: Session, cookie_value: Optional[str] = None,
@@ -266,6 +418,24 @@ def active_credentials(api: str) -> dict:
     if info is None:
         return {}
     return info.creds_for(api)
+
+
+def db_active_info(db: Session) -> Optional["CabinetInfo"]:
+    """Инфо активной связки сессии db: как разрешил get_db (кука), иначе дефолт.
+
+    `_active` — contextvar, и FastAPI выполняет зависимость и эндпоинт в разных
+    тредх threadpool (contextvar туда не попадает). Поэтому get_db дополнительно
+    кладёт info на сессию (`db._active_info`), а функции, которым нужны creds,
+    читают его отсюда, а не только из contextvar.
+    """
+    info = getattr(db, "_active_info", None)
+    if info is not None:
+        return info
+    user = seed_user(db)
+    info = resolve_active(db, None, user)
+    if info is not None:
+        db._active_info = info
+    return info
 
 
 def search_path_sql(schema: str) -> str:

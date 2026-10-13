@@ -29,7 +29,11 @@ async def import_products(file: UploadFile = File(...), db: Session = Depends(ge
 
 @router.post("/import/net-cost")
 async def import_net_cost(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Обновляет себестоимость (net_cost) товаров из файла с колонками article/net_cost."""
+    """Обновляет себестоимость, ценность и поставщика товаров из файла каталога.
+
+    Колонки: article (+ net_cost / value / supplier). Ценность берётся из
+    ``pure_value``, поставщик — из ``Поставщик`` (файл products.xlsx).
+    """
     data = await file.read()
     df = excel_io.read_excel_bytes(data)
     df = df.rename(columns={
@@ -37,9 +41,15 @@ async def import_net_cost(file: UploadFile = File(...), db: Session = Depends(ge
         "article": "article",
         "Себестоимость": "net_cost",
         "net_cost": "net_cost",
+        "Ценность": "value",
+        "pure_value": "value",
+        "value": "value",
+        "Поставщик": "supplier",
+        "supplier": "supplier",
     })
-    if "article" not in df.columns or "net_cost" not in df.columns:
-        raise HTTPException(status_code=400, detail="В файле нет колонок article и net_cost")
+    if "article" not in df.columns or not ({"net_cost", "value"} & set(df.columns)):
+        raise HTTPException(status_code=400,
+                            detail="В файле нет колонки article и одной из net_cost/value")
     n = sync_service.upsert_products(db, df)
     filled = common_service.count_products_with_cost(db)
     return {"imported": n, "total": len(df), "with_cost_total": filled, "filename": file.filename}

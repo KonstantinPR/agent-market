@@ -53,6 +53,13 @@ PRICING_DEFAULTS = {
     # ограничений нет.
     "min_rating_reviews": 4.0,
     "raise_pct_replenishable": 10.0,
+    # Ценность товара (value из каталога) относительно себестоимости: чем больше
+    # value превышает net_cost (value/net_cost), тем ценнее товар — тем меньше
+    # скидка при LOWER. Порог value_ratio_low = при значении ≤ себестоимости
+    # ограничений нет (1.0), value_ratio_high = при таком отношении и выше скидку
+    # не увеличиваем вовсе (0.0); между порогами — линейно.
+    "value_ratio_low": 1.0,
+    "value_ratio_high": 4.0,
     # T-14: качественные гейты для RAISE. Рейтинг здесь — «Рейтинг по отзывам»
     # из воронки продаж (1..5): низкий рейтинг не даёт поднимать цену.
     "min_rating_for_raise": 4.2,
@@ -523,12 +530,15 @@ def recommendations(
             models.Product.article, models.Product.name,
             models.Product.net_cost, models.Product.replenishable,
             models.Product.volume_l,
+            models.Product.value, models.Product.supplier,
     ).order_by(models.Product.article)):
         art = str(r.article).strip().upper()
         products[art] = {
             "name": r.name or "",
             "net_cost": _num(r.net_cost),
             "replenishable": bool(r.replenishable),
+            "value": _num(r.value),
+            "supplier": (r.supplier or ""),
         }
         volume_by_article[art] = _num(r.volume_l)
 
@@ -638,6 +648,8 @@ def recommendations(
             "detail_known": bool(dl),
             "funnel_known": bool(fl),
             "net_cost": prod["net_cost"],
+            "value": prod.get("value", 0.0),
+            "supplier": prod.get("supplier", ""),
             "sells_net": s_now, "cover_days": cover,
             "comm_rate": None, "logistics_unit": 0.0, "storage_unit": 0.0,
             "other_unit": 0.0, "floor_price": None,
@@ -705,6 +717,7 @@ def _row_skip(art, prod, nm_id, reason):
         "avg_price": 0.0, "stock": None, "doc": None,
         "velocity": 0.0, "v_proj": 0.0, "conv_pct": None, "backlog": 0,
         "net_cost": _num(prod["net_cost"]), "floor_price": None,
+        "value": _num(prod.get("value")), "supplier": (prod.get("supplier") or ""),
         "max_discount_item": None, "action": "SKIP", "status": "skipped_no_data",
         "reason": reason, "target_discount": None, "target_vis": None,
         "margin_pct_at_target": None,
@@ -758,6 +771,7 @@ def _base_row(f: dict) -> dict:
         "current_vis": f["current_vis"], "avg_price": f["avg_price"], "eff": None,
         "stock": f["stock"], "velocity": f["velocity"], "v_proj": f["v_proj"],
         "doc": None, "conv_pct": None, "backlog": 0, "net_cost": f["net_cost"],
+        "value": _num(f.get("value")), "supplier": (f.get("supplier") or ""),
         "comm_rate": f["comm_rate"], "floor_price": f["floor_price"],
         "logistics_unit": _num(f.get("logistics_unit")),
         "storage_unit": _num(f.get("storage_unit")),
@@ -1086,6 +1100,47 @@ def _rating_discount_scale(fb_rating, threshold) -> float:
     return (5.0 - r) / denom if denom > 0 else 0.0
 
 
+def _value_discount_scale(value, net_cost, s) -> float:
+    """Множитель снижения скидки по отношению «ценность/себестоимость».
+
+    value (pure_value из каталога) и net_cost (себестоимость): чем больше
+    ценность превышает себестоимость (value/net_cost), тем ценнее товар — тем
+    меньше скидка при LOWER. Нет данных (value ≤ 0 или net_cost ≤ 0) или
+    value ≤ себестоимости → 1.0 (без ограничений); при отношении
+    ≥ ``value_ratio_high`` → 0.0 (скидку не увеличиваем вовсе); между порогами
+    ``value_ratio_low`` и ``value_ratio_high`` — линейно.
+    """
+    v = _num(value)
+    c = _num(net_cost)
+    if v <= 0 or c <= 0:
+        return 1.0
+    lo = _num(s.get("value_ratio_low", 1.0))
+    hi = _num(s.get("value_ratio_high", 4.0))
+    if hi <= lo:
+        return 1.0
+    r = v / c
+    if r <= lo:
+        return 1.0
+    if r >= hi:
+        return 0.0
+    return (hi - r) / (hi - lo)
+
+
+def _valued_item_reason(f: dict, rating_scale: float, value_scale: float) -> str:
+    """Пояснение ветки «ценный товар»: какие именно факторы заглушили LOWER."""
+    parts = []
+    if rating_scale <= 0.01:
+        parts.append(f"высокий рейтинг по отзывам {_num(f.get('feedback_rating')):.1f}")
+    if value_scale <= 0.01:
+        v = _num(f.get("value"))
+        c = _num(f.get("net_cost"))
+        if v > 0 and c > 0:
+            parts.append(f"ценность {v / c:.1f}× себестоимости")
+        else:
+            parts.append("высокая ценность")
+    return "ценный товар (" + "; ".join(parts) + ") — скидку не увеличиваем"
+
+
 def _half_discount_guard(cur_disc: float, new_disc: float, factual: float, net_cost: float) -> float:
     """R: при RAISE (скидку уменьшаем) никогда не режем её более чем пополам.
 
@@ -1197,6 +1252,10 @@ def _decide(f: dict, s: dict) -> dict:
     # Рейтинг по отзывам (ценный товар): ограничивает скидку при LOWER.
     rating_scale = (_rating_discount_scale(f.get("feedback_rating"), s.get("min_rating_reviews", 4.0))
                     if use_reviews else 1.0)
+    # Ценность (value) относительно себестоимости: тоже тормозит LOWER.
+    value_scale = _value_discount_scale(f.get("value"), f.get("net_cost"), s)
+    # Оба фактора «ценного товара» объединяются в один множитель снижения.
+    item_scale = rating_scale * value_scale
 
     if use_inv and stock is None:
         base.update(action="SKIP", status="skipped_no_stock",
@@ -1245,12 +1304,11 @@ def _decide(f: dict, s: dict) -> dict:
     # R4: мёртвый запас (фактор «Продажи»)
     if use_sales and v_proj <= 0:
         if f["last_sale_days_ago"] >= int(s["dead_stock_days"]):
-            if rating_scale <= 0.01:
+            if item_scale <= 0.01:
                 return _mandatory_step(
                     base, f, s, "LOWER",
-                    f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
-                    f"— скидку не увеличиваем")
-            target_vis = max(_num(floor), eff * (1 - max_drop * rating_scale / 100))
+                    _valued_item_reason(f, rating_scale, value_scale))
+            target_vis = max(_num(floor), eff * (1 - max_drop * item_scale / 100))
             target_vis = min(target_vis, cur_vis)
             target_vis = max(target_vis, price * (1 - max_disc_item / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
@@ -1337,11 +1395,10 @@ def _decide(f: dict, s: dict) -> dict:
             base, f, s, "RAISE", f"дефицит (DOC={doc:.0f} дн., товар докупаемый) — темп важнее")
 
     if doc >= doc_high:
-        if rating_scale <= 0.01:
+        if item_scale <= 0.01:
             return _mandatory_step(
                 base, f, s, "LOWER",
-                f"ценный товар (рейтинг по отзывам {f.get('feedback_rating', 0):.1f}) "
-                f"— скидку не увеличиваем")
+                _valued_item_reason(f, rating_scale, value_scale))
         k = 0.5
         if use_orders and conv < 1.0:
             k *= 0.8
@@ -1351,7 +1408,7 @@ def _decide(f: dict, s: dict) -> dict:
             elif f["trend"] > 1.0:
                 k *= 1.2
         k = _clamp(k, 0.2, 1.2)
-        factor = max(1 - max_drop * rating_scale / 100, (_num(s["target_doc"]) / doc) ** k)
+        factor = max(1 - max_drop * item_scale / 100, (_num(s["target_doc"]) / doc) ** k)
         target_vis = max(_num(floor), eff * factor, price * (1 - max_disc_item / 100))
         target_vis = min(target_vis, cur_vis)
         new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc

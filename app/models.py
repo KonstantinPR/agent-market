@@ -41,6 +41,8 @@ class Product(Base):
     volume_l: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
     composition: Mapped[str] = mapped_column(Text, default="")
     net_cost: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    value: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    supplier: Mapped[str] = mapped_column(String(200), default="")
     replenishable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     sizes: Mapped[list["ProductSize"]] = relationship(
@@ -363,6 +365,35 @@ class StorageCost(Base):
     volume: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
     storage_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     warehouse_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class StorageCharge(Base):
+    """Фактическое хранение WB по товару за конкретный день.
+
+    Из отчёта `seller-analytics-api/v1/paid_storage` (поля date, nmId,
+    vendorCode, volume, warehousePrice). Это фактическая сумма за день по
+    артикулу (нетто: начисления минус корректировки) — в отличие от
+    storage_costs (rolling-срез последних 7 дней «объём×тариф»), из которого
+    хранение приходилось распределять эвристикой. Ключ (nm_id, date).
+    """
+
+    __tablename__ = "storage_charges"
+    __table_args__ = (
+        UniqueConstraint("nm_id", "date", name="uq_storage_charge_nm_date"),
+        Index("ix_storage_charge_article", "article"),
+        Index("ix_storage_charge_date", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nm_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    article: Mapped[str] = mapped_column(String(100), default="")
+    date: Mapped[date_type] = mapped_column(Date, nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    volume: Mapped[float] = mapped_column(Numeric(10, 3), default=0)
+    barcodes_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
     )

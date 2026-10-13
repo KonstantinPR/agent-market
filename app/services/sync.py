@@ -26,6 +26,16 @@ def _f(value, default=0.0) -> float:
     return v
 
 
+def _s(value, default="") -> str:
+    """Аккуратная строка: None/пусто/NaN → default."""
+    if value is None:
+        return default
+    s = str(value).strip()
+    if s == "" or s.lower() == "nan":
+        return default
+    return s
+
+
 def normalize_ozon_realization(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     """Приводит строки реализации Ozon (см. OZON_RU_COLUMNS) к схеме sales."""
     if df is None or df.empty:
@@ -714,9 +724,12 @@ def storage_split(
     """Распределение безартикульных плат «Хранение» по товарам.
 
     Строки хранения в детализации WB не содержат артикула (одна плата за день
-    за весь склад, поле paid_storage). Чтобы отнести их к товарам, вес каждого
-    товара считается как «занимаемый объём × дневной тариф × остаток»:
-    storage_costs.volume × (storage_price, если >0, иначе 1) × stocks.quantity.
+    за весь склад, поле paid_storage). Чтобы отнести их к товарам, основной путь
+    — ФАКТИЧЕСКИЕ начисления из storage_charges (paid_storage, nm_id × дата):
+    если по дню есть данные, плата дня делится пропорционально реальным суммам
+    артикулов. Если данных за день нет — эвристика: вес товара = «занимаемый
+    объём × дневной тариф × остаток» = storage_costs.volume × (storage_price,
+    если >0, иначе 1) × stocks.quantity.
     Для каждого дня с платой хранения S берётся остаток на этот день —
     ближайший срез стоков в окне ±window_days дней с максимальным суммарным
     весом (самый «полный» срез рядом); если полезного среза в окне нет —
@@ -730,12 +743,15 @@ def storage_split(
     «Хранением». Артикулы без строк в стоках, но с продажами в периоде,
     учитываются по проданному количеству.
 
+    Артикулы без объёма/тарифа в storage_costs получают fallback-вес =
+    средний «volume × tariff» артикулов с объёмом, умноженный на «остаток +
+    проданное × sold_fraction». Это обязательно: снимок storage_costs короткий,
+    и без fallback почти 60% проданных товаров уходили с нулевым «Хранением».
+
     target_articles — множество артикулов (UPPER). Если задано, веса считаются
     только по этим артикулам и нормализуются в их пределах: 100% платы
     распределяется внутри множества, «орфанов» (артикулы без продаж в окне)
-    не возникает. Артикулы target без объёма/тарифа в storage_costs получают
-    fallback-вес = средний «volume × tariff» целевых артикулов с объёмом,
-    умноженный на «остаток + проданное × sold_fraction» из среза.
+    не возникает; fallback-среднее тоже считается только по цели.
 
     Возвращает {article_upper: сумма_руб} за период (только товары с весом).
     Без target_articles — распределение по всем артикулам с весом.
@@ -764,22 +780,45 @@ def storage_split(
         if not art:
             continue
         vol_rate.setdefault(art, (float(sc.volume or 0), float(sc.storage_price or 0)))
-    if not vol_rate:
+
+    # Фактические дневные начисления хранения (paid_storage) — если по дню есть
+    # данные, доля считается по РЕАЛЬНЫМ суммам, а не по эвристике «объём×остаток».
+    charge_by_date: dict = {}
+    cq = select(
+        models.StorageCharge.article, models.StorageCharge.date,
+        func.sum(models.StorageCharge.amount),
+    )
+    if date_from:
+        cq = cq.where(models.StorageCharge.date >= date_from)
+    if date_to:
+        cq = cq.where(models.StorageCharge.date <= date_to)
+    cq = cq.group_by(models.StorageCharge.article, models.StorageCharge.date)
+    for art, cdt, amt in db.execute(cq):
+        a = (art or "").strip().upper()
+        if not a or not amt:
+            continue
+        charge_by_date.setdefault(cdt, {})[a] = (
+            charge_by_date.get(cdt, {}).get(a, 0.0) + float(amt)
+        )
+    if not vol_rate and not charge_by_date:
         return {}
 
-    # Средний «volume × tariff» целевых артикулов с объёмом — fallback-вес для
-    # артикулов target, у которых в storage_costs данных нет (вариант A).
+    # Средний «volume × tariff» по артикулам с объёмом — fallback-вес для
+    # артикулов, у которых в storage_costs данных нет. Снимок хранения WB —
+    # краткосрочный (≈7 дней), поэтому БОЛЬШИНСТВО проданных артикулов в нём
+    # отсутствует; без этого fallback они получали вес 0 и «Хранение» = 0
+    # (распределение несправедливо копилось на горстке свежих артикулов).
+    # При заданном target_articles среднее считается только по цели.
     mean_unit_weight = 0.0
-    if target_articles:
-        have = [
-            (float(v), float(r))
-            for a, (v, r) in vol_rate.items()
-            if a in target_articles
-        ]
-        if have:
-            mean_unit_weight = sum(
-                v * (r if r > 0 else 1.0) for v, r in have
-            ) / len(have)
+    have = [
+        (float(v), float(r))
+        for a, (v, r) in vol_rate.items()
+        if (target_articles is None or a in target_articles)
+    ]
+    if have:
+        mean_unit_weight = sum(
+            v * (r if r > 0 else 1.0) for v, r in have
+        ) / len(have)
 
     # Продажи периода (нетто по товарным строкам): то, что покинуло склад.
     sold_qty: dict = {}
@@ -873,14 +912,27 @@ def storage_split(
 
     out: dict = {}
     for d in days:
+        pool = day_totals[d]
+        # 1) Точный путь: по этому дню есть фактические начисления paid_storage.
+        cday = charge_by_date.get(d)
+        if cday:
+            base = {
+                a: v for a, v in cday.items()
+                if v > 0 and (target_articles is None or a in target_articles)
+            }
+            s = sum(base.values())
+            if s > 0:
+                for a, v in base.items():
+                    out[a] = out.get(a, 0.0) + pool * v / s
+                continue
+        # 2) Эвристика: объём×тариф×остаток (с fallback-весом).
         sdate = pick_snapshot(d)
         wmap, total_w = weight_cache[sdate]
         if total_w <= 0:
             continue
-        S = day_totals[d]
-        for art, w in wmap.items():
-            out[art] = out.get(art, 0.0) + S * w / total_w
-    return {k: round(v, 2) for k, v in out.items()}
+        for a, w in wmap.items():
+            out[a] = out.get(a, 0.0) + pool * w / total_w
+    return {a: round(v, 2) for a, v in out.items()}
 
 
 def _redistribute_articleless(rows, cells, fields, weight_idx=(6, 7)):
@@ -1013,13 +1065,14 @@ def detail_summary_dataframe(
 
     # Безартикульные платы «Хранение» распределяются по товарам свода пропорц.
     # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
-    # продажи периода). Распределение идёт только по артикулам с операциями
-    # в окне — 100% платы разносится внутри свода, отдельной строки-остатка
-    # не остаётся.
+    # продажи периода). target_articles = артикулы свода → 100% платы разносится
+    # внутри свода, отдельной строки-остатка не остаётся. Артикулы без объёма в
+    # storage_costs получают fallback-вес по среднему объёму.
     storage_est_map = storage_split(
         db,
         date_from=date_from,
         date_to=date_to,
+        target_articles={(a or "").strip().upper() for a in cells},
     )
 
     recs = []
@@ -1077,6 +1130,10 @@ def upsert_products(db, df: pd.DataFrame) -> int:
             rec.brand = str(row.get("brand", rec.brand))
             rec.barcode = str(row.get("barcode", rec.barcode))
             rec.net_cost = _f(row.get("net_cost", rec.net_cost))
+            if "value" in row:
+                rec.value = _f(row.get("value", rec.value))
+            if "supplier" in row:
+                rec.supplier = _s(row.get("supplier"), rec.supplier)
         else:
             db.add(models.Product(
                 article=art,
@@ -1084,6 +1141,8 @@ def upsert_products(db, df: pd.DataFrame) -> int:
                 brand=str(row.get("brand", "")),
                 barcode=str(row.get("barcode", "")),
                 net_cost=_f(row.get("net_cost", 0)),
+                value=_f(row.get("value", 0)),
+                supplier=_s(row.get("supplier")),
             ))
     db.commit()
     return n
@@ -2437,7 +2496,50 @@ def upsert_storage_costs(db, df: pd.DataFrame) -> int:
     return len(values)
 
 
-def record_api_pull(db, api: str, kind: str, rows: int, db_rows: int, window: str = "") -> None:
+def upsert_storage_charges(db, df: pd.DataFrame) -> int:
+    """Дневные начисления хранения WB (paid_storage) → storage_charges.
+
+    Upsert по (nm_id, date). warehousePrice суммируется (начисление + кор-
+    ректировка), даёт фактическую стоимость хранения артикула за день.
+    """
+    if df is None or df.empty:
+        return 0
+    if not {"date", "nmId", "warehousePrice"} <= set(df.columns):
+        return 0
+
+    def _num(col, default=0.0):
+        src = df[col] if col in df.columns else pd.Series(default, index=df.index)
+        return pd.to_numeric(src, errors="coerce").fillna(default)
+
+    out = pd.DataFrame({
+        "nm_id": df["nmId"].astype(str).str.strip(),
+        "article": df.get("vendorCode", pd.Series("", index=df.index)).astype(str).str.strip(),
+        "date": pd.to_datetime(df["date"], errors="coerce").dt.date,
+        "amount": pd.to_numeric(df["warehousePrice"], errors="coerce").fillna(0.0),
+        "volume": _num("volume"),
+        "barcodes_count": _num("barcodesCount"),
+    })
+    out = out[out["nm_id"].astype(bool) & out["date"].notna()]
+    if out.empty:
+        return 0
+    out = out.groupby(["nm_id", "date"], as_index=False).agg({
+        "article": "first", "amount": "sum",
+        "volume": "max", "barcodes_count": "max",
+    })
+    out["barcodes_count"] = out["barcodes_count"].astype(int)
+    values = [dict(r) for r in out.to_dict("records")]
+    ins = insert(models.StorageCharge)
+    stmt = ins.on_conflict_do_update(
+        index_elements=["nm_id", "date"],
+        set_={c: ins.excluded[c]
+              for c in ["article", "amount", "volume", "barcodes_count"]},
+    )
+    db.execute(stmt, values)
+    db.commit()
+    return len(values)
+
+
+def record_api_pull(db, api, kind, rows, db_rows, window="") -> None:
     """Обновляет лог последней успешной загрузки из API (api+kind)."""
     ins = insert(models.ApiPull)
     stmt = ins.on_conflict_do_update(

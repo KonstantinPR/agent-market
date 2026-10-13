@@ -178,8 +178,13 @@ for (let i = 1; i < order.length; i++) {
     "статус должен идти после всех кнопок шапки, нарушен порядок: " + order.join(","));
 }
 const paneMsgSpans = htmlSrc.match(/<span[^>]*class="[^"]*\bmsg\b[^"]*"[^>]*>/g) || [];
-assert.strictEqual(paneMsgSpans.length, 1,
-  "в разметке должен остаться ровно один статус — #headerMsg, найдено: " + paneMsgSpans.length);
+// Статус разделов один — в шапке (#headerMsg); в ящике кабинетов допускается
+// собственный локальный статус редактора (#cabEditorMsg).
+const statusSpans = paneMsgSpans.filter((s) => !/id="cabEditorMsg"/.test(s));
+assert.strictEqual(statusSpans.length, 1,
+  "в разметке должен остаться ровно один статус — #headerMsg, найдено: " + statusSpans.length);
+assert.ok(paneMsgSpans.some((s) => /id="headerMsg"/.test(s)),
+  "в шапке нет статуса #headerMsg");
 assert.ok(!htmlSrc.includes("data-date"),
   "в панелях не должно быть своих полей периода (data-date): период только в шапке");
 assert.ok(jsSrc.includes("function paneDates()") &&

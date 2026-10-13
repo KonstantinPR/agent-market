@@ -33,6 +33,7 @@ TABLES = ", ".join([
     "marketplaces", "products", "sales", "stocks", "custom_stock",
     "funnel_metric", "nm_articles", "api_pulls", "refresh_runs",
     "price_changes", "marketplace_cards", "price_snapshots", "storage_costs",
+    "storage_charges",
     "wb_detail_rows", "ozon_detail_rows", "ozon_buyouts",
     "ozon_accruals", "ozon_placements",
     "counterparties", "warehouse_docs", "warehouse_doc_items",

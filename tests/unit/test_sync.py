@@ -25,6 +25,7 @@ from app.services.sync import (
     upsert_ozon_price_snapshots,
     upsert_promotions,
     upsert_sales,
+    upsert_storage_charges,
     upsert_wb_detail_rows,
 )
 from app import models
@@ -339,6 +340,38 @@ def test_upsert_wb_detail_rows_idempotent_by_op_key(db):
     rows = db.execute(select(models.WbDetailRow)).scalars().all()
     assert len(rows) == 2
     assert next(r for r in rows if r.op_key == "sr:op1").quantity == 5
+
+
+def test_upsert_storage_charges_groups_by_nm_and_date(db):
+    df = pd.DataFrame([
+        {"date": "2026-09-01", "nmId": 111, "article": "A1",
+         "warehousePrice": 10.0, "volume": 2.0, "barcodesCount": 3},
+        {"date": "2026-09-01", "nmId": 111, "article": "A1",
+         "warehousePrice": -4.0, "volume": 2.0, "barcodesCount": 1},
+        {"date": "2026-09-02", "nmId": 111, "article": "A1",
+         "warehousePrice": 5.0, "volume": 2.0, "barcodesCount": 1},
+    ])
+    assert upsert_storage_charges(db, df) == 2
+    rows = db.execute(
+        select(models.StorageCharge).order_by(models.StorageCharge.date)
+    ).scalars().all()
+    assert len(rows) == 2
+    assert float(rows[0].amount) == 6.0 and rows[0].nm_id == "111"
+    assert float(rows[1].amount) == 5.0
+
+
+def test_upsert_storage_charges_overwrites_on_conflict(db):
+    df = pd.DataFrame([{"date": "2026-09-01", "nmId": 7, "article": "B2",
+                        "warehousePrice": 5.0}])
+    assert upsert_storage_charges(db, df) == 1
+    df2 = pd.DataFrame([
+        {"date": "2026-09-01", "nmId": 7, "article": "B2", "warehousePrice": 8.0},
+        {"date": "2026-09-01", "nmId": 7, "article": "B2", "warehousePrice": 2.0},
+    ])
+    upsert_storage_charges(db, df2)
+    rows = db.execute(select(models.StorageCharge)).scalars().all()
+    assert len(rows) == 1
+    assert float(rows[0].amount) == 10.0
 
 
 def test_upsert_wb_detail_rows_sums_only_goods_quantity(db):

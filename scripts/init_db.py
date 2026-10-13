@@ -41,6 +41,9 @@ def create_tables():
         conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS subject varchar(200) DEFAULT ''"))
         conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS volume_l numeric(10,3) DEFAULT 0"))
         conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS composition text DEFAULT ''"))
+        # Ценность (pure_value) и поставщик товара — из products.xlsx каталога.
+        conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS \"value\" numeric(12,2) DEFAULT 0"))
+        conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS supplier varchar(200) DEFAULT ''"))
         # Фаза B: остатки по размерам
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS chrt_id varchar(40) DEFAULT ''"))
         conn.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS size varchar(50) DEFAULT ''"))
