@@ -123,6 +123,37 @@ def test_apply_cooldown_blocks_second(db, api_client):
                for r in second["rows"] if r["action"] in ("RAISE", "LOWER"))
 
 
+def test_apply_min_prices_pushes_floor(db, api_client, stub_wb):
+    """Минимальные цены: только строки ниже пола, price=пол, discount=0, action=MIN."""
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    rec = api_client.post("/api/pricing/recommendations", json={}).json()
+    row = next(r for r in rec["rows"] if r["article"] == "TST-1")
+    floor = float(row["floor_price"])
+    row["price"] = floor + 300.0
+    row["current_vis"] = floor - 10.0
+    row["current_discount"] = 75.0
+    r = api_client.post("/api/pricing/apply-min", json={"ui_rows": [row]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pushed"] == 1
+    assert stub_wb.applied_prices[0]["discount"] == 0
+    assert stub_wb.applied_prices[0]["price"] >= floor - 1e-6
+    hist = api_client.get("/api/pricing/history").json()
+    assert any(x["action"] == "MIN" for x in hist["rows"])
+
+
+def test_apply_min_prices_nothing_below_floor(db, api_client):
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    rec = api_client.post("/api/pricing/recommendations", json={}).json()
+    row = next(r for r in rec["rows"] if r["article"] == "TST-1")
+    row["current_vis"] = float(row["floor_price"]) + 100.0
+    r = api_client.post("/api/pricing/apply-min", json={"ui_rows": [row]})
+    assert r.status_code == 200
+    assert r.json()["pushed"] == 0
+
+
 def test_export_excel(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))

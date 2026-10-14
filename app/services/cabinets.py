@@ -395,6 +395,41 @@ def resolve_active(db: Session, cookie_value: Optional[str] = None,
     return None
 
 
+def resolve_main(db: Session, user: Optional[models.User] = None) -> Optional[CabinetInfo]:
+    """Главная связка пользователя (users.main_cabinet_id), если задана/включена.
+
+    None — не задана, выключена или чужая (межсвязочное влияние тогда не работает).
+    """
+    user = user or seed_user(db)
+    mid = getattr(user, "main_cabinet_id", None)
+    if not mid:
+        return None
+    row = cabinet_by_id(db, mid, user)
+    if row is None or not row.enabled:
+        return None
+    return CabinetInfo.from_row(row, company_name=_company_name(db, row.company_id))
+
+
+def set_main_cabinet(db: Session, cabinet_id,
+                     user: Optional[models.User] = None) -> Optional[CabinetInfo]:
+    """Ставит/снимает главную связку. cabinet_id=None — «без главной связки»."""
+    user = user or seed_user(db)
+    if cabinet_id is None:
+        user.main_cabinet_id = None
+        db.commit()
+        return None
+    try:
+        cid = int(cabinet_id)
+    except (TypeError, ValueError):
+        raise ValueError("Неверный id связки")
+    row = cabinet_by_id(db, cid, user)
+    if row is None:
+        raise ValueError("Связка не найдена")
+    user.main_cabinet_id = cid
+    db.commit()
+    return CabinetInfo.from_row(row, company_name=_company_name(db, row.company_id))
+
+
 def set_active(info: Optional[CabinetInfo]) -> None:
     _active.set(info)
 

@@ -54,6 +54,12 @@ def _wb_creds():
     return creds or None
 
 
+def _oz_creds():
+    """Ozon-ключи активного кабинета для провайдера (None — фолбэк на .env)."""
+    creds = active_credentials("ozon")
+    return creds or None
+
+
 router = APIRouter()
 
 
@@ -94,6 +100,23 @@ def _resolve_links_param(db, links_param, mp_code=None):
         seen.add(i.id)
         uniq.append(i)
     return uniq
+
+
+def _apply_cabinet(db, cabinet):
+    """Локальный выбор связки в разделе: переключает search_path сессии.
+
+    `cabinet` — id связки (или None → ничего не делаем, работает активная из
+    куки). Возвращает CabinetInfo либо бросает 404. Нужен там, где раздел
+    показывает данные не активной, а выбранной в тулбаре связки (например
+    «Потребность в товаре»).
+    """
+    if cabinet is None:
+        return None
+    inf = cabinet_service.info_by_id(db, int(cabinet))
+    if inf is None or not inf.schema:
+        raise HTTPException(status_code=404, detail="Связка не найдена")
+    cabinet_service.apply_search_path(db, inf.schema)
+    return inf
 
 
 def _df_totals(df: pd.DataFrame, extra_skip=None) -> dict:

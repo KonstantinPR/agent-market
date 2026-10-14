@@ -197,6 +197,35 @@ def test_api_cabinet_select_unknown_404(api_client, db):
     assert r.status_code == 404
 
 
+def test_api_cabinet_main_set_and_clear(api_client, db):
+    _drop_cab_schemas()
+    user = cabinet_service.seed_user(db)
+    _mk_cab(db, code="mc1", schema=CAB_OO, user=user, marketplace="wb")
+    c2 = _mk_cab(db, code="mc2", schema=CAB_IP, user=user, marketplace="wb")
+    r = api_client.post("/api/cabinet/main", json={"id": c2.id})
+    assert r.status_code == 200
+    assert r.json()["main"] == c2.id
+    db.refresh(user)
+    assert user.main_cabinet_id == c2.id
+    body = api_client.get("/api/cabinets").json()
+    assert body["main"] == c2.id
+    assert body["user"]["main_cabinet_id"] == c2.id
+    # снятие главной связки
+    r2 = api_client.post("/api/cabinet/main", json={"id": None})
+    assert r2.status_code == 200
+    assert r2.json()["main"] is None
+    db.refresh(user)
+    assert user.main_cabinet_id is None
+
+
+def test_api_cabinet_main_unknown_400(api_client, db):
+    _drop_cab_schemas()
+    user = cabinet_service.seed_user(db)
+    _mk_cab(db, code="mcx", schema=CAB_OO, user=user)
+    r = api_client.post("/api/cabinet/main", json={"id": 999999})
+    assert r.status_code == 400
+
+
 def test_api_cabinets_reports_active_after_select(api_client, db):
     _drop_cab_schemas()
     user = cabinet_service.seed_user(db)
@@ -274,6 +303,57 @@ def test_api_refresh_skips_link_without_keys(api_client, db):
     r = api_client.post("/api/refresh", params={"api": "wb", "cab_id": c.id})
     assert r.status_code == 400
     assert "ключей" in r.json().get("detail", "")
+
+
+def test_replenish_cabinet_param_reads_selected_schema(db_engine, api_client, db):
+    """`cabinet=` в /replenish читает схему выбранной связки, а не активной."""
+    _drop_cab_schemas()
+    from datetime import date
+
+    with SessionLocal() as sess:
+        user = cabinet_service.seed_user(sess)
+        comp = _mk_company(sess, name="Фирма Р")
+        c1 = _mk_cab(sess, code="rp1", name="Связка А", schema=CAB_OO,
+                     marketplace="wb", company=comp, user=user)
+        c2 = _mk_cab(sess, code="rp2", name="Связка Б", schema=CAB_IP,
+                     marketplace="wb", company=comp, user=user)
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c1, c2])
+    # В схеме первой связки — карточка и остаток МП по артикулу «X».
+    with SessionLocal() as sess:
+        cabinet_service.apply_search_path(sess, CAB_OO)
+        wb_id = sess.execute(text("select id from marketplaces where code='wb'")).scalar()
+        sess.add(models.MarketplaceCard(marketplace_id=wb_id, chrt_id="111",
+                                        vendor_code="X", barcode="bc1"))
+        sess.add(models.Stock(marketplace_id=wb_id, date=date(2026, 9, 1), article="X",
+                              warehouse="Все", quantity=5, quantity_full=5, in_way=0))
+        sess.commit()
+
+    win = {"date_to": "2026-09-30", "window_days": 30}
+    # Активная связка Б (пустая схема) — «X» не виден.
+    r0 = api_client.get("/api/replenish", params=win,
+                        cookies={"agent_cabinet": str(c2.id)})
+    assert r0.status_code == 200
+    assert "X" not in {row["article"] for row in r0.json()["rows"]}
+    assert r0.json().get("cabinet") is None
+
+    # Локальный выбор связки А — данные из её схемы.
+    r1 = api_client.get("/api/replenish", params={**win, "cabinet": c1.id})
+    assert r1.status_code == 200
+    body = r1.json()
+    cab = body.get("cabinet") or {}
+    assert (cab.get("id"), cab.get("schema")) == (c1.id, CAB_OO)
+    assert cab.get("owner", "").startswith("Фирма Р")
+    assert "X" in {row["article"] for row in body["rows"]}
+
+    # Неизвестная связка — 404.
+    assert api_client.get("/api/replenish",
+                          params={"cabinet": 999999}).status_code == 404
+
+    db.rollback()  # снять ACCESS SHARE, иначе DROP SCHEMA ждёт нашу транзакцию
+    with engine.begin() as conn:
+        for s in (CAB_OO, CAB_IP):
+            conn.execute(text(f'drop schema if exists "{s}" cascade'))
+        Base.metadata.create_all(conn, checkfirst=True)
 
 
 def test_api_pricing_settings_roundtrip_and_copy(api_client, db):

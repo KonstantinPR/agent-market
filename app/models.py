@@ -692,6 +692,11 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(200), default="")
     last_cabinet_id: Mapped[Optional[int]] = mapped_column(Integer, default=None)
+    # Главная связка (кабинет-эталон) для межсвязочного влияния цен автопилота:
+    # остальные связки подстраиваются под неё на half (см. main_influence_pct).
+    # NULL = влияния нет. Общий каталог products — в public, поэтому влияем
+    # по article (общие товары видны из всех схем связок).
+    main_cabinet_id: Mapped[Optional[int]] = mapped_column(Integer, default=None)
 
 
 class Cabinet(Base):

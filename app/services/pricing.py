@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.providers import factory as provider_factory
-from app.services.cabinets import active_credentials
+from app.services.cabinets import active_credentials, run_per_link
 
 
 def _cab_provider():
@@ -100,6 +100,40 @@ PRICING_DEFAULTS = {
     "promo_enabled": False,
     "promo_push_pct": 2.0,
     "promo_max_beyond_floor_pp": 5.0,
+    # T-32 (R12): подтверждённый спрос поднимает цену вопреки зоне DOC.
+    # Сигналы спроса (выкупы/корзина/рейтинг/конверсия) при наборе
+    # demand_min_signals из 4 перекрывают «обычный» шаг по остатку и дают
+    # RAISE на demand_raise_pct %, но только пока DOC ≤ demand_raise_max_doc
+    # (в глубоком перезапасе не поднимаем — там товар не распродаётся).
+    "demand_raise": True,
+    "demand_min_buyouts": 3,
+    "demand_min_backlog": 5,
+    "demand_min_rating": 4.5,
+    "demand_min_conv_pct": 1.0,
+    "demand_min_signals": 2,
+    "demand_raise_pct": 15.0,
+    "demand_raise_max_doc": 120.0,
+    # T-32 (R13): скорость продаж из воронки, если по строке Sales за окно
+    # пусто (нет выручки), но в воронке есть активность. Считаем v_proj =
+    # funnel_velocity_field / дней среза воронки (buyouts по умолчанию).
+    "velocity_from_funnel": True,
+    "funnel_velocity_field": "buyouts",
+    # T-32 (R14): нет unit-экономики, но есть остаток и себестоимость.
+    # Включено — пол цены = net_cost×(1+floor_margin_pct/100), решение
+    # (мёртвый/перезапас → LOWER) принимается по нему вместо SKIP.
+    # Выключено — прежний SKIP skipped_no_ratio. net_cost<=0 → SKIP всегда.
+    "no_econ_cost_floor": True,
+    # T-32 (R15): ценность остатка (qty × net_cost) — колонка и вес при
+    # приоритизации (100×100 ₽ ≠ 1000×100 ₽).
+    "stock_value_weight": True,
+    # T-33 (R16): межсвязочное влияние. Если у пользователя выбрана «главная
+    # связка» (users.main_cabinet_id), остальные связки подстраиваются под её
+    # свежую рекомендацию: при RAISE главной локальная цена поднимается как
+    # минимум на половину (main_influence_pct) от относительного изменения
+    # витринной цены главной, но не против локального спроса. Влияют только
+    # повышения главной (её снижения игнорируются). follow_main=0 — выключить.
+    "follow_main": True,
+    "main_influence_pct": 50.0,
 }
 
 
@@ -256,14 +290,15 @@ def _normalize_prices(prices_df: Optional[pd.DataFrame]) -> dict:
     return out
 
 
-def _funnel_slice(db: Session, date_from: date, date_to: date) -> dict:
+def _funnel_slice(db: Session, date_from: date, date_to: date) -> tuple[dict, int]:
     """Последний срез воронки, пересекающий окно [date_from, date_to].
 
     Воронка WB — снимок за период (не по дням), поэтому берём одну (максимально
-    свежую) запись среза и не суммируем срезы. Возвращает расширенный набор
-    метрик (рейтинги, выкупы, конверсии, остатки WB, WB Клуб, вишлисты).
-    Ключи — и как в БД, и в верхнем регистре (артикулы продуктов могут
-    отличаться регистром от воронки/детализации).
+    свежую) запись среза и не суммируем срезы. Возвращает (метрики, дней_в_срезе).
+    Метрики — расширенный набор (рейтинги, выкупы, конверсии, остатки WB, WB Клуб,
+    вишлисты). Ключи — и как в БД, и в верхнем регистре (артикулы продуктов могут
+    отличаться регистром от воронки/детализации). Дней_в_срезе нужен для R13
+    (скорость из воронки: выкупы / дни среза).
     """
     snap = db.execute(
         select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
@@ -275,7 +310,7 @@ def _funnel_slice(db: Session, date_from: date, date_to: date) -> dict:
     ).first()
     out: dict = {}
     if snap is None:
-        return out
+        return out, 0
     from_d, to_d = snap.date_from, snap.date_to
     q = (
         select(
@@ -328,7 +363,7 @@ def _funnel_slice(db: Session, date_from: date, date_to: date) -> dict:
         art = str(r.article).strip()
         out[art] = rec
         out[art.upper()] = rec
-    return out
+    return out, (to_d - from_d).days + 1
 
 
 def _detail_metrics(db: Session, date_from: date, date_to: date) -> dict:
@@ -415,14 +450,164 @@ def _unit_economics(rows: pd.DataFrame) -> Optional[dict]:
     }
 
 
+def _canon_article(value) -> str:
+    """Канонический артикул для сопоставления строк связок (регистр/пробелы)."""
+    return str(value or "").strip().upper()
+
+
+def _reason_add(r: dict, note: str) -> None:
+    """Дописывает пометку к причине, не теряя прежний текст."""
+    old = (r.get("reason") or "").rstrip(". ")
+    r["reason"] = (old + ". " if old else "") + note
+
+
+def build_main_map(
+    db: Session,
+    main_info,
+    settings=None,
+    only_articles: Optional[set] = None,
+) -> dict:
+    """Карта влияния главной связки: canon(article) -> Δ% витринной цены.
+
+    Считает свежую рекомендацию главной связки (read-only) под её собственной
+    схемой и берёт только строки с action=RAISE: Δ = (target_vis−current_vis)/
+    current_vis×100. Пустая карта при отсутствии главной, ошибке или её данных —
+    влияние просто не применяется (расчёт зависимой связки не должен падать).
+
+    only_articles — ограничить расчёт пересечением артикулов (дешевле).
+    """
+    if main_info is None:
+        return {}
+    out: dict = {}
+    only = {_canon_article(a) for a in only_articles} if only_articles else None
+
+    def _fn(db2, info):  # noqa: ARG001
+        try:
+            rec = recommendations(db2, settings, only_articles=only)
+        except Exception:  # noqa: BLE001 — влияние не критично для расчёта
+            return
+        for r in rec.get("rows") or []:
+            if r.get("action") != "RAISE":
+                continue
+            cur = _num(r.get("current_vis"))
+            tgt = _num(r.get("target_vis"))
+            if cur > 0 and tgt > cur:
+                art = _canon_article(r.get("article"))
+                if art:
+                    out[art] = (tgt - cur) / cur * 100.0
+
+    run_per_link(db, [main_info], _fn)
+    return out
+
+
+def main_influence_map(db: Session, settings=None,
+                       only_articles: Optional[set] = None) -> dict:
+    """Карта влияния главной связки для текущего пользователя/сессии.
+
+    Пустая, если follow_main выключен, главная не задана, главная совпадает с
+    активной связкой, или при любой ошибке — влияние не должно ломать расчёт
+    зависимой связки. Настройки главной берутся её собственные (follow_main у
+    неё принудительно снят, чтобы не было рекурсии).
+    """
+    s = merge_settings(settings)
+    if not bool(s.get("follow_main", True)):
+        return {}
+    try:
+        from app.services import cabinets as cabinet_service
+        main = cabinet_service.resolve_main(db)
+        if main is None:
+            return {}
+        active = cabinet_service.db_active_info(db)
+        if active is not None and active.id == main.id:
+            return {}
+        ms = dict(cabinet_service.get_pricing_settings(db, main.id) or {})
+        ms["follow_main"] = False
+        return build_main_map(db, main, settings=ms, only_articles=only_articles)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def apply_main_influence(rows: list, main_map: dict, s: dict) -> int:
+    """T-33 (R16): подтягивает строки зависимой связки к главной на половину.
+
+    Если главная поднимает цену товара (Δ>0 против её же текущей), локальная
+    витринная цена поднимается как минимум на main_influence_pct% от Δ. Правила:
+      * влияют только ПОВЫШЕНИЯ главной (её снижения игнорируются);
+      * локально цена не опускается: если локальный расчёт и так поднимает
+        сильнее (например, горячий спрос) — не трогаем;
+      * пол безубыточности (floor_price) соблюдается;
+      * выше базовой цены не поднять — если скидка уже 0%, строка помечается
+        skipped_no_headroom (автопилот базовую цену не меняет);
+      * влияние применяется поверх min_delta_pp (иначе мелкие половинки глохнут).
+    Возвращает число фактически изменённых строк.
+    """
+    if not main_map or not bool(s.get("follow_main", True)):
+        return 0
+    k = _num(s.get("main_influence_pct"), 50.0) / 100.0
+    if k <= 0:
+        return 0
+    max_disc = _num(s.get("max_discount_pct"), 100.0)
+    touched = 0
+    for r in rows:
+        d_pct = main_map.get(_canon_article(r.get("article")))
+        if not d_pct or d_pct <= 0:
+            continue
+        price = _num(r.get("price"))
+        cur_vis = _num(r.get("current_vis"))
+        if price <= 0 or cur_vis <= 0:
+            continue
+        need_vis = cur_vis * (1 + d_pct * k / 100.0)
+        tgt_vis = _num(r.get("target_vis"), cur_vis)
+        if tgt_vis >= need_vis - 1e-9:
+            continue  # локальный расчёт уже поднимает не ниже требуемого
+        need_vis = min(need_vis, price)  # выше базовой цены скидка < 0 невозможна
+        if need_vis <= cur_vis + 1e-9:
+            # Скидка уже 0%: поднять цену нечем (базовая цена автопилотом не меняется).
+            r["influenced_by_main"] = True
+            r["main_delta_pct"] = round(d_pct, 2)
+            r["action"] = "RAISE"
+            r["status"] = "skipped_no_headroom"
+            _reason_add(r, "влияние главной связки: скидка уже 0%, повышение невозможно")
+            continue
+        lo = _num(r.get("floor_price"))
+        if lo and need_vis < lo:
+            need_vis = lo  # пол только усиливает; на повышении не мешает
+        new_disc = _clamp((1 - need_vis / price) * 100.0, 0.0, max_disc)
+        cur_disc = _num(r.get("current_discount"))
+        if new_disc >= cur_disc - 1e-9:
+            continue  # лимит/пол съели шаг — фактического изменения нет
+        new_vis = price * (1 - new_disc / 100.0)
+        _reason_add(r, f"влияние главной связки: +{d_pct * k:.1f}% → {new_vis:.0f} ₽")
+        r["action"] = "RAISE"
+        r["status"] = "suggested"
+        r["target_discount"] = round(new_disc, 1)
+        r["target_vis"] = round(new_vis, 2)
+        r["delta_discount"] = round(new_disc - cur_disc, 1)
+        if all(key in r for key in ("comm_rate", "logistics_unit", "storage_unit",
+                                    "other_unit", "net_cost")):
+            r["margin_pct_at_target"] = _margin_pct(r["target_vis"], r)
+        r["influenced_by_main"] = True
+        r["main_delta_pct"] = round(d_pct, 2)
+        touched += 1
+    return touched
+
+
 def recommendations(
     db: Session,
     settings=None,
     prices_df: Optional[pd.DataFrame] = None,
     provider=None,
     today: Optional[date] = None,
+    only_articles: Optional[set] = None,
+    main_map: Optional[dict] = None,
 ) -> dict:
-    """Read-only расчёт рекомендаций по правилам R1-R10."""
+    """Read-only расчёт рекомендаций по правилам R1-R10.
+
+    only_articles — если задан, считать только эти товары (для main_map главной
+    связки: нужны лишь пересекающиеся артикулы). main_map — заранее посчитанное
+    влияние главной связки (article -> Δ% витринной цены, T-33/R16); при None
+    влияние не применяется (вызывающий сам решает, строить ли его).
+    """
     s = merge_settings(settings)
     mode = "old" if str(s.get("mode") or "").strip().lower() in ("old", "legacy") else "new"
     s["mode"] = mode
@@ -508,7 +693,7 @@ def recommendations(
     )
     last_sale_ago = {str(art).upper(): (today - d).days for art, d in last_sale}
 
-    funnel = _funnel_slice(db, now_from, now_to)
+    funnel, funnel_days = _funnel_slice(db, now_from, now_to)
     detail = _detail_metrics(db, now_from, now_to)
     stock = _latest_stock(db, wb_mp)
     nm_map = {
@@ -580,6 +765,8 @@ def recommendations(
     non_wb = 0
     out_rows = []
     for art, prod in products.items():
+        if only_articles is not None and art not in only_articles:
+            continue
         nm_id = art_to_nm.get(art)
         if nm_id is None:
             non_wb += 1
@@ -612,6 +799,15 @@ def recommendations(
         ue = _unit_economics(art_fb)
         fl = funnel.get(art, {})
         dl = detail.get(art, {})
+        # R13: нет строк продаж в окне, но воронка показывает активность —
+        # берём скорость из среза воронки (по умолчанию выкупы), чтобы товар
+        # не объявлялся «мёртвым запасом» (иначе живые товары дешевеют).
+        if (use_sales and v_proj <= 0 and bool(s.get("velocity_from_funnel", True))
+                and fl):
+            field = str(s.get("funnel_velocity_field") or "buyouts")
+            fv = _num(fl.get(field))
+            if fv > 0 and funnel_days > 0:
+                v_proj = fv / funnel_days
         f = {
             "article": art, "name": prod["name"], "replenishable": prod["replenishable"],
             "nm_id": nm_id, "price": price, "current_discount": cur_disc,
@@ -684,6 +880,11 @@ def recommendations(
     # T-31: акции WB — инфо-поля по каждой строке + R11 «добор участия».
     _promo_pass(out_rows, _active_promotions(db), s, volume_by_article)
 
+    # T-33 (R16): межсвязочное влияние главной связки — ПОСЛЕ акций, чтобы быть
+    # финальным словом (главная важнее локального добора в акцию).
+    if main_map:
+        apply_main_influence(out_rows, main_map, s)
+
     return {
         "rows": out_rows,
         "settings": s,
@@ -714,7 +915,7 @@ def _row_skip(art, prod, nm_id, reason):
         "article": art, "name": prod["name"],
         "replenishable": prod["replenishable"], "nm_id": nm_id or "",
         "price": 0.0, "current_discount": 0.0, "current_vis": 0.0,
-        "avg_price": 0.0, "stock": None, "doc": None,
+        "avg_price": 0.0, "stock": None, "doc": None, "stock_value": 0.0,
         "velocity": 0.0, "v_proj": 0.0, "conv_pct": None, "backlog": 0,
         "net_cost": _num(prod["net_cost"]), "floor_price": None,
         "value": _num(prod.get("value")), "supplier": (prod.get("supplier") or ""),
@@ -770,6 +971,7 @@ def _base_row(f: dict) -> dict:
         "nm_id": f["nm_id"], "price": f["price"], "current_discount": f["current_discount"],
         "current_vis": f["current_vis"], "avg_price": f["avg_price"], "eff": None,
         "stock": f["stock"], "velocity": f["velocity"], "v_proj": f["v_proj"],
+        "stock_value": round(_num(f.get("stock")) * _num(f.get("net_cost")), 2),
         "doc": None, "conv_pct": None, "backlog": 0, "net_cost": f["net_cost"],
         "value": _num(f.get("value")), "supplier": (f.get("supplier") or ""),
         "comm_rate": f["comm_rate"], "floor_price": f["floor_price"],
@@ -820,6 +1022,40 @@ def _raise_boost(f: dict, s: dict) -> float:
     if f.get("detail_known") and f.get("margin_pct", 0) >= _num(s["strong_margin_pct"]):
         strong += 1
     return (1 + _num(s["raise_boost_pct"]) / 100) if strong >= 2 else 1.0
+
+
+def _demand_hot(f: dict, s: dict, doc: float) -> Optional[str]:
+    """R12: подтверждённый спрос по сигналам воронки.
+
+    Считает сигналы из 4 групп — выкупы, «в корзине» (adds−orders), рейтинг
+    отзывов, конверсия заказов. Возвращает текст-причину, если набрано не меньше
+    demand_min_signals групп И DOC не выше demand_raise_max_doc; иначе None.
+    Нулевой порог отключает соответствующую группу (0 = «нет данных» не считаем).
+    """
+    doc_cap = _num(s.get("demand_raise_max_doc"), 0.0)
+    if doc_cap > 0 and doc > doc_cap:
+        return None
+    signals: list = []
+
+    def hit(threshold, value, text):
+        thr = _num(threshold)
+        if thr > 0 and value >= thr:
+            signals.append(text)
+
+    buyouts = int(f.get("buyouts") or 0)
+    hit(s.get("demand_min_buyouts"), buyouts, f"выкупы {buyouts}")
+    backlog = max(int(f.get("adds") or 0) - int(f.get("orders") or 0), 0)
+    hit(s.get("demand_min_backlog"), backlog, f"в корзине {backlog}")
+    rating = _num(f.get("feedback_rating"))
+    hit(s.get("demand_min_rating"), rating, f"рейтинг {rating:.1f}")
+    views = int(f.get("views") or 0)
+    conv = (int(f.get("orders") or 0) / views * 100) if views > 0 else 0.0
+    hit(s.get("demand_min_conv_pct"), conv, f"конверсия {conv:.1f}%")
+
+    need = int(_num(s.get("demand_min_signals"), 2))
+    if len(signals) < max(need, 1):
+        return None
+    return ", ".join(signals)
 
 
 def _promo_cap_pct(description) -> Optional[float]:
@@ -1014,6 +1250,15 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
         st = r.get("stock")
         return 0.0 if st is None else _num(st)
 
+    def value_key(r):
+        # R15: при включённом весе себестоимости приоритет отдаём остатку по
+        # деньгам (100 шт × 1000 ₽ важнее 100 шт × 100 ₽), а не по штукам.
+        if bool(s.get("stock_value_weight", True)):
+            sv = r.get("stock_value")
+            if sv is not None:
+                return _num(sv)
+        return stock_key(r)
+
     def doc_key(r):
         d = r.get("doc")
         return float("inf") if d is None else _num(d)
@@ -1021,7 +1266,7 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
     def vol_key(r):
         return _num(volume_by_article.get(r.get("article")))
 
-    candidates.sort(key=lambda c: (margin_key(c[0]), -stock_key(c[0]),
+    candidates.sort(key=lambda c: (margin_key(c[0]), -value_key(c[0]),
                                    -doc_key(c[0]), -vol_key(c[0])))
 
     for r, cur, base_t, cap_disc in candidates[:needed]:
@@ -1267,9 +1512,22 @@ def _decide(f: dict, s: dict) -> dict:
 
     if use_margin:
         if f["comm_rate"] is None or floor is None:
-            base.update(action="SKIP", status="skipped_no_ratio",
-                        reason="нет unit-экономики (нет продаж/доходов — не можем гарантировать break-even)")
-            return base
+            # R14: unit-экономики нет (нет продаж/доходов за окно), но остаток
+            # есть и известна себестоимость. По политике cost_floor работаем от
+            # пола = себестоимость + floor_margin_pct (обычный LOWER по
+            # мёртвому/перезапасу), иначе — прежний SKIP.
+            # R14: unit-экономики нет (нет продаж/доходов за окно), но остаток
+            # есть и известна себестоимость. Включённый cost_floor даёт пол =
+            # себестоимость + floor_margin_pct (обычный LOWER по мёртвому/
+            # перезапасу), иначе — прежний SKIP.
+            net_cost = _num(f.get("net_cost"))
+            if bool(s.get("no_econ_cost_floor", True)) and net_cost > 0 and price > 0:
+                floor = net_cost * (1 + _num(s["floor_margin_pct"]) / 100)
+                f["floor_price"] = floor
+            else:
+                base.update(action="SKIP", status="skipped_no_ratio",
+                            reason="нет unit-экономики (нет продаж/доходов — не можем гарантировать break-even)")
+                return base
         max_disc_item = min(_num(s["max_discount_pct"]), (1 - floor / price) * 100 if price > 0 else 0)
     else:
         # без поля безубыточности ниже опускаться нельзя лишь до потолка max_discount_pct
@@ -1345,6 +1603,25 @@ def _decide(f: dict, s: dict) -> dict:
                 "LOWER" if doc >= _num(s["target_doc"]) else "RAISE",
                 "остаток не влияет (фактор выключен)")
         return base
+
+    # R12: подтверждённый спрос поднимает цену вопреки зоне DOC (в норме и
+    # перезапасе), пока DOC не выше demand_raise_max_doc. Обходим «половинный
+    # кап» (_half_discount_guard), иначе рост цены почти незаметен. В дефиците
+    # (doc < doc_low) работает нижестоящая логика с качественными гейтами T-14.
+    if (use_orders and bool(s.get("demand_raise", True)) and price > 0
+            and doc >= doc_low):
+        demand_reason = _demand_hot(f, s, doc)
+        if demand_reason:
+            raise_pct = _num(s.get("demand_raise_pct"), 15.0)
+            target_vis = min(price, cur_vis * (1 + raise_pct / 100))
+            new_disc = (1 - target_vis / price) * 100
+            if cur_disc - new_disc >= _num(s["min_delta_pp"]):
+                base.update(action="RAISE", status="suggested",
+                            reason=f"устойчивый спрос ({demand_reason}) — поднимаем цену",
+                            target_discount=round(_clamp(new_disc, 0, 100), 1),
+                            target_vis=round(price * (1 - new_disc / 100), 2),
+                            margin_pct_at_target=_margin_pct(price * (1 - new_disc / 100), f))
+                return base
 
     if doc < doc_low:
         if hot_demand:
@@ -1729,7 +2006,7 @@ def _pushed_items(rows: list, s: dict, applied_past: set) -> list:
 
 def _record(db: Session, rows: list, applied_at: Optional[datetime], error: Optional[str] = None):
     for r in rows:
-        is_applied = (r["action"] in ("RAISE", "LOWER", "HALVE")
+        is_applied = (r["action"] in ("RAISE", "LOWER", "HALVE", "MIN")
                       and r.get("status") == "applied"
                       and error is None)
         db.add(models.PriceChange(
@@ -1750,6 +2027,7 @@ def apply_recommendations(
     prices_df: Optional[pd.DataFrame] = None,
     provider=None,
     today: Optional[date] = None,
+    main_map: Optional[dict] = None,
 ) -> dict:
     """Расчёт + применение скидок через WbProvider.update_prices + журнал PriceChange."""
     s = merge_settings(settings)
@@ -1758,14 +2036,17 @@ def apply_recommendations(
     rec_settings = merge_settings(s)
     rec_settings["show_zero"] = True
     rec = recommendations(db, rec_settings, prices_df=prices_df, provider=provider,
-                          today=today)
+                          today=today, main_map=main_map)
     rows = rec["rows"]
     today = today or date.today()
     cooldown_from = today - timedelta(days=int(s["cooldown_days"]))
 
+    # Кулдаун — только по изменениям скидки (RAISE/LOWER/HALVE). MIN (минимальные
+    # цены, T-33) не должен блокировать последующие шаги автопилота.
     applied_past = set(db.scalars(
         select(models.PriceChange.article).where(
             models.PriceChange.status == "applied",
+            models.PriceChange.action.in_(("RAISE", "LOWER", "HALVE")),
             models.PriceChange.applied_at >= cooldown_from,
         )
     ).all())
@@ -1825,6 +2106,7 @@ def apply_rows(
     applied_past = set(db.scalars(
         select(models.PriceChange.article).where(
             models.PriceChange.status == "applied",
+            models.PriceChange.action.in_(("RAISE", "LOWER", "HALVE")),
             models.PriceChange.applied_at >= cooldown_from,
         )
     ).all())
@@ -1850,5 +2132,97 @@ def apply_rows(
     applied_ids = [r["article"] for r in rows if r["status"] == "applied"]
     note = f"Применено изменений: {len(applied_ids)} (из видимых в таблице: {len(rows)})."
     return {"applied": applied_ids, "rows": rows, "pushed": len(items),
+            "task_id": result.get("task_id") if isinstance(result, dict) else None,
+            "note": note}
+
+
+def apply_min_prices(
+    db: Session,
+    rows: Optional[list] = None,
+    settings=None,
+    provider=None,
+    today: Optional[date] = None,
+) -> dict:
+    """T-33: минимальные (break-even) цены — price=floor_price, discount=0.
+
+    Отправляются только строки, у которых текущая витринная цена ниже пола
+    безубыточности (profit ≥ 0 уже не выполняется). rows=None → пересчитываются
+    рекомендации (show_zero=True, чтобы не пропустить убыточные нулевые). Порог
+    WB (priceLimits.minPrice) применяется как кламп ИСТИННОЙ минимальной цены:
+    итог = max(пол, мин. цена WB). Пишет журнал price_changes с action=MIN
+    (не участвует в кулдауне автопилота).
+    """
+    s = merge_settings(settings or {})
+    if rows is None:
+        rec_settings = merge_settings(s)
+        rec_settings["show_zero"] = True
+        prices_df, _u, _src = resolve_prices(db, provider=provider, allow_network=True)
+        rows = recommendations(
+            db, rec_settings, prices_df=prices_df, provider=provider, today=today,
+        ).get("rows") or []
+    rows = [dict(r) for r in rows]
+
+    targets, no_nm = [], 0
+    for r in rows:
+        floor = _num(r.get("floor_price"))
+        cur_vis = _num(r.get("current_vis"))
+        if floor <= 0 or cur_vis <= 0 or cur_vis >= floor - 1e-9:
+            continue  # цена не ниже пола — товар и так безубыточен
+        try:
+            nm = int(r.get("nm_id"))
+        except (TypeError, ValueError):
+            nm = 0
+        if nm <= 0:
+            no_nm += 1
+            continue
+        r["nm_id"] = nm
+        r["_min_price"] = max(100.0, float(floor))
+        targets.append(r)
+
+    if not targets:
+        return {"applied": [], "pushed": 0, "skipped": no_nm,
+                "note": "Нет товаров с ценой ниже безубыточного минимума."}
+
+    prov = provider or _cab_provider()
+    items = [{"nmID": r["nm_id"], "price": r["_min_price"], "discount": 0}
+             for r in targets]
+    get_min = getattr(prov, "get_min_prices", None)
+    if callable(get_min):
+        try:
+            wb_min = get_min([it["nmID"] for it in items]) or {}
+        except Exception:  # noqa: BLE001 — клампинг по WB пропускается
+            wb_min = {}
+        for it in items:
+            wb = _num((wb_min or {}).get(str(it["nmID"])))
+            if wb > 0:
+                it["price"] = max(it["price"], wb)
+
+    now = datetime.now()
+    try:
+        result = prov.update_prices(items)
+    except Exception as exc:  # noqa: BLE001
+        for r in targets:
+            r["action"] = "MIN"
+            r["status"] = "error"
+            r["reason"] = f"минимальная цена: {exc}"
+        _record(db, targets, applied_at=None, error=str(exc))
+        raise
+
+    by_nm = {it["nmID"]: it["price"] for it in items}
+    for r in targets:
+        sent = by_nm.get(r["nm_id"], r["_min_price"])
+        r["action"] = "MIN"
+        r["status"] = "applied"
+        r["target_discount"] = 0.0
+        r["target_vis"] = round(sent, 2)
+        r["reason"] = (f"минимальная цена (безубыток): {sent:.0f} ₽ (пол "
+                       f"{_num(r.get('floor_price')):.0f} ₽), скидка 0%")
+        r["delta_discount"] = round(0.0 - _num(r.get("current_discount")), 1)
+    _record(db, targets, applied_at=now)
+    applied_ids = [r["article"] for r in targets]
+    note = f"Минимальные цены отправлено: {len(items)}."
+    if no_nm:
+        note += f" Пропущено без nm_id: {no_nm}."
+    return {"applied": applied_ids, "pushed": len(items), "skipped": no_nm,
             "task_id": result.get("task_id") if isinstance(result, dict) else None,
             "note": note}

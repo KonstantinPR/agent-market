@@ -13,6 +13,7 @@ from app.services.pricing import (
     _parse_ranging,
     _promo_cap_pct,
     _promo_pass,
+    _value_discount_scale,
     merge_settings,
     project_velocity,
     recommendations,
@@ -21,16 +22,19 @@ from app.services.pricing import (
 TODAY = date.today()
 
 
-def _seed(db, art, nm, *, name="Товар", net_cost=300, replenishable=False,
+def _seed(db, art, nm, *, name="Товар", net_cost=300, value=0,
+          supplier="", replenishable=False,
           stock=100, in_way=0, sales=(), funnel=(0, 0, 0, 0, 0), funnel_extra=None):
     """Засевает товар: nm-карта, остаток, воронка, продажи.
 
     funnel=(views, adds, orders, cancelled, avg_price) для последнего среза воронки.
     funnel_extra — дополнительные поля среза воронки (рейтинг, выкупы и т.п.).
     sales=список кортежей (offset_days, quantity, returns_qty).
+    value/supplier — ценность и поставщик из каталога (products.xlsx).
     """
     wb = db.execute(select(models.Marketplace.id).where(models.Marketplace.code == "wb")).scalar_one()
     db.add(models.Product(article=art, name=name, net_cost=net_cost,
+                          value=value, supplier=supplier,
                           replenishable=replenishable))
     db.add(models.NmArticle(nm_id=nm, article=art))
     if stock is not None:
@@ -186,9 +190,96 @@ def test_r1_no_stock_skips(db):
 
 def test_r2_no_unit_economics_skips(db):
     # история есть (запись в продажах), но продаж/реального дохода нет -> нет unit-экономики
+    # (no_econ_cost_floor=0 сохраняет прежний «пропустить»)
     _seed(db, "R2", "P2", stock=10, sales=[(40, 0, 0)])
-    rec = recommendations(db, prices_df=_prices(("P2", 1000, 0)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("P2", 1000, 0)), today=TODAY,
+                          settings={"no_econ_cost_floor": 0})
     assert _row(rec, "R2")["status"] == "skipped_no_ratio"
+
+
+def test_r14_cost_floor_lowers_without_unit_econ(db):
+    """R14: нет unit-экономики, но есть остаток и себестоимость — снижаем по полу cost_floor."""
+    _seed(db, "CF1", "PCF1", stock=100, net_cost=400, sales=[(40, 0, 0)])
+    rec = recommendations(db, prices_df=_prices(("PCF1", 1000, 0)), today=TODAY)
+    row = _row(rec, "CF1")
+    assert row["action"] == "LOWER"
+    assert row["status"] == "suggested"
+    # floor = 400 * (1 + 10%) = 440; цель не ниже пола
+    assert row["target_vis"] >= 400.0
+
+
+def test_r14_cost_floor_skips_without_cost(db):
+    """R14: себестоимости нет (net_cost=0) — по-прежнему пропускаем."""
+    _seed(db, "CF2", "PCF2", stock=100, net_cost=0, sales=[(40, 0, 0)])
+    rec = recommendations(db, prices_df=_prices(("PCF2", 1000, 0)), today=TODAY)
+    assert _row(rec, "CF2")["status"] == "skipped_no_ratio"
+
+
+def _demand_seed(db, art, nm, stock):
+    """Товар с подтверждённым спросом: выкупленные заказы + корзина + рейтинг."""
+    _seed(db, art, nm, stock=stock, replenishable=True,
+          sales=[(2, 4, 0), (20, 4, 0), *_fallback_sales()],
+          funnel=(200, 30, 10, 0, 900),
+          funnel_extra={"buyouts": 6, "feedback_rating": 4.9})
+
+
+def test_r12_demand_raises_in_normal_zone(db):
+    """R12: сильный спрос поднимает цену даже при doc ≥ target_doc (без R12 был бы LOWER)."""
+    _demand_seed(db, "D12", "PD12", stock=15)  # doc ≈ 52.5 — нормальная зона
+    rec = recommendations(db, prices_df=_prices(("PD12", 1000, 20)), today=TODAY)
+    row = _row(rec, "D12")
+    assert row["action"] == "RAISE"
+    # +15% к витрине: 800 -> 920, скидка 20 -> 8 (обходим «половинный кап» 10)
+    assert row["target_discount"] == pytest.approx(8.0, abs=0.6)
+    assert "устойчивый спрос" in row["reason"]
+
+
+def test_r12_demand_capped_by_doc(db):
+    """R12: если перезапас выше demand_raise_max_doc — не поднимаем, работаем по остатку."""
+    _demand_seed(db, "D13", "PD13", stock=400)  # doc ≈ 1400 > 120
+    rec = recommendations(db, prices_df=_prices(("PD13", 1000, 20)), today=TODAY)
+    row = _row(rec, "D12" if False else "D13")
+    assert row["action"] == "LOWER"
+    assert row["doc"] is not None and row["doc"] > 120
+
+
+def test_r13_velocity_from_funnel_buyouts(db):
+    """R13: нет строк продаж в окне, но воронка с выкупами — товар не «мёртвый»."""
+    _seed(db, "V13", "PV13", stock=1, net_cost=200, sales=[(40, 0, 0)],
+          funnel=(200, 40, 20, 0, 900),
+          funnel_extra={"buyouts": 6, "feedback_rating": 4.8})
+    rec = recommendations(db, prices_df=_prices(("PV13", 1000, 20)), today=TODAY)
+    row = _row(rec, "V13")
+    assert row["v_proj"] > 0                     # скорость взята из воронки (6/7)
+    assert "мёртв" not in (row["reason"] or "")
+    assert row["action"] == "RAISE"              # дефицит + спрос
+
+
+def test_r13_without_funnel_still_dead(db):
+    """R13: без активности в воронке товар по-прежнему «мёртвый запас»."""
+    _seed(db, "V14", "PV14", stock=5, sales=[(40, 0, 0)])
+    rec = recommendations(db, prices_df=_prices(("PV14", 1000, 10)), today=TODAY)
+    row = _row(rec, "V14")
+    assert "мёртв" in row["reason"]
+    assert row["v_proj"] == 0
+
+
+def test_r15_stock_value_weight_column(db):
+    """R15: ценность остатка = остаток × себестоимость."""
+    _seed(db, "SV1", "PSV1", stock=100, net_cost=400, sales=[(2, 4, 0), *_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PSV1", 1000, 10)), today=TODAY)
+    assert _row(rec, "SV1")["stock_value"] == pytest.approx(40000.0)
+
+
+def test_merge_settings_new_r12_r14_keys():
+    s = merge_settings({"demand_raise": "false", "demand_raise_pct": 12,
+                        "no_econ_cost_floor": 0, "velocity_from_funnel": 0,
+                        "demand_min_buyouts": 5})
+    assert s["demand_raise"] is False
+    assert s["demand_raise_pct"] == pytest.approx(12.0)
+    assert s["no_econ_cost_floor"] is False
+    assert s["velocity_from_funnel"] is False
+    assert s["demand_min_buyouts"] == pytest.approx(5.0)
 
 
 def test_r3_high_returns_skips(db):
@@ -842,7 +933,8 @@ def test_use_orders_off_disables_hot_raise(db):
 def test_use_margin_off_relaxes_unit_econ_requirement(db):
     """use_margin=False: нехватка unit-экономики не блокирует решение."""
     _seed(db, "MU1", "PMU1", stock=10, sales=[(5, 2, 3)])
-    rec_on = recommendations(db, prices_df=_prices(("PMU1", 1000, 0)), today=TODAY)
+    rec_on = recommendations(db, prices_df=_prices(("PMU1", 1000, 0)), today=TODAY,
+                             settings={"no_econ_cost_floor": 0})
     assert _row(rec_on, "MU1")["status"] == "skipped_no_ratio"
     rec_off = recommendations(db, prices_df=_prices(("PMU1", 1000, 0)), today=TODAY,
                               settings={"use_margin": False})
@@ -973,6 +1065,107 @@ def test_use_reviews_off_disables_rating_cap(db):
     row = _row(rec, "RR7")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
+
+
+# -------------------------------------- Ценность/себестоимость (value) тормозит LOWER
+
+
+def test_value_scale_unit_boundaries():
+    """_value_discount_scale: нет данных/отношение ≤ low → 1.0, ≥ high → 0.0, между — линейно."""
+    s = {"value_ratio_low": 1.0, "value_ratio_high": 4.0}
+    assert _value_discount_scale(0, 100, s) == 1.0            # нет ценности
+    assert _value_discount_scale(100, 0, s) == 1.0            # нет себестоимости
+    assert _value_discount_scale(100, 100, s) == 1.0          # r = 1.0 = low
+    assert _value_discount_scale(50, 100, s) == 1.0           # r < low
+    assert _value_discount_scale(400, 100, s) == 0.0          # r = 4.0 = high
+    assert _value_discount_scale(800, 100, s) == 0.0          # r > high
+    assert _value_discount_scale(250, 100, s) == pytest.approx(0.5)  # (4−2.5)/3
+    # вырожденные пороги → без ограничений
+    assert _value_discount_scale(400, 100, {"value_ratio_low": 2.0,
+                                            "value_ratio_high": 2.0}) == 1.0
+
+
+def test_value_ratio_high_limits_overstock_lower(db):
+    """value = 4×себестоимости → ценному товару скидку не увеличиваем: только обязательный шаг."""
+    _seed(db, "VL1", "PVL1", stock=1000, net_cost=300, value=1200,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PVL1", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "VL1")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(11.0, abs=0.5)  # 10 -> 11 (минимальный шаг)
+    assert "ценный товар" in row["reason"]
+
+
+def test_value_ratio_mid_softens_overstock_drop(db):
+    """value = 2×себестоимости → LOWER разрешён, но скидка меньше, чем без ценности."""
+    _seed(db, "VL2", "PVL2", stock=1000, net_cost=300, value=600,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PVL2", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "VL2")
+    assert row["action"] == "LOWER"
+    valued_disc = row["target_discount"]
+
+    _seed(db, "VL2B", "PVL2B", stock=1000, net_cost=300,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec_base = recommendations(db, prices_df=_prices(("PVL2B", 2000, 10)), today=TODAY,
+                               settings={"prefer_raise": False})
+    base_disc = _row(rec_base, "VL2B")["target_discount"]
+    assert valued_disc < base_disc
+
+
+def test_value_below_cost_no_effect(db):
+    """value = себестоимости (r = 1.0 ≤ low) → поведение как R8 (без ограничений)."""
+    _seed(db, "VL3", "PVL3", stock=1000, net_cost=300, value=300,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PVL3", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "VL3")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
+
+
+def test_value_unknown_no_effect(db):
+    """value = 0 (нет данных) → ограничений нет."""
+    _seed(db, "VL4", "PVL4", stock=1000, net_cost=300,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PVL4", 2000, 10)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "VL4")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
+
+
+def test_value_ratio_high_limits_dead_stock_lower(db):
+    """Мёртвый товар с value = 4×себестоимости → скидку не делим, но коррекция обязательна (шаг 1)."""
+    _seed(db, "VL5", "PVL5", stock=100, net_cost=300, value=1200,
+          sales=[*_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PVL5", 1000, 0)), today=TODAY,
+                          settings={"prefer_raise": False})
+    row = _row(rec, "VL5")
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(1.0, abs=0.5)
+    assert "ценный товар" in row["reason"]
+
+
+def test_value_ratio_does_not_limit_raise(db):
+    """Ценность не мешает RAISE при дефиците."""
+    _seed(db, "VL6", "PVL6", stock=5, net_cost=300, value=1200,
+          sales=[(2, 6, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PVL6", 1000, 20)), today=TODAY)
+    assert _row(rec, "VL6")["action"] == "RAISE"
+
+
+def test_recommendation_row_includes_value_and_supplier(db):
+    """Строка рекомендации несёт value и supplier из каталога."""
+    _seed(db, "VL7", "PVL7", stock=100, net_cost=300, value=750,
+          supplier="ООО Ромашка",
+          sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()], funnel=(100, 1, 1, 0, 900))
+    rec = recommendations(db, prices_df=_prices(("PVL7", 1000, 10)), today=TODAY)
+    row = _row(rec, "VL7")
+    assert row["value"] == 750.0
+    assert row["supplier"] == "ООО Ромашка"
 
 
 # ------------------------------------------------------------------ «Старая версия» (mode=old)
@@ -1315,3 +1508,230 @@ def test_active_promotions_ignores_finished(db):
     db.commit()
     active = _active_promotions(db)
     assert active == []
+
+
+# ------------------------------------------------- R16/T-33: влияние главной связки
+
+
+def _inf_row(art="A1", price=2000.0, cur_disc=20.0, tgt_disc=None, action="HOLD",
+             floor=700.0):
+    tgt_disc = cur_disc if tgt_disc is None else tgt_disc
+    return {
+        "article": art, "nm_id": "1", "name": "Товар", "price": price,
+        "current_discount": cur_disc, "current_vis": price * (1 - cur_disc / 100),
+        "target_discount": tgt_disc, "target_vis": price * (1 - tgt_disc / 100),
+        "action": action, "status": "suggested", "reason": "правила",
+        "floor_price": floor,
+    }
+
+
+def test_apply_main_influence_half_raise(db):
+    """Главная подняла +10% → локальная витрина растёт на половину (5%)."""
+    r = _inf_row(cur_disc=20.0)  # current_vis = 1600
+    n = pricing_service.apply_main_influence([r], {"A1": 10.0}, {})
+    assert n == 1
+    assert r["action"] == "RAISE"
+    assert r["target_vis"] == pytest.approx(1680.0, abs=0.5)
+    assert r["target_discount"] == pytest.approx(16.0, abs=0.1)
+    assert r["influenced_by_main"] is True
+    assert r["main_delta_pct"] == 10.0
+    assert "влияние главной связки" in r["reason"]
+
+
+def test_apply_main_influence_respects_pct(db):
+    """main_influence_pct=100 → берём Δ главной целиком (10%)."""
+    r = _inf_row(cur_disc=20.0)
+    pricing_service.apply_main_influence([r], {"A1": 10.0}, {"main_influence_pct": 100.0})
+    assert r["target_vis"] == pytest.approx(1760.0, abs=0.5)
+
+
+def test_apply_main_influence_ignores_lower_and_absent(db):
+    r = _inf_row()
+    assert pricing_service.apply_main_influence([r], {}, {}) == 0
+    assert pricing_service.apply_main_influence([r], {"A1": -5.0}, {}) == 0
+    assert pricing_service.apply_main_influence([r], {"OTHER": 10.0}, {}) == 0
+    assert r["action"] == "HOLD"
+
+
+def test_apply_main_influence_off_switch(db):
+    r = _inf_row()
+    assert pricing_service.apply_main_influence([r], {"A1": 10.0}, {"follow_main": False}) == 0
+    assert "influenced_by_main" not in r
+
+
+def test_apply_main_influence_keeps_stronger_local_raise(db):
+    """Локальный расчёт уже поднимает сильнее — строку не переписываем вниз."""
+    r = _inf_row(cur_disc=20.0, tgt_disc=5.0, action="RAISE")  # target_vis = 1900
+    n = pricing_service.apply_main_influence([r], {"A1": 10.0}, {})
+    assert n == 0
+    assert r["target_vis"] == pytest.approx(1900.0, abs=0.5)
+    assert r["target_discount"] == pytest.approx(5.0, abs=0.1)
+
+
+def test_apply_main_influence_no_headroom_marks_skipped(db):
+    """Скидка уже 0% (current_vis == базовая) → поднять нечем: skipped_no_headroom."""
+    r = _inf_row(cur_disc=0.0)
+    n = pricing_service.apply_main_influence([r], {"A1": 10.0}, {})
+    assert n == 0
+    assert r["status"] == "skipped_no_headroom"
+    assert r["action"] == "RAISE"
+    assert r["influenced_by_main"] is True
+    assert r["main_delta_pct"] == 10.0
+
+
+def test_apply_main_influence_floor_strengthens(db):
+    """Пол безубыточности выше требуемого влияния — берём пол (не ниже)."""
+    r = _inf_row(cur_disc=20.0, floor=1700.0)  # need 1680 < floor 1700
+    n = pricing_service.apply_main_influence([r], {"A1": 10.0}, {})
+    assert n == 1
+    assert r["target_vis"] == pytest.approx(1700.0, abs=0.5)
+
+
+class _InfoStub:
+    def __init__(self, schema="public"):
+        self.schema = schema
+
+
+def test_build_main_map_collects_only_raises(db, monkeypatch):
+    """В карту влияния попадают только RAISE главной; Δ = (tgt−cur)/cur·100."""
+    monkeypatch.setattr(pricing_service, "recommendations", lambda *a, **k: {"rows": [
+        {"article": "a1", "action": "RAISE", "current_vis": 1000.0, "target_vis": 1100.0},
+        {"article": "a2", "action": "LOWER", "current_vis": 1000.0, "target_vis": 900.0},
+        {"article": "a3", "action": "RAISE", "current_vis": 0.0, "target_vis": 100.0},
+    ]})
+    m = pricing_service.build_main_map(db, _InfoStub())
+    assert set(m.keys()) == {"A1"}
+    assert m["A1"] == pytest.approx(10.0)
+
+
+def test_main_influence_map_empty_without_main(db):
+    assert pricing_service.main_influence_map(db, {}) == {}
+
+
+def test_main_influence_map_off_switch(db):
+    assert pricing_service.main_influence_map(db, {"follow_main": False}) == {}
+
+
+def test_main_influence_map_skips_when_main_is_active(db):
+    from app.services import cabinets as cab
+    user = cab.seed_user(db)
+    comp = models.Company(user_id=user.id, name="Фирма", position=1)
+    db.add(comp)
+    db.flush()
+    c = models.Cabinet(user_id=user.id, company_id=comp.id, code="only", name="Only",
+                       schema="public", marketplace="wb", enabled=True, position=1)
+    db.add(c)
+    db.commit()
+    user.last_cabinet_id = c.id
+    user.main_cabinet_id = c.id
+    db.commit()
+    assert pricing_service.main_influence_map(db, {}) == {}
+
+
+def test_main_influence_map_uses_main_when_distinct(db, monkeypatch):
+    from app.services import cabinets as cab
+    user = cab.seed_user(db)
+    comp = models.Company(user_id=user.id, name="Фирма", position=1)
+    db.add(comp)
+    db.flush()
+    local = models.Cabinet(user_id=user.id, company_id=comp.id, code="l", name="Local",
+                           schema="cab_l", marketplace="wb", enabled=True, position=1)
+    main = models.Cabinet(user_id=user.id, company_id=comp.id, code="m", name="Main",
+                          schema="cab_m", marketplace="wb", enabled=True, position=2,
+                          pricing_settings='{"min_delta_pp": 3.0}')
+    db.add_all([local, main])
+    db.commit()
+    user.last_cabinet_id = local.id
+    user.main_cabinet_id = main.id
+    db.commit()
+    seen = {}
+
+    def fake_rec(db2, settings=None, only_articles=None, **kw):
+        seen["settings"] = settings
+        return {"rows": [
+            {"article": "x1", "action": "RAISE", "current_vis": 100.0, "target_vis": 110.0},
+        ]}
+
+    monkeypatch.setattr(pricing_service, "recommendations", fake_rec)
+    m = pricing_service.main_influence_map(db, {})
+    assert m["X1"] == pytest.approx(10.0)
+    # у главной follow_main принудительно снят (иначе была бы рекурсия)
+    assert seen["settings"].get("follow_main") is False
+
+
+def test_recommendations_applies_main_map(db):
+    """Интеграция: main_map подтягивает строку зависимой связки на половину."""
+    _seed(db, "M1", "5551", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    prices = _prices(("5551", 2000, 10))
+    base = recommendations(db, prices_df=prices, today=TODAY)
+    row_base = next(r for r in base["rows"] if r["article"] == "M1")
+    # главная просит +10% к витрине; влияние даёт половину, но не ниже локального
+    inf = recommendations(db, prices_df=prices, today=TODAY, settings={"prefer_raise": False},
+                          main_map={"M1": 10.0})
+    row_inf = next(r for r in inf["rows"] if r["article"] == "M1")
+    need = row_base["current_vis"] * 1.05
+    if row_base["action"] == "LOWER" or row_base["target_vis"] < need:
+        assert row_inf["target_vis"] >= row_base["target_vis"] - 1e-6
+        assert row_inf["influenced_by_main"] is True
+        assert row_inf["main_delta_pct"] == 10.0
+
+
+# ------------------------------------------------- T-33: минимальные (безубыточные) цены
+
+
+def test_apply_min_prices_pushes_floor_only(db):
+    """В WB уходят только строки ниже пола: price=пол, discount=0, action=MIN."""
+    rows = [
+        {"article": "T1", "nm_id": "111", "price": 2000.0, "current_vis": 500.0,
+         "current_discount": 75.0, "floor_price": 800.0, "target_vis": 500.0},
+        {"article": "T2", "nm_id": "222", "price": 2000.0, "current_vis": 1500.0,
+         "current_discount": 25.0, "floor_price": 800.0, "target_vis": 1500.0},
+    ]
+    fake = _FakeProvider()
+    res = pricing_service.apply_min_prices(db, rows=rows, provider=fake, today=TODAY)
+    assert res["applied"] == ["T1"]
+    assert res["pushed"] == 1
+    assert fake.applied_prices == [{"nmID": 111, "price": 800, "discount": 0}]
+    log = db.execute(
+        select(models.PriceChange).where(models.PriceChange.article == "T1")
+    ).scalars().all()
+    assert log and log[-1].status == "applied" and log[-1].action == "MIN"
+
+
+def test_apply_min_prices_skips_without_nm_and_above_floor(db):
+    rows = [
+        {"article": "J1", "nm_id": None, "price": 2000.0, "current_vis": 100.0,
+         "current_discount": 95.0, "floor_price": 800.0},
+        {"article": "J2", "nm_id": "222", "price": 2000.0, "current_vis": 1000.0,
+         "current_discount": 50.0, "floor_price": 800.0},
+    ]
+    fake = _FakeProvider()
+    res = pricing_service.apply_min_prices(db, rows=rows, provider=fake, today=TODAY)
+    assert res["pushed"] == 0
+    assert fake.applied_prices is None
+    assert "Нет товаров" in res["note"]
+
+
+class _FakeMinProvider(_FakeProvider):
+    def get_min_prices(self, nms):
+        return {str(nms[0]): 900.0}
+
+
+def test_apply_min_prices_clamps_by_wb_min(db):
+    rows = [{"article": "T1", "nm_id": "111", "price": 2000.0, "current_vis": 500.0,
+             "current_discount": 75.0, "floor_price": 800.0}]
+    fake = _FakeMinProvider()
+    pricing_service.apply_min_prices(db, rows=rows, provider=fake, today=TODAY)
+    assert fake.applied_prices == [{"nmID": 111, "price": 900, "discount": 0}]
+
+
+def test_apply_min_prices_does_not_break_cooldown_of_regular(db):
+    """MIN пишется в журнал и не блокирует затем обычное (RAISE/LOWER) применение."""
+    db.add(models.PriceChange(
+        article="T1", action="MIN", status="applied", calculated_at=datetime.now(),
+    ))
+    db.commit()
+    res = pricing_service.apply_rows(
+        db, [_ui_row(art="T1", nm="111")], provider=_FakeProvider(), today=TODAY)
+    assert res["pushed"] == 1

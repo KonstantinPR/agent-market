@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "99";
+const UI_VERSION = "102";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -184,6 +184,7 @@ const LS_KEYS = {
   "pricing_hide_skip": "скрыть «держать»/«пропустить» в автопилоте",
   "pricing_settings_visible": "меню «Настройки» автопилота развёрнуто",
   "pricing_open_groups": "раскрытые группы настроек автопилота (JSON)",
+  "pricing-mp": "маркетплейс вкладки «Автопилот цен»: wb (по умолчанию) или oz",
   "cab-auto-refresh": "автообновление связок при старте приложения",
   "cab-compare": "сравнение продаж между кабинетами включено",
   "cab-compare-links": "связки, выбранные для сравнения продаж (id через запятую)",
@@ -861,6 +862,9 @@ async function loadTabInner(name, f) {
     else if (name === "oz-accrual") await renderOzAccrual();
     else if (name === "yandex") await renderYandexFiles();
     else if (name === "tickets") await renderTickets();
+    else if (name === "automation-foldering") await renderAutomationFoldering();
+    else if (name === "automation-names") await renderAutomationNames();
+    else if (name === "automation-crop") await renderAutomationCrop();
   } catch (err) {
     console.error("loadTab error:", err);
     showLoadError(err);
@@ -2408,6 +2412,41 @@ function replenishView() {
   return (el && el.value) || "article";
 }
 
+// Связка, выбранная в «Потребности» (пустое значение = активная из шапки).
+function replenishCabLink() {
+  const el = $("#replenishCabinet");
+  const id = el && el.value;
+  if (id) {
+    for (const comp of (cabState.companies || [])) {
+      for (const lk of (comp.links || [])) {
+        if (String(lk.id) === String(id)) return lk;
+      }
+    }
+  }
+  return cabState.current || cabLinkActive();
+}
+
+// «Вид таблицы» в «Потребности»: размерный разрез — только у WB.
+// У связки Ozon размеров в продажах нет, поэтому вид принудительно
+// переключается на «по артикулам», а опция «размеры» блокируется.
+function syncReplenishView() {
+  const sel = $("#replenishView");
+  if (!sel) return;
+  const lk = replenishCabLink();
+  const ozView = lk && lk.marketplace === "ozon";
+  const opt = sel.querySelector('option[value="sizes"]');
+  if (opt) {
+    opt.disabled = !!ozView;
+    opt.hidden = !!ozView;
+  }
+  if (ozView && sel.value !== "article") sel.value = "article";
+  const hz = $("#replenishHideZeroSizes");
+  if (hz) hz.disabled = !!ozView;
+  sel.title = ozView
+    ? "Связка Ozon: доступен только разрез по артикулам — размеров в продажах Ozon нет"
+    : "Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)";
+}
+
 function _footSum(rows, k) { return rows.reduce((a, r) => a + (Number(r[k]) || 0), 0); }
 
 function _footAvg(rows, k, dp) {
@@ -2485,6 +2524,8 @@ function replenishQs(f) {
     hide_zero_sizes: $("#replenishHideZeroSizes") && $("#replenishHideZeroSizes").checked ? 1 : undefined,
   };
   if (f.marketplace) q.marketplace = f.marketplace;
+  const cab = $("#replenishCabinet");
+  if (cab && cab.value) q.cabinet = cab.value;
   const like = tabLike("replenishLike");
   if (like) q.article_like = like;
   return qs(q);
@@ -2492,6 +2533,7 @@ function replenishQs(f) {
 
 async function renderReplenish() {
   const box = $("#replenishTable");
+  syncReplenishView();
   let f = {};
   try { f = filters(); } catch (e) { /* пустой объект */ }
   const p = replenishQs(f);
@@ -3519,6 +3561,276 @@ function initYandexTab() {
   }
   const ref = document.getElementById("yandexRefresh");
   if (ref) ref.addEventListener("click", () => renderYandexFiles());
+}
+
+// ------------------------------------------------------------- Автоматизация
+
+async function renderAutomationFoldering() {
+  const box = document.getElementById("autoFoldPreviewBox");
+  if (box) box.innerHTML = "";
+}
+
+async function renderAutomationNames() {
+  const box = document.getElementById("autoNamesBox");
+  if (box) box.innerHTML = "";
+}
+
+async function renderAutomationCrop() { /* форма статична */ }
+
+function _autoFoldFormData() {
+  const fd = new FormData();
+  fd.append("articles", (document.getElementById("autoFoldArticles") || {}).value || "");
+  const fileEl = document.getElementById("autoFoldFile");
+  if (fileEl && fileEl.files[0]) fd.append("file", fileEl.files[0]);
+  fd.append("marketplace", (document.getElementById("autoFoldMarket") || {}).value || "WB");
+  fd.append("is_replace", document.getElementById("autoFoldAll").checked ? "ALL" : "ONLY_NEW");
+  fd.append("order", (document.getElementById("autoFoldOrder") || {}).value || "ASCENDING");
+  fd.append("leading_nulls", document.getElementById("autoFoldNulls").checked ? "true" : "false");
+  const co = document.getElementById("autoFoldChangeOrder").value;
+  if (co) fd.append("change_order", co);
+  return fd;
+}
+
+function _autoNamesFormData() {
+  const fd = new FormData();
+  fd.append("articles", (document.getElementById("autoNamesArticles") || {}).value || "");
+  const fileEl = document.getElementById("autoNamesFile");
+  if (fileEl && fileEl.files[0]) fd.append("file", fileEl.files[0]);
+  fd.append("multiply", (document.getElementById("autoNamesMultiply") || {}).value || "1");
+  fd.append("start_from", (document.getElementById("autoNamesStart") || {}).value || "1");
+  return fd;
+}
+
+async function _autoPostJson(url, fd) {
+  const resp = await fetch(url, { method: "POST", body: fd, signal: apiSignal() });
+  const j = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(j.detail || String(resp.status));
+  return j;
+}
+
+async function _autoPostDownload(url, fd, filename) {
+  const resp = await fetch(url, { method: "POST", body: fd, signal: apiSignal() });
+  if (!resp.ok) {
+    let msg = String(resp.status);
+    try { const j = await resp.json(); msg = j.detail || msg; } catch (e) { /* not json */ }
+    throw new Error(msg);
+  }
+  const blob = await resp.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+function _renderFoldReport(rep, box) {
+  let html = "";
+  const rows = rep.with_photos || [];
+  if (rows.length) {
+    html += '<table><thead><tr><th>Артикул</th><th>Папка</th><th>Фото</th></tr></thead><tbody>';
+    for (const r of rows) {
+      html += "<tr><td>" + escapeHtml(r.article) + "</td><td>" + escapeHtml(r.folder)
+        + "</td><td>" + fmt(r.photos) + "</td></tr>";
+    }
+    html += "</tbody></table>";
+  } else {
+    html += '<div class="empty">Нет артикулов с найденными фото.</div>';
+  }
+  if ((rep.missing || []).length) {
+    html += '<p class="hint">Не найдены фото (' + rep.missing.length + "): "
+      + escapeHtml(rep.missing.slice(0, 40).join(", ")) + "</p>";
+  }
+  if ((rep.no_nm || []).length) {
+    html += '<p class="hint">Нет nmID в базе (' + rep.no_nm.length + "): "
+      + escapeHtml(rep.no_nm.slice(0, 40).join(", ")) + "</p>";
+  }
+  box.innerHTML = html;
+}
+
+async function onAutoTemplate() {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Готовлю шаблон…"; msg.classList.remove("error"); }
+  try {
+    const resp = await fetch("/api/automation/template", { signal: apiSignal() });
+    if (!resp.ok) throw new Error(String(resp.status));
+    const blob = await resp.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "template.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    if (msg) msg.textContent = "Шаблон скачан";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+  }
+}
+
+async function onAutoFoldPreview() {
+  const msg = statusEl();
+  const box = document.getElementById("autoFoldPreviewBox");
+  if (msg) { msg.textContent = "Считаю…"; msg.classList.remove("error"); }
+  try {
+    const rep = await _autoPostJson("/api/automation/foldering/preview", _autoFoldFormData());
+    _renderFoldReport(rep, box);
+    if (msg) msg.textContent = "Найдено артикулов: " + fmt(rep.found) + ", папок нет у " + fmt(rep.missing.length);
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+    if (box) box.innerHTML = "";
+  }
+}
+
+async function onAutoFoldBuild() {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Собираю архив…"; msg.classList.remove("error"); }
+  try {
+    const mp = (document.getElementById("autoFoldMarket") || {}).value || "WB";
+    await _autoPostDownload("/api/automation/foldering/build", _autoFoldFormData(), "foldering_" + mp.toLowerCase() + ".zip");
+    if (msg) msg.textContent = "Архив скачан";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+  }
+}
+
+async function onAutoNamesBuild() {
+  const msg = statusEl();
+  const box = document.getElementById("autoNamesBox");
+  if (msg) { msg.textContent = "Генерирую…"; msg.classList.remove("error"); }
+  try {
+    const res = await _autoPostJson("/api/automation/names/multiply", _autoNamesFormData());
+    const items = res.items || [];
+    box.innerHTML = '<p class="hint">Имён: ' + fmt(res.count || items.length) + "</p>"
+      + '<textarea readonly rows="12" style="width:100%">' + escapeHtml(items.join("\n")) + "</textarea>";
+    if (msg) msg.textContent = "Имён: " + fmt(res.count || items.length);
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+    if (box) box.innerHTML = "";
+  }
+}
+
+async function onAutoNamesDownload() {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Готовлю файл…"; msg.classList.remove("error"); }
+  try {
+    await _autoPostDownload("/api/automation/names/download", _autoNamesFormData(), "names.txt");
+    if (msg) msg.textContent = "Файл скачан";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+  }
+}
+
+async function onAutoCropBuild() {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Обрабатываю изображения…"; msg.classList.remove("error"); }
+  try {
+    const fd = new FormData();
+    fd.append("type_clothes", (document.getElementById("autoCropType") || {}).value || "Одежда по пояс");
+    fd.append("articles", (document.getElementById("autoCropArticles") || {}).value || "");
+    const fileEl = document.getElementById("autoCropFiles");
+    if (fileEl) for (const f of fileEl.files) fd.append("files", f);
+    await _autoPostDownload("/api/automation/crop/build", fd, "crop.zip");
+    if (msg) msg.textContent = "Архив скачан";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+  }
+}
+
+function initAutoDropzone(inputId, dropId) {
+  const input = document.getElementById(inputId);
+  const drop = document.getElementById(dropId);
+  if (!input || !drop) return;
+  const label = drop.querySelector(".dz-label");
+  const defaultText = label ? label.textContent : "";
+  const refresh = () => {
+    if (!label) return;
+    const names = Array.from(input.files || []).map((f) => f.name);
+    label.textContent = names.length ? names.join(", ") : defaultText;
+  };
+  drop.addEventListener("click", () => input.click());
+  input.addEventListener("change", refresh);
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+      input.files = e.dataTransfer.files;
+      refresh();
+    }
+  });
+}
+
+function initMenuSelect(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel || sel.dataset.menuSelect) return;
+  sel.dataset.menuSelect = "1";
+  const menu = document.createElement("div");
+  menu.className = "view-menu";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn";
+  if (sel.title) btn.title = sel.title;
+  const panel = document.createElement("div");
+  panel.className = "view-menu-panel hidden";
+  menu.appendChild(btn);
+  menu.appendChild(panel);
+  sel.parentNode.insertBefore(menu, sel);
+  sel.classList.add("hidden");
+  const sync = () => {
+    const cur = sel.options[sel.selectedIndex];
+    btn.textContent = (cur ? cur.textContent : "") + " \u25BE";
+    panel.innerHTML = "";
+    Array.from(sel.options).forEach((o) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "menu-item" + (o.value === sel.value ? " active" : "");
+      item.textContent = o.textContent;
+      item.addEventListener("click", () => {
+        sel.value = o.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        panel.classList.add("hidden");
+        menu.classList.remove("open");
+      });
+      panel.appendChild(item);
+    });
+  };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".view-menu-panel").forEach((p) => { if (p !== panel) p.classList.add("hidden"); });
+    document.querySelectorAll(".view-menu.open").forEach((m) => { if (m !== menu) m.classList.remove("open"); });
+    panel.classList.toggle("hidden");
+    menu.classList.toggle("open");
+  });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+  sel.addEventListener("change", sync);
+  sync();
+}
+
+function initAutomationTabs() {
+  const p = document.getElementById("autoFoldPreview");
+  if (p) p.addEventListener("click", onAutoFoldPreview);
+  const b = document.getElementById("autoFoldBuild");
+  if (b) b.addEventListener("click", onAutoFoldBuild);
+  const nb = document.getElementById("autoNamesBuild");
+  if (nb) nb.addEventListener("click", onAutoNamesBuild);
+  const nd = document.getElementById("autoNamesDownload");
+  if (nd) nd.addEventListener("click", onAutoNamesDownload);
+  const cb = document.getElementById("autoCropBuild");
+  if (cb) cb.addEventListener("click", onAutoCropBuild);
+  for (const id of ["autoFoldTemplate", "autoNamesTemplate"]) {
+    const t = document.getElementById(id);
+    if (t) t.addEventListener("click", onAutoTemplate);
+  }
+  initMenuSelect("autoFoldMarket");
+  initMenuSelect("autoFoldOrder");
+  initMenuSelect("autoCropType");
+  initAutoDropzone("autoFoldFile", "autoFoldDrop");
+  initAutoDropzone("autoNamesFile", "autoNamesDrop");
+  initAutoDropzone("autoCropFiles", "autoCropDrop");
 }
 
 let pullsCache = null;
@@ -5156,9 +5468,55 @@ async function loadCabinets() {
     label.title = (cur && cur.owner) || who;
   }
   renderCabinets();
+  fillMainCabinet();
+  fillReplenishCabinet();
   updateMpNav();
   updateCabPricingControls();
   if (cabSyncPricingOn()) await ensurePricingSettings();
+}
+
+// Локальный выбор связки в «Потребности» (не меняет активную связку шапки).
+function fillReplenishCabinet() {
+  const el = $("#replenishCabinet");
+  if (!el) return;
+  const prev = el.value;
+  let h = '<option value="">Активная (из шапки)</option>';
+  for (const comp of (cabState.companies || [])) {
+    const links = comp.links || [];
+    if (!links.length) continue;
+    h += '<optgroup label="' + escapeHtml(comp.name || "Без фирмы") + '">';
+    for (const lk of links) {
+      h += '<option value="' + lk.id + '">' +
+        escapeHtml(lk.owner || lk.name || "") + "</option>";
+    }
+    h += "</optgroup>";
+  }
+  el.innerHTML = h;
+  if (prev && el.querySelector('option[value="' + prev + '"]')) el.value = prev;
+  syncReplenishView();
+}
+
+function fillMainCabinet() {
+  const el = $("#cabMainSelect");
+  if (!el) return;
+  const cur = (cabState.main != null ? cabState.main
+    : (cabState.user && cabState.user.main_cabinet_id)) || "";
+  let h = '<option value="">Нет (не следовать)</option>';
+  for (const comp of (cabState.companies || [])) {
+    const links = comp.links || [];
+    if (!links.length) continue;
+    h += '<optgroup label="' + escapeHtml(comp.name || "Без фирмы") + '">';
+    for (const lk of links) {
+      const mp = MP_SHORT[lk.marketplace] || MP_LABELS[lk.marketplace] || lk.marketplace || "";
+      h += '<option value="' + lk.id + '">' +
+        escapeHtml(lk.owner || lk.name || "") + (mp ? " · " + escapeHtml(mp) : "") + "</option>";
+    }
+    h += "</optgroup>";
+  }
+  el.innerHTML = h;
+  const want = String(cur || "");
+  if (want && el.querySelector('option[value="' + want + '"]')) el.value = want;
+  else el.value = "";
 }
 
 function shortUserName(u) {
@@ -5810,6 +6168,11 @@ const PRICING_LABELS = {
   promo_max_rows: "Товаров за проход, ≤ шт",
   promo_min_stale_days: "Порог «залежалось», дн",
   promo_protect_velocity: "Защита живых, шт/дн",
+  follow_main: "T-33: следовать за главной связкой",
+  main_influence_pct: "T-33: доля влияния главной, %",
+  min_delta_pct: "Ozon: мин. изменение цены, %",
+  oz_price_step: "Ozon: шаг цены, руб",
+  ozon_auto_action_guard: "Ozon: учитывать автоакции при расчёте пола",
 };
 
 const PRICING_HINTS = {
@@ -5834,6 +6197,18 @@ const PRICING_HINTS = {
   min_rating_reviews: "Рейтинг по отзывам из воронки продаж (1..5): чем выше — тем меньше скидка при снижении, ведь товар ценный. При рейтинге ≥ этого порога снижение ограничивается, а при 5,0 скидка не увеличивается вовсе. 0 = нет данных — ограничений нет.",
   value_ratio_low: "Нижний порог отношения «ценность/себестоимость» (value из каталога ÷ себестоимость). Пока отношение ≤ этого значения — ограничения по ценности нет, скидка снижается как обычно. По умолчанию 1,0: при ценности ≤ себестоимости скидку не тормозим.",
   value_ratio_high: "Верхний порог отношения «ценность/себестоимость»: при нём и выше автопилот вовсе не увеличивает скидку — товар слишком ценный, дёшево отдавать невыгодно. Между нижним и верхним порогами ограничение растёт линейно. По умолчанию 4,0.",
+  demand_raise: "R12: если по товару набрано достаточно сигналов спроса (выкупы, корзина, рейтинг, конверсия) — автопилот ПОДНИМАЕТ цену, даже когда товар в норме или в перезапасе по DOC. В дефиците работает обычная логика с гейтами качества. Это противовес ситуации «хорошо продаётся, а цена падает из-за остатка».",
+  demand_min_buyouts: "R12: сигнал «выкупы» — сколько покупок (выкупов) в свежем срезе воронки считать подтверждением спроса. 0 = сигнал выключен.",
+  demand_min_backlog: "R12: сигнал «в корзине» — корзина (добавления минус заказы) не меньше этого числа. 0 = сигнал выключен.",
+  demand_min_rating: "R12: сигнал «рейтинг отзывов» — средний рейтинг не ниже этого балла (1..5). 0 = сигнал выключен; рейтинг 0/нет данных сигналом не считается.",
+  demand_min_conv_pct: "R12: сигнал «конверсия» — заказы/просмотры не ниже этого %. 0 = сигнал выключен.",
+  demand_min_signals: "R12: сколько сигналов из четырёх (выкупы, корзина, рейтинг, конверсия) нужно набрать, чтобы поднимать цену. По умолчанию 2. При рейтинге уже 5,0 воронка почти всегда даёт 2 сигнала.",
+  demand_raise_pct: "R12: на сколько % поднять витринную цену при подтверждённом спросе (по умолчанию 15). Этот путь обходит «половинный кап»: скидка может уменьшиться больше чем вдвое за шаг. Верхний предел — DOC ≤ «Спрос: не поднимать при DOC >».",
+  demand_raise_max_doc: "R12: при DOC выше этого значения спрос НЕ поднимает цену (глубокий перезапас — товар всё равно плохо уходит, сначала разгрузка). По умолчанию 120 дней.",
+  velocity_from_funnel: "R13: если за окно нет строк продаж, но в свежем срезе воронки есть активность (выкупы/заказы) — скорость продаж берётся из воронки, и товар НЕ объявляется «мёртвым запасом». Выключено — как раньше: нет строк продаж → мёртвый запас.",
+  funnel_velocity_field: "R13: какое поле воронки использовать как прокси скорости: buyouts (выкупы, по умолчанию) или orders (заказы). Только латиница, без пробелов.",
+  no_econ_cost_floor: "R14: если unit-экономики нет (нет продаж/доходов за 90 дней), но остаток есть — считать пол цены по себестоимости: floor = себестоимость × (1 + «Минимальная маржа»/100), и товар идёт по обычным веткам (обычно снижение), а не «пропускается». Выключено — прежнее поведение «пропустить (нет unit-экономики)». Если себестоимость 0 — товар всё равно пропускается.",
+  stock_value_weight: "R15: учитывать остаток по деньгам (штуки × себестоимость), а не по штукам — 100 шт × 1000 ₽ важнее 100 шт × 100 ₽. Влияет на приоритет разгрузки через акции WB. В саму формулу DOC остаток входит по-прежнему в штуках.",
   fallback_window_days: "Окно (дней), за которое берутся фактические продажи для расчёта unit-экономики: реальная цена, комиссия, маржа, возвраты.",
   raise_pct_replenishable: "Потолок повышения цены для докупаемых товаров, % — их поднимаем аккуратно, чтобы не потерять выкупы.",
   min_rating_for_raise: "Повышение цены блокируется, если рейтинг по отзывам из воронки (1..5) ниже этого значения (сигналы с 0 трактуются как «нет данных» и не блокируют).",
@@ -5962,6 +6337,7 @@ const pricingHeaders = [
   { k: "target_discount", label: "Целевая скидка, %", num: true, render: targetDiscCell , tip: "Рекомендуемая скидка по правилам R1-R10: зависит от покрытия остатка (DOC), спроса, конверсии, рейтинга и рентабельности. Ограничена ценой безубыточности и потолком скидки."},
   { k: "current_discount", label: "Скидка сейчас, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Текущая скидка в карточке WB (поле discount из прайса). Если скидка не задана, берётся из расчёта цены со скидкой."},
   { k: "delta_discount", label: "Дельта скидки", num: true, render: deltaDiscCell , tip: "Целевая минус текущая, п.п.: плюс = автопилот хочет увеличить скидку (снизить цену), минус = поднять цену. Пусто, если решения нет."},
+  { k: "main_delta_pct", label: "Влияние главной, %", num: true, render: (v) => v == null || v === "" ? "—" : Number(v).toFixed(1) + "%" , tip: "T-33: насколько главная связка подняла витринную цену этого товара (Δ%). Локальная цена поднимается как минимум на половину от этого значения (main_influence_pct), никогда не снижается против главной. Пусто — товар главной не поднимался."},
   { k: "target_vis", label: "Целевая цена, руб", num: true, render: targetVisCell , tip: "Цена для покупателя при целевой скидке = базовая цена × (1 − скидка/100). Ниже точки безубыточности автопилот не опускает."},
   { k: "margin_per_one", label: "Прибыль/шт, руб", num: true, render: profitCell , tip: "Фактическая прибыль с единицы по детализации продаж WB за окно: прибыль ÷ проданные штуки. Рядом в скобках — рентабельность от выручки."},
   { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money , tip: "Действующая цена покупателя = базовая цена WB × (1 − текущая скидка/100). Сравните с целевой ценой, чтобы увидеть эффект решения."},
@@ -5970,6 +6346,7 @@ const pricingHeaders = [
   { k: "supplier", label: "Поставщик", render: cellFmts.text , tip: "Поставщик товара из каталога (колонка «Поставщик» файла products.xlsx)."},
   { k: "avg_price", label: "Ср. цена факт, руб", num: true, render: cellFmts.money , tip: "Средняя цена заказа из воронки продаж WB за срез. Если воронки нет, в расчётах она заменяется витринной ценой, и защита «цена ниже себестоимости» ослабевает."},
   { k: "stock", label: "Остаток", num: true, render: cellFmts.int , tip: "Остаток WB по последнему срезу стоков: quantity + в пути. Нет данных об остатках = автопилот пропускает товар (SKIP)."},
+  { k: "stock_value", label: "Остаток, себест.", num: true, render: cellFmts.moneyZero , tip: "Ценность остатка = остаток × себестоимость. R15: при разгрузке акциями приоритет отдаётся товарам с большей замороженной суммой, а не с большим числом штук."},
   { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int , tip: "Выкупы за срез воронки продаж: заказы, которые покупатель забрал. Отличаются от заказов из-за отмен и невыкупов."},
   { k: "backlog", label: "В корзине", num: true, render: cellFmts.int , tip: "Добавления в корзину минус заказы, не меньше нуля: спрос есть, а сделки нет. Используется как сигнал «много в корзинах, но не покупают»."},
   { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct , tip: "Заказы ÷ просмотры × 100 по воронке. Ниже 0,7% автопилот не увеличивает скидку, при большом «в корзине» — пропускает товар."},
@@ -6012,6 +6389,42 @@ const pricingHeaders = [
   { k: "replenishable", label: "Докупаемый", render: (v) => v ? "да" : "нет" , tip: "Флаг каталога «докупаемый»: дефицитный товар автопилот не спешит удорожать."},
   { k: "detail_sells", label: "Продано в детализации, шт", num: true, render: cellFmts.int , tip: "Продано по детализации продаж WB за окно, шт."},
   { k: "detail_returns_qty", label: "Возвращено в детализации, шт", num: true, render: cellFmts.int , tip: "Возвраты по детализации продаж WB за окно, шт."},
+];
+
+// Автопилот цен Ozon (price-based, по базовому артикулу). Подписи совпадают с
+// columns.json (таб oz-pricing); здесь — только отрисовка ячеек и подсказки.
+const ozPricingHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text, tip: "Базовый артикул (base_article) — единица расчёта автопилота Ozon." },
+  { k: "name", label: "Наименование", render: cellFmts.text, tip: "Наименование товара из каталога products." },
+  { k: "offers_count", label: "Офферов", num: true, render: cellFmts.int, tip: "Сколько офферов Ozon (размеров) входит в базовый артикул." },
+  { k: "nm_id", label: "Товар Ozon (ID)", render: cellFmts.text, tip: "product_id Ozon (nm_id) представителя базового артикула." },
+  { k: "price", label: "Цена витрины, руб", num: true, render: cellFmts.money, tip: "Текущая цена витрины Ozon (price). Меняется напрямую через /v1/product/import/prices." },
+  { k: "old_price", label: "Цена до скидки, руб", num: true, render: cellFmts.money, tip: "Цена до скидки Ozon (old_price), если задана. Автопилот её не трогает." },
+  { k: "ozon_discount_pct", label: "Скидка Ozon, %", num: true, render: cellFmts.pct, tip: "Скидка Ozon, вычисленная из old_price и price, %." },
+  { k: "target_price", label: "Целевая цена, руб", num: true, render: cellFmts.money, tip: "Рекомендуемая цена витрины Ozon. Не опускается ниже пола." },
+  { k: "delta_price", label: "Δ цены, руб", num: true, render: cellFmts.moneyCls, tip: "Целевая минус текущая цена, руб. Плюс = поднять, минус = снизить." },
+  { k: "delta_pct", label: "Δ цены, %", num: true, render: cellFmts.signedPct, tip: "Изменение цены к текущей, %." },
+  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.moneyZero, tip: "Себестоимость единицы из каталога." },
+  { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money, tip: "Минимальная цена безубыточности Ozon: себестоимость + комиссия + логистика + хранение + услуги." },
+  { k: "margin_pct", label: "Маржа факт, %", num: true, render: cellFmts.pct, tip: "Рентабельность за окно по детализации Ozon: прибыль ÷ выручка × 100." },
+  { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct, tip: "Прогноз рентабельности при целевой цене, %." },
+  { k: "stock", label: "Остаток", num: true, render: cellFmts.int, tip: "Остаток Ozon по последнему срезу стоков. Нет данных = SKIP." },
+  { k: "velocity", label: "v, шт/дн", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1), tip: "Скорость продаж Ozon за окно, шт/дн." },
+  { k: "v_proj", label: "v прогноз, шт/дн", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1), tip: "Прогноз скорости с учётом тренда и сезонности." },
+  { k: "trend", label: "Тренд", num: true, render: (v) => v == null ? "—" : (v && v > 1 ? "<span class='pos'>▲ " : v && v < 1 ? "<span class='neg'>▼ " : "<span>") + (v || 0).toFixed(2) + "</span>", tip: "Скорость текущего окна ÷ предыдущего." },
+  { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Покрытие остатка продажами: остаток ÷ скорость, дней." },
+  { k: "stock_value", label: "Остаток, себест.", num: true, render: cellFmts.moneyZero, tip: "Остаток × себестоимость, ₽." },
+  { k: "commission_per_one", label: "Комиссия/шт, руб", num: true, render: cellFmts.money, tip: "Комиссия Ozon на единицу по детализации." },
+  { k: "services_per_one", label: "Услуги/шт, руб", num: true, render: cellFmts.money, tip: "Услуги Ozon на единицу по детализации." },
+  { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money, tip: "Хранение Ozon на единицу." },
+  { k: "return_rate", label: "Возвраты, %", num: true, render: cellFmts.pct, tip: "Доля возвратов по детализации Ozon, %." },
+  { k: "last_sale_days_ago", label: "Дней без продаж", num: true, render: (v) => v == null ? "—" : (Number(v) >= 9999 ? "никогда" : fmt(v)), tip: "Дней с последней продажи Ozon. Сигнал разгрузки." },
+  { k: "replenishable", label: "Докупаемый", render: (v) => v ? "да" : "нет", tip: "Флаг каталога «докупаемый»." },
+  { k: "action", label: "Решение", render: actionCell, tip: "RAISE/LOWER/HOLD/SKIP — итоговое действие автопилота Ozon." },
+  { k: "status", label: "Статус", render: cellFmts.text, tip: "Служебный статус решения." },
+  { k: "reason", label: "Причина", render: cellFmts.text, tip: "Текстовое объяснение решения." },
+  { k: "influenced_by_main", label: "Влияние главной", render: (v) => v ? "да" : "—", tip: "Если главная связка — Ozon, отметка, что цена поднята под влиянием главной." },
+  { k: "main_delta_pct", label: "Влияние главной, %", num: true, render: (v) => v == null || v === "" ? "—" : Number(v).toFixed(1) + "%", tip: "Насколько главная связка подняла цену этого товара, %." },
 ];
 
 // ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
@@ -6124,8 +6537,41 @@ registerColView("replenish", {
 });
 registerColView("pricing", {
   storageKey: "pricingCols", pinnable: true,
-  headers: pricingHeaders,
+  mode: () => (pricingMpCurrent() === "oz" ? "oz" : "default"),
+  sets: {
+    default: { headers: pricingHeaders },
+    oz: { headers: ozPricingHeaders },
+  },
 });
+
+// Текущий маркетплейс вкладки «Автопилот цен»: "wb" (по умолчанию) или "oz".
+function pricingMpCurrent() {
+  return localStorage.getItem("pricing-mp") === "oz" ? "oz" : "wb";
+}
+function setPricingMp(mp) {
+  localStorage.setItem("pricing-mp", mp === "oz" ? "oz" : "wb");
+}
+// Активный набор колонок панели «Автопилот цен» по маркетплейсу.
+function pricingActiveHeaders() {
+  return pricingMpCurrent() === "oz" ? ozPricingHeaders : pricingHeaders;
+}
+
+function syncPricingMpUi() {
+  const oz = pricingMpCurrent() === "oz";
+  const wbBtn = $("#pricingMpWb"), ozBtn = $("#pricingMpOz");
+  if (wbBtn) wbBtn.classList.toggle("active", !oz);
+  if (ozBtn) ozBtn.classList.toggle("active", oz);
+  const applyBtn = $("#pricingApply");
+  if (applyBtn) applyBtn.textContent = oz ? "Применить в Ozon" : "Применить в WB";
+  const modeMenu = $("#pricingModeMenu");
+  if (modeMenu) modeMenu.classList.toggle("hidden", oz);
+  const promo = $("#pricingPromoRefresh");
+  if (promo) promo.classList.toggle("hidden", oz);
+  const priceBtn = $("#pricingPriceRefresh");
+  if (priceBtn) priceBtn.textContent = oz ? "Обновить цены Ozon" : "Обновить цены WB";
+  const minBtn = $("#pricingMinPrices");
+  if (minBtn) minBtn.title = oz ? "Поднять цены витрины Ozon до безубыточного минимума там, где цена ниже пола" : "Отправить в WB минимальные цены (break-even)";
+}
 
 // ----------------------------------------------------- Фильтр по колонкам таблицы автопилота
 let _pricingColFilters = loadPricingColFilters();
@@ -6168,7 +6614,7 @@ function pricingRowMatches(r, filters) {
   for (const k of Object.keys(filters)) {
     const raw = String(filters[k] || "").trim();
     if (!raw) continue;
-    const hd = pricingHeaders.find((x) => x.k === k);
+    const hd = pricingActiveHeaders().find((x) => x.k === k);
     if (hd && hd.num) {
       if (!numMatch(r[k], raw)) return false;
     } else {
@@ -6187,7 +6633,7 @@ const schedulePricingFilter = debounceRun(() => {
 function buildPricingFilterBar() {
   const host = $("#pricingFilters");
   if (!host) return;
-  const headers = colViewHeaders("pricing", pricingHeaders);
+  const headers = colViewHeaders("pricing", pricingActiveHeaders());
   const sig = headers.map((h) => h.k).join(",");
   if (host._sig === sig) return;
   host._sig = sig;
@@ -6217,7 +6663,7 @@ function buildPricingFilterBar() {
 }
 // Активные фильтры — только по тем колонкам, что сейчас видимы и непусты.
 function pricingEffectiveColFilters() {
-  const visible = new Set(colViewHeaders("pricing", pricingHeaders).map((h) => h.k));
+  const visible = new Set(colViewHeaders("pricing", pricingActiveHeaders()).map((h) => h.k));
   const out = {};
   for (const k of Object.keys(_pricingColFilters)) {
     const v = String(_pricingColFilters[k] || "").trim();
@@ -6557,6 +7003,9 @@ const PRICING_GROUPS = [
       "min_rating_reviews", "value_ratio_low", "value_ratio_high",
       "hot_conv_pct", "hot_backlog_factor",
       "low_conv_pct", "return_penalty",
+      "demand_raise", "demand_min_signals", "demand_min_buyouts",
+      "demand_min_backlog", "demand_min_rating", "demand_min_conv_pct",
+      "demand_raise_pct", "demand_raise_max_doc", "velocity_from_funnel",
   ] },
   { title: "Качество и рост", col: 1, keys: [
       "min_rating_for_raise", "min_conv_buyout_for_raise",
@@ -6566,6 +7015,10 @@ const PRICING_GROUPS = [
   ] },
   { title: "Применение и противовес", col: 1, keys: [
       "cooldown_days", "prefer_raise", "prefer_raise_bias",
+      "follow_main", "main_influence_pct",
+  ] },
+  { title: "Ozon (price-based)", col: 1, keys: [
+      "min_delta_pct", "oz_price_step", "ozon_auto_action_guard",
   ] },
 ];
 const PRICING_GROUPS_CLOSED_BY_DEFAULT = new Set(["Качество и рост"]);
@@ -6626,10 +7079,11 @@ async function buildPricingSettings() {
   // Режим («новая/старая версия») — часть настроек связки: пересобираем его
   // из saved при каждом построении панели (в т.ч. после смены кабинета).
   pricingModeCurrent = null;
-  if (!pricingDefaults) {
+  const _mp = pricingMpCurrent();
+  if (!pricingDefaults || pricingDefaults._mp !== _mp) {
     try {
-      const d = await api("/pricing/defaults");
-      pricingDefaults = d.defaults;
+      const d = await api(_mp === "oz" ? "/pricing-ozon/defaults" : "/pricing/defaults");
+      pricingDefaults = Object.assign({}, d.defaults, { _mp: _mp });
     } catch (err) {
       $("#headerMsg").textContent = "Ошибка загрузки настроек: " + err.message;
       return;
@@ -6669,6 +7123,8 @@ async function buildPricingSettings() {
     for (const key of grp.keys) {
       if (key === "show_zero") continue;
       const cur = saved[key] !== undefined ? saved[key] : pricingDefaults[key];
+      if (cur === undefined) continue;
+      if (cur === undefined) continue;
       body.appendChild(pricingParamRow(key, cur));
     }
     det.appendChild(body);
@@ -6757,12 +7213,15 @@ let pricingModeCurrent = null;
 function refreshApplyButton() {
   const btn = $("#pricingApply");
   if (!btn) return;
-  const actives = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
+  const oz = pricingMpCurrent() === "oz";
+  const actives = oz
+    ? _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER")
+    : _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
   const canApply = actives.length > 0;
   btn.disabled = !canApply;
-  btn.title = canApply
-    ? "Применить через WB API только видимые в таблице строки (с учётом фильтров)"
-    : "Нет видимых рекомендаций на изменение — применить больше нечего (только строки таблицы)";
+  btn.title = oz
+    ? (canApply ? "Применить цены витрины Ozon для видимых строк" : "Нет видимых рекомендаций Ozon для применения")
+    : (canApply ? "Применить через WB API только видимые в таблице строки (с учётом фильтров)" : "Нет видимых рекомендаций на изменение — применить больше нечего");
 }
 
 // Какая агрегация нужна в строке «Итого» для каждой колонки: sum (сумма) или avg (среднее).
@@ -6820,14 +7279,15 @@ function renderPricingPricesAge(data) {
 }
 
 async function refreshPricingPrices() {
+  const oz = pricingMpCurrent() === "oz";
   const msg = statusEl();
   const btn = $("#pricingPriceRefresh");
   const prev = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Обновляю цены…"; }
-  const prog = startProgress(msg, "Загружаю цены WB");
+  const prog = startProgress(msg, oz ? "Загружаю цены Ozon" : "Загружаю цены WB");
   let resp;
   try {
-    resp = await fetch("/api/wb/prices?excel=0", {
+    resp = await fetch(oz ? "/api/ozon/prices" : "/api/wb/prices?excel=0", {
       method: "POST",
       headers: { "X-Progress-Id": prog.op },
     });
@@ -6837,9 +7297,9 @@ async function refreshPricingPrices() {
   try {
     const j = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error((j.detail || resp.status) || "не удалось загрузить цены");
-    msg.textContent = "Цены WB загружены: " + fmt(j.count || 0) + " позиций. Пересчитываю…";
+    msg.textContent = (oz ? "Цены Ozon" : "Цены WB") + " загружены: " + fmt(j.count || 0) + " позиций. Пересчитываю…";
     await renderPricing(false);
-    msg.textContent = "Цены WB обновлены: " + fmt(j.count || 0) + " позиций";
+    msg.textContent = (oz ? "Цены Ozon" : "Цены WB") + " обновлены: " + fmt(j.count || 0) + " позиций";
   } catch (err) {
     msg.textContent = "Ошибка загрузки цен: " + err.message;
   } finally {
@@ -6848,7 +7308,9 @@ async function refreshPricingPrices() {
 }
 
 async function renderPricing(apply) {
+  if (pricingMpCurrent() === "oz") return renderPricingOzon(apply);
   await buildPricingSettings();
+  syncPricingMpUi();
   const s = pricingWithDates(collectPricingSettings());
   const showZeroEl = $("#pricingShowZero");
   if (showZeroEl) s.show_zero = showZeroEl.checked;
@@ -6865,7 +7327,7 @@ async function renderPricing(apply) {
   try {
     const data = await apiPost("/pricing/recommendations", s);
     _pricingResp = data;
-    renderPricingPricesAge(data);
+    // renderPricingPricesAge(data); // перенесено в строку состояния
     const allRows = data.rows || [];
     let pre = allRows;
     if (q) {
@@ -6893,10 +7355,77 @@ async function renderPricing(apply) {
     if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
     if (data.as_of) summary += " · на " + data.as_of;
     if (data.note) summary += " · " + data.note;
+    // Добавляем информацию о снимке цен WB (как давно обновляли)
+    try {
+      if (data.prices_updated_at) {
+        const t = Date.parse(data.prices_updated_at);
+        if (isFinite(t)) {
+          const hours = (Date.now() - t) / 36e5;
+          summary += " · цены WB: " + pricingAgeText(hours) + " назад";
+        } else if (data.prices_source === "wb_api") {
+          summary += " · цены WB: из API";
+        }
+      } else if (data.prices_source === "wb_api") {
+        summary += " · цены WB: из API";
+      }
+    } catch (e) { /* ignore */ }
     // Сводка — в общую зелёную строку состояния шапки (как везде); полный
     // текст длиннее HEADER_MSG_MAX — уходит в тултип через normalizeStatus.
     msg.textContent = summary;
-    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingHeaders), rows, pricingFooters(rows), null, colViewPinKeys("pricing"));
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, pricingFooters(rows), null, colViewPinKeys("pricing"));
+    await renderPricingHistory();
+    refreshApplyButton();
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
+// Автопилот цен Ozon (price-based). Считает по базовым артикулам, меняет цену
+// витрины напрямую. Журнал решений — общий (/pricing/history).
+async function renderPricingOzon(apply) {
+  await buildPricingSettings();
+  syncPricingMpUi();
+  const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
+  const msg = statusEl();
+  const likeEl = $("#pricingLike") || { value: "" };
+  const q = likeEl.value.trim().toLowerCase();
+  const hideSkipEl = $("#pricingHideSkip");
+  const hidePassive = hideSkipEl ? hideSkipEl.checked : false;
+  buildPricingFilterBar();
+  const filtersHost = $("#pricingFilters");
+  if (filtersHost) filtersHost.classList.toggle("hidden", !pricingFiltersOn());
+  const colFilters = pricingEffectiveColFilters();
+  msg.textContent = "Считаю рекомендации Ozon…";
+  try {
+    const data = await apiPost("/pricing-ozon/recommendations", s);
+    _pricingResp = data;
+    // renderPricingPricesAge(data); // перенесено в строку состояния
+    const allRows = data.rows || [];
+    let pre = allRows;
+    if (q) {
+      pre = pre.filter((r) =>
+        likeMatch(String(r.article || "") + " " + (r.name || ""), q)
+      );
+    }
+    const hiddenPassive = hidePassive ? pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length : 0;
+    const rows = pre.filter((r) =>
+      (!hidePassive || (r.action !== "SKIP" && r.action !== "HOLD")) && pricingRowMatches(r, colFilters)
+    );
+    _pricingRows = rows;
+    const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
+    const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
+    let summary = "Ozon · товаров: " + fmt(rows.length);
+    if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
+    summary += ", решений: " + fmt(actionable);
+    if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+    if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
+    if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
+    if (data.as_of) summary += " · на " + data.as_of;
+    if (data.note) summary += " · " + data.note;
+    msg.textContent = summary;
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", ozPricingHeaders), rows, pricingFooters(rows), null, colViewPinKeys("pricing"));
     await renderPricingHistory();
     refreshApplyButton();
   } catch (err) {
@@ -6905,6 +7434,7 @@ async function renderPricing(apply) {
 }
 
 async function applyPricing() {
+  if (pricingMpCurrent() === "oz") return applyPricingOzon();
   const msg = statusEl();
   await buildPricingSettings();
   const s = pricingWithDates(collectPricingSettings());
@@ -6948,9 +7478,134 @@ async function applyPricing() {
   }
 }
 
+// Автопилот Ozon: применяет цены витрины через /v1/product/import/prices по
+// видимым в таблице строкам (RAISE/LOWER).
+async function applyPricingOzon() {
+  const msg = statusEl();
+  await buildPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
+  const toApply = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER");
+  if (!toApply.length) {
+    msg.textContent = "Нет видимых товаров Ozon для применения";
+    return;
+  }
+  const lowers = toApply.filter((r) => r.action === "LOWER");
+  const raises = toApply.filter((r) => r.action === "RAISE");
+  const parts = [];
+  if (raises.length) parts.push("поднять цену у " + raises.length + " товаров");
+  if (lowers.length) parts.push("снизить цену у " + lowers.length + " товаров");
+  if (!confirm("Применить цены витрины Ozon для " + toApply.length + " видимых товаров?\n• " + parts.join("\n• ") +
+      "\n\nЦена меняется напрямую через Ozon API.")) return;
+  const btn = $("#pricingApply");
+  const prev = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Отправляю…"; }
+  msg.textContent = "Отправляю цены в Ozon API…";
+  try {
+    const body = Object.assign({}, s, { ui_rows: toApply });
+    const resp = await fetch("/api/pricing-ozon/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error((j.detail || resp.status) || "Ozon API не принял изменения");
+    msg.textContent = j.note || ("Ozon: применено " + (j.applied || []).length + " артикулов");
+    await renderPricing(false);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
+// T-33: минимальные (безубыточные) цены в WB — только видимые строки ниже пола.
+async function applyMinPrices() {
+  if (pricingMpCurrent() === "oz") return applyMinPricesOzon();
+  const msg = statusEl();
+  await buildPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
+  const rows = _pricingRows.filter((r) =>
+    r.floor_price != null && r.current_vis != null &&
+    Number(r.floor_price) > 0 && Number(r.current_vis) < Number(r.floor_price));
+  if (!rows.length) {
+    msg.textContent = "Нет видимых товаров с ценой ниже безубыточного минимума";
+    return;
+  }
+  const list = rows.slice(0, 5).map((r) => r.article).join(", ") + (rows.length > 5 ? "…" : "");
+  if (!confirm("Отправить в WB минимальные (безубыточные) цены для " + rows.length + " видимых товаров?\n(" +
+      list + ")\n\nБазовая цена будет поднята до пола, скидка обнулена.")) return;
+  const btn = $("#pricingMinPrices");
+  const prev = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Отправляю…"; }
+  msg.textContent = "Отправляю минимальные цены в WB API…";
+  try {
+    const body = Object.assign({}, s, { ui_rows: rows });
+    const resp = await fetch("/api/pricing/apply-min", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error((j.detail || resp.status) || "WB API не принял изменения");
+    msg.textContent = j.note || ("Минимальные цены отправлены: " + (j.applied || []).length + " артикулов");
+    await renderPricing(false);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
+// Ozon: минимальные (безубыточные) цены — поднять витрину до пола безубытка.
+async function applyMinPricesOzon() {
+  const msg = statusEl();
+  await buildPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
+  const showZeroEl = $("#pricingShowZero");
+  if (showZeroEl) s.show_zero = showZeroEl.checked;
+  const rows = _pricingRows.filter((r) =>
+    r.floor_price != null && r.price != null &&
+    Number(r.floor_price) > 0 && Number(r.price) < Number(r.floor_price));
+  if (!rows.length) {
+    msg.textContent = "Нет видимых товаров Ozon с ценой ниже безубыточного минимума";
+    return;
+  }
+  const list = rows.slice(0, 5).map((r) => r.article).join(", ") + (rows.length > 5 ? "…" : "");
+  if (!confirm("Поднять цены витрины Ozon до безубыточного минимума для " + rows.length + " видимых товаров?\n(" +
+      list + ")")) return;
+  const btn = $("#pricingMinPrices");
+  const prev = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Отправляю…"; }
+  msg.textContent = "Отправляю минимальные цены в Ozon API…";
+  try {
+    const body = Object.assign({}, s, { ui_rows: rows });
+    const resp = await fetch("/api/pricing-ozon/apply-min", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error((j.detail || resp.status) || "Ozon API не принял изменения");
+    msg.textContent = j.note || ("Ozon: минимальные цены отправлены: " + (j.applied || []).length + " артикулов");
+    await renderPricing(false);
+  } catch (err) {
+    msg.textContent = "Ошибка: " + err.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
 // Календарь акций WB → wb_promotions, затем пересчёт рекомендаций.
 async function refreshPricingPromos() {
   const msg = statusEl();
+  if (pricingMpCurrent() === "oz") {
+    msg.textContent = "Акции WB не применяются к автопилоту Ozon";
+    return;
+  }
   const btn = $("#pricingPromoRefresh");
   const prev = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Обновляю акции…"; }
@@ -6977,10 +7632,11 @@ async function exportPricing() {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
+  const oz = pricingMpCurrent() === "oz";
   const msg = statusEl();
   msg.textContent = "Формирую Excel…";
   try {
-    const resp = await fetch("/api/pricing/export", {
+    const resp = await fetch(oz ? "/api/pricing-ozon/export" : "/api/pricing/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(s),
@@ -6997,7 +7653,7 @@ async function exportPricing() {
     const count = resp.headers.get("X-Count");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition")) || "pricing.xlsx";
+    a.download = filenameFromDisposition(resp.headers.get("Content-Disposition")) || (oz ? "pricing_ozon.xlsx" : "pricing.xlsx");
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -7081,10 +7737,11 @@ async function uploadPricingToDisk() {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
+  const oz = pricingMpCurrent() === "oz";
   const msg = statusEl();
   msg.textContent = "Формирую файл…";
   try {
-    const resp = await fetch("/api/pricing/export", {
+    const resp = await fetch(oz ? "/api/pricing-ozon/export" : "/api/pricing/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(s),
@@ -7098,7 +7755,7 @@ async function uploadPricingToDisk() {
       throw new Error(resp.status + " " + detail);
     }
     const blob = await resp.blob();
-    const name = "pricing_" + yandexStamp() + ".xlsx";
+    const name = (oz ? "pricing_ozon_" : "pricing_") + yandexStamp() + ".xlsx";
     await uploadBlobToYandex(blob, name, msg);
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
@@ -7113,6 +7770,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initOzBySize();
   initHelp();
   initYandexTab();
+  initAutomationTabs();
   initTableHover();
   await loadCabinets();
   if (localStorage.getItem("cab-auto-refresh") === "1") {
@@ -7322,6 +7980,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   }
+  const cabMain = $("#cabMainSelect");
+  if (cabMain) cabMain.addEventListener("change", async () => {
+    const id = cabMain.value ? Number(cabMain.value) : null;
+    try {
+      const res = await apiPost("/cabinet/main", { id });
+      cabState.main = res.main;
+      if (cabState.user) cabState.user.main_cabinet_id = res.main;
+      if (currentTab === "pricing") loadTab("pricing");
+    } catch (err) {
+      alert(apiErrorMessage(err));
+      fillMainCabinet();
+    }
+  });
   const cabHide = $("#cabHideNoKeys");
   if (cabHide) {
     cabHide.checked = cabHideNoKeys();
@@ -7358,6 +8029,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   onTabChange("marginOzonDetailCompare", "margin-ozon-detail");
   ["replenishWindow", "replenishTarget", "replenishSort", "replenishShowInactive", "replenishView"]
     .forEach((id) => onTabChange(id, "replenish"));
+  onTabChange("replenishCabinet", "replenish", () => {
+    syncReplenishView();
+    loadTab("replenish");
+  });
   onTabInput("replenishLike", "replenish");
   onTabInput("wbFunnelLike", "wb-funnel");
   onTabInput("wbStockLike", "wb-stock");
@@ -7411,7 +8086,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (panel) panel.classList.add("hidden");
     });
   }
-  // ── «Наш склад» — импорт/экспорт/диск ──
+  // ── «Отправки» — импорт/экспорт/диск ──
   $("#whCpImport").addEventListener("click", () => uploadFile("/warehouse/import/counterparties", $("#whCpFile"), "#headerMsg", "wh-cp"));
   $("#whRImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=receipt", $("#whRFile"), "#headerMsg", "wh-receipt"));
   $("#whSImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=shipment", $("#whSFile"), "#headerMsg", "wh-shipment"));
@@ -7450,6 +8125,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (pricingPromoRefresh) pricingPromoRefresh.addEventListener("click", () => refreshPricingPromos());
   const pricingPriceRefresh = $("#pricingPriceRefresh");
   if (pricingPriceRefresh) pricingPriceRefresh.addEventListener("click", () => refreshPricingPrices());
+  const pricingMinPrices = $("#pricingMinPrices");
+  if (pricingMinPrices) pricingMinPrices.addEventListener("click", () => applyMinPrices());
+  const pricingMpWbBtn = $("#pricingMpWb");
+  if (pricingMpWbBtn) pricingMpWbBtn.addEventListener("click", () => {
+    if (pricingMpCurrent() === "wb") return;
+    setPricingMp("wb");
+    syncPricingMpUi();
+    if (currentTab === "pricing") renderPricing(false);
+  });
+  const pricingMpOzBtn = $("#pricingMpOz");
+  if (pricingMpOzBtn) pricingMpOzBtn.addEventListener("click", () => {
+    if (pricingMpCurrent() === "oz") return;
+    setPricingMp("oz");
+    syncPricingMpUi();
+    if (currentTab === "pricing") renderPricing(false);
+  });
   onTabInput("pricingLike", "pricing", () => renderPricing(false), 350);
   initPricingShowMenu();
   const pricingFiltersBtn = $("#pricingFiltersBtn");

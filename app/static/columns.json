@@ -3238,6 +3238,11 @@
        "def": true
       },
       {
+       "k": "main_delta_pct",
+       "label": "Влияние главной, %",
+       "def": false
+      },
+      {
        "k": "target_vis",
        "label": "Целевая цена, руб",
        "def": true
@@ -3272,13 +3277,18 @@
        "label": "Ср. цена факт, руб",
        "def": true
       },
-      {
-       "k": "stock",
-       "label": "Остаток",
-       "def": true
-      },
-      {
-       "k": "buyouts",
+       {
+        "k": "stock",
+        "label": "Остаток",
+        "def": true
+       },
+       {
+        "k": "stock_value",
+        "label": "Остаток, себест.",
+        "def": false
+       },
+       {
+        "k": "buyouts",
        "label": "Выкупы, шт",
        "def": true
       },
@@ -3488,6 +3498,165 @@
        "def": false
       }
      ]
+    },
+    "oz": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "offers_count",
+       "label": "Офферов",
+       "def": false
+      },
+      {
+       "k": "nm_id",
+       "label": "Товар Ozon (ID)",
+       "def": true
+      },
+      {
+       "k": "price",
+       "label": "Цена витрины, руб",
+       "def": true
+      },
+      {
+       "k": "old_price",
+       "label": "Цена до скидки, руб",
+       "def": false
+      },
+      {
+       "k": "ozon_discount_pct",
+       "label": "Скидка Ozon, %",
+       "def": false
+      },
+      {
+       "k": "target_price",
+       "label": "Целевая цена, руб",
+       "def": true
+      },
+      {
+       "k": "delta_price",
+       "label": "Δ цены, руб",
+       "def": false
+      },
+      {
+       "k": "delta_pct",
+       "label": "Δ цены, %",
+       "def": true
+      },
+      {
+       "k": "net_cost",
+       "label": "Себестоимость",
+       "def": false
+      },
+      {
+       "k": "floor_price",
+       "label": "Пол (break-even), руб",
+       "def": false
+      },
+      {
+       "k": "margin_pct",
+       "label": "Маржа факт, %",
+       "def": false
+      },
+      {
+       "k": "margin_pct_at_target",
+       "label": "Маржа при цели, %",
+       "def": false
+      },
+      {
+       "k": "stock",
+       "label": "Остаток",
+       "def": true
+      },
+      {
+       "k": "velocity",
+       "label": "v, шт/дн",
+       "def": false
+      },
+      {
+       "k": "v_proj",
+       "label": "v прогноз, шт/дн",
+       "def": false
+      },
+      {
+       "k": "trend",
+       "label": "Тренд",
+       "def": false
+      },
+      {
+       "k": "doc",
+       "label": "DOC, дн",
+       "def": true
+      },
+      {
+       "k": "stock_value",
+       "label": "Остаток, себест.",
+       "def": false
+      },
+      {
+       "k": "commission_per_one",
+       "label": "Комиссия/шт, руб",
+       "def": false
+      },
+      {
+       "k": "services_per_one",
+       "label": "Услуги/шт, руб",
+       "def": false
+      },
+      {
+       "k": "storage_per_one",
+       "label": "Хранение/шт, руб",
+       "def": false
+      },
+      {
+       "k": "return_rate",
+       "label": "Возвраты, %",
+       "def": false
+      },
+      {
+       "k": "last_sale_days_ago",
+       "label": "Дней без продаж",
+       "def": false
+      },
+      {
+       "k": "replenishable",
+       "label": "Докупаемый",
+       "def": false
+      },
+      {
+       "k": "action",
+       "label": "Решение",
+       "def": true
+      },
+      {
+       "k": "status",
+       "label": "Статус",
+       "def": false
+      },
+      {
+       "k": "reason",
+       "label": "Причина",
+       "def": true
+      },
+      {
+       "k": "influenced_by_main",
+       "label": "Влияние главной",
+       "def": false
+      },
+      {
+       "k": "main_delta_pct",
+       "label": "Влияние главной, %",
+       "def": false
+      }
+     ]
     }
    },
    "groups": [
@@ -3511,6 +3680,7 @@
       "target_vis",
       "margin_per_one",
       "delta_discount",
+      "main_delta_pct",
       "avg_price",
       "margin_pct_at_target",
       "price",
@@ -3583,7 +3753,8 @@
     }
    ],
    "exportDicts": [
-    "pricing_export"
+    "pricing_export",
+    "oz_pricing_export"
    ]
   }
  },
@@ -4277,6 +4448,10 @@
     "k": "delta_discount",
     "label": "Дельта скидки"
    },
+   {
+    "k": "main_delta_pct",
+    "label": "Влияние главной, %"
+   },
     {
      "k": "net_cost",
      "label": "Себестоимость"
@@ -4321,12 +4496,16 @@
     "k": "backlog",
     "label": "В корзине"
    },
-   {
-    "k": "stock",
-    "label": "Остаток"
-   },
-   {
-    "k": "avg_price",
+    {
+     "k": "stock",
+     "label": "Остаток"
+    },
+    {
+     "k": "stock_value",
+     "label": "Остаток, себест."
+    },
+    {
+     "k": "avg_price",
     "label": "Ср. цена факт, руб"
    },
    {
@@ -5567,6 +5746,132 @@
     "k": "margin",
     "label": "Маржа, руб"
    }
+  ],
+  "oz_pricing_export": [
+    {
+      "k": "article",
+      "label": "Артикул"
+    },
+    {
+      "k": "name",
+      "label": "Наименование"
+    },
+    {
+      "k": "offers_count",
+      "label": "Офферов"
+    },
+    {
+      "k": "nm_id",
+      "label": "Товар Ozon (ID)"
+    },
+    {
+      "k": "price",
+      "label": "Цена витрины, руб"
+    },
+    {
+      "k": "old_price",
+      "label": "Цена до скидки, руб"
+    },
+    {
+      "k": "ozon_discount_pct",
+      "label": "Скидка Ozon, %"
+    },
+    {
+      "k": "target_price",
+      "label": "Целевая цена, руб"
+    },
+    {
+      "k": "delta_price",
+      "label": "Δ цены, руб"
+    },
+    {
+      "k": "delta_pct",
+      "label": "Δ цены, %"
+    },
+    {
+      "k": "net_cost",
+      "label": "Себестоимость"
+    },
+    {
+      "k": "floor_price",
+      "label": "Пол (break-even), руб"
+    },
+    {
+      "k": "margin_pct",
+      "label": "Маржа факт, %"
+    },
+    {
+      "k": "margin_pct_at_target",
+      "label": "Маржа при цели, %"
+    },
+    {
+      "k": "stock",
+      "label": "Остаток"
+    },
+    {
+      "k": "velocity",
+      "label": "v, шт/дн"
+    },
+    {
+      "k": "v_proj",
+      "label": "v прогноз, шт/дн"
+    },
+    {
+      "k": "trend",
+      "label": "Тренд"
+    },
+    {
+      "k": "doc",
+      "label": "DOC, дн"
+    },
+    {
+      "k": "stock_value",
+      "label": "Остаток, себест."
+    },
+    {
+      "k": "commission_per_one",
+      "label": "Комиссия/шт, руб"
+    },
+    {
+      "k": "services_per_one",
+      "label": "Услуги/шт, руб"
+    },
+    {
+      "k": "storage_per_one",
+      "label": "Хранение/шт, руб"
+    },
+    {
+      "k": "return_rate",
+      "label": "Возвраты, %"
+    },
+    {
+      "k": "last_sale_days_ago",
+      "label": "Дней без продаж"
+    },
+    {
+      "k": "replenishable",
+      "label": "Докупаемый"
+    },
+    {
+      "k": "action",
+      "label": "Решение"
+    },
+    {
+      "k": "status",
+      "label": "Статус"
+    },
+    {
+      "k": "reason",
+      "label": "Причина"
+    },
+    {
+      "k": "influenced_by_main",
+      "label": "Влияние главной"
+    },
+    {
+      "k": "main_delta_pct",
+      "label": "Влияние главной, %"
+    }
   ]
  }
 }

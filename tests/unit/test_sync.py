@@ -10,6 +10,7 @@ from app.services.sync import (
     normalize_ozon_placement,
     normalize_ozon_realization,
     normalize_ozon_accrual,
+    normalize_marketplace_cards,
     normalize_oz_cards,
     normalize_wb_detail,
     normalize_wb_sales,
@@ -22,6 +23,7 @@ from app.services.sync import (
     upsert_ozon_placements,
     upsert_price_snapshots,
     upsert_products,
+    upsert_marketplace_cards,
     upsert_ozon_price_snapshots,
     upsert_promotions,
     upsert_sales,
@@ -181,6 +183,47 @@ def test_normalize_oz_cards_empty_returns_none():
     assert normalize_oz_cards(pd.DataFrame({"x": [1]})) is None
 
 
+def test_normalize_marketplace_cards_wb_api_chrt_id():
+    # API WB (content/v2/get/cards/list) отдаёт поле chrtID (заглавные ID)
+    df = pd.DataFrame({
+        "chrtID": [95000001, 95000002],
+        "techSize": ["36", "37"],
+        "skus": ["2000000001", "2000000002"],
+        "vendorCode": ["JBR-1", "JBR-1"],
+        "nmID": [5001, 5002],
+        "brand": ["B", "B"],
+        "subject": ["Обувь", "Обувь"],
+        "title": ["Товар", "Товар"],
+    })
+    out = normalize_marketplace_cards(df)
+    assert out is not None and len(out) == 2
+    rec = out.iloc[0].to_dict()
+    assert rec["chrt_id"] == "95000001"
+    assert rec["size"] == "36"
+    assert rec["barcode"] == "2000000001"
+    assert rec["vendor_code"] == "JBR-1"
+    assert rec["nm_id"] == "5001"
+
+
+def test_upsert_marketplace_cards_from_wb_api_columns(db):
+    df = pd.DataFrame({
+        "chrtID": [95000001, 95000002],
+        "techSize": ["36", "37"],
+        "skus": ["2000000001", "2000000002"],
+        "vendorCode": ["JBR-1", "JBR-1"],
+        "nmID": [5001, 5002],
+        "brand": ["B", "B"],
+        "subject": ["Обувь", "Обувь"],
+        "title": ["Товар", "Товар"],
+    })
+    out = normalize_marketplace_cards(df)
+    assert upsert_marketplace_cards(db, out, "wb") == 2
+    mp_wb = db.execute(select(models.Marketplace).where(models.Marketplace.code == "wb")).scalar_one()
+    rows = db.execute(select(models.MarketplaceCard).where(
+        models.MarketplaceCard.marketplace_id == mp_wb.id)).scalars().all()
+    assert {r.chrt_id for r in rows} == {"95000001", "95000002"}
+
+
 def _add_wb_cards(db, rows):
     mp_wb = db.execute(select(models.Marketplace).where(models.Marketplace.code == "wb")).scalar_one()
     for r in rows:
@@ -250,6 +293,23 @@ def test_upsert_products_is_idempotent(db):
     ).scalars().all()
     assert len(rows) == 1
     assert rows[0].net_cost == 90.0
+
+
+def test_upsert_products_value_and_supplier(db):
+    """upsert_products сохраняет value/supplier при вставке и обновляет их."""
+    df = pd.DataFrame([{"article": "A1", "name": "Первый", "net_cost": 100.5,
+                        "value": 400.0, "supplier": "ООО Ромашка"}])
+    assert upsert_products(db, df) == 1
+    prod = db.get(models.Product, "A1")
+    assert prod.value == 400.0
+    assert prod.supplier == "ООО Ромашка"
+    # обновление: value/supplier перезаписываются
+    df2 = pd.DataFrame([{"article": "A1", "name": "Первый", "net_cost": 100.5,
+                         "value": 250.0, "supplier": "ИП Иванов"}])
+    assert upsert_products(db, df2) == 1
+    prod = db.get(models.Product, "A1")
+    assert prod.value == 250.0
+    assert prod.supplier == "ИП Иванов"
 
 
 def test_upsert_sales_agg_and_idempotent(db):

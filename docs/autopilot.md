@@ -23,10 +23,12 @@
 | Цены WB | провайдер (прайс) | базовая `price`, текущая скидка `discount`, витрина `cur_vis` |
 | Мин. цена WB | провайдер (`price_minimum` по nmID) | `min_price` — клампинг LOWER (опция) |
 | Докупаемость | товар (`replenishable`) | различие «регулярные поставки» / «последние единицы» |
+| Ценность | товар (`value` из products.xlsx, колонка `pure_value`) | `value_scale` — ограничивает скидку при LOWER |
 
 Итоговая строка решения содержит: `action` (RAISE / LOWER / HALVE / HOLD / SKIP),
 `target_discount` и `target_vis` (целевая скидка и витринная цена после неё),
 `margin_pct_at_target` (ожидаемая маржа), `reason` (почему).
+В строку также выводятся справочные `value` (ценность) и `supplier` (поставщик) из каталога.
 
 ---
 
@@ -121,6 +123,23 @@ rating_scale = 1.0,                если rating ≤ 0 или rating ≤ min_r
 
 При `use_reviews` выключен — `rating_scale = 1.0` (рейтинг не ограничивает).
 
+**Ценность/себестоимость → ограничение скидки при снижении** (ценный товар):
+
+```
+value_scale = 1.0,                если value ≤ 0 или net_cost ≤ 0 (нет данных)
+            = 1.0,                если value/net_cost ≤ value_ratio_low
+            = 0.0,                если value/net_cost ≥ value_ratio_high
+            = (value_ratio_high − value/net_cost) / (value_ratio_high − value_ratio_low), иначе
+```
+
+`value` — ценность товара из каталога (products.xlsx, колонка `pure_value`),
+`net_cost` — себестоимость. Чем выше ценность относительно себестоимости, тем
+«ценнее» товар и тем меньше скидка при снижении.
+
+Оба фактора объединяются в общий множитель снижения:
+`item_scale = rating_scale × value_scale`. Если `item_scale ≤ 0.01` — срабатывает
+LOWER-обязательный шаг «ценный товар» (п.4.3 и п.4.6).
+
 **Противовес (prefer_raise)** сдвигает все границы решения:
 
 ```
@@ -179,9 +198,9 @@ step   = cur_disc − target
 
 ```
 если last_sale_days_ago ≥ dead_stock_days (7):
-    если rating_scale ≤ 0.01 (рейтинг 5.0):  LOWER-обязательный шаг «ценный товар» (п.5)
+    если item_scale ≤ 0.01 (рейтинг 5.0 или ценность ≥ порога):  LOWER-обязательный шаг «ценный товар» (п.5)
     иначе:
-        target_vis = max(floor, eff × (1 − max_drop'×rating_scale/100), min_price)
+        target_vis = max(floor, eff × (1 − max_drop'×item_scale/100), min_price)
         target_vis = min(target_vis, cur_vis)
         target_vis = max(target_vis, price × (1 − max_disc_item/100))
         new_disc   = (1 − target_vis/price) × 100
@@ -218,7 +237,8 @@ Unit-экономика	продажи за 90 дней (fallback)	комисс�
 Цены WB	провайдер (прайс)	базовая price, текущая скидка discount, витрина cur_vis
 Мин. цена WB	провайдер (price_minimum по nmID)	min_price — клампинг LOWER (опция)
 Докупаемость	товар (replenishable)	различие «регулярные поставки» / «последние единицы»
-Итоговая строка решения содержит: action (RAISE / LOWER / HALVE / HOLD / SKIP), target_discount и target_vis (целевая скидка и витринная цена после неё), margin_pct_at_target (ожидаемая маржа), reason (почему).
+Ценность	товар (value из products.xlsx, колонка pure_value)	value_scale — ограничивает скидку при LOWER
+Итоговая строка решения содержит: action (RAISE / LOWER / HALVE / HOLD / SKIP), target_discount и target_vis (целевая скидка и витринная цена после неё), margin_pct_at_target (ожидаемая маржа), reason (почему). В строку также выводятся справочные value (ценность) и supplier (поставщик) из каталога.
 
 2. Окна и период анализа
 Окно по умолчанию — window_days = 14 дней, якорь на «сегодня».
@@ -276,6 +296,15 @@ rating_scale = 1.0,                если rating ≤ 0 или rating ≤ min_r
              = 0.0,                если rating ≥ 5.0
              = (5 − rating)/(5 − min_rating_reviews),      иначе (линейно)
 При use_reviews выключен — rating_scale = 1.0 (рейтинг не ограничивает).
+Ценность/себестоимость → ограничение скидки при снижении (ценный товар):
+
+value_scale = 1.0,                если value ≤ 0 или net_cost ≤ 0 (нет данных)
+            = 1.0,                если value/net_cost ≤ value_ratio_low
+            = 0.0,                если value/net_cost ≥ value_ratio_high
+            = (value_ratio_high − value/net_cost) / (value_ratio_high − value_ratio_low), иначе
+value — ценность товара из каталога (products.xlsx, колонка pure_value), net_cost — себестоимость.
+Чем выше ценность относительно себестоимости, тем «ценнее» товар и тем меньше скидка при снижении.
+Оба фактора объединяются: item_scale = rating_scale × value_scale. Если item_scale ≤ 0.01 — LOWER-обязательный шаг «ценный товар».
 
 Противовес (prefer_raise) сдвигает все границы решения:
 
@@ -312,10 +341,10 @@ use_orders, много «в корзине» (backlog по порогу hot_back
 4.3. Мёртвый запас (use_sales, продажи ≈ 0, есть остаток)
 Условие входа: v_proj ≤ 0.
 
-если last_sale_days_ago ≥ dead_stock_days (7):
-    если rating_scale ≤ 0.01 (рейтинг 5.0):  LOWER-обязательный шаг «ценный товар» (п.5)
+    если last_sale_days_ago ≥ dead_stock_days (7):
+    если item_scale ≤ 0.01 (рейтинг 5.0 или ценность ≥ порога):  LOWER-обязательный шаг «ценный товар» (п.5)
     иначе:
-        target_vis = max(floor, eff × (1 − max_drop'×rating_scale/100), min_price)
+        target_vis = max(floor, eff × (1 − max_drop'×item_scale/100), min_price)
         target_vis = min(target_vis, cur_vis)
         target_vis = max(target_vis, price × (1 − max_disc_item/100))
         new_disc   = (1 − target_vis/price) × 100
@@ -350,7 +379,7 @@ target_vis = price × (1 − new_disc/100)
 4.6. Перезапас — doc ≥ doc_high'
 Повод опустить цену (уменьшить скидку = увеличить скидку… проще: сделать витрину ниже).
 
-если rating_scale ≤ 0.01 (рейтинг 5.0):  LOWER-обязательный шаг «ценный товар» (п.5)
+если item_scale ≤ 0.01 (рейтинг 5.0 или ценность ≥ порога):  LOWER-обязательный шаг «ценный товар» (п.5)
 
 k = 0.5
         × 0.8, если use_orders и conv < 1.0
@@ -358,7 +387,7 @@ k = 0.5
         × 1.2, если use_season и trend > 1.0        # тренд растёт — мягче
         clamp(0.2..1.2)
 
-factor = max(1 − max_drop'×rating_scale/100, (target_doc / doc)^k)
+factor = max(1 − max_drop'×item_scale/100, (target_doc / doc)^k)
 target_vis = max(floor, eff × factor, price × (1 − max_disc_item/100), min_price)
 target_vis = min(target_vis, cur_vis)
 new_disc   = (1 − target_vis/price) × 100
@@ -542,6 +571,8 @@ hot_backlog_factor	2.0	«в корзине» ≥ ×orders → горячий с�
 low_conv_pct	0.7	Много в корзинах и conv ниже → SKIP («цена тормозит сделку»)
 return_penalty	0.3	Доля возвратов/отмен выше → SKIP (мыльный спрос)
 min_rating_reviews	4.0	Порог рейтинга по отзывам (ценный товар)
+value_ratio_low	1.0	Ценность/себест. ≤ → ограничений нет (value_scale = 1.0)
+value_ratio_high	4.0	Ценность/себест. ≥ → скидку не увеличиваем (value_scale = 0.0)
 11.5. Качество (используется при use_quality)
 Параметр	Дефолт	Роль
 min_rating_for_raise	4.2	Гейт RAISE: рейтинг ниже → нельзя поднимать
@@ -573,7 +604,7 @@ _decide_dead — HALVE (мёртвый товар).
 _decide — главное дерево решений (R3–R10 + зоны).
 _mandatory_step — правило 1 (обязательная коррекция при остатке).
 _half_discount_guard — правило 2 (половинный кап RAISE).
-_rating_discount_scale, _raise_quality_gate, _raise_boost — качество/рейтинг.
+_rating_discount_scale, _value_discount_scale, _raise_quality_gate, _raise_boost — качество/рейтинг/ценность.
 _pushed_items, apply_recommendations — кулдаун, применение, журнал.
 Менять поведение «скидки» нужно здесь, а не в UI: интерфейс лишь сохраняет числа, дефолты — в PRICING_DEFAULTS.
 ### 4.5. Дефицит — `doc < doc_low'`
@@ -607,7 +638,7 @@ target_vis = price × (1 − new_disc/100)
 Повод опустить цену (уменьшить скидку = увеличить скидку… проще: сделать витрину ниже).
 
 ```
-если rating_scale ≤ 0.01 (рейтинг 5.0):  LOWER-обязательный шаг «ценный товар» (п.5)
+если item_scale ≤ 0.01 (рейтинг 5.0 или ценность ≥ порога):  LOWER-обязательный шаг «ценный товар» (п.5)
 
 k = 0.5
         × 0.8, если use_orders и conv < 1.0
@@ -615,7 +646,7 @@ k = 0.5
         × 1.2, если use_season и trend > 1.0        # тренд растёт — мягче
         clamp(0.2..1.2)
 
-factor = max(1 − max_drop'×rating_scale/100, (target_doc / doc)^k)
+factor = max(1 − max_drop'×item_scale/100, (target_doc / doc)^k)
 target_vis = max(floor, eff × factor, price × (1 − max_disc_item/100), min_price)
 target_vis = min(target_vis, cur_vis)
 new_disc   = (1 − target_vis/price) × 100
@@ -911,6 +942,22 @@ reason: «перезапас … · мин. цена WB 1900 ₽ — корре�
 | `low_conv_pct` | 0.7 | Много в корзинах и conv ниже → SKIP («цена тормозит сделку») |
 | `return_penalty` | 0.3 | Доля возвратов/отмен выше → SKIP (мыльный спрос) |
 | `min_rating_reviews` | 4.0 | Порог рейтинга по отзывам (ценный товар) |
+| `value_ratio_low` | 1.0 | Ценность/себест. ≤ → ограничений нет (`value_scale = 1.0`) |
+| `value_ratio_high` | 4.0 | Ценность/себест. ≥ → скидку не увеличиваем (`value_scale = 0.0`) |
+| `demand_raise` | true | R12: подтверждённый спрос поднимает цену (за пределами дефицита) |
+| `demand_min_buyouts` | 3 | R12: порог сигнала «выкупы» (0 = сигнал выключен) |
+| `demand_min_backlog` | 5 | R12: порог сигнала «в корзине» |
+| `demand_min_rating` | 4.5 | R12: порог сигнала «рейтинг отзывов» |
+| `demand_min_conv_pct` | 1.0 | R12: порог сигнала «конверсия заказов», % |
+| `demand_min_signals` | 2 | R12: сколько сигналов из 4 нужно, чтобы поднимать |
+| `demand_raise_pct` | 15.0 | R12: рост витрины при подтверждённом спросе, % (обходит половинный кап) |
+| `demand_raise_max_doc` | 120.0 | R12: не поднимать, если DOC выше (глубокий перезапас) |
+| `velocity_from_funnel` | true | R13: брать скорость из воронки, если строк продаж в окне нет |
+| `funnel_velocity_field` | buyouts | R13: поле воронки как прокси скорости (`buyouts`/`orders`) |
+| `no_econ_cost_floor` | true | R14: без unit-экономики считать пол по себестоимости (иначе `SKIP`) |
+| `stock_value_weight` | true | R15: приоритет по деньгам остатка (`stock × net_cost`), не по штукам |
+| `follow_main` | true | R16/T-33: следовать за свежей рекомендацией главной связки (только повышения) |
+| `main_influence_pct` | 50.0 | R16/T-33: доля влияния главной (`50` = половина её Δ%) |
 
 ### 11.5. Качество (используется при `use_quality`)
 
@@ -952,8 +999,107 @@ reason: «перезапас … · мин. цена WB 1900 ₽ — корре�
 - `_decide` — главное дерево решений (R3–R10 + зоны).
 - `_mandatory_step` — правило 1 (обязательная коррекция при остатке).
 - `_half_discount_guard` — правило 2 (половинный кап RAISE).
-- `_rating_discount_scale`, `_raise_quality_gate`, `_raise_boost` — качество/рейтинг.
+- `_rating_discount_scale`, `_value_discount_scale`, `_raise_quality_gate`, `_raise_boost` — качество/рейтинг/ценность.
+- `_demand_hot` — R12: подтверждённый спрос (выкупы/корзина/рейтинг/конверсия).
+- `build_main_map`, `main_influence_map`, `apply_main_influence` — R16/T-33:
+  межсвязочное влияние (главная связка → зависимые, только повышения).
+- `apply_min_prices` — T-33: минимальные (безубыточные) цены (`action=MIN`).
 - `_pushed_items`, `apply_recommendations` — кулдаун, применение, журнал.
 
 Менять поведение «скидки» нужно здесь, а не в UI: интерфейс лишь сохраняет
 числа, дефолты — в `PRICING_DEFAULTS`.
+
+---
+
+## 13. R12–R15 (T-32): спрос важнее остатка, скорость из воронки, пол по себестоимости
+
+Эти правила чинят три перекоса прежней логики: хорошие товары дешевели из-за
+остатка, живые товары без строк продаж объявлялись «мёртвыми», а товары с
+остатком и без unit-экономики уходили в `SKIP`.
+
+### R12. Подтверждённый спрос → RAISE (`_demand_hot`)
+
+- Работает при включённом факторе «Заказы и конверсия» (`use_orders`).
+- Считаются 4 сигнала: выкупы ≥ `demand_min_buyouts`, «в корзине» ≥
+  `demand_min_backlog`, рейтинг отзывов ≥ `demand_min_rating`, конверсия ≥
+  `demand_min_conv_pct`. Нулевой порог отключает сигнал (0/нет данных не считается).
+- Если набрано ≥ `demand_min_signals` и `DOC ≤ demand_raise_max_doc` — **RAISE**
+  на `demand_raise_pct` (по умолчанию +15% к витрине). Этот путь **обходит**
+  «половинный кап» (правило 5.2), иначе рост цены почти незаметен.
+- Зона действия — нормальные остатки и перезапас (`doc ≥ doc_low'`). В дефиците
+  (`doc < doc_low'`) продолжает работать нижестоящая логика с гейтами качества
+  T-14, чтобы «мыльный» спрос (плохой рейтинг, отмены, возвраты) не поднимал цену.
+- `prefer_raise`/зоны DOC на R12 не влияют; `use_quality` — тоже (гейты T-14
+  остаются только у дефицитной ветки).
+
+### R13. Скорость из воронки при отсутствии строк продаж
+
+- Если за окно нет строк `Sale` (`v_proj ≤ 0`), но в свежем срезе воронки есть
+  активность, `v_proj = funnel_velocity_field / дней_в_срезе` (по умолчанию
+  `buyouts` к выкупам). Так товар с выкупами не считается «мёртвым запасом».
+- `use_sales = off` по-прежнему обнуляет скорость; при отсутствии воронки
+  поведение не меняется (п.4.3 «мёртвый запас»).
+
+### R14. Пол по себестоимости без unit-экономики (`no_econ_cost_floor`)
+
+- Если `use_margin`, но unit-экономики нет (`comm_rate`/`floor` пусты) и
+  `no_econ_cost_floor = true` (по умолчанию), а `net_cost > 0` — вместо
+  `SKIP skipped_no_ratio` берётся `floor = net_cost × (1 + floor_margin_pct/100)`,
+  и товар идёт по обычным веткам мёртвого запаса/перезапаса (обычно LOWER).
+  `net_cost = 0` → по-прежнему `SKIP`. Выключение флага (`false`) возвращает
+  прежнее поведение «пропустить».
+
+### R15. Ценность остатка (`stock_value`)
+
+- В строку добавляется `stock_value = stock × net_cost`. При
+  `stock_value_weight = true` это поле используется как ключ приоритета добора
+  акций (`_promo_pass`) вместо штук: 100 шт × 1000 ₽ важнее 100 шт × 100 ₽.
+  Схема `Stock` не меняется; `in_way` по-прежнему входит в `stock`.
+
+---
+
+## 14. R16/T-33: межсвязочное влияние и минимальные цены
+
+Функциональность работает поверх автопилота и **не заменяет** обычные правила
+R1–R15: она лишь подтягивает итоговую строку вверх (влияние) либо отправляет
+пол безубыточности (мин. цены).
+
+### 14.1. Главная связка (влияние цен между кабинетами)
+
+- «Главная связка» — настройка пользователя (`users.main_cabinet_id`); выбирается
+  в панели «Личные кабинеты» (селект «Главная связка»), API —
+  `POST /api/cabinet/main {id|null}`. `null` = не следовать ни за кем.
+- Если у активной связки `follow_main = true` (по умолчанию) и задана главная
+  (и это не та же связка), сервер считает свежую рекомендацию главной (read-only,
+  под её собственной схемой) и строит карту `article → Δ%` по строкам
+  **`action = RAISE`** главной: `Δ = (target_vis − current_vis) / current_vis × 100`.
+  Настройки главной берутся её собственные (`follow_main` у неё принудительно
+  снят — без рекурсии).
+- Локальная строка зависимой связки поднимается как минимум на
+  `main_influence_pct`% от Δ (по умолчанию 50% = половина). Правила:
+  - влияют **только повышения** главной; её снижения игнорируются;
+  - цена **не опускается**: если локальный расчёт и так поднимает сильнее
+    (горячий спрос) — строка не трогается;
+  - пол безубыточности (`floor_price`) соблюдается;
+  - выше базовой цены не поднять — если скидка уже 0%,
+    строка помечается `status = skipped_no_headroom`;
+  - влияние применяется **поверх** `min_delta_pp` (иначе мелкие половинки глохнут).
+- Строки, затронутые влиянием, получают `influenced_by_main = true` и
+  `main_delta_pct` (Δ главной, %); колонка «Влияние главной, %» в таблице
+  автопилота и в экспорте Excel.
+- Пустая карта (нет главной / ошибка / нет пересечений) — влияние просто не
+  применяется, расчёт зависимой связки не падает.
+
+### 14.2. Минимальные (безубыточные) цены
+
+- Кнопка «Минимальные цены» в шапке автопилота (только WB на этом этапе),
+  API — `POST /api/pricing/apply-min` (тело как у `/pricing/apply`; опционально
+  `ui_rows` — видимые строки таблицы, иначе сервер пересчитывает всё).
+- Отправляются **только строки, у которых текущая витринная цена ниже пола**
+  (`current_vis < floor_price`); ставятся `price = пол`, `discount = 0`.
+- Порог WB (`priceLimits.minPrice`) применяется как кламп истинного минимума:
+  итог = `max(пол, мин. цена WB)`.
+- Пишется журнал `price_changes` с `action = MIN` (в кулдауне автопилота не
+  участвует).
+- Ozon (Phase 2) — пока не поддержан: нужен `POST /v3/product/import/prices`
+  в провайдере.

@@ -122,6 +122,11 @@ def ensure_schema(seed: bool = True) -> None:
         conn.execute(text(
             "ALTER TABLE cabinets ADD COLUMN IF NOT EXISTS pricing_settings text DEFAULT ''"
         ))
+        # T-33: главная связка пользователя (межсвязочное влияние автопилота цен).
+        # create_all колонку к уже существующей таблице users не добавляет.
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS main_cabinet_id integer"
+        ))
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE TABLE IF NOT EXISTS app_schema_state (key text PRIMARY KEY, value text)"

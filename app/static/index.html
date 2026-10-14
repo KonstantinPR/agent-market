@@ -13,13 +13,13 @@
   <div class="links" id="navLinks">
     <a class="nav-link" data-tab="dashboard" href="#">Обзор</a>
     <div class="dropdown" id="oursDropdown">
-      <button class="dropbtn" id="oursMenuBtn">Наш склад &#9662;</button>
+      <button class="dropbtn" id="oursMenuBtn">Отправки &#9662;</button>
       <div class="dropdown-menu" id="oursMenu">
         <a class="nav-link" data-tab="products" href="#">Товары</a>
         <a class="nav-link" data-tab="ours" href="#">Начальные остатки</a>
         <a class="nav-link" data-tab="wh-cp" href="#">Контрагенты</a>
         <a class="nav-link" data-tab="wh-receipt" href="#">Приход</a>
-        <a class="nav-link" data-tab="wh-shipment" href="#">Отгрузка</a>
+         <a class="nav-link" data-tab="wh-shipment" href="#">Отправки</a>
         <a class="nav-link" data-tab="wh-stock" href="#">Остатки</a>
         <a class="nav-link" data-tab="wh-turnover" href="#">Обороты</a>
         <a class="nav-link" data-tab="replenish" href="#">Потребность в товаре</a>
@@ -31,7 +31,7 @@
         <a class="nav-link" data-tab="margin-funnel" href="#">Воронка Продаж WB</a>
         <a class="nav-link" data-tab="margin-detail" href="#">Детализация Продаж WB</a>
         <a class="nav-link" data-tab="margin-ozon-detail" href="#">Анализ Продаж OZON</a>
-        <a class="nav-link" data-tab="pricing" href="#">Автопилот цен WB</a>
+        <a class="nav-link" data-tab="pricing" href="#">Автопилот цен</a>
       </div>
     </div>
     <div class="dropdown" id="wbDropdown">
@@ -63,6 +63,14 @@
       <button class="dropbtn" id="ydMenuBtn">Яндекс.Диск &#9662;</button>
       <div class="dropdown-menu" id="ydMenu">
         <a class="nav-link" data-tab="yandex" href="#">Файлы отчётов</a>
+      </div>
+    </div>
+    <div class="dropdown" id="autoDropdown">
+      <button class="dropbtn" id="autoMenuBtn">Автоматизация &#9662;</button>
+      <div class="dropdown-menu" id="autoMenu">
+        <a class="nav-link" data-tab="automation-foldering" href="#">Фото для маркетплейса</a>
+        <a class="nav-link" data-tab="automation-names" href="#">Размножить имена</a>
+        <a class="nav-link" data-tab="automation-crop" href="#">Кроп изображений</a>
       </div>
     </div>
     <a class="nav-link" data-tab="tickets" href="#">Тикеты</a>
@@ -309,19 +317,24 @@
   </section>
 
   <section id="tab-pricing" class="pane">
-    <span class="hint">Автопилот меняет только скидку (базовую цену карточки не трогает), опирается на данные воронки и фактическую маржу из детализации и не опускает витринную цену ниже порога убытка. «Применить» в шапке пересчитывает рекомендации, «Применить в WB» вносит новые скидки через API.</span>
+    <span class="hint">Автопилот цен: можно переключиться между WB и Ozon. WB меняет только скидку (базовую цену не трогает), Ozon меняет цену витрины напрямую. Расчёт строится по базовым артикулам Ozon.</span>
     <div class="toolbar">
-      <button id="pricingApply" class="btn" disabled title="Применение скидок через WB API — доступно, когда есть рекомендации на изменение в видимой таблице">Применить в WB</button>
-      <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">Решение зависит от конверсии, динамики продаж и порога безубыточности: цена поднимается только при реальных продажах и хороших сигналах, докупаемые товары поднимаются умеренно. Кнопка «Применить в WB» вносит новые скидки через API — только по видимым в таблице строкам (с учётом фильтров).</span></span>
+      <div class="seg">
+        <button type="button" class="btn seg-btn active" id="pricingMpWb" title="Автопилот WB">WB</button>
+        <button type="button" class="btn seg-btn" id="pricingMpOz" title="Автопилот Ozon (price-based)">Ozon</button>
+      </div>
+      <button id="pricingApply" class="btn" disabled title="Применение изменений через API — доступно, когда есть рекомендации на изменение в видимой таблице">Применить</button>
+      <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">WB: меняет скидку через API. Ozon: меняет цену витрины напрямую (/v1/product/import/prices). Расчёт Ozon — price-based, по базовым артикулам, пол безубыточности из margin-детализации Ozon.</span></span>
       <input id="pricingLike" placeholder="Артикул или название содержит… * = любая часть">
       <div class="view-menu" id="pricingShowMenu">
         <button type="button" class="btn" id="btnpricingShow" title="Показ строк таблицы: с нулевыми товарами, скрыть «держать» и «пропустить»">Показ ▾</button>
         <div class="view-menu-panel hidden" id="pricingShowPanel"></div>
       </div>
       <button id="pricingFiltersBtn" class="btn" title="Фильтры по каждой колонке таблицы">Фильтры</button>
-      <button id="pricingPriceRefresh" class="btn" title="Загрузить актуальные цены и скидки WB из API в базу (расчёт считает по этому снимку, поэтому он мгновенный)">Обновить цены WB</button>
-      <span id="pricingPricesAge" class="prices-age" title="Расчёт считается по снимку цен в базе — он не ждёт WB API"></span>
-      <button id="pricingPromoRefresh" class="btn" title="Загрузить календарь акций WB в базу (последние 30 и следующие 90 дней)">Обновить акции WB</button>
+      <button id="pricingPriceRefresh" class="btn" title="Загрузить актуальные цены (WB/снимок Ozon) в базу">Обновить цены</button>
+      <span id="pricingPricesAge" class="prices-age" title="Расчёт считается по снимку цен в базе"></span>
+      <button id="pricingPromoRefresh" class="btn" title="Загрузить календарь акций WB (только для режима WB)">Акции WB</button>
+      <button id="pricingMinPrices" class="btn" title="Отправить минимальные цены: где текущая ниже безубыточного минимума — поднять до пола">Минимальные цены</button>
       <div class="view-menu" id="pricingSettingsMenu">
         <button type="button" class="btn split-l" id="btnpricingSettings" title="Раскрыть панели настроек">Настройки</button>
         <button type="button" class="btn split-r" id="btnpricingSettingsCaret" title="Действия: обновить расчёт, развернуть всё">▾</button>
@@ -372,7 +385,7 @@
       <button id="oursImport" class="btn">Загрузить остатки</button>
       <span class="toolbar-right"><span id="oursTablePager"></span></span>
     </div>
-    <p class="hint">Начальные (стартовые) остатки — отправная точка складского учёта. Дальше остатки считаются: начальные + Приход − Отгрузка.</p>
+    <p class="hint">Начальные (стартовые) остатки — отправная точка складского учёта. Дальше остатки считаются: начальные + Приход − Отправки.</p>
     <div class="table-wrap" id="oursTable"></div>
   </section>
 
@@ -406,15 +419,15 @@
 
   <section id="tab-wh-shipment" class="pane" data-wh-type="shipment">
     <div class="toolbar">
-      <input type="file" id="whSFile" accept=".xlsx">
-      <button id="whSImport" class="btn">Загрузить Отгрузку</button>
+      <div class="dz-row"><input type="file" id="whSFile" class="hidden" accept=".xlsx,.xlsm"><div class="dropzone" id="whSDrop"><span class="dz-label">Перетащите сюда Excel-файл или нажмите для выбора</span></div></div>
+      <button id="whSImport" class="btn">Загрузить Отправку</button>
       <a class="btn" id="whSExport" href="/api/warehouse/export/docs?type=shipment">Выгрузить в Excel</a>
       <a class="btn" id="whSTemplate" href="/api/warehouse/export/template-docs?type=shipment">Шаблон</a>
       <button id="whSToDisk" class="btn">На диск</button>
-      <button id="whSFromDisk" class="btn">С диска</button>
-      <span class="toolbar-right"><span id="whSTablePager"></span></span>
+      <button id="whSFromDisk" class="btn">Импорт с диска</button><button id="whSFromPaths" class="btn" title="Импорт отправок из локальных путей по правилу">Из путей</button>
+      <span class="toolbar-right"><span id="whSTablePager"></span><div class="view-menu" id="whShipmentViewMenu"><button type="button" class="btn" id="btnwhShipmentView">Вид таблицы &#9662;</button><div class="view-menu-panel hidden" id="whShipmentViewPanel"></div></div></span>
     </div>
-    <p class="hint">Отгрузка товара (покупателю или на склад маркетплейса — контрагент WB/Ozon). Тот же формат, что и Приход.</p>
+    <p class="hint">Отправка товара (покупателю или на склад маркетплейса — контрагент WB/Ozon). Тот же формат, что и Приход.</p>
     <div class="table-wrap" id="whSTable"></div>
     <div class="table-wrap" id="whSDetail"></div>
   </section>
@@ -441,6 +454,7 @@
   <section id="tab-replenish" class="pane">
     <div class="toolbar">
       <input id="replenishLike" placeholder="Артикул содержит… * = любая часть">
+      <select id="replenishCabinet" title="Связка: чьи продажи/остатки маркетплейсов показывать. Наш склад общий для всех связок."></select>
       <label title="Окно спроса (дней), за которое считается скорость продаж">Спрос <input type="number" class="tool-input num" id="replenishWindow" min="1" max="365" value="30"> дн.</label>
       <label title="Целевой запас в днях продаж, до которого пополняем наш склад и маркетплейсы">Запас <input type="number" class="tool-input num" id="replenishTarget" min="1" max="366" value="30"> дн.</label>
       <select id="replenishView" title="Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)">
@@ -468,7 +482,7 @@
         <span class="tip" id="replenishPdfTip" tabindex="0" role="tooltip">?<span class="tip-text">В PDF по каждому товару — список <b>всех размеров карточки WB</b>: наличие (включая наш товар в пути) и «Дослать» — сколько не хватает до целевого запаса. Скорость продаж размера считается за окно из селектора (180 дней / 365 дней / всё время): короткое окно даёт нулевую скорость размерам, которые давно не продавались. <b>Галка «Учитывать прибыльность» (включена по умолчанию)</b> держит на WB четверть выбранного периода продаж и домножает цель на коэффициент по рентабельности товара: ≤ 0% — не подсортировываем совсем, 15% → ×1.0, 30% и выше → ×2.0. Коэффициент общий на товар — у размеров своей себестоимости нет. Убыточные и полностью закрытые товары в PDF не попадают. Если галку выключить, покрытие берётся из поля «Запас», а пустой размер получает 1 штуку. <b>Пустой размер не остаётся пустым:</b> если размер есть в карточке, но на WB его нет и продаж не было, в него закладывается 1 штука (кроме убыточных товаров) — иначе размер нельзя выбрать на карточке. Размеры, которых нет в карточке, но которые есть в продажах или остатках, тоже показываются. «—» вместо числа означает «дославать нечего». <b>Файл с правками:</b> в меню «PDF ▾» можно перетащить отредактированную выгрузку Excel (или выбрать её кнопкой) — состав карточек и значения печатаются из файла, «Итого дослать» задаёт колонка «WB дефицит» (пустая ячейка — расчёт по складу), отбраковка убыточных не применяется, фильтры таблицы игнорируются. Ozon пока не учитывается.</span></span>
       </span>
     </div>
-    <p class="hint">Спрос = продажи − возвраты за окно (шт/день) из детализаций Прибыльности. «Купить у поставщика» — довести общий запас (наш склад + WB/Ozon) до целевого числа дней; «Отгрузить» — из нашего остатка покрыть дефициты маркетплейсов (приоритет худшему остатку в днях). Товары без карточки на WB/Ozon считаются неактуальными и скрыты. Вид «Размеры» — разрез по размерам WB: продажи по размеру, остатки на складах МП по размеру и все размеры карточки WB (даже без продаж и остатков — со штрихкодом); спрос Ozon и «Купить у поставщика» считаются только по артикулу и в этом виде не выводятся.</p>
+    <p class="hint">Спрос = продажи − возвраты за окно (шт/день) из детализаций Прибыльности. «Купить у поставщика» — довести общий запас (наш склад + WB/Ozon) до целевого числа дней; «Отгрузить» — сколько нужно отправить на каждый МП, чтобы закрыть его дефицит: источник — наш остаток и докупка, поэтому при нулевом своём остатке отгрузка не 0, если что-то нужно докупить (приоритет худшему остатку в днях). Товары без карточки на WB/Ozon считаются неактуальными и скрыты. Вид «Размеры» — разрез по размерам WB: продажи по размеру, остатки на складах МП по размеру и все размеры карточки WB (даже без продаж и остатков — со штрихкодом); спрос Ozon и «Купить у поставщика» считаются только по артикулу и в этом виде не выводятся. Для связки Ozon доступен только вид «артикулы».</p>
     <div class="table-wrap" id="replenishTable"></div>
   </section>
 
@@ -854,6 +868,89 @@
     </div>
     <div id="ticketsBoard"></div>
   </section>
+
+  <section id="tab-automation-foldering" class="pane">
+    <div class="wb-form">
+      <p class="hint">Раскладка фото с Яндекс.Диска по папкам маркетплейса в ZIP. <b>WB</b> — папка = nmID (из базы <code>nm_articles</code>), файлы <code>&lt;артикул&gt;-&lt;n&gt;.JPG</code>. <b>OZON</b> — папка = артикул, файлы <code>&lt;артикул&gt;.JPG</code> / <code>&lt;артикул&gt;_&lt;n&gt;.JPG</code>. Источник — локальный индекс Яндекс.Диска.</p>
+      <div class="toolbar">
+        <select id="autoFoldMarket" title="Маркетплейс: WB — папка по nmID, OZON — по артикулу">
+          <option value="WB" selected>WB</option>
+          <option value="OZON">OZON</option>
+        </select>
+        <select id="autoFoldOrder" title="Порядок нумерации фото">
+          <option value="ASCENDING" selected>ASCENDING (по возрастанию)</option>
+          <option value="DESCENDING">DESCENDING (по убыванию)</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="autoFoldAll"> взять все фото (ALL), иначе только новые</label>
+        <label class="chk"><input type="checkbox" id="autoFoldNulls"> ведущие нули (&minus;2 → &minus;002)</label>
+        <input id="autoFoldChangeOrder" type="number" min="2" placeholder="Поменять 1 и N" style="width:160px">
+      </div>
+      <div class="toolbar">
+        <textarea id="autoFoldArticles" rows="5" placeholder="Артикулы копипастом (по одному в строке); можно пары: артикул<TAB>nmID" style="width:100%"></textarea>
+      </div>
+      <div class="dz-row">
+        <div class="dropzone" id="autoFoldDrop">
+          <span class="dz-label">Перетащите сюда Excel, CSV или TXT со списком артикулов (по одному в строке) — или нажмите для выбора файла. Колонка «Артикул» обязательна, «nm_id» нужна только для WB (иначе nmID возьмётся из базы). Можно вставить артикулы и в поле ниже.</span>
+        </div>
+        <input type="file" id="autoFoldFile" class="hidden" accept=".xlsx,.xlsm,.csv,.txt">
+      </div>
+      <div class="toolbar">
+        <button id="autoFoldTemplate" class="btn">Скачать шаблон</button>
+        <button id="autoFoldPreview" class="btn">Предпросмотр</button>
+        <button id="autoFoldBuild" class="btn btn-primary">Скачать ZIP</button>
+      </div>
+    </div>
+    <div class="table-wrap" id="autoFoldPreviewBox"></div>
+  </section>
+
+  <section id="tab-automation-names" class="pane">
+    <div class="wb-form">
+      <p class="hint">Размножить имена фото: на каждый артикул — «Сколько» имён подряд, начиная с «С какого номера». Результат — список (одно имя на строку). Файлы не изменяются.</p>
+      <div class="toolbar">
+        <input id="autoNamesMultiply" type="number" min="1" placeholder="Сколько" style="width:120px">
+        <input id="autoNamesStart" type="number" min="1" placeholder="С какого номера" style="width:170px">
+      </div>
+      <div class="toolbar">
+        <textarea id="autoNamesArticles" rows="5" placeholder="Артикулы копипастом (по одному в строке)" style="width:100%"></textarea>
+      </div>
+      <div class="dz-row">
+        <div class="dropzone" id="autoNamesDrop">
+          <span class="dz-label">Перетащите сюда Excel, CSV или TXT со списком артикулов (по одному в строке) — или нажмите для выбора файла. Достаточно одной колонки «Артикул»; можно вставить артикулы и в поле выше.</span>
+        </div>
+        <input type="file" id="autoNamesFile" class="hidden" accept=".xlsx,.xlsm,.csv,.txt">
+      </div>
+      <div class="toolbar">
+        <button id="autoNamesTemplate" class="btn">Скачать шаблон</button>
+        <button id="autoNamesBuild" class="btn">Сгенерировать</button>
+        <button id="autoNamesDownload" class="btn btn-primary">Скачать txt</button>
+      </div>
+    </div>
+    <div class="table-wrap" id="autoNamesBox"></div>
+  </section>
+
+  <section id="tab-automation-crop" class="pane">
+    <div class="wb-form">
+      <p class="hint">Кроп изображений: обрезка фона и вставка на белую канву. Можно загрузить файлы и/или указать артикулы (фото возьмутся с Яндекс.Диска). Фото должны быть очищены по краям от резких деталей — грязи, рук, посторонних предметов.</p>
+      <div class="toolbar">
+        <select id="autoCropType" title="Категория кадра: задаёт рамку кропа">
+          <option value="Одежда по пояс" selected>Одежда по пояс</option>
+          <option value="Обувь без модели">Обувь без модели</option>
+          <option value="Обувь без модели малыши">Обувь без модели малыши</option>
+          <option value="Модель в полный рост">Модель в полный рост</option>
+        </select>
+        <button id="autoCropBuild" class="btn btn-primary">Скачать ZIP</button>
+      </div>
+      <div class="dz-row">
+        <div class="dropzone" id="autoCropDrop">
+          <span class="dz-label">Перетащите сюда изображения — или нажмите для выбора файлов</span>
+        </div>
+        <input type="file" id="autoCropFiles" class="hidden" multiple accept="image/*">
+      </div>
+      <div class="toolbar">
+        <textarea id="autoCropArticles" rows="3" placeholder="Артикулы с Яндекс.Диска (по одному в строке)" style="width:100%"></textarea>
+      </div>
+    </div>
+  </section>
 </main>
 <div id="cabDrawerOverlay" class="drawer-overlay hidden"></div>
 <aside id="cabDrawer" class="drawer hidden" aria-label="Личные кабинеты">
@@ -879,6 +976,10 @@
       <button id="cabRefreshAll" class="btn btn-primary">Обновить всё</button>
     </div>
     <div class="cab-settings">
+      <label class="cab-opt cab-main" title="T-33: связка, за свежей рекомендацией которой следуют остальные: их цена поднимается как минимум на половину роста главной (и никогда не снижается против неё). «Нет» — не следовать ни за кем.">
+        <span>Главная связка:</span>
+        <select id="cabMainSelect"><option value="">Нет (не следовать)</option></select>
+      </label>
       <label class="cab-opt" title="При старте приложения тихо запустить обновление всех связок; прогресс — в строке шапки"><input type="checkbox" id="cabAutoRefresh"> Автообновление при старте</label>
       <label class="cab-opt" title="Сравнение связок в «Обзоре» и «Прибыльности»: отметьте не менее двух связок одного МП в списке выше, данные сольются с колонкой «Владелец»"><input type="checkbox" id="cabCompare"> Сравнение продаж между кабинетами</label>
       <label class="cab-opt" title="Хранить настройки автопилота цен на каждый кабинет (на сервере) и копировать их между кабинетами"><input type="checkbox" id="cabSyncPricing"> Синхронизация автопилота цен</label>
@@ -942,7 +1043,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=99"></script>
+<script src="/static/app.js?v=102"></script>
 </body>
 </html>
 

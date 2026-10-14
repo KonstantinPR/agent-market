@@ -4,6 +4,7 @@ from app.api._common import *  # noqa: F401,F403
 from app.api._common import (
     _REPLENISH_EXPORT,
     _REPLENISH_EXPORT_SIZES,
+    _apply_cabinet,
     _fmt_days,
     _parse_window400,
     _replenish_cols,
@@ -139,8 +140,10 @@ def export_replenish(
     hide_zero_sizes: int = 0,
     view: str = "article",
     cols: Optional[str] = None,
+    cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
+    _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
     if date_from is None and date_to is None:
         back = max(1, int(window_days or settings.sync_days_default))
@@ -185,6 +188,7 @@ def export_replenish_pdf(
     vel_days: int = replenish_service.WB_SORT_VELOCITY_DAYS,
     profit: int = 1,
     limit: int = PDF_DEFAULT_LIMIT,
+    cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """Карточки потребности в PDF из строк таблицы (базовый режим).
@@ -201,6 +205,7 @@ def export_replenish_pdf(
 
     PDF из Excel-файла с правками — отдельный ``POST /export/replenish/pdf``.
     """
+    _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
     if date_from is None and date_to is None:
         back = max(1, int(window_days or settings.sync_days_default))
@@ -239,6 +244,7 @@ def export_replenish_pdf_from_excel(
     vel_days: int = replenish_service.WB_SORT_VELOCITY_DAYS,
     profit: int = 1,
     limit: int = PDF_DEFAULT_LIMIT,
+    cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """PDF из строк Excel-файла (дропзона в меню PDF).
@@ -254,6 +260,7 @@ def export_replenish_pdf_from_excel(
     сортировка) игнорируются — состав задаёт файл; окно/скорость/прибыльность
     и фото действуют как в базовом режиме.
     """
+    _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
     if date_from is None and date_to is None:
         back = max(1, int(window_days or settings.sync_days_default))

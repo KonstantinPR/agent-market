@@ -1151,7 +1151,7 @@ def upsert_products(db, df: pd.DataFrame) -> int:
 # Карты колонок (Excel-выгрузка ЛК WB + API WB) на схему marketplace_cards
 CARD_RENAME = {
     "Код размера (chrt_id)": "chrt_id", "Код размера": "chrt_id", "chrt_id": "chrt_id",
-    "chrtId": "chrt_id",
+    "chrtId": "chrt_id", "chrtID": "chrt_id",
     "Артикул WB": "nm_id", "Артикул WB (nmID)": "nm_id", "nm_id": "nm_id", "nmID": "nm_id",
     "Артикул продавца": "vendor_code", "vendor_code": "vendor_code", "vendorCode": "vendor_code",
     "Артикул": "vendor_code",

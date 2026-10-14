@@ -237,6 +237,21 @@ class FakeOz:
             "price_min_price": [1000, 700],
         })
 
+    update_prices_error = None
+    applied_prices = None
+    min_prices_error = None
+
+    def update_prices(self, items):
+        if self.update_prices_error:
+            raise self.update_prices_error
+        self.applied_prices = items
+        return {"result": [], "updated": len(items)}
+
+    def get_min_prices(self, offer_ids):
+        if self.min_prices_error:
+            raise self.min_prices_error
+        return {}
+
     def get_realization(self, month, year):
         if self.realization_error:
             raise self.realization_error

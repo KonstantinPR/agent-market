@@ -192,6 +192,73 @@ class OzonProvider(BaseProvider):
             return pd.DataFrame()
         return pd.json_normalize(items, sep="_", errors="ignore")
 
+    # ------------------------------------------------- обновление цен (v1)
+    def update_prices(self, items) -> dict:
+        """Обновление цен Ozon: POST /v1/product/import/prices.
+
+        items: список {"offer_id": str, "price": float, ["old_price": float],
+        ["min_price": float]}. Цена — строка с точкой, до 2 знаков.
+        old_price/min_price отправляются только если заданы явно (иначе Ozon
+        оставляет их без изменений). Стратегии/автодействия не трогаем
+        (auto_action_enabled/price_strategy_enabled = "UNKNOWN").
+        Лимит Ozon: не более 10 изменений цены на товар в час.
+        """
+        if self.testing:
+            self.applied_prices = items
+            return {"result": [], "updated": len(items)}
+        if not items:
+            return {"result": [], "updated": 0}
+
+        def _fmt(v):
+            if v is None or v == "":
+                return None
+            return f"{float(v):.2f}"
+
+        prices = []
+        for it in items:
+            offer_id = str(it.get("offer_id") or "").strip()
+            if not offer_id or it.get("price") is None:
+                continue
+            row = {
+                "offer_id": offer_id,
+                "price": _fmt(it.get("price")),
+                "currency_code": it.get("currency_code") or "RUB",
+                "auto_action_enabled": "UNKNOWN",
+                "price_strategy_enabled": "UNKNOWN",
+            }
+            if it.get("old_price") is not None:
+                row["old_price"] = _fmt(it.get("old_price"))
+            if it.get("min_price") is not None:
+                row["min_price"] = _fmt(it.get("min_price"))
+            prices.append(row)
+        if not prices:
+            return {"result": [], "updated": 0}
+
+        resp = self._post(f"{OZON_API}/v1/product/import/prices", {"prices": prices})
+        data = resp.json() if resp.content else {}
+        result = data.get("result") or []
+        updated, errors = 0, []
+        for r in result:
+            errs = r.get("errors") or []
+            if errs:
+                errors.append({"offer_id": r.get("offer_id"), "errors": errs})
+            if r.get("updated"):
+                updated += 1
+        if errors:
+            detail = "; ".join(
+                f"{e['offer_id']}: " + ", ".join(str(x.get("message", "")) for x in e["errors"])
+                for e in errors[:5]
+            )
+            raise OzonApiError(f"Ozon API отклонил изменение цен: {detail}")
+        return {"result": result, "updated": updated}
+
+    def get_min_prices(self, offer_ids) -> dict:
+        """Ozon не отдаёт публичный минимум (аналог WB priceLimits.minPrice).
+
+        Возвращаем {}: пол цены считаем сами из unit-экономики (floor_price).
+        """
+        return {}
+
     # ------------------------------------------------------------- реализация
     def _parse_realization_rows(self, data, day: date) -> pd.DataFrame:
         """Строки реализации -> плоский датафрейм (см. OZON_RU_COLUMNS)."""

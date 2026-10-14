@@ -112,7 +112,7 @@
 |---|---|---|---|
 | POST | `/api/import/cards` | `import_cards` | Загрузка карточек товара маркетплейса из Excel. |
 | POST | `/api/import/custom-stock` | `import_custom_stock` |  |
-| POST | `/api/import/net-cost` | `import_net_cost` | Обновляет себестоимость (net_cost) товаров из файла с колонками article/net_cost. |
+| POST | `/api/import/net-cost` | `import_net_cost` | Обновляет себестоимость (net_cost), ценность (value из `pure_value`) и поставщика (supplier из `Поставщик`) товаров по файлу каталога. Нужны колонки `article` и одна из `net_cost`/`value`. |
 | POST | `/api/import/products` | `import_products` |  |
 
 ## margin

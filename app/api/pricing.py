@@ -19,11 +19,13 @@ def pricing_defaults():
 def pricing_recommendations(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов)."""
     prices_df, updated_at, source = pricing_service.resolve_prices(db)
+    main_map = pricing_service.main_influence_map(db, payload)
     rec = pricing_service.recommendations(
-        db, settings=payload, prices_df=prices_df,
+        db, settings=payload, prices_df=prices_df, main_map=main_map,
     )
     rec["prices_source"] = source
     rec["prices_updated_at"] = updated_at.isoformat() if updated_at else None
+    rec["main_influence"] = {"count": len(main_map)}
     return rec
 
 
@@ -43,8 +45,9 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
                 db, ui_rows, settings=payload, provider=prov,
             )
         prices_df, updated_at, source = pricing_service.resolve_prices(db)
+        main_map = pricing_service.main_influence_map(db, payload)
         res = pricing_service.apply_recommendations(
-            db, settings=payload, prices_df=prices_df, provider=prov,
+            db, settings=payload, prices_df=prices_df, provider=prov, main_map=main_map,
         )
         res["prices_source"] = source
         res["prices_updated_at"] = updated_at.isoformat() if updated_at else None
@@ -55,6 +58,28 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"WB API не принял изменение цен: {e}")
+
+
+@router.post("/pricing/apply-min")
+def pricing_apply_min(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Минимальные (break-even) цены в WB: где цена ниже пола, ставим пол/скидку 0%.
+
+    Тело — настройки автопилота (как /pricing/apply); опционально ui_rows (видимые
+    строки таблицы) — тогда отправляются только они, иначе сервер пересчитает всё.
+    """
+    prov = provider_factory.get_wb_provider(credentials=_wb_creds())
+    ui_rows = payload.get("ui_rows")
+    try:
+        res = pricing_service.apply_min_prices(
+            db, rows=(ui_rows if ui_rows else None), settings=payload, provider=prov,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except WbApiError as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"WB API не принял минимальные цены: {e}")
 
 
 @router.get("/pricing/history")
@@ -94,8 +119,9 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
     """Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся."""
     cols = payload.get("cols")
     prices_df, _updated_at, _source = pricing_service.resolve_prices(db)
+    main_map = pricing_service.main_influence_map(db, payload)
     rec = pricing_service.recommendations(
-        db, settings=payload, prices_df=prices_df,
+        db, settings=payload, prices_df=prices_df, main_map=main_map,
     )
     df = pd.DataFrame(rec["rows"])
     if not df.empty:
@@ -105,7 +131,8 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "nm_id", "article", "name", "price", "current_vis", "current_discount", "target_vis",
         "target_discount", "delta_discount", "net_cost", "action", "status", "reason",
         "doc", "velocity", "trend",
-        "conv_pct", "backlog", "stock", "avg_price", "eff", "floor_price",
+        "influenced_by_main", "main_delta_pct",
+        "conv_pct", "backlog", "stock", "stock_value", "avg_price", "eff", "floor_price",
         "max_discount_item", "margin_pct_at_target", "replenishable",
         "feedback_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
         "add_to_wishlist", "stock_wb", "return_rate", "margin_pct", "margin_per_one",

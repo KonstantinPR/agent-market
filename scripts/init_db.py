@@ -87,6 +87,8 @@ def create_tables():
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS comparison_json text"))
         # Настройки автопилота цен в разрезе связки (галкой «Синхронизация автопилота цен»)
         conn.execute(text("ALTER TABLE cabinets ADD COLUMN IF NOT EXISTS pricing_settings text DEFAULT ''"))
+        # T-33: главная связка пользователя (межсвязочное влияние автопилота цен).
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS main_cabinet_id integer"))
         conn.execute(text("ALTER TABLE stocks DROP CONSTRAINT IF EXISTS uq_stocks_market_date_article_wh"))
         conn.execute(text("""
             DO $$

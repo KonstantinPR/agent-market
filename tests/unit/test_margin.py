@@ -142,6 +142,20 @@ def test_margin_detail_matches_product_case_insensitive(db):
     assert row["margin"] == 2500.0 - 1500.0
 
 
+def test_margin_detail_includes_value_and_supplier(db):
+    """Детализация несёт value и supplier товара из каталога."""
+    db.add(models.Product(article="VAL-1", name="Ценный", net_cost=300.0,
+                          value=900.0, supplier="ООО Ромашка"))
+    db.add(models.WbDetailRow(op_key="sr:v1", source="excel", article="val-1",
+                              doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                              quantity=1, retail_amount=1200.0, for_pay=1000.0))
+    db.commit()
+    out = margin_detail_dataframe(db)
+    row = out.iloc[0]
+    assert row["value"] == 900.0
+    assert row["supplier"] == "ООО Ромашка"
+
+
 def test_margin_detail_falls_back_to_barcode(db):
     """Если артикул не матчится по регистру — берём продукт по barcode (sku)."""
     db.add(models.Product(article="ABC-1", name="По баркоду", net_cost=700.0,

@@ -3,6 +3,7 @@
 from app.api._common import *  # noqa: F401,F403
 from app.api._common import (
     _REPLENISH_EXPORT,
+    _apply_cabinet,
     _parse_window400,
 )
 
@@ -22,6 +23,7 @@ def api_replenish(
     show_inactive: int = 0,
     hide_zero_sizes: int = 0,
     view: str = "article",
+    cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """Потребность в товаре: спрос (детализации) + остатки (наш склад и МП).
@@ -31,7 +33,9 @@ def api_replenish(
     даты окна. sort: urgency | margin | name. view: article | sizes —
     размерный разрез (WB) по той же логике. hide_zero_sizes — в разрезе
     «по размерам» скрыть размеры без продаж и остатков (везде 0).
+    cabinet — локальный выбор связки в разделе (None — активная из куки).
     """
+    inf = _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
     if date_from is None and date_to is None:
         # окно задано не фильтрами, а window_days: двигаем назад от даты to_.
@@ -51,6 +55,8 @@ def api_replenish(
     )
     result["date_from"] = from_.isoformat()
     result["date_to"] = to_.isoformat()
+    if inf is not None:
+        result["cabinet"] = {"id": inf.id, "owner": inf.owner(), "schema": inf.schema}
     return result
 
 

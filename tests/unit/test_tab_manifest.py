@@ -22,6 +22,7 @@ ORPHAN_TABS = {"sales", "stocks"}
 NO_COLVIEW_TABS = {
     "dashboard", "ours", "wh-cp", "wh-receipt", "wh-shipment", "wh-stock",
     "wh-turnover", "yandex", "tickets",
+    "automation-foldering", "automation-names", "automation-crop",
 }
 
 
@@ -125,6 +126,6 @@ def test_api_tabs_have_pull_route():
 
 def test_manifest_counts_are_stable():
     """Страховка от регрессии парсинга: числа зафиксированы осознанно."""
-    assert len(nav_tabs()) == 30, "изменилось число пунктов меню — обновите тест осознанно"
-    assert len(section_tabs()) == 32, "изменилось число секций — обновите тест осознанно"
+    assert len(nav_tabs()) == 33, "изменилось число пунктов меню — обновите тест осознанно"
+    assert len(section_tabs()) == 35, "изменилось число секций — обновите тест осознанно"
     assert len(pull_tabs()) == 16, "изменилось число записей apiPullByTab — обновите тест"

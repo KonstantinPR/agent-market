@@ -56,10 +56,13 @@ def api_cabinets(request: Request, db: Session = Depends(get_db)):
         for c in companies
     ]
     current = active.to_dict(active=True, mp_names=mp_names) if active is not None else None
+    main_info = cabinet_service.resolve_main(db, user)
     return {
         "companies": grouped,
         "current": current,
-        "user": {"username": user.username, "display_name": user.display_name},
+        "main": main_info.id if main_info is not None else getattr(user, "main_cabinet_id", None),
+        "user": {"username": user.username, "display_name": user.display_name,
+                 "main_cabinet_id": getattr(user, "main_cabinet_id", None)},
     }
 
 
@@ -98,6 +101,22 @@ def api_cabinet_select(payload: dict = Body(default={}), response: Response = No
     if info is None:
         raise HTTPException(status_code=404, detail="Связка не найдена")
     return info.to_dict(active=True, mp_names=cabinet_service.marketplace_names(db))
+
+
+@router.post("/cabinet/main")
+def api_cabinet_main(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Главная связка для межсвязочного влияния цен. id=null — «без главной»."""
+    user = _current_user(db)
+    cab_id = payload.get("id", None)
+    try:
+        info = cabinet_service.set_main_cabinet(db, cab_id, user)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    mp_names = cabinet_service.marketplace_names(db)
+    return {
+        "main": info.id if info is not None else None,
+        "main_info": info.to_dict(mp_names=mp_names) if info is not None else None,
+    }
 
 
 @router.get("/cabinet/{cabinet_id}/settings")

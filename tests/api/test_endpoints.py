@@ -703,6 +703,27 @@ def test_import_net_cost_updates_and_counts(api_client):
     assert a1["net_cost"] == 250.0
 
 
+def test_import_net_cost_updates_value_and_supplier(api_client, db):
+    """Файл каталога: pure_value → value, Поставщик → supplier; загрузка по article+value."""
+    from app import models
+    r = api_client.post("/api/import/net-cost", files={
+        "file": ("n.xlsx", _xlsx(pd.DataFrame([
+            {"article": "A1", "pure_value": "700", "Поставщик": "ООО Ромашка"},
+        ])), XLSX)})
+    assert r.status_code == 200
+    prod = db.get(models.Product, "A1")
+    assert prod.value == 700.0
+    assert prod.supplier == "ООО Ромашка"
+
+
+def test_import_net_cost_requires_article_and_cost_or_value(api_client):
+    r = api_client.post("/api/import/net-cost", files={
+        "file": ("n.xlsx", _xlsx(pd.DataFrame([
+            {"article": "A1", "Наименование": "Без цены"},
+        ])), XLSX)})
+    assert r.status_code == 400
+
+
 def test_import_custom_stock(api_client):
     r = api_client.post("/api/import/custom-stock", files={
         "file": ("c.xlsx", _xlsx(pd.DataFrame([

@@ -23,6 +23,7 @@ SNAPSHOT = """
 DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
+GET /api/automation/template
 GET /api/cabinet/current
 GET /api/cabinet/pricing-settings
 GET /api/cabinet/{cabinet_id}/settings
@@ -64,6 +65,7 @@ GET /api/ozon/detail-summary
 GET /api/ozon/placement-rows
 GET /api/ozon/placement-summary
 GET /api/prices
+GET /api/pricing-ozon/defaults
 GET /api/pricing/defaults
 GET /api/pricing/history
 GET /api/progress
@@ -90,6 +92,12 @@ GET /api/wb/detail-rows
 GET /api/wb/detail-summary
 GET /api/yandex/download
 GET /api/yandex/list
+POST /api/automation/crop/build
+POST /api/automation/foldering/build
+POST /api/automation/foldering/preview
+POST /api/automation/names/download
+POST /api/automation/names/multiply
+POST /api/cabinet/main
 POST /api/cabinet/pricing-settings/copy
 POST /api/cabinet/select
 POST /api/export/replenish/pdf
@@ -106,7 +114,12 @@ POST /api/ozon/placement
 POST /api/ozon/prices
 POST /api/ozon/realization
 POST /api/ozon/stock
+POST /api/pricing-ozon/apply
+POST /api/pricing-ozon/apply-min
+POST /api/pricing-ozon/export
+POST /api/pricing-ozon/recommendations
 POST /api/pricing/apply
+POST /api/pricing/apply-min
 POST /api/pricing/export
 POST /api/pricing/recommendations
 POST /api/products/preview

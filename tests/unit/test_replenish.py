@@ -88,6 +88,67 @@ def test_replenish_wb_ship_and_buy(db):
     assert r["meta"]["ship_total"] == 20
 
 
+def test_replenish_ship_shows_mp_when_buy_needed(db):
+    """Свой склад пуст: «Отгрузить WB» — адрес докупки, а не 0.
+
+    Если «Купить у поставщика» > 0, товар кому-то адресован: недостающее
+    уедет на маркетплейс после закупки, поэтому отгрузка не должна быть 0.
+    """
+    db.add(models.Product(article="WB-2", name="Ноль склада", net_cost=100.0,
+                          replenishable=True))
+    _card(db, "wb", vendor="WB-2")
+    db.add(_wb_row("w2", "WB-2", TODAY, qty=60, income=54000.0, amount=60000.0))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row = r["rows"][0]
+    assert row["our_stock"] == 0
+    assert row["need_buy"] == 60           # 30 дн × 2/дн − 0
+    assert row["wb_def"] == 20             # из плана подсортировки (180 дн)
+    assert row["ship_wb"] == 20            # адрес докупки, а не 0
+    assert row["ship_oz"] == 0
+    assert row["ship_wb"] + row["ship_oz"] > 0
+
+
+def test_replenish_ship_shows_both_mps_when_buy_needed(db):
+    """Спрос на обоих МП и пустые склады: обе отгрузки показывают адрес."""
+    db.add(models.Product(article="PRI-1", name="Приоритет", net_cost=100.0,
+                          replenishable=True))
+    _card(db, "wb", vendor="PRI-1")
+    _card(db, "ozon", vendor="PRI-1")
+    db.add(_wb_row("p1", "PRI-1", TODAY, qty=60, income=54000.0, amount=60000.0))
+    db.add(_oz_row("p2", "PRI-1", TODAY, qty=30))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row = r["rows"][0]
+    assert row["our_stock"] == 0
+    assert row["need_buy"] > 0
+    assert row["ship_wb"] > 0              # WB-дефицит адресован WB
+    assert row["ship_oz"] > 0              # Ozon-дефицит адресован Ozon
+
+def test_replenish_ship_when_plan_zeroes_wb_deficit(db):
+    """План обнулил дефицит WB, но в окне спроса он есть — отгрузка не 0.
+
+    План подсортировки считает по 180 дням и может дать to_sort=0 (спрос
+    свежий, а на WB уже что-то лежит). Если мы докупаем (need_buy>0), товар
+    кому-то адресован: закрываем оконный дефицит WB, а не оставляем 0.
+    """
+    db.add(models.Product(article="WB-3", name="План-ноль", net_cost=100.0,
+                          replenishable=True))
+    _card(db, "wb", vendor="WB-3")
+    _stock(db, "wb", "WB-3", TODAY, qty=2, qf=2)
+    db.add(_wb_row("w3", "WB-3", TODAY, qty=5, income=5400.0, amount=6000.0))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row = r["rows"][0]
+    assert row["our_stock"] == 0
+    assert row["wb_def"] == 0              # план обнулил (180 дн и остаток на WB)
+    assert row["to_sort"] == 0
+    assert row["need_buy"] > 0             # докупаем: 30 дн × 5/30 − 2
+    assert row["ship_wb"] > 0              # но не 0 — адрес докупки
+
 def test_replenish_returns_net_demand(db):
     """Возвраты вычтены из sells у обоих МП (нетто); в return_rate — отдельно."""
     db.add(models.Product(article="NET-1", name="Нетто", net_cost=100.0))

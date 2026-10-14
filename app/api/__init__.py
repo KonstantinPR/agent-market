@@ -12,6 +12,7 @@ from . import (
     ozon,
     margin,
     pricing,
+    pricing_ozon,
     products,
     replenish,
     imports,
@@ -19,6 +20,7 @@ from . import (
     tickets,
     catalog,
     maintenance,
+    automation,
 )
 
 router = APIRouter(prefix="/api")
@@ -32,6 +34,7 @@ for _mod in (
     ozon,
     margin,
     pricing,
+    pricing_ozon,
     products,
     replenish,
     imports,
@@ -39,6 +42,7 @@ for _mod in (
     tickets,
     catalog,
     maintenance,
+    automation,
 ):
     router.include_router(_mod.router)
 

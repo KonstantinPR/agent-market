@@ -6,7 +6,8 @@
 1. докупить у поставщика на наш склад (`need_buy`) — по суммарному спросу
    и целевому запасу в днях;
 2. отгрузить на склады маркетплейсов (`ship_wb` / `ship_oz`) — из нашего
-   остатка, по дефициту конкретного МП.
+   остатка и докупки, по дефициту конкретного МП: если своего товара не
+   хватает, недостающее всё равно адресовано МП и уедет туда после закупки.
 
 Спрос = продажи − возвраты за окно (нетто), в штуках в день. Товар без
 карточки на WB/Ozon (сверка по артикулу и штрихкоду) помечается
@@ -659,11 +660,13 @@ def replenish_rows(
         # 180 дн, пол 1 шт в пустой размер карточки, прибыльность. Иначе окно
         # без WB-продаж даёт дефицит 0, хотя карточка пуста. Для артикулов без
         # данных WB остаётся расчёт по окну спроса.
-        wb_def = _ceil(target_days * vel_wb - wb_avail)
+        wb_def_win = _ceil(target_days * vel_wb - wb_avail)
+        wb_def = wb_def_win
         to_sort = plan_total.get(key, 0)
         if key in plan_total:
             wb_def = to_sort
-        oz_def = _ceil(target_days * vel_oz - oz_avail)
+        oz_def_win = _ceil(target_days * vel_oz - oz_avail)
+        oz_def = oz_def_win
 
         # Актуальность: карточка на одном из МП (артикул или баркод).
         actual_mp = []
@@ -680,26 +683,39 @@ def replenish_rows(
                 actual_mp.append(code)
         actual = bool(actual_mp)
 
-        # Отгрузка с нашего склада: покрываем дефициты МП, приоритет —
-        # худшему DOC, при равенстве — более маржинальному.
+        # «Отгрузить WB/Ozon» — сколько нужно отправить на каждый МП, чтобы
+        # закрыть его дефицит. Источник — наш склад плюс докупка (`need_buy`):
+        # если своего остатка не хватает, недостающее всё равно уедет на МП
+        # после закупки. Иначе при нулевом своём остатке обе отгрузки были бы
+        # 0, хотя «Купить у поставщика» > 0 — а значит товар кому-то адресован.
+        # Приоритет — МП с худшим DOC, при равенстве — более маржинальному.
+        sys_stock = our + wb_all + oz_all
+        need_buy = _ceil(target_days * vel - sys_stock)
+
         defs = []
-        for code, df_, d_ in (("wb", wb_d, wb_def), ("ozon", oz_d, oz_def)):
+        for code, df_, d_, win_d in (
+            ("wb", wb_d, wb_def, wb_def_win),
+            ("ozon", oz_d, oz_def, oz_def_win),
+        ):
             if code not in codes:
                 continue
             doc = wb_doc if code == "wb" else oz_doc
             merit = _num(df_.get("margin_per_one"))
-            defs.append((code, d_, doc, merit))
+            # План подсортировки мог обнулить дефицит МП (to_sort=0), хотя в
+            # окне спроса он есть. Если мы всё равно докупаем (need_buy>0),
+            # товар кому-то адресован — закрываем оконный дефицит этого МП.
+            t = d_
+            if t == 0 and need_buy > 0 and win_d > 0:
+                t = win_d
+            defs.append((code, t, doc, merit))
         defs = [x for x in defs if x[1] > 0]
         defs.sort(key=lambda x: (x[2] if x[2] is not None else 1e12, -x[3]))
-        rem = max(0, our)
+        rem = max(0, our) + max(0, need_buy)
         ship = {"wb": 0, "ozon": 0}
         for code, d_, _doc, _m in defs:
             s = min(d_, rem)
             ship[code] = s
             rem -= s
-
-        sys_stock = our + wb_all + oz_all
-        need_buy = _ceil(target_days * vel - sys_stock)
 
         margin_total = _num(wb_d.get("margin")) + _num(oz_d.get("margin"))
         income_total = _num(wb_d.get("income")) + _num(oz_d.get("income"))
