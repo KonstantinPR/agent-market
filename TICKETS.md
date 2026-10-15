@@ -120,10 +120,7 @@
 
 ## В работе
 
-- [T-41] (high) Автопилот цен WB: не уходить ниже скидки, рекомендованной акцией (regular, `planDiscount`)
-  > где: models.py `wb_promo_nomenclatures`, refresh.pull_wb_promotions, sync.upsert_promo_nomenclatures,
-  > pricing._promo_plan_apply (финальный потолок после apply_main_influence, под promo_enabled)
-  > состояние: в работе
+_(пусто)_
 
 ## Заблокированные
 
@@ -235,4 +232,6 @@
 - [T-13] (declined) Автопилот цен WB: обогащение данных (воронка + детализация)
 
 - [T-14] (declined) Автопилот цен WB: модель решений — модуляторы R1–R10
+
+- [T-41] (closed) Автопилот цен WB: не уходить ниже скидки, рекомендованной акцией (regular, `planDiscount`) — ссылка на коммит `8668cf7`
 
