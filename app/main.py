@@ -50,10 +50,23 @@ def index():
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
 
     from app.config import settings
     from app.database import ensure_schema
 
     ensure_schema()
-    uvicorn.run(app, host=settings.app_host, port=settings.app_port)
+    if os.environ.get("AGENT_MARKET_NO_RELOAD") == "1":
+        uvicorn.run(app, host=settings.app_host, port=settings.app_port)
+    else:
+        # Авто-перезапуск при правках бэкенда (app/) — изменения видны сразу,
+        # без ручного рестарта. Отключается через AGENT_MARKET_NO_RELOAD=1.
+        uvicorn.run(
+            "app.main:app",
+            host=settings.app_host,
+            port=settings.app_port,
+            reload=True,
+            reload_dirs=[str(BASE_DIR / "app")],
+        )

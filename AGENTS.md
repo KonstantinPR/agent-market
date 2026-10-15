@@ -118,6 +118,18 @@ agent_market/
 - Сервер: `& "C:\python_projects\agent_market\venv\Scripts\python.exe" app/main.py`
   из `C:\python_projects\agent_market` (адрес/порт — `settings.app_host/app_port`,
   по умолчанию `127.0.0.1:8000`).
+- **Авто-применение правок (правило):** после любых изменений пользователь не
+  должен сам перезапускать сервер или жать F5.
+  - Бэкенд (`app/**/*.py`): uvicorn запускается с `--reload` (и `app/main.py`,
+    и `start-app.cmd`), поэтому сервер сам перезапускается при правке.
+    Отключается через переменную окружения `AGENT_MARKET_NO_RELOAD=1`.
+  - Фронтенд (`app/static/*`): страница сама обновляется — `autoreload.js`
+    (подключён в `index.html`) опрашивает `Last-Modified` статики и делает
+    `location.reload()` при изменении/после рестарта сервера (пауза, если
+    фокус в поле ввода, чтобы не потерять ввод).
+  - Итог для агента: после правок достаточно сохранить файлы; проверить порт
+    `8000` отвечает. При необходимости полного рестарта — `restart-app.cmd`
+    (или `powershell -File restart-app.ps1`).
 - Detached (фоновый сервер, как запускается в сессиях):
   ```
   Start-Process -FilePath "C:\python_projects\agent_market\venv\Scripts\python.exe" `
@@ -126,8 +138,15 @@ agent_market/
     -RedirectStandardOutput "C:\Users\1\AppData\Local\Temp\opencode\agent_market_server.log" `
     -RedirectStandardError "C:\Users\1\AppData\Local\Temp\opencode\agent_market_server.err.log"
   ```
-- Остановка: найти процесс, слушающий порт 8000 (`Get-NetTCPConnection -LocalPort 8000 -State Listen`),
-  и `Stop-Process -Id <pid> -Force`.
+- Остановка: `--reload` порождает дерево процессов (супервизор + воркер),
+  поэтому убивать нужно всё дерево, а не только слушателя порта:
+  ```
+  Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'app\.main:app' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+  ```
+  (простая остановка по `Get-NetTCPConnection -LocalPort 8000` оставит живой
+  супервизор — используйте `restart-app.cmd`).
 - Логи сервера: `C:\Users\1\AppData\Local\Temp\opencode\agent_market_server.log` / `.err.log`.
 
 ## Фотографии товара (T-31)

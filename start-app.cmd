@@ -10,7 +10,7 @@ if not errorlevel 1 goto open
 
 echo agent_market server is not running. Starting on port %PORT% ...
 pushd "%APP_DIR%"
-start "agent_market" /min "%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port %PORT%
+start "agent_market" /min "%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port %PORT% --reload --reload-dir "%APP_DIR%\app"
 popd
 
 set /a tries=0
