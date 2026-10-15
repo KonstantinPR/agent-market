@@ -236,6 +236,14 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
   cursor: pointer;
 }
 .filters button:hover { background: #000; }
+/* Кнопка-селектор в шапке — в виде «Вид таблицы» (белая), а не как чёрная кнопка */
+.filters .view-menu > .btn {
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #111;
+  padding: 4px 12px;
+}
+.filters .view-menu > .btn:hover { border-color: #111; background: #fff; }
 
 main { padding: 20px; }
 .pane { display: none; }

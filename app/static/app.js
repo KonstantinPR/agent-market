@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "106";
+const UI_VERSION = "108";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2445,6 +2445,7 @@ function syncReplenishView() {
   sel.title = ozView
     ? "Связка Ozon: доступен только разрез по артикулам — размеров в продажах Ozon нет"
     : "Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)";
+  if (sel._menuSync) sel._menuSync();
 }
 
 function _footSum(rows, k) { return rows.reduce((a, r) => a + (Number(r[k]) || 0), 0); }
@@ -2746,6 +2747,8 @@ function buildReplenishPdfMenu() {
   velRow.appendChild(document.createTextNode(" Скорость по: "));
   velRow.appendChild(velSel);
   panel.appendChild(velRow);
+  initMenuSelect(sel);
+  initMenuSelect(velSel);
 
   // Галка прибыльности меняет смысл покрытия, поэтому гасим «Запас»:
   // он при включённой галке не используется, и оставлять его активным
@@ -3765,8 +3768,14 @@ function initAutoDropzone(inputId, dropId) {
   });
 }
 
-function initMenuSelect(selectId) {
-  const sel = document.getElementById(selectId);
+// Единый вид селекторов: нативный <select> превращается в кнопку `.btn` с
+// раскрывающейся панелью `.view-menu-panel` — тот же вид, что у «Вид таблицы».
+// Сам <select> остаётся в DOM (скрыт), поэтому весь прежний код продолжает
+// читать его .value и слушать `change`. Принимает id или сам элемент.
+function initMenuSelect(selectOrId) {
+  const sel = typeof selectOrId === "string"
+    ? document.getElementById(selectOrId)
+    : selectOrId;
   if (!sel || sel.dataset.menuSelect) return;
   sel.dataset.menuSelect = "1";
   const menu = document.createElement("div");
@@ -3783,12 +3792,16 @@ function initMenuSelect(selectId) {
   sel.classList.add("hidden");
   const sync = () => {
     const cur = sel.options[sel.selectedIndex];
-    btn.textContent = (cur ? cur.textContent : "") + " \u25BE";
+    const curShown = cur && !cur.hidden && !cur.disabled;
+    btn.textContent = ((curShown ? cur.textContent : "") || "") + " \u25BE";
+    btn.disabled = !!sel.disabled;
     panel.innerHTML = "";
-    Array.from(sel.options).forEach((o) => {
+    for (const o of Array.from(sel.options)) {
+      if (o.hidden || o.disabled) continue;
       const item = document.createElement("button");
       item.type = "button";
       item.className = "menu-item" + (o.value === sel.value ? " active" : "");
+      if (o.title) item.title = o.title;
       item.textContent = o.textContent;
       item.addEventListener("click", () => {
         sel.value = o.value;
@@ -3797,19 +3810,69 @@ function initMenuSelect(selectId) {
         menu.classList.remove("open");
       });
       panel.appendChild(item);
-    });
+    }
   };
+  // Позволяет коду, меняющему .value без события change, обновить подпись кнопки.
+  sel._menuSync = sync;
+  // Селект внутри поповера-меню (напр. параметры PDF) — подменю раскрываем поверх
+  // (position:fixed), иначе его обрежет overflow родительской панели.
+  const nested = !!(sel.closest && sel.closest(".view-menu-panel"));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    document.querySelectorAll(".view-menu-panel").forEach((p) => { if (p !== panel) p.classList.add("hidden"); });
-    document.querySelectorAll(".view-menu.open").forEach((m) => { if (m !== menu) m.classList.remove("open"); });
-    panel.classList.toggle("hidden");
-    menu.classList.toggle("open");
+    // Закрываем прочие меню, но НЕ родительские панели-поповеры (иначе вложенное
+    // подменю свернуло бы то меню, внутри которого оно само находится).
+    document.querySelectorAll(".view-menu-panel").forEach((p) => { if (p !== panel && !p.contains(menu)) p.classList.add("hidden"); });
+    document.querySelectorAll(".view-menu.open").forEach((m) => { if (m !== menu && !m.contains(menu)) m.classList.remove("open"); });
+    if (panel.classList.contains("hidden")) {
+      sync();
+      panel.classList.remove("hidden");
+      menu.classList.add("open");
+      panel.style.right = "auto";
+      if (nested) {
+        const r = btn.getBoundingClientRect();
+        panel.style.position = "fixed";
+        panel.style.zIndex = "60";
+        panel.style.left = Math.round(r.left) + "px";
+        panel.style.top = Math.round(r.bottom + 4) + "px";
+        panel.style.maxHeight = Math.max(160, window.innerHeight - r.bottom - 16) + "px";
+      } else {
+        panel.style.position = "";
+        panel.style.zIndex = "";
+        panel.style.top = "";
+        panel.style.maxHeight = "";
+        panel.style.left = "0";
+        // не даём панели выехать за края окна (левые селекторы, узкие экраны)
+        const pr = panel.getBoundingClientRect();
+        let shift = 0;
+        if (pr.right > window.innerWidth - 8) shift = (window.innerWidth - 8) - pr.right;
+        if (pr.left + shift < 8) shift = 8 - pr.left;
+        if (shift) panel.style.left = Math.round(shift) + "px";
+      }
+    } else {
+      panel.classList.add("hidden");
+      menu.classList.remove("open");
+    }
   });
   menu.addEventListener("click", (e) => e.stopPropagation());
   document.addEventListener("click", () => panel.classList.add("hidden"));
   sel.addEventListener("change", sync);
+  // Набор/доступность опций могут меняться динамически (связки, режимы) —
+  // пересобираем меню, чтобы кнопка и панель не расходились с <select>.
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver(sync).observe(sel, {
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ["disabled", "hidden"],
+    });
+  }
   sync();
+}
+
+// Один проход по всем <select> документа — чтобы вид был одинаковым во всех
+// разделах. Динамически создаваемые селекты (внутри поповеров) конвертируются
+// там, где создаются.
+function initAllMenuSelects(root) {
+  const scope = root || document;
+  scope.querySelectorAll("select").forEach((s) => initMenuSelect(s));
 }
 
 function initAutomationTabs() {
@@ -4029,7 +4092,9 @@ function initTicketsTab() {
       closeModal();
       document.getElementById("ticketTitle").value = "";
       document.getElementById("ticketBody").value = "";
-      document.getElementById("ticketPriority").value = "medium";
+      const priorityEl = document.getElementById("ticketPriority");
+      priorityEl.value = "medium";
+      if (priorityEl._menuSync) priorityEl._menuSync();
       if (msg) { msg.textContent = ""; msg.classList.remove("error"); }
       await renderTickets();
     } catch (err) {
@@ -5495,6 +5560,7 @@ function fillReplenishCabinet() {
   }
   el.innerHTML = h;
   if (prev && el.querySelector('option[value="' + prev + '"]')) el.value = prev;
+  if (el._menuSync) el._menuSync();
   syncReplenishView();
 }
 
@@ -5519,6 +5585,7 @@ function fillMainCabinet() {
   const want = String(cur || "");
   if (want && el.querySelector('option[value="' + want + '"]')) el.value = want;
   else el.value = "";
+  if (el._menuSync) el._menuSync();
 }
 
 function shortUserName(u) {
@@ -7774,6 +7841,7 @@ async function uploadPricingToDisk() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   await loadColViews();
+  initAllMenuSelects();
   initDates();
   initStatusWatch();
   initWriteDb();

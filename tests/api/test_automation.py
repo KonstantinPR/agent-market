@@ -72,6 +72,27 @@ def test_names_multiply_defaults_to_one(client):
     assert r.json()["items"] == ["A-1.JPG"]
 
 
+def test_names_multiply_upper_default(client):
+    # Капслок включён по умолчанию.
+    r = client.post("/api/automation/names/multiply", data={"articles": "wlp-117"})
+    assert r.status_code == 200
+    assert r.json()["items"] == ["WLP-117-1.JPG"]
+
+
+def test_names_multiply_upper_false(client):
+    r = client.post("/api/automation/names/multiply",
+                    data={"articles": "wlp-117", "upper": "false"})
+    assert r.status_code == 200
+    assert r.json()["items"] == ["wlp-117-1.JPG"]
+
+
+def test_names_download_upper_false(client):
+    r = client.post("/api/automation/names/download",
+                    data={"articles": "wlp-117", "upper": "false"})
+    assert r.status_code == 200
+    assert "wlp-117-1.JPG" in r.text
+
+
 def test_template_xlsx(client):
     r = client.get("/api/automation/template")
     assert r.status_code == 200

@@ -175,13 +175,14 @@ async def automation_names_multiply(
     file: UploadFile = File(None),
     multiply: int = Form(1),
     start_from: int = Form(1),
+    upper: bool = Form(True),
 ):
     arts, _nm = await _load_inputs(articles, file)
     if not arts:
         raise HTTPException(status_code=400, detail="Не переданы артикулы")
     if multiply < 1:
         raise HTTPException(status_code=400, detail="«Сколько» должно быть ≥ 1")
-    items = names_service.names_multiply(arts, multiply, start_from)
+    items = names_service.names_multiply(arts, multiply, start_from, upper=upper)
     return {"items": items, "count": len(items)}
 
 
@@ -191,13 +192,14 @@ async def automation_names_download(
     file: UploadFile = File(None),
     multiply: int = Form(1),
     start_from: int = Form(1),
+    upper: bool = Form(True),
 ):
     arts, _nm = await _load_inputs(articles, file)
     if not arts:
         raise HTTPException(status_code=400, detail="Не переданы артикулы")
     if multiply < 1:
         raise HTTPException(status_code=400, detail="«Сколько» должно быть ≥ 1")
-    items = names_service.names_multiply(arts, multiply, start_from)
+    items = names_service.names_multiply(arts, multiply, start_from, upper=upper)
     text = names_service.to_text(items)
     return Response(
         content=text,

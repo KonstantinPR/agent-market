@@ -31,6 +31,20 @@ def test_multiply_strips_whitespace():
     assert names_multiply([" A "], 1) == ["A-1.JPG"]
 
 
+def test_multiply_upper_default():
+    # Капслок по умолчанию: артикул выводится в верхнем регистре.
+    assert names_multiply(["wlp-117", "abc"], 1) == ["WLP-117-1.JPG", "ABC-1.JPG"]
+
+
+def test_multiply_upper_false_keeps_case():
+    assert names_multiply(["wlp-117"], 1, upper=False) == ["wlp-117-1.JPG"]
+
+
+def test_multiply_upper_numbering_by_upper_art():
+    # При капслоке «a» и «A» — один артикул: нумерация сквозная.
+    assert names_multiply(["a", "A"], 1) == ["A-1.JPG", "A-2.JPG"]
+
+
 def test_to_text():
     assert to_text(["a", "b"]) == "a\nb\n"
     assert to_text([]) == ""

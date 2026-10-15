@@ -16,10 +16,13 @@ def names_multiply(
     articles: list[str],
     multiply: int,
     start_from: int = 1,
+    upper: bool = True,
 ) -> list[str]:
     """Список имён: на каждый артикул ``multiply`` имён подряд.
 
     ``articles`` — список артикулов (строки; пустые/пробельные пропускаются).
+    ``upper`` — капслок: артикул в имени выводится в верхнем регистре
+    (по умолчанию включён).
     """
     mult = int(multiply)
     start = int(start_from)
@@ -32,6 +35,8 @@ def names_multiply(
         art = str(raw).strip()
         if not art:
             continue
+        if upper:
+            art = art.upper()
         n = last_used[art] + 1
         for _ in range(mult):
             out.append(f"{art}-{n}.JPG")
