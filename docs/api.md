@@ -2,13 +2,14 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **123**, групп: **27**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **136**, групп: **29**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
-- [cabinet](#cabinet) — 7 шт.
+- [automation](#automation) — 6 шт.
+- [cabinet](#cabinet) — 8 шт.
 - [cabinets](#cabinets) — 1 шт.
 - [cards](#cards) — 1 шт.
 - [custom-stock](#custom-stock) — 1 шт.
@@ -19,7 +20,8 @@
 - [margin](#margin) — 3 шт.
 - [ozon](#ozon) — 16 шт.
 - [prices](#prices) — 1 шт.
-- [pricing](#pricing) — 5 шт.
+- [pricing](#pricing) — 6 шт.
+- [pricing-ozon](#pricing-ozon) — 5 шт.
 - [products](#products) — 6 шт.
 - [progress](#progress) — 1 шт.
 - [promo](#promo) — 2 шт.
@@ -36,11 +38,23 @@
 - [wb](#wb) — 11 шт.
 - [yandex](#yandex) — 4 шт.
 
+## automation
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| POST | `/api/automation/crop/build` | `automation_crop_build` |  |
+| POST | `/api/automation/foldering/build` | `automation_foldering_build` |  |
+| POST | `/api/automation/foldering/preview` | `automation_foldering_preview` |  |
+| POST | `/api/automation/names/download` | `automation_names_download` |  |
+| POST | `/api/automation/names/multiply` | `automation_names_multiply` |  |
+| GET | `/api/automation/template` | `automation_template` | Excel-шаблон списка артикулов (Артикул + nm_id) с примерами строк. |
+
 ## cabinet
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
 | GET | `/api/cabinet/current` | `api_cabinet_current` | Активная связка (по куке agent_cabinet). None — «как раньше» (public). |
+| POST | `/api/cabinet/main` | `api_cabinet_main` | Главная связка для межсвязочного влияния цен. id=null — «без главной». |
 | GET | `/api/cabinet/pricing-settings` | `api_pricing_settings_get` | Настройки автопилота цен активной связки (JSON) — {} если не заданы. |
 | PUT | `/api/cabinet/pricing-settings` | `api_pricing_settings_put` | Сохраняет настройки автопилота цен за активной связкой. |
 | POST | `/api/cabinet/pricing-settings/copy` | `api_pricing_settings_copy` | Копирует настройки автопилота текущей связки в другие связки. |
@@ -112,7 +126,7 @@
 |---|---|---|---|
 | POST | `/api/import/cards` | `import_cards` | Загрузка карточек товара маркетплейса из Excel. |
 | POST | `/api/import/custom-stock` | `import_custom_stock` |  |
-| POST | `/api/import/net-cost` | `import_net_cost` | Обновляет себестоимость (net_cost), ценность (value из `pure_value`) и поставщика (supplier из `Поставщик`) товаров по файлу каталога. Нужны колонки `article` и одна из `net_cost`/`value`. |
+| POST | `/api/import/net-cost` | `import_net_cost` | Обновляет себестоимость, ценность и поставщика товаров из файла каталога. |
 | POST | `/api/import/products` | `import_products` |  |
 
 ## margin
@@ -155,10 +169,21 @@
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
 | POST | `/api/pricing/apply` | `pricing_apply` | Применяет скидки через WB API upload/task и пишет журнал price_changes. |
+| POST | `/api/pricing/apply-min` | `pricing_apply_min` | Минимальные (break-even) цены в WB: где цена ниже пола, ставим пол/скидку 0%. |
 | GET | `/api/pricing/defaults` | `pricing_defaults` |  |
 | POST | `/api/pricing/export` | `pricing_export` | Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся. |
 | GET | `/api/pricing/history` | `pricing_history` | Журнал решений автопилота (последние события). |
 | POST | `/api/pricing/recommendations` | `pricing_recommendations` | Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов). |
+
+## pricing-ozon
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| POST | `/api/pricing-ozon/apply` | `pricing_ozon_apply` | Применяет цены Ozon через /v1/product/import/prices и пишет журнал. |
+| POST | `/api/pricing-ozon/apply-min` | `pricing_ozon_apply_min` | Минимальные (break-even) цены Ozon: где витрина ниже пола — поднимаем до пола. |
+| GET | `/api/pricing-ozon/defaults` | `pricing_ozon_defaults` |  |
+| POST | `/api/pricing-ozon/export` | `pricing_ozon_export` | Рекомендации автопилота Ozon в Excel. Изменения в Ozon API НЕ вносятся. |
+| POST | `/api/pricing-ozon/recommendations` | `pricing_ozon_recommendations` | Read-only расчёт рекомендаций автопилота Ozon (по базовым артикулам). |
 
 ## products
 
@@ -182,7 +207,7 @@
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
 | GET | `/api/promo/list` | `promo_list` | Сохранённые акции WB: актуальные и ближайшие (±90 дней), свежие сверху. |
-| POST | `/api/promo/refresh` | `promo_refresh` | Одноразовое обновление акций WB (Календарь акций) в wb_promotions. |
+| POST | `/api/promo/refresh` | `promo_refresh` | Обновление акций WB (wb_promotions) и их номенклатуры (planDiscount). |
 
 ## pulls
 

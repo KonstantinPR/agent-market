@@ -287,3 +287,68 @@ def test_promo_list_api(db, api_client):
     assert row["participation_percent"] == 15.0
     assert row["cap_pct"] == 7.0
     assert row["tiers"][0]["rate"] == 20.0
+
+
+# ------------------------------------ номенклатура акций / потолок (T-41 / R19)
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_promo_refresh_api_fetches_nomenclatures_for_regular(db, api_client, stub_wb):
+    """Refresh тянет planDiscount только для активных regular-акций (auto — 422)."""
+    now = datetime.utcnow()
+    stub_wb.promo_list = [
+        {"id": 9100, "name": "ЛЕТО", "type": "regular",
+         "startDateTime": _iso(now - timedelta(days=1)),
+         "endDateTime": _iso(now + timedelta(days=5))},
+        {"id": 9200, "name": "АВТО", "type": "auto",
+         "startDateTime": _iso(now - timedelta(days=1)),
+         "endDateTime": _iso(now + timedelta(days=5))},
+    ]
+    stub_wb.promo_nomenclatures = {
+        9100: {
+            True: [{"id": "1001", "inaction": True, "price": 4200,
+                    "planprice": 4116, "discount": 0, "plandiscount": 2}],
+            False: [{"id": "1002", "inaction": False, "price": 2000,
+                     "planprice": 1860, "discount": 3, "plandiscount": 7}],
+        },
+        9200: {
+            True: [{"id": "9999", "inaction": True, "plandiscount": 50}],
+            False: [],
+        },
+    }
+    r = api_client.post("/api/promo/refresh")
+    assert r.status_code == 200
+    assert r.json()["promo_nom_rows"] == 2
+    noms = db.execute(select(models.PromoNomenclature)).scalars().all()
+    assert sorted((n.promo_id, n.nm_id) for n in noms) == [(9100, "1001"), (9100, "1002")]
+
+
+def test_recommendations_promo_plan_cap_api(db, api_client):
+    """promo_plan_pct/promo_cap_applied в ответе и потолок по плану WB."""
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    plain = api_client.post("/api/pricing/recommendations",
+                            json={"promo_enabled": True}).json()
+    r_plain = next(r for r in plain["rows"] if r["article"] == "TST-1")
+    assert r_plain["promo_plan_pct"] is None
+    assert r_plain["promo_cap_applied"] is False
+
+    now = datetime.utcnow()
+    db.add(models.Promotion(
+        promo_id=9300, name="ЛЕТО", adv_type="regular", description="",
+        starts_at=now - timedelta(days=1), ends_at=now + timedelta(days=5),
+        participation_percent=10.0, ranging_json=""))
+    db.add(models.PromoNomenclature(
+        promo_id=9300, nm_id="1001", in_action=False,
+        price=2000, plan_price=1980, discount=0, plan_discount=1.0))
+    db.commit()
+    capped = api_client.post("/api/pricing/recommendations",
+                             json={"promo_enabled": True}).json()
+    row = next(r for r in capped["rows"] if r["article"] == "TST-1")
+    assert row["promo_plan_pct"] == 1.0
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(1.0, abs=0.01)
+    assert row["promo_cap_applied"] is True

@@ -98,10 +98,12 @@ PRICING_DEFAULTS = {
     # сравнения результатов; общие стражи безопасности действуют в обеих).
     "mode": "new",
     # T-31: акции WB (Календарь акций). promo_enabled = «учитывать акции» в
-    # автопилоте: при недоходе до следующего ranging-тира лучшей акции «добираем»
-    # K товаров (наименее рентабельные → больший остаток → медленнее оборот →
-    # объёмные), поднимая целевую скидку на promo_push_pct. Вниз хуже безубытка
-    # разрешено до promo_max_beyond_floor_pp п.п. (акция важнее пола цены).
+    # автопилоте: (1) при недоходе до следующего ranging-тира лучшей акции
+    # «добираем» K товаров (наименее рентабельные → больший остаток → медленнее
+    # оборот → объёмные), поднимая целевую скидку на promo_push_pct; вниз хуже
+    # безубытка разрешено до promo_max_beyond_floor_pp п.п. (акция важнее пола
+    # цены). (2) T-41 (R19): не уходить ниже скидки, рекомендованной акцией WB
+    # (planDiscount из nomenclatures; только regular-акции) — финальный потолок.
     "promo_enabled": False,
     "promo_push_pct": 2.0,
     "promo_max_beyond_floor_pp": 5.0,
@@ -927,6 +929,11 @@ def recommendations(
     if main_map:
         apply_main_influence(out_rows, main_map, s)
 
+    # T-41 (R19): потолок по рекомендации акции WB (regular, planDiscount).
+    # Финальное правило: идёт после push (R11), смягчения (R18) и главной
+    # связки (R16) — ничто не должно увести цену ниже, чем просит WB.
+    promo_plan_apply(out_rows, _promo_plan_map(db), s)
+
     return {
         "rows": out_rows,
         "settings": s,
@@ -1187,6 +1194,7 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
         "promo_cap_pct": None, "promo_push_applied": False,
         "promo_delta_discount": 0.0, "promo_gap_pp": None,
         "promo_boost_gain": None,
+        "promo_plan_pct": None, "promo_cap_applied": False,
     }
     if not promos:
         for r in rows:
@@ -1248,6 +1256,8 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
             "promo_delta_discount": 0.0,
             "promo_gap_pp": gap_pp,
             "promo_boost_gain": boost_gain,
+            "promo_plan_pct": None,
+            "promo_cap_applied": False,
         })
 
     if not s.get("promo_enabled") or best_next is None or best is None or not rows:
@@ -1341,6 +1351,91 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
                                 "other_unit", "net_cost")):
             r["margin_pct_at_target"] = _margin_pct(r["target_vis"], r)
         r["promo_push_applied"] = True
+
+
+def _promo_plan_map(db) -> dict:
+    """nm_id → максимальная рекомендованная WB скидка (planDiscount), %.
+
+    T-41 / R19. Источник — wb_promo_nomenclatures (GET /calendar/promotions/
+    nomenclatures), только regular-акции: у автоакций endpoint отвечает 422 и
+    per-product требований WB не отдаёт. Берём активные акции (starts_at/ends_at
+    покрывают текущий момент) и по каждому товару — максимум planDiscount среди
+    участников (inAction=true) и подходящих кандидатов (inAction=false).
+    """
+    if db is None:
+        return {}
+    now = datetime.utcnow()
+    try:
+        rows = db.execute(
+            select(
+                models.PromoNomenclature.nm_id,
+                func.max(models.PromoNomenclature.plan_discount).label("cap"),
+            )
+            .join(models.Promotion,
+                  models.Promotion.promo_id == models.PromoNomenclature.promo_id)
+            .where(
+                models.Promotion.adv_type == "regular",
+                models.Promotion.starts_at <= now,
+                models.Promotion.ends_at >= now,
+            )
+            .group_by(models.PromoNomenclature.nm_id)
+        ).all()
+    except Exception:  # noqa: BLE001 — нет таблицы/колонки не должен ронять расчёт
+        return {}
+    return {str(nm): _num(cap) for nm, cap in rows if nm}
+
+
+def promo_plan_apply(rows: list, plan_map: dict, s: dict) -> int:
+    """R19: не уходить ниже скидки, рекомендованной акцией WB (regular).
+
+    Финальный потолок — вызывается ПОСЛЕ push (R11), смягчения (R18) и влияния
+    главной связки (R16), чтобы ничто не увело цену ниже рекомендации WB.
+    Правило работает только при promo_enabled; инфо-поле promo_plan_pct
+    («WB просит скидку») заполняется всегда, когда для товара есть данные.
+
+    effective_cap = max(cap, current_discount): потолок лишь предотвращает
+    УГЛУБЛЕНИЕ скидки, но никогда не заставляет повышать цену — товар, уже
+    сидящий глубже рекомендации WB, остаётся как есть. Возвращает число строк,
+    у которых целевая скидка была ограничена.
+    """
+    for r in rows:
+        r.setdefault("promo_plan_pct", None)
+        r.setdefault("promo_cap_applied", False)
+    if not plan_map:
+        return 0
+    for r in rows:
+        nm = str(r.get("nm_id") or "")
+        cap = plan_map.get(nm)
+        if not nm or cap is None:
+            continue
+        r["promo_plan_pct"] = round(cap, 1)
+        if not s.get("promo_enabled"):
+            continue
+        tgt = r.get("target_discount")
+        if tgt is None:
+            continue
+        tgt = _num(tgt)
+        cur = _num(r.get("current_discount"))
+        effective_cap = max(cap, cur)
+        if tgt <= effective_cap + 1e-9:
+            continue
+        price = _num(r.get("price"))
+        new_disc = round(effective_cap, 1)
+        r["target_discount"] = new_disc
+        if price > 0:
+            r["target_vis"] = round(price * (1 - new_disc / 100), 2)
+        r["delta_discount"] = round(new_disc - cur, 1)
+        if all(k in r for k in ("comm_rate", "logistics_unit", "storage_unit",
+                                "other_unit", "net_cost")):
+            r["margin_pct_at_target"] = _margin_pct(r["target_vis"], r)
+        r["promo_cap_applied"] = True
+        if r.get("action") in ("LOWER", "HALVE"):
+            r["status"] = "suggested"
+            reason = (r.get("reason") or "").rstrip(".")
+            note = (f"потолок акции WB: скидка ограничена планом WB "
+                    f"{new_disc:.1f}%")
+            r["reason"] = ((reason + ". ") if reason else "") + note
+    return sum(1 for r in rows if r.get("promo_cap_applied"))
 
 
 def _decide_dead(f: dict, s: dict) -> dict:

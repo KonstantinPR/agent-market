@@ -26,6 +26,7 @@ MP_SPLIT_TABLES = frozenset({"sales", "stocks", "marketplace_cards", "price_snap
 WB_ONLY_TABLES = frozenset({
     "wb_detail_rows", "funnel_metric", "nm_articles",
     "price_changes", "storage_costs", "storage_charges", "wb_promotions",
+    "wb_promo_nomenclatures",
 })
 # Таблицы только Ozon.
 OZ_ONLY_TABLES = frozenset({

@@ -1968,6 +1968,92 @@ def upsert_promotions(db, list_df: pd.DataFrame,
     return len(values)
 
 
+def upsert_promo_nomenclatures(db, promo_id: int,
+                               nom_df: Optional[pd.DataFrame]) -> int:
+    """Номенклатура regular-акции WB (planDiscount/planPrice) -> wb_promo_nomenclatures.
+
+    `nom_df` — строки GET /calendar/promotions/nomenclatures в нижнем регистре
+    колонок (id, inaction, price, planprice, discount, plandiscount). Upsert по
+    (promo_id, nm_id). Возвращает число записанных строк.
+    """
+    if nom_df is None or nom_df.empty:
+        return 0
+    try:
+        pid = int(promo_id)
+    except (TypeError, ValueError):
+        return 0
+    if not pid:
+        return 0
+    rows = []
+    for rec in nom_df.to_dict("records"):
+        nm = _s(rec.get("id"))
+        if not nm or nm.lower() == "nan":
+            continue
+        plan = rec.get("plandiscount")
+        if plan is None or plan == "" or (isinstance(plan, float) and plan != plan):
+            # Без рекомендации WB строка бесполезна для потолка.
+            continue
+        rows.append({
+            "promo_id": pid,
+            "nm_id": nm,
+            "in_action": bool(rec.get("inaction")),
+            "price": _num_or_none(rec.get("price")),
+            "plan_price": _num_or_none(rec.get("planprice")),
+            "discount": _num_or_none(rec.get("discount")),
+            "plan_discount": _f(plan),
+        })
+    if not rows:
+        return 0
+    ins = insert(models.PromoNomenclature)
+    stmt = ins.on_conflict_do_update(
+        constraint="uq_promo_nom_promo_nm",
+        set_={
+            "in_action": ins.excluded.in_action,
+            "price": ins.excluded.price,
+            "plan_price": ins.excluded.plan_price,
+            "discount": ins.excluded.discount,
+            "plan_discount": ins.excluded.plan_discount,
+            "fetched_at": func.now(),
+        },
+    )
+    db.execute(stmt, rows)
+    db.commit()
+    return len(rows)
+
+
+def purge_promo_nomenclatures(db, keep_promo_ids: list) -> None:
+    """Удаляет строки номенклатуры акций, которых больше нет в keep_promo_ids.
+
+    Вызывается после обновления списка акций, чтобы потолок не считался по
+    закрытым/невидимым акциям.
+    """
+    keep = [int(p) for p in (keep_promo_ids or []) if p]
+    sel = select(models.PromoNomenclature.promo_id).distinct()
+    if keep:
+        sel = sel.where(models.PromoNomenclature.promo_id.notin_(keep))
+    stale = [r[0] for r in db.execute(sel).all()]
+    if not stale:
+        return
+    db.execute(
+        models.PromoNomenclature.__table__.delete().where(
+            models.PromoNomenclature.promo_id.in_(stale))
+    )
+    db.commit()
+
+
+def _num_or_none(value):
+    """Число/строка -> float, иначе None (пустые ячейки planPrice и т.п.)."""
+    if value is None or value == "":
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN
+        return None
+    return v
+
+
 def upsert_ozon_price_snapshots(db, df: pd.DataFrame) -> int:
     """Снимок цен/скидок Ozon (v5/product/info/prices) -> price_snapshots.
     Схема Ozon: offer_id (артикул), product_id, price_price (текущая),

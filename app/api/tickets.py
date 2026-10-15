@@ -63,7 +63,14 @@ def api_ticket_reopen(tid: str):
 
 @router.post("/promo/refresh")
 def promo_refresh(db: Session = Depends(get_db)):
-    """Одноразовое обновление акций WB (Календарь акций) в wb_promotions."""
+    """Обновление акций WB (wb_promotions) и их номенклатуры (planDiscount).
+
+    Календарь акций → wb_promotions; для активных regular-акций дополнительно
+    грузится номенклатура (участники + кандидаты, inAction=true/false) →
+    wb_promo_nomenclatures — источник потолока скидки автопилота (R19/T-41);
+    в ответе поле promo_nom_rows. У автоакций endpoint nomenclatures отвечает
+    422, их пропускаем.
+    """
     try:
         res = refresh_service.pull_wb_promotions(db, write_db=True)
     except Exception as e:  # noqa: BLE001
@@ -71,6 +78,7 @@ def promo_refresh(db: Session = Depends(get_db)):
     return {
         "rows": res["rows"], "db_rows": res["db_rows"],
         "count": res["count"], "window": res["window"],
+        "promo_nom_rows": res.get("promo_nom_rows", 0),
     }
 
 

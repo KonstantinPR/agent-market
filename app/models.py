@@ -298,6 +298,35 @@ class Promotion(Base):
     )
 
 
+class PromoNomenclature(Base):
+    """Номенклатура акции WB (GET /calendar/promotions/nomenclatures) — источник
+    рекомендованной WB скидки `planDiscount`.
+
+    Только для regular-акций (у автоакций endpoint отвечает 422 и per-product
+    требований WB не отдаёт). Строки для `in_action=True` (участники) и
+    `in_action=False` (подходящие кандидаты) складываются в одну таблицу:
+    `nm_id` + `plan_discount` = потолок скидки, который автопилот не должен
+    переступать, пока акция активна.
+    """
+
+    __tablename__ = "wb_promo_nomenclatures"
+    __table_args__ = (
+        UniqueConstraint("promo_id", "nm_id", name="uq_promo_nom_promo_nm"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    promo_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    nm_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    in_action: Mapped[bool] = mapped_column(Boolean, default=False)
+    price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=True)
+    plan_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=True)
+    discount: Mapped[float] = mapped_column(Numeric(6, 2), nullable=True)
+    plan_discount: Mapped[float] = mapped_column(Numeric(6, 2), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
 class ApiPull(Base):
     """Лог последних успешных загрузок из API маркетплейсов (по api+kind)."""
 

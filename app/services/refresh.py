@@ -11,7 +11,7 @@ import json
 import logging
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
@@ -558,17 +558,57 @@ def pull_wb_storage_charges(db, from_, to_, provider: Optional[WbProvider] = Non
             "rows": len(df), "window": f"{from_}..{to_}"}
 
 
+def _promo_naive_utc(value) -> Optional[datetime]:
+    """ISO datetime («2026-10-03T21:00:00Z») → naive UTC (как в БД)."""
+    if value is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+    except (TypeError, ValueError):
+        return None
+
+
+def _active_regular_promo_ids(df: pd.DataFrame) -> list:
+    """id обычных (regular) акций, активных на текущий момент.
+
+    Для автоакций endpoint nomenclatures отвечает 422 — их пропускаем.
+    """
+    if df is None or df.empty:
+        return []
+    now = datetime.utcnow()
+    out = []
+    for rec in df.to_dict("records"):
+        try:
+            pid = int(rec.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not pid or str(rec.get("type") or "").strip().lower() != "regular":
+            continue
+        start = _promo_naive_utc(rec.get("startDateTime"))
+        end = _promo_naive_utc(rec.get("endDateTime"))
+        if start and start > now:
+            continue
+        if end and end < now:
+            continue
+        out.append(pid)
+    return out
+
+
 def pull_wb_promotions(db, provider: Optional[WbProvider] = None,
                        write_db: bool = True) -> dict:
     """Акции WB (Календарь акций): окно [−30 дн, +90 дн], доступные для участия.
 
     Строки и details пишутся в wb_promotions; лог в api_pulls (kind=promotions).
+    Для активных regular-акций дополнительно тянется номенклатура
+    (planDiscount/planPrice) — источник потолка скидки автопилота (R19).
     """
     prov = provider or _wb_provider()
     from_ = date.today() - timedelta(days=30)
     to_ = date.today() + timedelta(days=90)
     df = prov.get_promotions(from_, to_, all_promo=False)
     n = 0
+    nom_rows = 0
     if write_db and not df.empty:
         ids = [
             int(i) for i in pd.to_numeric(
@@ -578,10 +618,25 @@ def pull_wb_promotions(db, provider: Optional[WbProvider] = None,
         ]
         det = prov.get_promotion_details(ids) if ids else pd.DataFrame()
         n = sync_service.upsert_promotions(db, df, det)
+        # Номенклатура (regular, активные): участники + кандидаты.
+        regular_ids = _active_regular_promo_ids(df)
+        for pid in regular_ids:
+            for in_action in (True, False):
+                try:
+                    nom = prov.get_promotion_nomenclatures(pid, in_action=in_action)
+                except Exception as exc:  # noqa: BLE001 — одна акция не роняет пул
+                    logger.warning("Номенклатура акции %s (in_action=%s): %s",
+                                   pid, in_action, exc)
+                    continue
+                nom_rows += sync_service.upsert_promo_nomenclatures(db, pid, nom)
+                if not nom.empty:
+                    time.sleep(0.7)
+        # Закрытые/невидимые акции убираем, чтобы потолок не считался по ним.
+        sync_service.purge_promo_nomenclatures(db, regular_ids)
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "promotions", len(df), n, window)
     return {"df": df, "count": n if write_db else len(df), "db_rows": n,
-            "rows": len(df), "window": window}
+            "rows": len(df), "window": window, "promo_nom_rows": nom_rows}
 
 
 def pull_wb_sales(db, from_, to_, provider: Optional[WbProvider] = None,

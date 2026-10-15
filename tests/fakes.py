@@ -77,10 +77,16 @@ class FakeWb:
         return pd.DataFrame({"nmID": ["1001", "1002"], "price": [1100, 990]})
 
     promo_error = None
+    # Перекрытия для T-41 (номенклатура акций): список акций и план по товарам.
+    promo_list = None
+    promo_nomenclatures = None
+    promo_nom_error = None
 
     def get_promotions(self, start_date=None, end_date=None, all_promo=False):
         if self.promo_error:
             raise self.promo_error
+        if self.promo_list is not None:
+            return pd.DataFrame(self.promo_list)
         return pd.DataFrame([{
             "id": 7001, "name": "ХИТЫ ГОДА", "type": "auto",
             "startDateTime": "2026-01-01T00:00:00Z", "endDateTime": "2026-12-31T23:59:59Z",
@@ -101,6 +107,15 @@ class FakeWb:
                 {"participationRate": 60, "boost": 40},
             ]),
         }])
+
+    def get_promotion_nomenclatures(self, promo_id, in_action=False):
+        """Номенклатура акции (planDiscount/planPrice) — источник потолка R19."""
+        if self.promo_nom_error:
+            raise self.promo_nom_error
+        if self.promo_nomenclatures is not None:
+            per_promo = self.promo_nomenclatures.get(int(promo_id), {})
+            return pd.DataFrame(per_promo.get(bool(in_action), []))
+        return pd.DataFrame()
 
     prices_min_prices = None
     min_prices_error = None

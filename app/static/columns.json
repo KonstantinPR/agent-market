@@ -3458,6 +3458,16 @@
        "def": false
       },
       {
+       "k": "promo_plan_pct",
+       "label": "WB просит скидку, %",
+       "def": false
+      },
+      {
+       "k": "promo_cap_applied",
+       "label": "Ограничено акцией",
+       "def": false
+      },
+      {
        "k": "last_sale_days_ago",
        "label": "Дней без продаж",
        "def": false
@@ -3750,6 +3760,8 @@
       "promo_delta_discount",
       "promo_score",
       "promo_score_confidence",
+      "promo_plan_pct",
+      "promo_cap_applied",
       "last_sale_days_ago"
      ]
     },
@@ -4646,10 +4658,18 @@
     "k": "promo_score",
     "label": "Оценка"
    },
-   {
-    "k": "promo_score_confidence",
-    "label": "Полнота оценки"
-   },
+    {
+     "k": "promo_score_confidence",
+     "label": "Полнота оценки"
+    },
+    {
+     "k": "promo_plan_pct",
+     "label": "WB просит скидку, %"
+    },
+    {
+     "k": "promo_cap_applied",
+     "label": "Ограничено акцией"
+    },
    {
     "k": "last_sale_days_ago",
     "label": "Дней без продаж"

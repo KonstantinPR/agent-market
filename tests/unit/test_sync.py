@@ -25,7 +25,9 @@ from app.services.sync import (
     upsert_products,
     upsert_marketplace_cards,
     upsert_ozon_price_snapshots,
+    upsert_promo_nomenclatures,
     upsert_promotions,
+    purge_promo_nomenclatures,
     upsert_sales,
     upsert_storage_charges,
     upsert_wb_detail_rows,
@@ -1046,3 +1048,56 @@ def test_upsert_promotions_merge_details_by_id(db):
     p = db.execute(select(models.Promotion)).scalar_one()
     assert p.promo_id == 7001
     assert p.participation_percent is None  # деталей для 7001 не было
+
+
+# --------------------------- номенклатура акций (T-41 / R19): planDiscount
+
+
+_NOM_DF = pd.DataFrame([
+    {"id": "1001", "inaction": True, "price": 4200, "currencycode": "rub",
+     "planprice": 4116, "discount": 0, "plandiscount": 2},
+    {"id": "1002", "inaction": False, "price": 2000, "currencycode": "rub",
+     "planprice": 1860, "discount": 3, "plandiscount": 7},
+])
+
+
+def test_upsert_promo_nomenclatures_writes_and_updates(db):
+    n = upsert_promo_nomenclatures(db, 9001, _NOM_DF)
+    assert n == 2
+    rows = db.execute(
+        select(models.PromoNomenclature).order_by(models.PromoNomenclature.nm_id)
+    ).scalars().all()
+    assert [r.nm_id for r in rows] == ["1001", "1002"]
+    assert [bool(r.in_action) for r in rows] == [True, False]
+    assert float(rows[0].plan_discount) == 2.0
+    assert float(rows[1].plan_discount) == 7.0
+    assert float(rows[1].plan_price) == 1860.0
+    assert float(rows[1].discount) == 3.0
+
+    # повтор — upsert, а не дубль
+    again = _NOM_DF.copy()
+    again["plandiscount"] = [3.0, 8.0]
+    assert upsert_promo_nomenclatures(db, 9001, again) == 2
+    db.expire_all()
+    rows = db.execute(select(models.PromoNomenclature)).scalars().all()
+    assert len(rows) == 2
+    assert float(rows[0].plan_discount) == 3.0
+
+
+def test_upsert_promo_nomenclatures_skips_empty_and_bad(db):
+    assert upsert_promo_nomenclatures(db, 9001, pd.DataFrame()) == 0
+    assert upsert_promo_nomenclatures(db, None, _NOM_DF) == 0
+    assert upsert_promo_nomenclatures(db, 0, _NOM_DF) == 0
+    # строки без рекомендации WB (planDiscount) бесполезны для потолка
+    no_plan = pd.DataFrame([{"id": "1", "inaction": True, "plandiscount": None}])
+    assert upsert_promo_nomenclatures(db, 9001, no_plan) == 0
+
+
+def test_purge_promo_nomenclatures_drops_stale_promos(db):
+    upsert_promo_nomenclatures(db, 9001, _NOM_DF)
+    upsert_promo_nomenclatures(db, 9002, _NOM_DF)
+    purge_promo_nomenclatures(db, [9001])
+    rows = db.execute(select(models.PromoNomenclature)).scalars().all()
+    assert [r.promo_id for r in rows] == [9001, 9001]
+    purge_promo_nomenclatures(db, [])
+    assert db.execute(select(models.PromoNomenclature)).scalars().all() == []

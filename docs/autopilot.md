@@ -933,6 +933,7 @@ reason: «перезапас … · мин. цена WB 1900 ₽ — корре�
 | `min_delta_pp` | 1.0 | Мин. изменение скидки, п.п. (защита от «флапа») |
 | `dead_min_discount` | 1.0 | Нижняя граница скидки мёртвых (HALVE) |
 | `cooldown_days` | 3 | Дней между изменениями цены товара |
+| `promo_enabled` | выкл. | Акции WB: добор участия (R11) + потолок по `planDiscount` (R19) |
 
 ### 11.4. Спрос и воронка
 
@@ -1002,6 +1003,10 @@ reason: «перезапас … · мин. цена WB 1900 ₽ — корре�
 - `_half_discount_guard` — правило 2 (половинный кап RAISE).
 - `_rating_discount_scale`, `_value_discount_scale`, `_raise_quality_gate`, `_raise_boost` — качество/рейтинг/ценность.
 - `_demand_hot` — R12: подтверждённый спрос (выкупы/корзина/рейтинг/конверсия).
+- `soften_lower` — R18: мягкость снижения цены (`lower_soften`).
+- `_promo_pass` — R11: акции WB (info-поля + добор участия `promo_push_pct`).
+- `_promo_plan_map`, `promo_plan_apply` — R19/T-41: потолок по рекомендованной
+  акцией скидке (`planDiscount` из `wb_promo_nomenclatures`; regular-акции).
 - `build_main_map`, `main_influence_map`, `apply_main_influence` — R16/T-33:
   межсвязочное влияние (главная связка → зависимые, только повышения).
 - `apply_min_prices` — T-33: минимальные (безубыточные) цены (`action=MIN`).
@@ -1087,6 +1092,45 @@ reason: «перезапас … · мин. цена WB 1900 ₽ — корре�
 - Порядок: смягчение идёт **до** акций WB (добор участия `promo_push_pct`
   встаёт поверх уже смягчённой скидки) и **до** влияния главной связки
   (R16 поднимает цену поверх). Применяется и в рекомендациях, и при «Применить».
+
+### R19. Потолок по рекомендованной акцией скидке (`planDiscount`, T-41)
+
+Автопилот не должен уходить **ниже скидки, которую рекомендует активная акция
+WB**. Если автопилот хотел бы 12%, а акция WB просит 7% — он останавливается
+на 7%.
+
+- **Источник данных.** `GET /calendar/promotions/nomenclatures?promotionID=&inAction=`
+  отдаёт per-product `planPrice` и `planDiscount` (рекомендованная WB скидка).
+  **Работает только для `regular`-акций — у `auto` endpoint отвечает 422.**
+  Поскольку автоакции составляют ~97% каталога, правило сейчас покрывает лишь
+  обычные акции; это задокументированное ограничение API WB, а не пробел.
+- **Хранение.** Per-cab таблица `wb_promo_nomenclatures`
+  (`models.PromoNomenclature`): `promo_id`, `nm_id`, `in_action`, `price`,
+  `plan_price`, `discount`, `plan_discount`, `fetched_at`; unique `(promo_id, nm_id)`.
+  Заполняется в `refresh.pull_wb_promotions` **только по активным regular-акциям**
+  (обе ветки: участники `inAction=true` + кандидаты `false`), чистится
+  `sync.purge_promo_nomenclatures`. Регистрация per-cab — в `WB_ONLY_TABLES`
+  (`services/cabinet_migrate.py`).
+- **Расчёт.** `pricing._promo_plan_map(db)` → `{nm_id: max(plan_discount)}`
+  по **активным** regular-акциям (`adv_type='regular'`, `starts_at ≤ now ≤ ends_at`).
+  Если у товара несколько акций — берётся **максимальная (самая глубокая)** скидка.
+- **Правило.** `pricing.promo_plan_apply` применяет
+  `effective_cap = max(cap, current_discount)` и
+  `target_discount = min(target_discount, effective_cap)`; пересчитываются
+  `target_vis`, `delta_discount`, `margin_pct_at_target`. Потолок лишь
+  предотвращает **углубление** скидки, но **никогда не заставляет повышать цену**:
+  товар, уже сидящий глубже рекомендации WB, остаётся как есть.
+- **Порядок.** Вызывается в `recommendations()` **после** push (R11),
+  смягчения (R18) и главной связки (R16) — то есть это **финальный** потолок:
+  ничто из предыдущих правил не может увести цену ниже плана WB.
+  («Главная связка» ранее считалась последним словом — R19 становится новым
+  финальным ограничением, поскольку требование WB жёстче любого внутреннего правила.)
+- **Включение.** Работает только при `promo_enabled = true` (общий флаг
+  «учитывать акции WB» — и добор R11, и потолок R19). При выключенном флаге
+  `promo_plan_pct` всё равно заполняется как справочная информация.
+- **Колонки.** `promo_plan_pct` («WB просит скидку, %») и
+  `promo_cap_applied` («Ограничено акцией») — в таблице автопилота и в
+  Excel-экспорте (`pricing_export`).
 
 ---
 

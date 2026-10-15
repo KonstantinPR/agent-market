@@ -382,13 +382,28 @@ agent_market/
   - `GET /promotions/details` батчами ≤100 promotionIDs → `participationPercentage`,
     `ranging[{condition,participationRate,boost}]`, счётчики `inPromoActionTotal/Leftovers`,
     `notInPromoActionTotal/Leftovers`, `exceptionProductsCount`.
-  - `GET /promotions/nomenclatures` и `POST /promotions/upload` к auto-акциям
-    неприменимы — отвечают 422.
-  - **Per-product «требуемой скидки по акции» WB не отдаёт** (в `products` есть только
-    наша `discount`). Поэтому мин/макс-колонки по акциям не выдумываются; связка с
-    автопилотом сделана агрегатным правилом R11 (`pricing._promo_pass`) через
-    ranging-тиры. Обратная задача («срезать лишнюю скидку при выходе из акции»)
-    без per-product данных нерешаема — реализован только добор.
+  - `GET /promotions/nomenclatures?promotionID=&inAction=true|false` →
+    `[{id(nmID), inAction, price, currencyCode, planPrice, discount, planDiscount}]`
+    (пагинация). **Работает только для `regular`-акций; у `auto`-акций — 422**
+    (проверено вживую: 2766 → 200, 3038/3010 → 422). `POST /promotions/upload`
+    к auto-акциям тоже неприменим. В Prices & Discounts полей про акции нет.
+  - **Per-product рекомендованная WB скидка есть — но только у regular-акций:**
+    это `planDiscount` (+ рекомендованная `planPrice`) из `nomenclatures`.
+    `discount` в ответе — НАША текущая скидка. `inAction=true` — участники,
+    `false` — подходящие кандидаты. Данные складываются в per-cab таблицу
+    `wb_promo_nomenclatures` (`models.PromoNomenclature`, upsert
+    `sync.upsert_promo_nomenclatures`, чистка `purge_promo_nomenclatures`;
+    тянется в `refresh.pull_wb_promotions` только по активным regular-акциям).
+  - Автоакции (~97% каталога) per-product требований не отдают — это
+    **задокументированное ограничение**, а не пробел реализации.
+  - **R19 (`pricing.promo_plan_apply`, T-41): автопилот не уходит ниже
+    рекомендованной акцией скидки.** `cap = max(planDiscount)` по активным
+    regular-акциям, где товар есть (участник или кандидат);
+    `effective_cap = max(cap, current_discount)` — потолок лишь предотвращает
+    **углубление** скидки, но никогда не заставляет повышать цену. Правило
+    работает только при `promo_enabled` и идёт **после** push (R11),
+    смягчения (R18) и главной связки (R16) — финальный потолок. Инфо-поле
+    `promo_plan_pct` заполняется всегда, `promo_cap_applied` — при срабатывании.
   - Даты WB-акций — с временем и `Z`; БД хранит naive UTC, конверсия `_promo_dt`
     в `app/services/sync.py`.
   - **Семантика лестницы ranging — наша интерпретация, не данные WB.** Условие у
@@ -398,11 +413,12 @@ agent_market/
     `promo_boost_gain` = буст наивысшего тира с `rate ≤` целевой скидки,
     `promo_gap_pp` = `tier_pct −` целевая скидка (пересчитывается после добора).
     Не выдавать эти числа за то, что WB сообщил о конкретном артикуле.
-  - Правило R11 — только добор, плоский (`+promo_push_pct` на первых K кандидатов)
-    и только вниз по скидке. Срезание скидки при выходе из акции сознательно не
-    реализовано: без per-product требований WB порог среза был бы выдумкой.
-    Колонка `promo_delta_discount` отделяет вклад акции от `delta_discount`,
-    который остаётся «правила R1-R10 + акция».
+  - Правило R11 — добор, плоский (`+promo_push_pct` на первых K кандидатов)
+    и только вниз по скидке. Колонка `promo_delta_discount` отделяет вклад
+    акции от `delta_discount`, который остаётся «правила R1-R10 + акция».
+    Ранее упоминавшееся «срезание скидки при выходе из акции» сознательно не
+    реализовано (нет per-product данных у auto-акций); R19 решает соседнюю
+    задачу — не уходить глубже плана WB **пока акция активна**.
 
 ## Перед коммитом
 

@@ -120,7 +120,10 @@
 
 ## В работе
 
-_(пусто)_
+- [T-41] (high) Автопилот цен WB: не уходить ниже скидки, рекомендованной акцией (regular, `planDiscount`)
+  > где: models.py `wb_promo_nomenclatures`, refresh.pull_wb_promotions, sync.upsert_promo_nomenclatures,
+  > pricing._promo_plan_apply (финальный потолок после apply_main_influence, под promo_enabled)
+  > состояние: в работе
 
 ## Заблокированные
 

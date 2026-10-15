@@ -141,7 +141,8 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "promo_count", "promo_names", "promo_part_pct", "promo_tier_pct",
         "promo_tier_boost", "promo_need_rows", "promo_cap_pct",
         "promo_push_applied", "promo_delta_discount", "promo_score",
-        "promo_score_confidence", "last_sale_days_ago",
+        "promo_score_confidence", "promo_plan_pct", "promo_cap_applied",
+        "last_sale_days_ago",
     ]
     df = df[[c for c in keep if c in df.columns]]
     df, ru = excel_io.project_export(df, export_cols("pricing_export"), cols)

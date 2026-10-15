@@ -37,7 +37,7 @@ TABLES = ", ".join([
     "wb_detail_rows", "ozon_detail_rows", "ozon_buyouts",
     "ozon_accruals", "ozon_placements",
     "counterparties", "warehouse_docs", "warehouse_doc_items",
-    "product_sizes", "product_aliases", "wb_promotions",
+    "product_sizes", "product_aliases", "wb_promotions", "wb_promo_nomenclatures",
     "users", "cabinets",
 ])
 

@@ -13,9 +13,11 @@ from app.services.pricing import (
     _parse_ranging,
     _promo_cap_pct,
     _promo_pass,
+    _promo_plan_map,
     _value_discount_scale,
     merge_settings,
     project_velocity,
+    promo_plan_apply,
     recommendations,
 )
 
@@ -1803,3 +1805,128 @@ def test_apply_min_prices_does_not_break_cooldown_of_regular(db):
     res = pricing_service.apply_rows(
         db, [_ui_row(art="T1", nm="111")], provider=_FakeProvider(), today=TODAY)
     assert res["pushed"] == 1
+
+
+# ------------------------------------- R19 / T-41: потолок акции WB (planDiscount)
+
+
+def _plan_row(art="PL", nm="555", *, price=2000.0, cur=3.0, tgt=12.0,
+              action="LOWER", status="suggested", reason="правила R1-R10"):
+    return {
+        "article": art, "nm_id": nm, "price": price,
+        "current_discount": cur, "current_vis": round(price * (1 - cur / 100), 2),
+        "target_discount": tgt, "target_vis": round(price * (1 - tgt / 100), 2),
+        "delta_discount": round(tgt - cur, 1), "action": action,
+        "status": status, "reason": reason, "stock": 100,
+        "comm_rate": 0.15, "logistics_unit": 40.0, "storage_unit": 10.0,
+        "other_unit": 5.0, "net_cost": 300.0, "margin_pct_at_target": None,
+    }
+
+
+def test_promo_plan_apply_clamps_target_to_wb_plan():
+    """R19 идёт после push (R11): добор не может увести ниже плана WB."""
+    rows = [_plan_row(cur=3.0, tgt=12.0)]
+    n = promo_plan_apply(rows, {"555": 7.0}, merge_settings({"promo_enabled": True}))
+    assert n == 1
+    assert rows[0]["target_discount"] == 7.0
+    assert rows[0]["target_vis"] == pytest.approx(2000 * 0.93)
+    assert rows[0]["delta_discount"] == pytest.approx(4.0, abs=0.01)
+    assert rows[0]["promo_cap_applied"] is True
+    assert rows[0]["promo_plan_pct"] == 7.0
+    assert "потолок акции WB" in rows[0]["reason"]
+
+
+def test_promo_plan_apply_noop_when_target_within_plan():
+    rows = [_plan_row(cur=3.0, tgt=5.0)]
+    n = promo_plan_apply(rows, {"555": 7.0}, merge_settings({"promo_enabled": True}))
+    assert n == 0
+    assert rows[0]["target_discount"] == 5.0
+    assert rows[0]["promo_cap_applied"] is False
+    assert rows[0]["promo_plan_pct"] == 7.0  # инфо-поле заполняется всегда
+
+
+def test_promo_plan_apply_disabled_keeps_target():
+    rows = [_plan_row(cur=3.0, tgt=12.0)]
+    n = promo_plan_apply(rows, {"555": 7.0}, merge_settings({"promo_enabled": False}))
+    assert n == 0
+    assert rows[0]["target_discount"] == 12.0
+    assert rows[0]["promo_cap_applied"] is False
+    assert rows[0]["promo_plan_pct"] == 7.0
+
+
+def test_promo_plan_apply_never_forces_a_raise():
+    """Товар уже глубже рекомендации WB: не поднимаем, но и не углубляем."""
+    rows = [_plan_row(cur=10.0, tgt=12.0)]
+    n = promo_plan_apply(rows, {"555": 7.0}, merge_settings({"promo_enabled": True}))
+    assert n == 1
+    assert rows[0]["target_discount"] == 10.0  # effective_cap = max(7, 10)
+    assert rows[0]["delta_discount"] == 0.0
+    assert rows[0]["promo_cap_applied"] is True
+
+
+def test_promo_plan_apply_sets_info_defaults():
+    rows = [_plan_row()]
+    promo_plan_apply(rows, {}, merge_settings({"promo_enabled": True}))
+    assert rows[0]["promo_plan_pct"] is None
+    assert rows[0]["promo_cap_applied"] is False
+
+
+def _regular_promo_row(promo_id=9001, name="ЛЕТО", plan_for=()):
+    """Активная regular-акция + строки номенклатуры (nm_id, plan_discount)."""
+    now = datetime.utcnow()
+    promo = models.Promotion(
+        promo_id=promo_id, name=name, adv_type="regular", description="",
+        starts_at=now - timedelta(days=1), ends_at=now + timedelta(days=5),
+        participation_percent=10.0,
+        ranging_json=json.dumps([{"participationRate": 20, "boost": 0}]),
+    )
+    noms = [models.PromoNomenclature(
+        promo_id=promo_id, nm_id=nm, in_action=True,
+        price=2000.0, plan_price=round(2000 * (1 - disc / 100), 2),
+        discount=0.0, plan_discount=disc,
+    ) for nm, disc in plan_for]
+    return promo, noms
+
+
+def test_promo_plan_map_regular_active_max(db):
+    """Карта берёт только regular-акции, активные сейчас, и максимум planDiscount."""
+    now = datetime.utcnow()
+    db.add(_active_promo_row(promo_id=1))  # auto — игнорируется
+    db.add(models.Promotion(
+        promo_id=2, name="ЛЕТО", adv_type="regular", description="",
+        starts_at=now - timedelta(days=1), ends_at=now + timedelta(days=5),
+        participation_percent=5.0, ranging_json=""))
+    db.add(models.Promotion(
+        promo_id=3, name="ЗИМА", adv_type="regular", description="",
+        starts_at=now - timedelta(days=1), ends_at=now + timedelta(days=5),
+        participation_percent=5.0, ranging_json=""))
+    db.add(models.Promotion(
+        promo_id=4, name="ЗАКРЫТАЯ", adv_type="regular", description="",
+        starts_at=now - timedelta(days=20), ends_at=now - timedelta(days=10),
+        participation_percent=5.0, ranging_json=""))
+    db.add(models.PromoNomenclature(promo_id=2, nm_id="1", in_action=True, plan_discount=4.0))
+    db.add(models.PromoNomenclature(promo_id=2, nm_id="2", in_action=False, plan_discount=6.0))
+    db.add(models.PromoNomenclature(promo_id=3, nm_id="1", in_action=True, plan_discount=9.0))
+    db.add(models.PromoNomenclature(promo_id=4, nm_id="1", in_action=True, plan_discount=99.0))
+    db.commit()
+    plan = _promo_plan_map(db)
+    assert plan["1"] == 9.0  # max(4, 9); закрытая (99) и auto не участвуют
+    assert plan["2"] == 6.0
+
+
+def test_recommendations_promo_plan_cap(db):
+    """Интеграция: активная regular-акция ограничивает целевую скидку планом WB."""
+    nm = _seed(db, "R19", "991234", stock=1000,
+               sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    promo, noms = _regular_promo_row(plan_for=[(nm, 7.0)])
+    db.add(promo)
+    for nom in noms:
+        db.add(nom)
+    db.commit()
+    rec = recommendations(db, prices_df=_prices((nm, 2000, 3)), today=TODAY,
+                          settings={"promo_enabled": True})
+    row = _row(rec, "R19")
+    assert row["promo_plan_pct"] == 7.0
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] <= 7.0 + 1e-9
+    assert row["promo_cap_applied"] is True

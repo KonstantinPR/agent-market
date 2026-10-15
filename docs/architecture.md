@@ -34,35 +34,35 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 7433 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/static/columns.json` | 5496 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/api/ (17 файлов)` | 4757 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/services/sync.py` | 2469 | запись выгрузок WB/Ozon в БД |
-| `app/services/pricing.py` | 1797 | автопилот цен: R1–R11, расчёт скидок |
-| `tests/api/test_endpoints.py` | 1375 | HTTP-эндпоинты через TestClient |
-| `app/services/refresh.py` | 1352 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `app/static/style.css` | 1246 | стили (панели «Вид таблицы», тулбары, таблицы) |
-| `app/providers/wb.py` | 1062 | HTTP к Wildberries |
-| `app/services/replenish.py` | 1025 | подсортировка WB, план дефицита, скорость продаж |
-| `app/providers/ozon.py` | 969 | HTTP к Ozon |
-| `app/static/index.html` | 948 | разметка: навигация `data-tab` + секции `tab-*` |
-| `tests/unit/test_margin.py` | 878 | юнит-тесты маржинальности |
-| `app/services/margin.py` | 774 | маржинальность по детализациям, группировка артикулоразмеров |
-| `app/models.py` | 726 | SQLAlchemy-модели (схема БД) |
+| `app/static/app.js` | 8214 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/columns.json` | 5915 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/api/ (19 файлов)` | 5257 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/services/sync.py` | 2657 | запись выгрузок WB/Ozon в БД |
+| `app/services/pricing.py` | 2401 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
+| `app/services/refresh.py` | 1462 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
+| `tests/api/test_endpoints.py` | 1394 | HTTP-эндпоинты через TestClient |
+| `app/static/style.css` | 1265 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/providers/wb.py` | 1145 | HTTP к Wildberries |
+| `app/static/index.html` | 1050 | разметка: навигация `data-tab` + секции `tab-*` |
+| `app/services/replenish.py` | 1041 | подсортировка WB, план дефицита, скорость продаж |
+| `app/providers/ozon.py` | 1036 | HTTP к Ozon |
+| `tests/unit/test_margin.py` | 927 | юнит-тесты маржинальности |
+| `app/services/margin.py` | 815 | маржинальность по детализациям, группировка артикулоразмеров |
+| `app/models.py` | 791 | SQLAlchemy-модели (схема БД) |
+| `tests/js/test_js_helpers.py` | 641 | проверка app.js через Node `vm` |
 | `app/services/pdf_demand.py` | 623 | PDF «Потребность в товаре» |
-| `tests/js/test_js_helpers.py` | 618 | проверка app.js через Node `vm` |
 | `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
-| `app/services/dashboard.py` | 500 | сводные панели дашборда |
+| `app/services/dashboard.py` | 512 | сводные панели дашборда |
 | `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 255 | индекс фото на диске, выбор папки, fallback по префиксу |
 | `scripts/load_sample.py` | 216 | демо-данные |
-| `app/database.py` | 203 | engine/session PostgreSQL |
+| `app/database.py` | 211 | engine/session PostgreSQL |
 | `app/services/base_price.py` | 178 | рекомендуемая (базовая) цена |
 | `app/services/thumbs.py` | 144 | миниатюры PDF в `data/thumbs/` |
 | `app/services/excel_import.py` | 137 | разбор отредактированного Excel «Потребность» |
+| `scripts/init_db.py` | 122 | создание схемы + идемпотентные ALTER |
 | `app/services/progress.py` | 118 | прогресс длительных выкачек: ContextVar + реестр, GET /api/progress |
-| `scripts/init_db.py` | 117 | создание схемы + идемпотентные ALTER |
 | `app/services/yandex_disk.py` | 108 | загрузка отчётов на Яндекс.Диск |
 | `app/services/funnel.py` | 98 | воронка продаж (агрегация) |
 | `app/services/common.py` | 76 | общие хелперы (wildcard-фильтр `like_*`, окна) |
