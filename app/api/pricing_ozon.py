@@ -84,7 +84,7 @@ def pricing_ozon_export(payload: dict = Body(default={}), db: Session = Depends(
         "article", "name", "offers_count", "nm_id", "price", "old_price",
         "ozon_discount_pct", "target_price", "delta_price", "delta_pct",
         "net_cost", "floor_price", "margin_pct", "margin_pct_at_target",
-        "stock", "velocity", "v_proj", "trend", "doc", "stock_value",
+        "stock", "in_way", "velocity", "v_proj", "trend", "doc", "stock_value",
         "commission_per_one", "services_per_one", "storage_per_one",
         "return_rate", "last_sale_days_ago", "replenishable",
         "action", "status", "reason", "influenced_by_main", "main_delta_pct",

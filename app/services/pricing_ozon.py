@@ -306,7 +306,7 @@ def _floor_price(f: dict, s: dict) -> Optional[float]:
 
 
 def _latest_ozon_stock(db: Session, base_map: dict) -> dict:
-    """Остаток Ozon по базовому артикулу (последний срез stocks)."""
+    """Остаток Ozon на складе (on-hand) по базовому артикулу (последний срез stocks)."""
     mp = _oz_id(db)
     latest = db.scalar(
         select(func.max(models.Stock.date)).where(models.Stock.marketplace_id == mp)
@@ -326,6 +326,27 @@ def _latest_ozon_stock(db: Session, base_map: dict) -> dict:
     return out
 
 
+def _latest_ozon_in_way(db: Session, base_map: dict) -> dict:
+    """«В пути» Ozon по базовому артикулу (последний срез stocks, promised_amount)."""
+    mp = _oz_id(db)
+    latest = db.scalar(
+        select(func.max(models.Stock.date)).where(models.Stock.marketplace_id == mp)
+    )
+    if latest is None:
+        return {}
+    out: dict = {}
+    for art, base, qty in db.execute(
+        select(models.Stock.article, models.Stock.base_article, func.sum(models.Stock.in_way))
+        .where(models.Stock.marketplace_id == mp, models.Stock.date == latest)
+        .group_by(models.Stock.article, models.Stock.base_article)
+    ):
+        key = (_canon_article(base) or base_map.get(_canon_article(art))
+               or _canon_article(art))
+        if key:
+            out[key] = out.get(key, 0) + int(qty or 0)
+    return out
+
+
 def _product_map(db: Session) -> dict:
     return {_canon_article(p.article): p for p in db.execute(select(models.Product)).scalars()}
 
@@ -333,6 +354,52 @@ def _product_map(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 # Решение (price-based порт правил R1-R10)
 # ---------------------------------------------------------------------------
+def soften_lower_ozon(rows: list, s: dict) -> int:
+    """R18: снижение цены Ozon — в lower_soften раз мягче; повышения не трогаем.
+
+    Дельта LOWER (price − target_price) делится на lower_soften, но никогда не
+    ужимается ниже шага max(min_delta_pct %, oz_price_step ₽) — минимальный шаг
+    (правило «коррекция обязательна») и защита от флапа целы. Вызывается после
+    решений, до влияния главной связки. Возвращает число смягчённых строк.
+    """
+    soften = _num(s.get("lower_soften"), 1.0)
+    if soften <= 1.0:
+        return 0
+    step_pct = _num(s.get("min_delta_pct"), 1.0)
+    step_rub = _num(s.get("oz_price_step"), 1.0)
+    n = 0
+    for r in rows:
+        if r.get("action") != "LOWER":
+            continue
+        price = _num(r.get("price"))
+        tgt = _num(r.get("target_price"))
+        floor = _num(r.get("floor_price"))
+        if price <= 0 or tgt >= price:
+            continue
+        min_step = max(step_pct / 100.0 * price, step_rub)
+        if price - tgt <= min_step + 1e-9:
+            continue  # минимальный шаг не смягчаем
+        # Смягчённый шаг, но не меньше обязательного минимума и не ниже пола.
+        new_t = min(price - (price - tgt) / soften, price - min_step)
+        new_t = max(new_t, floor, 1.0)
+        new_t = round(new_t, 2)
+        if abs(new_t - tgt) < 1e-9:
+            continue
+        r["target_price"] = new_t
+        r["delta_price"] = round(new_t - price, 2)
+        r["delta_pct"] = round((new_t - price) / price * 100, 2)
+        r["margin_pct_at_target"] = _margin_pct_oz(new_t, {
+            "comm_rate": r.get("comm_rate"),
+            "logistics_unit": r.get("logistics_unit"),
+            "storage_unit": r.get("storage_unit"),
+            "services_unit": r.get("services_unit"),
+            "other_unit": r.get("other_unit"),
+            "net_cost": r.get("net_cost"),
+        })
+        n += 1
+    return n
+
+
 def _margin_pct_oz(target: float, f: dict) -> Optional[float]:
     comm = f.get("comm_rate")
     if comm is None or target <= 0:
@@ -359,7 +426,8 @@ def _base_row_ozon(f: dict) -> dict:
         "services_per_one": f.get("services_per_one"),
         "storage_per_one": f.get("storage_per_one"),
         "return_rate": f.get("return_rate", 0.0),
-        "stock": f.get("stock"), "velocity": f.get("velocity", 0.0),
+        "stock": f.get("stock"), "in_way": f.get("in_way"),
+        "velocity": f.get("velocity", 0.0),
         "v_proj": f.get("v_proj", 0.0), "trend": f.get("trend", 1.0),
         "last_sale_days_ago": f.get("last_sale_days_ago"),
         "doc": None, "replenishable": bool(f.get("replenishable")),
@@ -653,6 +721,7 @@ def recommendations_ozon(
 
     detail = _detail_metrics_ozon(db, date_from, date_to, base_map)
     stock = _latest_ozon_stock(db, base_map)
+    in_way = _latest_ozon_in_way(db, base_map)
     prods = _product_map(db)
     span = max((date_to - date_from).days + 1, 1)
 
@@ -676,6 +745,7 @@ def recommendations_ozon(
         last = drow.get("last")
         last_days = (today - last).days if last else 999
         st = stock.get(base)
+        iw = in_way.get(base)
         f = {
             "article": base, "name": (prod.name if prod else "") or str(mrow.get("name") or ""),
             "nm_id": g.get("nm_id", ""), "offers": g["offers"],
@@ -683,7 +753,8 @@ def recommendations_ozon(
             "price": price, "old_price": g.get("old_price"),
             "ozon_discount_pct": (round((g["old_price"] - price) / g["old_price"] * 100, 1)
                                   if g.get("old_price") else 0.0),
-            "stock": st, "velocity": round(v_now, 2), "v_proj": v_proj, "trend": round(trend, 2),
+            "stock": st, "in_way": iw,
+            "velocity": round(v_now, 2), "v_proj": v_proj, "trend": round(trend, 2),
             "last_sale_days_ago": last_days,
             "net_cost": net_cost,
             "value": _num(getattr(prod, "value", 0)) if prod else 0.0,
@@ -702,6 +773,9 @@ def recommendations_ozon(
         f["floor_price"] = _floor_price(f, s)
         f["stock_value"] = round((st or 0) * net_cost, 2)
         rows.append(_decide_ozon(f, s))
+
+    # R18: мягкость снижения — LOWER делим на lower_soften, RAISE не трогаем.
+    soften_lower_ozon(rows, s)
 
     main_map = main_map if main_map is not None else (
         build_main_map_ozon(db, s) if s.get("follow_main") else {})

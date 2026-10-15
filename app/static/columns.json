@@ -3283,6 +3283,11 @@
         "def": true
        },
        {
+        "k": "in_way",
+        "label": "В пути",
+        "def": false
+       },
+       {
         "k": "stock_value",
         "label": "Остаток, себест.",
         "def": false
@@ -3575,6 +3580,11 @@
        "k": "stock",
        "label": "Остаток",
        "def": true
+      },
+      {
+       "k": "in_way",
+       "label": "В пути",
+       "def": false
       },
       {
        "k": "velocity",
@@ -4499,6 +4509,10 @@
     {
      "k": "stock",
      "label": "Остаток"
+    },
+    {
+     "k": "in_way",
+     "label": "В пути"
     },
     {
      "k": "stock_value",
@@ -5807,6 +5821,10 @@
     {
       "k": "stock",
       "label": "Остаток"
+    },
+    {
+      "k": "in_way",
+      "label": "В пути"
     },
     {
       "k": "velocity",

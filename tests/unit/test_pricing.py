@@ -293,7 +293,7 @@ def test_r3_high_returns_skips(db):
 def test_r4_dead_stock_lowers(db):
     _seed(db, "R4", "P4", stock=100, sales=[*_fallback_sales()])
     rec = recommendations(db, prices_df=_prices(("P4", 1000, 0)), today=TODAY,
-                          settings={"prefer_raise": False})
+                          settings={"prefer_raise": False, "lower_soften": 1.0})
     row = _row(rec, "R4")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx(15.0, abs=0.5)  # 1000 -> 850
@@ -353,7 +353,7 @@ def test_r8_overstock_lowers(db):
     _seed(db, "R8", "P8", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("P8", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False})
+                          settings={"prefer_raise": False, "lower_soften": 1.0})
     row = _row(rec, "R8")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
@@ -576,7 +576,7 @@ def test_apply_records_applied_and_returns_items(db):
     fake = _FakeProvider()
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("881234", 2000, 10)), provider=fake, today=TODAY,
-        settings={"prefer_raise": False},
+        settings={"prefer_raise": False, "lower_soften": 1.0},
     )
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
@@ -814,11 +814,23 @@ def test_stock_not_lost_when_other_marketplace_has_newer_snapshot(db):
     assert row["status"] != "skipped_no_stock"
 
 
-def test_stock_includes_in_way(db):
-    """«В пути» учитывается в остатке автопилота: quantity + in_way."""
+def test_stock_excludes_in_way(db):
+    """«В пути» НЕ входит в остаток автопилота: stock = quantity, in_way отдельно."""
     _seed(db, "R10", "P10", stock=5, in_way=3, sales=[*_fallback_sales()])
     rec = recommendations(db, prices_df=_prices(("P10", 1000, 0)), today=TODAY)
-    assert _row(rec, "R10")["stock"] == 8
+    row = _row(rec, "R10")
+    assert row["stock"] == 5
+    assert row["in_way"] == 3
+
+
+def test_in_transit_only_product_stays_alive(db):
+    """Нулевой склад, но товар «в пути» — не мёртвый: HOLD «распродан», in_way виден."""
+    _seed(db, "IW1", "PIW1", stock=0, in_way=4, sales=[*_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PIW1", 1000, 0)), today=TODAY)
+    row = _row(rec, "IW1")
+    assert row["in_way"] == 4
+    assert row["stock"] == 0
+    assert row["action"] != "HALVE"
 
 
 def test_sales_match_products_case_insensitive(db):
@@ -865,11 +877,67 @@ def test_prefer_raise_softens_overstock_drop(db):
     """Перезапас: с противовесом шаг снижения мягче (1570.5 вместо 1530)."""
     _seed(db, "PR2", "PPR2", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("PPR2", 2000, 10)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("PPR2", 2000, 10)), today=TODAY,
+                          settings={"lower_soften": 1.0})
     row = _row(rec, "PR2")
     assert row["action"] == "LOWER"
     assert row["target_vis"] == pytest.approx(1570.5, abs=1)
     assert row["target_discount"] == pytest.approx((1 - 1570.5 / 2000) * 100, abs=0.5)
+
+
+# ------------------------------------------------------------ R18: мягкость снижения
+
+
+def _overstock_row(db, art, nm, settings):
+    """Перезапас (DOC≫цели) → строка рекомендации для артикула."""
+    _seed(db, art, nm, stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    rec = recommendations(db, prices_df=_prices((nm, 2000, 10)), today=TODAY,
+                          settings=settings)
+    return _row(rec, art)
+
+
+def test_lower_soften_divides_drop_by_factor(db):
+    """lower_soften=4 → дельта LOWER в 4 раза меньше, чем при 1; повышение цены то же."""
+    hard = _overstock_row(db, "RS1", "PRS1",
+                          {"prefer_raise": False, "lower_soften": 1.0})
+    soft = _overstock_row(db, "RS2", "PRS2",
+                          {"prefer_raise": False, "lower_soften": 4.0})
+    assert hard["action"] == soft["action"] == "LOWER"
+    assert soft["target_discount"] < hard["target_discount"]  # скидка меньше → цена выше
+    assert soft["target_vis"] > hard["target_vis"]
+    assert soft["delta_discount"] == pytest.approx(hard["delta_discount"] / 4.0, abs=0.15)
+
+
+def test_lower_soften_keeps_min_step(db):
+    """Обязательный шаг (1 п.п.) не смягчается — правило «коррекция обязательна» цело."""
+    _seed(db, "RS3", "PRS3", stock=20,
+          sales=[(2, 5, 0), (14, 5, 0), *_fallback_sales()], funnel=(200, 4, 4, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PRS3", 1000, 10)), today=TODAY)
+    row = _row(rec, "RS3")
+    assert 14 <= row["doc"] < 60
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx(11.0, abs=0.5)  # шаг 1 п.п. цел
+    assert "коррекция скидки обязательна" in row["reason"]
+
+
+def test_lower_soften_does_not_affect_raise(db):
+    """Повышение цены от lower_soften не зависит."""
+    _seed(db, "RS4", "PRS4", stock=5, replenishable=True,
+          sales=[(2, 4, 0), (20, 1, 0), *_fallback_sales()], funnel=(200, 10, 8, 0, 900))
+    rec = recommendations(db, prices_df=_prices(("PRS4", 1000, 20)), today=TODAY,
+                          settings={"lower_soften": 4.0})
+    row = _row(rec, "RS4")
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(12.0, abs=0.5)
+
+
+def test_lower_soften_off_keeps_full_drop(db):
+    """lower_soften=1 (или ≤1) — снижение без смягчения."""
+    row = _overstock_row(db, "RS5", "PRS5",
+                         {"prefer_raise": False, "lower_soften": 1.0})
+    assert row["action"] == "LOWER"
+    assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
 
 
 # ------------------------------------------------------ T-24: факторы решения + базис WB-карточек
@@ -1017,7 +1085,7 @@ def test_rating_reviews_below_threshold_no_effect(db):
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
           funnel_extra={"feedback_rating": 3.8})
     rec = recommendations(db, prices_df=_prices(("PRR3", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False})
+                          settings={"prefer_raise": False, "lower_soften": 1.0})
     row = _row(rec, "RR3")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
@@ -1028,7 +1096,7 @@ def test_rating_reviews_unknown_no_effect(db):
     _seed(db, "RR4", "PRR4", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("PRR4", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False})
+                          settings={"prefer_raise": False, "lower_soften": 1.0})
     row = _row(rec, "RR4")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
@@ -1061,7 +1129,7 @@ def test_use_reviews_off_disables_rating_cap(db):
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0),
           funnel_extra={"feedback_rating": 5.0})
     rec = recommendations(db, prices_df=_prices(("PRR7", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False, "use_reviews": False})
+                          settings={"prefer_raise": False, "use_reviews": False, "lower_soften": 1.0})
     row = _row(rec, "RR7")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
@@ -1120,7 +1188,7 @@ def test_value_below_cost_no_effect(db):
     _seed(db, "VL3", "PVL3", stock=1000, net_cost=300, value=300,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("PVL3", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False})
+                          settings={"prefer_raise": False, "lower_soften": 1.0})
     row = _row(rec, "VL3")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
@@ -1131,7 +1199,7 @@ def test_value_unknown_no_effect(db):
     _seed(db, "VL4", "PVL4", stock=1000, net_cost=300,
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     rec = recommendations(db, prices_df=_prices(("PVL4", 2000, 10)), today=TODAY,
-                          settings={"prefer_raise": False})
+                          settings={"prefer_raise": False, "lower_soften": 1.0})
     row = _row(rec, "VL4")
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
@@ -1213,7 +1281,7 @@ def test_legacy_rich_price_lowers_discount(db):
     _seed(db, "OLDLOWER", "POL", stock=5, net_cost=100,
           sales=[*_fallback_sales()])
     rec = recommendations(db, prices_df=_prices(("POL", 2000, 5)), today=TODAY,
-                          settings={"mode": "old"})
+                          settings={"mode": "old", "lower_soften": 1.0})
     row = _row(rec, "OLDLOWER")
     assert row["action"] == "LOWER"
     assert row["status"] == "suggested"

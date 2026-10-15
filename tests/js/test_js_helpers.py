@@ -116,6 +116,24 @@ for (const tab of ["wb-cards", "wb-stock", "wb-prices", "oz-cards", "oz-stock",
             "в apiPullByTab нет маршрута для " + tab);
 }
 
+// «Проверить пропущенные детализации» (WB → Детализация продаж): кнопка обязана
+// вызывать checkWbDetailGaps. Функция была объявлена, но нигде не подключена —
+// клик не давал никакого результата.
+assert.ok(htmlSrc.includes('id="wbGapsCheck"'), "в шапке нет кнопки wbGapsCheck");
+assert.ok(htmlSrc.includes('id="wbGapsDownload"'), "в WB-детализации нет кнопки wbGapsDownload");
+assert.ok(htmlSrc.includes('id="wbGapsBox"'), "нет контейнера wbGapsBox для таблицы пропусков");
+assert.ok(htmlSrc.includes('id="wbGapsInfo"'), "нет строки статуса wbGapsInfo");
+assert.ok(jsSrc.includes('async function checkWbDetailGaps()'),
+          "нет функции checkWbDetailGaps");
+assert.ok(jsSrc.includes('addEventListener("click", () => checkWbDetailGaps())'),
+          "кнопка «Проверить пропущенные детализации» не вызывает checkWbDetailGaps");
+assert.ok(jsSrc.includes('addEventListener("click", () => downloadMissingWbDetail())'),
+          "кнопка «Догрузить пропущенные» не вызывает downloadMissingWbDetail");
+assert.ok(jsSrc.includes('api("/wb/detail-gaps"'),
+          "checkWbDetailGaps должен обращаться к GET /api/wb/detail-gaps");
+assert.ok(apiSrc.includes('@router.get("/wb/detail-gaps")'),
+          "в app/api/ нет маршрута GET /wb/detail-gaps");
+
 // Раздел OZON: кнопки «Скачать Excel» (wb-dl) допустимы только в export-only oz-cashflow.
 // Остальные oz-панели — правило эталона: подсказка + тулбар таблицы (без дублей).
 const ozPanes = [...htmlSrc.matchAll(/<section id="(tab-oz-[^"]+)" class="pane">([\s\S]*?)<\/section>/g)];

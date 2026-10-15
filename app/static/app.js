@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "102";
+const UI_VERSION = "104";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -6128,6 +6128,7 @@ const PRICING_LABELS = {
   max_discount_pct: "Максимальная скидка от базовой цены, %",
   max_raise_pct: "Максимальный рост цены за шаг, %",
   max_drop_pct: "Максимальное снижение цены за шаг, %",
+  lower_soften: "Мягкость снижения цены, ×",
   min_delta_pp: "Мин. изменение скидки, п.п.",
   cooldown_days: "Кулдаун между изменениями цены, дн",
   season_adj: "Экстраполяция тренда продаж (сезонность)",
@@ -6183,7 +6184,8 @@ const PRICING_HINTS = {
   floor_margin_pct: "Запас маржи над точкой безубыточности: пол цены = себестоимость+логистика+комиссия+хранение, увеличенные на эту маржу. Цену ниже пола автопилот не опускает.",
   max_discount_pct: "Потолок скидки для любого товара, % от базовой цены. Дальше скидка не снижается ни при каком решении.",
   max_raise_pct: "Максимальное повышение витринной цены за один шаг, % (росту разрешён только при реальных продажах).",
-  max_drop_pct: "Максимальное снижение витринной цены за один шаг, %.",
+  max_drop_pct: "Максимальное снижение витринной цены за один шаг, % (до смягчения lower_soften).",
+  lower_soften: "Во сколько раз делить расчётное снижение цены: 1 — как считает движок, 4 — снижение в 4 раза мягче. Повышения цены и минимальный шаг (min_delta_pp) от этого не зависят.",
   min_delta_pp: "Минимальное изменение скидки, п.п. Если расчётная дельта меньше — товар не трогаем (защита от «флапа» цен).",
   cooldown_days: "Кулдаун: сколько дней после применения товар не меняется повторно, даже если правила снова что-то рекомендуют.",
   season_adj: "Учитывать тренд продаж (рост/падение как сезонность). Выкл. → скорость продаж берётся как есть, без экстраполяции.",
@@ -6345,7 +6347,8 @@ const pricingHeaders = [
   { k: "value", label: "Ценность", num: true, render: cellFmts.moneyZero , tip: "Ценность единицы (pure_value) из каталога товаров. Отношение ценность/себестоимость тормозит снижение цены: чем ценнее товар относительно себестоимости, тем меньше автопилот увеличивает скидку (при value ≥ value_ratio_high × себестоимости — не увеличивает вовсе)."},
   { k: "supplier", label: "Поставщик", render: cellFmts.text , tip: "Поставщик товара из каталога (колонка «Поставщик» файла products.xlsx)."},
   { k: "avg_price", label: "Ср. цена факт, руб", num: true, render: cellFmts.money , tip: "Средняя цена заказа из воронки продаж WB за срез. Если воронки нет, в расчётах она заменяется витринной ценой, и защита «цена ниже себестоимости» ослабевает."},
-  { k: "stock", label: "Остаток", num: true, render: cellFmts.int , tip: "Остаток WB по последнему срезу стоков: quantity + в пути. Нет данных об остатках = автопилот пропускает товар (SKIP)."},
+  { k: "stock", label: "Остаток", num: true, render: cellFmts.int , tip: "Остаток WB на складе по последнему срезу стоков (без «в пути»). Нет данных об остатках = автопилот пропускает товар (SKIP)."},
+  { k: "in_way", label: "В пути", num: true, render: cellFmts.int , tip: "Товар «в пути» на склад WB (inWayToClient + inWayFromClient) по последнему срезу стоков. В остаток и в ценность остатка не входит."},
   { k: "stock_value", label: "Остаток, себест.", num: true, render: cellFmts.moneyZero , tip: "Ценность остатка = остаток × себестоимость. R15: при разгрузке акциями приоритет отдаётся товарам с большей замороженной суммой, а не с большим числом штук."},
   { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int , tip: "Выкупы за срез воронки продаж: заказы, которые покупатель забрал. Отличаются от заказов из-за отмен и невыкупов."},
   { k: "backlog", label: "В корзине", num: true, render: cellFmts.int , tip: "Добавления в корзину минус заказы, не меньше нуля: спрос есть, а сделки нет. Используется как сигнал «много в корзинах, но не покупают»."},
@@ -6408,7 +6411,8 @@ const ozPricingHeaders = [
   { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money, tip: "Минимальная цена безубыточности Ozon: себестоимость + комиссия + логистика + хранение + услуги." },
   { k: "margin_pct", label: "Маржа факт, %", num: true, render: cellFmts.pct, tip: "Рентабельность за окно по детализации Ozon: прибыль ÷ выручка × 100." },
   { k: "margin_pct_at_target", label: "Маржа при цели, %", num: true, render: cellFmts.pct, tip: "Прогноз рентабельности при целевой цене, %." },
-  { k: "stock", label: "Остаток", num: true, render: cellFmts.int, tip: "Остаток Ozon по последнему срезу стоков. Нет данных = SKIP." },
+  { k: "stock", label: "Остаток", num: true, render: cellFmts.int, tip: "Остаток Ozon на складе по последнему срезу стоков (без «в пути»). Нет данных = SKIP." },
+  { k: "in_way", label: "В пути", num: true, render: cellFmts.int, tip: "«В пути» Ozon по последнему срезу стоков (promised_amount). В остаток не входит." },
   { k: "velocity", label: "v, шт/дн", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1), tip: "Скорость продаж Ozon за окно, шт/дн." },
   { k: "v_proj", label: "v прогноз, шт/дн", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(1), tip: "Прогноз скорости с учётом тренда и сезонности." },
   { k: "trend", label: "Тренд", num: true, render: (v) => v == null ? "—" : (v && v > 1 ? "<span class='pos'>▲ " : v && v < 1 ? "<span class='neg'>▼ " : "<span>") + (v || 0).toFixed(2) + "</span>", tip: "Скорость текущего окна ÷ предыдущего." },
@@ -6997,7 +7001,8 @@ const PRICING_GROUPS = [
   ] },
   { title: "Цены и шаги", col: 1, keys: [
       "floor_margin_pct", "max_discount_pct", "max_raise_pct", "max_drop_pct",
-      "min_delta_pp", "raise_pct_replenishable", "dead_min_discount",
+      "lower_soften", "min_delta_pp", "raise_pct_replenishable",
+      "dead_min_discount",
   ] },
   { title: "Спрос и воронка", col: 1, keys: [
       "min_rating_reviews", "value_ratio_low", "value_ratio_high",
@@ -7068,7 +7073,8 @@ function pricingParamRow(key, cur) {
       || key === "min_rating_reviews" || key === "promo_push_pct"
       || key === "value_ratio_low" || key === "value_ratio_high"
       || key === "promo_protect_velocity"
-      || key === "promo_max_beyond_floor_pp") ? "0.1" : "1";
+      || key === "promo_max_beyond_floor_pp"
+      || key === "lower_soften") ? "0.1" : "1";
     input.value = cur;
   }
   lbl.appendChild(input);
@@ -7226,7 +7232,7 @@ function refreshApplyButton() {
 
 // Какая агрегация нужна в строке «Итого» для каждой колонки: sum (сумма) или avg (среднее).
 const PRICING_FOOT = {
-  stock: "sum", stock_wb: "sum", buyouts: "sum", backlog: "sum",
+  stock: "sum", stock_wb: "sum", in_way: "sum", buyouts: "sum", backlog: "sum",
   add_to_wishlist: "sum", cancel_sum: "sum",
   delta_discount: "avg", target_discount: "avg", current_discount: "avg", target_vis: "avg", current_vis: "avg",
   avg_price: "avg", net_cost: "avg", margin_pct: "avg", margin_per_one: "avg", feedback_rating: "avg",
@@ -7906,6 +7912,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!spec) return Promise.resolve();
     return apiDownload(spec[0], spec[1], spec[2], true);
   }));
+  const btnWbGapsCheck = document.getElementById("wbGapsCheck");
+  if (btnWbGapsCheck) btnWbGapsCheck.addEventListener("click", () => checkWbDetailGaps());
+  const btnWbGapsDownload = document.getElementById("wbGapsDownload");
+  if (btnWbGapsDownload) btnWbGapsDownload.addEventListener("click", () => downloadMissingWbDetail());
   const funnelExp = document.getElementById("wbFunnelExpanded");
   if (funnelExp) funnelExp.addEventListener("change", () => loadTab("wb-funnel"));
   $("#btnApply").addEventListener("click", () => loadTab(currentTab));

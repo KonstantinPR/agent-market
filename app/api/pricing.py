@@ -132,7 +132,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "target_discount", "delta_discount", "net_cost", "action", "status", "reason",
         "doc", "velocity", "trend",
         "influenced_by_main", "main_delta_pct",
-        "conv_pct", "backlog", "stock", "stock_value", "avg_price", "eff", "floor_price",
+        "conv_pct", "backlog", "stock", "in_way", "stock_value", "avg_price", "eff", "floor_price",
         "max_discount_item", "margin_pct_at_target", "replenishable",
         "feedback_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
         "add_to_wishlist", "stock_wb", "return_rate", "margin_pct", "margin_per_one",

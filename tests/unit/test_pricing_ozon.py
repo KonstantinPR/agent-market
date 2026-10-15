@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 
 import pandas as pd
+import pytest
 from sqlalchemy import select
 
 from app import models
@@ -17,7 +18,8 @@ def _mp(db):
 
 
 def _seed(db, base, *, name="Товар", net_cost=300, price=1000, old_price=None,
-          stock=100, sizes=(), sells=(), replenishable=False, value=0, set_name=True):
+          stock=100, in_way=0, sizes=(), sells=(), replenishable=False, value=0,
+          set_name=True):
     """Засевает Ozon-товар: продукт, снимок цен (офферы), остаток, детализацию."""
     if set_name:
         db.add(models.Product(article=base, name=name, net_cost=net_cost,
@@ -31,7 +33,7 @@ def _seed(db, base, *, name="Товар", net_cost=300, price=1000, old_price=No
         ))
     if stock is not None:
         db.add(models.Stock(marketplace_id=_mp(db), date=TODAY - timedelta(days=1),
-                            article=base, base_article=base, quantity=stock))
+                            article=base, base_article=base, quantity=stock, in_way=in_way))
     for i, (offset, qty, ret) in enumerate(sells):
         d = TODAY - timedelta(days=offset)
         db.add(models.OzonDetailRow(
@@ -100,6 +102,15 @@ def test_sold_out_holds(db):
     assert r["action"] == "HOLD" and r["status"] == "hold"
 
 
+def test_stock_excludes_in_way(db):
+    """«В пути» не входит в остаток Ozon: stock = quantity, in_way отдельно."""
+    _seed(db, "OZONE", stock=5, in_way=3, sells=[(1, 1, 0)])
+    rec = oz.recommendations_ozon(db)
+    r = _row(rec, "OZONE")
+    assert r["stock"] == 5
+    assert r["in_way"] == 3
+
+
 def test_no_stock_data_skips(db):
     _seed(db, "OZ-1", stock=None, sells=[(1, 1, 0)])
     rec = oz.recommendations_ozon(db)
@@ -121,6 +132,26 @@ def test_overstock_lowers(db):
     rec = oz.recommendations_ozon(db)
     r = _row(rec, "OZ-1")
     assert r["action"] == "LOWER" and r["target_price"] >= r["floor_price"]
+
+
+def test_lower_soften_divides_ozon_drop(db):
+    """R18: lower_soften=4 → снижение цены Ozon в 4 раза мягче, чем при 1."""
+    _seed(db, "OZS", stock=100, price=1000, sells=[(1, 2, 0)])
+    hard = _row(oz.recommendations_ozon(db, settings={"lower_soften": 1.0}), "OZS")
+    soft = _row(oz.recommendations_ozon(db, settings={"lower_soften": 4.0}), "OZS")
+    assert hard["action"] == soft["action"] == "LOWER"
+    assert soft["target_price"] > hard["target_price"]
+    assert (soft["price"] - soft["target_price"]) == pytest.approx(
+        (hard["price"] - hard["target_price"]) / 4.0, abs=0.5)
+
+
+def test_lower_soften_keeps_ozon_min_step(db):
+    """Обязательный шаг цены (min_delta_pct/oz_price_step) не смягчается."""
+    _seed(db, "OZM", stock=100, price=1000, sells=[])  # мёртвый запас → обязательный шаг
+    rec = oz.recommendations_ozon(db, settings={"lower_soften": 4.0})
+    r = _row(rec, "OZM")
+    assert r["action"] == "LOWER"
+    assert r["price"] - r["target_price"] == pytest.approx(10.0, abs=0.5)  # шаг 1% = 10 ₽
 
 
 def test_deficit_not_replenishable_raises(db):

@@ -37,6 +37,11 @@ PRICING_DEFAULTS = {
     "max_discount_pct": 50.0,
     "max_raise_pct": 15.0,
     "max_drop_pct": 15.0,
+    # R18: мягкость снижения цены. Во сколько раз делить расчётную дельту
+    # LOWER (1 — как раньше, 4 — снижение в 4 раза мягче). Повышения цены
+    # от этого параметра не зависят; минимальный шаг (min_delta_pp) не
+    # смягчается — правило «коррекция обязательна» и защита от флапа целы.
+    "lower_soften": 4.0,
     "min_delta_pp": 1.0,
     "cooldown_days": 3,
     "season_adj": True,
@@ -406,6 +411,10 @@ def _detail_metrics(db: Session, date_from: date, date_to: date) -> dict:
 
 
 def _latest_stock(db: Session, wb_mp: int) -> dict:
+    """Остаток WB на складе (on-hand) по последнему срезу стоков.
+
+    Без «в пути»: товары, едущие на склад, в остаток не входят (см. _latest_in_way).
+    """
     latest = db.scalar(
         select(func.max(models.Stock.date))
         .where(models.Stock.marketplace_id == wb_mp)
@@ -415,7 +424,31 @@ def _latest_stock(db: Session, wb_mp: int) -> dict:
     q = (
         select(
             models.Stock.article,
-            func.sum(models.Stock.quantity + models.Stock.in_way).label("qty"),
+            func.sum(models.Stock.quantity).label("qty"),
+        )
+        .where(models.Stock.date == latest, models.Stock.marketplace_id == wb_mp)
+        .group_by(models.Stock.article)
+    )
+    out: dict = {}
+    for art, qty in db.execute(q):
+        val = int(qty or 0)
+        out[str(art)] = val
+        out[str(art).upper()] = val
+    return out
+
+
+def _latest_in_way(db: Session, wb_mp: int) -> dict:
+    """«В пути» WB по последнему срезу стоков (inWayToClient + inWayFromClient)."""
+    latest = db.scalar(
+        select(func.max(models.Stock.date))
+        .where(models.Stock.marketplace_id == wb_mp)
+    )
+    if latest is None:
+        return {}
+    q = (
+        select(
+            models.Stock.article,
+            func.sum(models.Stock.in_way).label("qty"),
         )
         .where(models.Stock.date == latest, models.Stock.marketplace_id == wb_mp)
         .group_by(models.Stock.article)
@@ -696,6 +729,7 @@ def recommendations(
     funnel, funnel_days = _funnel_slice(db, now_from, now_to)
     detail = _detail_metrics(db, now_from, now_to)
     stock = _latest_stock(db, wb_mp)
+    in_way = _latest_in_way(db, wb_mp)
     nm_map = {
         str(r.nm_id).strip(): str(r.article).strip().upper()
         for r in db.execute(select(models.NmArticle.nm_id, models.NmArticle.article))
@@ -757,6 +791,8 @@ def recommendations(
         if int(v.get("detail_sells") or 0) > 0 or int(v.get("detail_returns_qty") or 0) > 0
     }
     has_life |= {a for a, v in stock.items() if _num(v) > 0}
+    # Товар с нулевым складом, но идущий «в пути» — живой: не прячем как мёртвый.
+    has_life |= {a for a, v in in_way.items() if _num(v) > 0}
 
     show_zero = bool(s["show_zero"])
     use_season = bool(s.get("use_season", True))
@@ -812,6 +848,7 @@ def recommendations(
             "article": art, "name": prod["name"], "replenishable": prod["replenishable"],
             "nm_id": nm_id, "price": price, "current_discount": cur_disc,
             "current_vis": cur_vis, "stock": stock.get(art),
+            "in_way": in_way.get(art),
             "velocity": v_now, "v_proj": v_proj, "trend": (v_now / v_prev) if v_prev > 0 else 1.0,
             "last_sale_days_ago": last_sale_ago.get(art, 9999),
             "avg_price": _num(fl.get("avg_price")),
@@ -876,6 +913,11 @@ def recommendations(
             r["delta_discount"] = round(r["target_discount"] - r["current_discount"], 1)
         else:
             r["delta_discount"] = None
+
+    # R18: мягкость снижения — LOWER делим на lower_soften, RAISE не трогаем.
+    # Идёт ДО акций, чтобы добор участия (promo_push_pct) добавлялся к уже
+    # смягчённой скидке и акция добирала свой уровень как задумано.
+    soften_lower(out_rows, s)
 
     # T-31: акции WB — инфо-поля по каждой строке + R11 «добор участия».
     _promo_pass(out_rows, _active_promotions(db), s, volume_by_article)
@@ -950,6 +992,7 @@ def _enriched(f: dict) -> dict:
         "share_order_percent": _num(f.get("share_order_percent")),
         "avg_orders_per_day": _num(f.get("avg_orders_per_day")),
         "stock_wb": int(f.get("stock_wb") or 0),
+        "in_way": int(f.get("in_way") or 0),
         "cancel_sum": _num(f.get("cancel_sum")),
         "wb_club_buyout_percent": _num(f.get("wb_club_buyout_percent")),
         "return_rate": _num(f.get("return_rate")),
@@ -1964,6 +2007,41 @@ def _decide_legacy(f: dict, s: dict, k_norma_revenue: Optional[float] = None) ->
         margin_pct_at_target=_margin_pct(target_vis, f),
     )
     return base
+
+
+def soften_lower(rows: list, s: dict) -> int:
+    """R18: снижение цены — в lower_soften раз мягче; повышения не трогаем.
+
+    Дельта LOWER (target_discount − current_discount) делится на lower_soften,
+    но никогда не ужимается ниже min_delta_pp: минимальный шаг (правило
+    «коррекция обязательна») и защита от флапа остаются как есть. Вызывается
+    после решений, ДО акций (чтобы добор участия шёл поверх смягчённой скидки)
+    и до влияния главной связки. Возвращает число смягчённых строк.
+    """
+    soften = _num(s.get("lower_soften"), 1.0)
+    if soften <= 1.0:
+        return 0
+    min_delta = _num(s.get("min_delta_pp"), 1.0)
+    n = 0
+    for r in rows:
+        if r.get("action") != "LOWER":
+            continue
+        price = _num(r.get("price"))
+        cur = _num(r.get("current_discount"))
+        tgt = _num(r.get("target_discount"))
+        if price <= 0 or tgt - cur <= min_delta + 1e-9:
+            continue  # минимальный шаг не смягчаем
+        new_disc = max(cur + (tgt - cur) / soften, cur + min_delta)
+        new_disc = _clamp(new_disc, 0, 100)
+        if abs(new_disc - tgt) < 1e-9:
+            continue
+        new_vis = price * (1 - new_disc / 100)
+        r["target_discount"] = round(new_disc, 1)
+        r["target_vis"] = round(new_vis, 2)
+        r["delta_discount"] = round(new_disc - cur, 1)
+        r["margin_pct_at_target"] = _margin_pct(new_vis, r)
+        n += 1
+    return n
 
 
 def _margin_pct(target_vis: float, f: dict) -> Optional[float]:
