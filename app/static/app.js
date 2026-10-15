@@ -837,13 +837,10 @@ async function loadTabInner(name, f) {
       await renderMarginOzonDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginOzonDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined, links: cabLinksFor("ozon") }));
     } else if (name === "sales") await renderSales(qs(f));
     else if (name === "stocks") await renderStocks(f.marketplace);
-    else if (name === "ours") await renderOurs();
     else if (name === "products") await renderProducts();
     else if (name === "wh-cp") await renderWhCp();
     else if (name === "wh-receipt") await renderWhDocs("receipt", "whRTable", "headerMsg", "whRDetail");
     else if (name === "wh-shipment") await renderWhDocs("shipment", "whSTable", "headerMsg", "whSDetail");
-    else if (name === "wh-stock") await renderWhStock();
-    else if (name === "wh-turnover") await renderWhTurnover();
     else if (name === "replenish") await renderReplenish();
     else if (name === "pricing") await renderPricing(false);
     else if (name === "wb-cards" || name === "oz-cards") await renderCards(name);
@@ -2233,18 +2230,6 @@ async function renderStocks(marketplace) {
   pagedTable($("#stocksTable"), headers, aggregateStocks(data.rows || []));
 }
 
-async function renderOurs() {
-  const data = await api("/custom-stock");
-  const headers = [
-    { k: "article", label: "Артикул", render: cellFmts.text },
-    { k: "name", label: "Наименование", render: cellFmts.text },
-    { k: "quantity", label: "Кол-во на складе", num: true, render: cellFmts.int },
-    { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money },
-    { k: "updated_at", label: "Обновлено", render: cellFmts.text },
-  ];
-  pagedTable($("#oursTable"), headers, data.rows || []);
-}
-
 // ─────────────────────────────── «Наш склад» ───────────────────────────────
 
 let whCpLabels = {};
@@ -2302,50 +2287,6 @@ async function renderWhDocs(type, boxId, msgId, detailId) {
   if (msg) msg.textContent = "Документов: " + fmt(data.count);
   detail.innerHTML = "";
   pagedTable(box, whDocHeaders, data.rows || []);
-}
-
-const whStockHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул из документов «Нашего склада». Строка появляется, если по артикулу был хоть один приход или отгрузка."},
-  { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование из каталога товаров на момент формирования выборки."},
-  { k: "start_qty", label: "Начальный", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Входящий остаток из справочника «Наш склад → Остатки» (custom_stock) — то, что было до первого прихода."},
-  { k: "received", label: "Приход", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Сумма количеств по всем документам типа «Приход» за всю историю, а не за период."},
-  { k: "shipped", label: "Отгрузка", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Сумма количеств по всем документам типа «Отгрузка» за всю историю, не за период."},
-  { k: "balance", label: "Остаток", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Начальный + приход − отгрузка, шт. Строки отсортированы по убыванию остатка."},
-  { k: "avg_cost", label: "Себестоимость ед.", num: true, render: cellFmts.money2 , tip: "Средневзвешенная по приходам: (начальный остаток × его цена + Σ приход × цена) ÷ (начальный + приход). Эта же цифра пишется в каталог товаров."},
-  { k: "stock_value", label: "Стоимость остатков", num: true, render: cellFmts.money , tip: "Остаток × средневзвешенная себестоимость, ₽ — сколько денег «заморожено» в этом товаре."},
-];
-
-async function renderWhStock() {
-  const box = $("#whStockTable");
-  const q = tabLike("whStockLike");
-  let data;
-  try {
-    data = await api("/warehouse/stock" + qs({ article_like: q || undefined }));
-  } catch (err) {
-    box.innerHTML = '<div class="empty">Не удалось загрузить остатки: ' + escapeHtml(err.message) + "</div>";
-    return;
-  }
-  pagedTable(box, whStockHeaders, data.rows || []);
-}
-
-const whTurnoverHeaders = [
-  { k: "counterparty", label: "Контрагент", render: cellFmts.text , tip: "Контрагент из справочника. Прочерк означает документ без привязанного контрагента (обычно отгрузка без указания получателя)."},
-  { k: "in_n", label: "Приход, док.", num: true, render: cellFmts.int , tip: "Сколько документов типа «Приход» заведено на этого контрагента за всю историю."},
-  { k: "in_sum", label: "Приход, сумма", num: true, render: cellFmts.money , tip: "Сумма всех приходных документов контрагента, ₽ (Σ итогов документов). Это закупки, а не выручка."},
-  { k: "out_n", label: "Отгрузка, док.", num: true, render: cellFmts.int , tip: "Сколько документов типа «Отгрузка» заведено на этого контрагента за всю историю."},
-  { k: "out_sum", label: "Отгрузка, сумма", num: true, render: cellFmts.money , tip: "Сумма всех отгрузочных документов контрагента, ₽. Строки отсортированы по сумме прихода и отгрузки вместе."},
-];
-
-async function renderWhTurnover() {
-  const box = $("#whTurnoverTable");
-  let data;
-  try {
-    data = await api("/warehouse/turnover");
-  } catch (err) {
-    box.innerHTML = '<div class="empty">Не удалось загрузить обороты: ' + escapeHtml(err.message) + "</div>";
-    return;
-  }
-  pagedTable(box, whTurnoverHeaders, data.rows || []);
 }
 
 const replenishHeaders = [
@@ -2994,8 +2935,12 @@ const productsSizeHeaders = [
   { k: "volume_l", label: "Объём, л", num: true, render: (v) => v == null || v === 0 ? "—" : fmt(v) , tip: "Объём товара в литрах из ЛК WB — по нему считается стоимость хранения."},
 ];
 const productsStockHeaders = [
-  { k: "own_stock", label: "Остаток свой", num: true, render: (v) => v == null ? "—" : (Number.isInteger(Number(v)) ? fmt(v) : fmtFloat(Number(v), 1)) , tip: "Наш склад: баланс по документам (начальный + приход − отгрузка) без разбивки по размерам. Тот же источник, что и вкладка «Остатки»."},
+  { k: "start_qty", label: "Начальный", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Входящий остаток из начальных остатков (custom_stock) — то, что было до первого прихода."},
+  { k: "received", label: "Приход", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Сумма количеств по всем документам типа «Приход» за всю историю, а не за период. Считается по артикулу (в режиме «По размерам» одинаково для всех размеров)."},
+  { k: "shipped", label: "Отгрузка", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Сумма количеств по всем документам типа «Отгрузка» за всю историю, не за период. Считается по артикулу."},
+  { k: "own_stock", label: "Остаток свой", num: true, render: (v) => v == null ? "—" : (Number.isInteger(Number(v)) ? fmt(v) : fmtFloat(Number(v), 1)) , tip: "Наш склад: баланс по документам (начальный + приход − отгрузка). Заменяет вкладку «Остатки»."},
   { k: "mp_stock", label: "Остаток МП", num: true, render: cellFmts.int , tip: "Остаток на маркетплейсах по последнему срезу стоков: WB + Ozon, суммой по всем складам. В режиме «По размерам» — только WB по этому размеру."},
+  { k: "stock_value", label: "Стоимость остатков", num: true, render: cellFmts.money , tip: "Остаток × средневзвешенная себестоимость, ₽ — сколько денег «заморожено» в этом товаре."},
 ];
 
 function productsQs() {
@@ -3088,7 +3033,7 @@ function productsExportUrl() {
   const p = productsQs();
   const extra = [];
   const stocksEl = document.getElementById("productsStocks");
-  if (stocksEl && stocksEl.checked) extra.push("own_stock", "mp_stock");
+  if (stocksEl && stocksEl.checked) extra.push("start_qty", "received", "shipped", "own_stock", "mp_stock", "stock_value");
   const cp = colViewParam("products", extra);
   return "/api/export/products" + p + (cp ? (p ? "&" : "?") + cp : "");
 }
@@ -8129,7 +8074,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     .forEach(([id, tab]) => onTabInput(id, tab));
   onTabChange("ozStockAgg", "oz-stock");
   onTabChange("ozPriceAgg", "oz-prices");
-  $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#headerMsg", "ours"));
+  $("#oursImport").addEventListener("click", () => uploadFile("/import/custom-stock", $("#oursFile"), "#headerMsg", "products"));
   onTabInput("productsLike", "products");
   onTabChange("productsSizes", "products");
   onTabChange("productsStocks", "products");
@@ -8194,7 +8139,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   });
-  onTabInput("whStockLike", "wh-stock");
   initCardsUpload();
   initDetailUpload();
   initProductsUpload();

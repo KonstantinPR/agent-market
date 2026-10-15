@@ -34,18 +34,18 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 8214 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/static/columns.json` | 5915 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/api/ (19 файлов)` | 5257 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/app.js` | 8226 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/columns.json` | 5971 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/api/ (19 файлов)` | 5280 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/services/sync.py` | 2657 | запись выгрузок WB/Ozon в БД |
 | `app/services/pricing.py` | 2401 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/refresh.py` | 1462 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `tests/api/test_endpoints.py` | 1394 | HTTP-эндпоинты через TestClient |
-| `app/static/style.css` | 1265 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/style.css` | 1273 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `app/providers/wb.py` | 1145 | HTTP к Wildberries |
-| `app/static/index.html` | 1050 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/replenish.py` | 1041 | подсортировка WB, план дефицита, скорость продаж |
 | `app/providers/ozon.py` | 1036 | HTTP к Ozon |
+| `app/static/index.html` | 1021 | разметка: навигация `data-tab` + секции `tab-*` |
 | `tests/unit/test_margin.py` | 927 | юнит-тесты маржинальности |
 | `app/services/margin.py` | 815 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/models.py` | 791 | SQLAlchemy-модели (схема БД) |
@@ -68,7 +68,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/common.py` | 76 | общие хелперы (wildcard-фильтр `like_*`, окна) |
 | `app/providers/errors.py` | 75 | нормализованные ошибки апстримов |
 | `app/services/excel_io.py` | 73 | чтение/запись Excel |
-| `app/main.py` | 59 | сборка FastAPI-приложения, `/`, статика |
+| `app/main.py` | 72 | сборка FastAPI-приложения, `/`, статика |
 | `app/config.py` | 58 | `Settings`, читается из `.env` |
 | `app/services/columns.py` | 42 | loader columns.json (`export_cols` для Python) |
 | `app/providers/base.py` | 33 | базовый провайдер |

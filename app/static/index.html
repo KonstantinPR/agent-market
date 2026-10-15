@@ -13,15 +13,12 @@
   <div class="links" id="navLinks">
     <a class="nav-link" data-tab="dashboard" href="#">Обзор</a>
     <div class="dropdown" id="oursDropdown">
-      <button class="dropbtn" id="oursMenuBtn">Отправки &#9662;</button>
+      <button class="dropbtn" id="oursMenuBtn">Наш Склад &#9662;</button>
       <div class="dropdown-menu" id="oursMenu">
         <a class="nav-link" data-tab="products" href="#">Товары</a>
-        <a class="nav-link" data-tab="ours" href="#">Начальные остатки</a>
         <a class="nav-link" data-tab="wh-cp" href="#">Контрагенты</a>
-        <a class="nav-link" data-tab="wh-receipt" href="#">Приход</a>
-         <a class="nav-link" data-tab="wh-shipment" href="#">Отправки</a>
-        <a class="nav-link" data-tab="wh-stock" href="#">Остатки</a>
-        <a class="nav-link" data-tab="wh-turnover" href="#">Обороты</a>
+        <a class="nav-link" data-tab="wh-receipt" href="#">Приходы</a>
+        <a class="nav-link" data-tab="wh-shipment" href="#">Отправки</a>
         <a class="nav-link" data-tab="replenish" href="#">Потребность в товаре</a>
       </div>
     </div>
@@ -379,16 +376,6 @@
     <div class="table-wrap" id="stocksTable"></div>
   </section>
 
-  <section id="tab-ours" class="pane">
-    <div class="toolbar">
-      <input type="file" id="oursFile" accept=".xlsx">
-      <button id="oursImport" class="btn">Загрузить остатки</button>
-      <span class="toolbar-right"><span id="oursTablePager"></span></span>
-    </div>
-    <p class="hint">Начальные (стартовые) остатки — отправная точка складского учёта. Дальше остатки считаются: начальные + Приход − Отправки.</p>
-    <div class="table-wrap" id="oursTable"></div>
-  </section>
-
   <section id="tab-wh-cp" class="pane">
     <div class="toolbar">
       <input type="file" id="whCpFile" accept=".xlsx">
@@ -430,25 +417,6 @@
     <p class="hint">Отправка товара (покупателю или на склад маркетплейса — контрагент WB/Ozon). Тот же формат, что и Приход.</p>
     <div class="table-wrap" id="whSTable"></div>
     <div class="table-wrap" id="whSDetail"></div>
-  </section>
-
-  <section id="tab-wh-stock" class="pane">
-    <div class="toolbar">
-      <input type="text" id="whStockLike" placeholder="Поиск по артикулу или названию * = любая часть">
-      <span class="toolbar-right">
-        <span id="whStockTablePager"></span>
-        <a class="btn" id="whStockExport" href="/api/warehouse/export/stock">Выгрузить в Excel</a>
-      </span>
-    </div>
-    <div class="table-wrap" id="whStockTable"></div>
-  </section>
-
-  <section id="tab-wh-turnover" class="pane">
-    <div class="toolbar">
-      <a class="btn" id="whTurnoverExport" href="/api/warehouse/export/turnover">Выгрузить в Excel</a>
-      <span class="toolbar-right"><span id="whTurnoverTablePager"></span></span>
-    </div>
-    <div class="table-wrap" id="whTurnoverTable"></div>
   </section>
 
   <section id="tab-replenish" class="pane">
@@ -498,6 +466,8 @@
           <span class="dz-label">Перетащите сюда Excel-файл с себестоимостью или нажмите</span>
         </div>
       </div>
+      <input type="file" id="oursFile" class="hidden" accept=".xlsx">
+      <button id="oursImport" class="btn">Загрузить начальные остатки</button>
       <input id="productsLike" placeholder="Артикул содержит… * = любая часть">
       <label class="chk"><input type="checkbox" id="productsSizes"> С размерами</label>
       <label class="chk"><input type="checkbox" id="productsStocks"> Показывать остатки</label>

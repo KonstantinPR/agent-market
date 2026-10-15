@@ -465,7 +465,7 @@ if (likeFail) throw new Error(`${likeFail} ошибок likeMatch`);
 const SEARCH_INPUTS = [
   "salesSearch",
   "marginFunnelLike", "marginOzonDetailLike", "marginDetailLike",
-  "pricingLike", "whStockLike", "replenishLike", "productsLike",
+  "pricingLike", "replenishLike", "productsLike",
   "wbCardsLike", "wbStockLike", "wbFunnelLike", "wbSalesLike", "wbDetailLike",
   "wbPricesLike", "wbStorageLike",
   "ozCardsLike", "ozStockLike", "ozPricesLike", "ozRealLike", "ozDetailLike",

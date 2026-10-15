@@ -1631,6 +1631,21 @@
        "def": false
       },
       {
+       "k": "start_qty",
+       "label": "Начальный",
+       "def": true
+      },
+      {
+       "k": "received",
+       "label": "Приход",
+       "def": true
+      },
+      {
+       "k": "shipped",
+       "label": "Отгрузка",
+       "def": true
+      },
+      {
        "k": "own_stock",
        "label": "Остаток свой",
        "def": true
@@ -1638,6 +1653,11 @@
       {
        "k": "mp_stock",
        "label": "Остаток МП",
+       "def": true
+      },
+      {
+       "k": "stock_value",
+       "label": "Стоимость остатков",
        "def": true
       }
      ]
@@ -1715,6 +1735,21 @@
        "def": false
       },
       {
+       "k": "start_qty",
+       "label": "Начальный",
+       "def": true
+      },
+      {
+       "k": "received",
+       "label": "Приход",
+       "def": true
+      },
+      {
+       "k": "shipped",
+       "label": "Отгрузка",
+       "def": true
+      },
+      {
        "k": "own_stock",
        "label": "Остаток свой",
        "def": true
@@ -1722,6 +1757,11 @@
       {
        "k": "mp_stock",
        "label": "Остаток МП",
+       "def": true
+      },
+      {
+       "k": "stock_value",
+       "label": "Стоимость остатков",
        "def": true
       }
      ]
@@ -4408,22 +4448,38 @@
     "k": "replenishable",
     "label": "Докупаемый"
    },
-   {
-    "k": "tags",
-    "label": "Маркетплейсы"
-   },
-   {
-    "k": "own_stock",
-    "label": "Свой склад"
-   },
-   {
-    "k": "mp_stock",
-    "label": "Остаток МП"
-   },
-   {
-    "k": "recommended_price",
-    "label": "Рекомендуемая цена"
-   },
+    {
+     "k": "tags",
+     "label": "Маркетплейсы"
+    },
+    {
+     "k": "start_qty",
+     "label": "Начальный"
+    },
+    {
+     "k": "received",
+     "label": "Приход"
+    },
+    {
+     "k": "shipped",
+     "label": "Отгрузка"
+    },
+    {
+     "k": "own_stock",
+     "label": "Свой склад"
+    },
+    {
+     "k": "mp_stock",
+     "label": "Остаток МП"
+    },
+    {
+     "k": "stock_value",
+     "label": "Стоимость остатков"
+    },
+    {
+     "k": "recommended_price",
+     "label": "Рекомендуемая цена"
+    },
    {
     "k": "min_price",
     "label": "Мин. цена"

@@ -610,7 +610,8 @@ def _catalog_stock_maps(db: Session):
     mp_stock_size: {(мрп, артикул, размер): кол-во} — для WB (размер из techSize карточек);
     mp_covers:     {артикул: {размер: кол-во}} — WB-остатки в разрезе размеров;
     ozon_total:    {артикул: кол-во} — Ozon без размера (суммируется целиком на строку);
-    own:           {артикул: баланс склада}.
+    own:           {артикул: баланс склада};
+    stock:         {артикул: строка stock_view} — начальный/приход/отгрузка/баланс/себестоимость.
     """
     mp_stock: dict = {}
     mp_stock_size: dict = {}
@@ -630,12 +631,14 @@ def _catalog_stock_maps(db: Session):
             mp_stock_size[(code, art, size or "")] = int(qty or 0)
             if code == "ozon":
                 ozon_total[art] = ozon_total.get(art, 0) + int(qty or 0)
-    own = {r["article"]: float(r["balance"]) for r in warehouse_service.stock_view(db)}
+    stock_rows = warehouse_service.stock_view(db)
+    own = {r["article"]: float(r["balance"]) for r in stock_rows}
+    stock = {r["article"]: r for r in stock_rows}
     mp_covers = {art: {} for art in {a for (_, a, _) in mp_stock_size if (_, a) and _ in ("wb",)}}
     for (code, art, size), qty in mp_stock_size.items():
         if code == "wb" and size:
             mp_covers.setdefault(art, {})[size] = mp_covers.get(art, {}).get(size, 0) + qty
-    return mp_stock, mp_stock_size, mp_covers, ozon_total, own
+    return mp_stock, mp_stock_size, mp_covers, ozon_total, own, stock
 
 
 def _product_prefix(article) -> str:
@@ -760,8 +763,9 @@ def api_products(
 
     sizes=0 — агрегат по товару (кол-во размеров, первый баркод, теги WB/Ozon);
     sizes=1 — строки по размерам (product_sizes);
-    stocks=1 — добавляет own_stock (баланс склада) и mp_stock (последний срез WB+Ozon),
-    а также рекомендуемую цену/наценку (base_price).
+    stocks=1 — добавляет складские колонки: start_qty (начальный), received (приход),
+    shipped (отгрузка), own_stock (баланс склада), stock_value (стоимость остатков),
+    mp_stock/ozon_stock (последний срез WB+Ozon), а также рекомендуемую цену/наценку.
     """
     prods = list(db.execute(
         select(models.Product).order_by(models.Product.article)
@@ -785,9 +789,10 @@ def api_products(
     mp_covers: dict = {}
     ozon_total: dict = {}
     own: dict = {}
+    stock: dict = {}
     with_stock = bool(int(stocks))
     if with_stock:
-        mp_stock, mp_stock_size, mp_covers, ozon_total, own = _catalog_stock_maps(db)
+        mp_stock, mp_stock_size, mp_covers, ozon_total, own, stock = _catalog_stock_maps(db)
     settings = base_price_service.PRICE_DEFAULTS
 
     def mp_total(article: str) -> int:
@@ -796,6 +801,14 @@ def api_products(
     def wb_size_qty(article: str, size: str) -> int:
         """WB-остаток в разрезе размера (0 если данных по размеру нет)."""
         return int(mp_stock_size.get(("wb", article, size or ""), 0))
+
+    def fill_stock(row: dict, article: str) -> None:
+        """Складские колонки из stock_view: начальный/приход/отгрузка/стоимость остатков."""
+        sr = stock.get(article)
+        row["start_qty"] = float(sr["start_qty"]) if sr else 0.0
+        row["received"] = float(sr["received"]) if sr else 0.0
+        row["shipped"] = float(sr["shipped"]) if sr else 0.0
+        row["stock_value"] = float(sr["stock_value"]) if sr else 0.0
 
     rows = []
     if int(sizes):
@@ -812,6 +825,7 @@ def api_products(
                     row["own_stock"] = own.get(p.article, 0.0)
                     row["mp_stock"] = wb_size_qty(p.article, s["size"])
                     row["ozon_stock"] = int(ozon_total.get(p.article, 0))
+                    fill_stock(row, p.article)
                 row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map), ue_for(p.article)))
                 rows.append(row)
     else:
@@ -829,6 +843,7 @@ def api_products(
                 row["own_stock"] = own.get(p.article, 0.0)
                 row["mp_stock"] = mp_total(p.article)
                 row["ozon_stock"] = int(ozon_total.get(p.article, 0))
+                fill_stock(row, p.article)
             row.update(_catalog_price_fields(p, settings, _eff_net_cost(p.article, p.net_cost, prefix_map), ue_for(p.article)))
             rows.append(row)
     totals = {}
@@ -836,9 +851,17 @@ def api_products(
         if int(sizes):
             totals["own_stock"] = sum(own.get(p.article, 0.0) for p in prods)
             totals["mp_stock"] = sum(mp_total(p.article) for p in prods)
+            totals["start_qty"] = sum(float(stock.get(p.article, {}).get("start_qty", 0.0)) for p in prods)
+            totals["received"] = sum(float(stock.get(p.article, {}).get("received", 0.0)) for p in prods)
+            totals["shipped"] = sum(float(stock.get(p.article, {}).get("shipped", 0.0)) for p in prods)
+            totals["stock_value"] = sum(float(stock.get(p.article, {}).get("stock_value", 0.0)) for p in prods)
         else:
             totals["own_stock"] = sum(r["own_stock"] for r in rows)
             totals["mp_stock"] = sum(r["mp_stock"] for r in rows)
+            totals["start_qty"] = sum(r["start_qty"] for r in rows)
+            totals["received"] = sum(r["received"] for r in rows)
+            totals["shipped"] = sum(r["shipped"] for r in rows)
+            totals["stock_value"] = sum(r["stock_value"] for r in rows)
     return {"rows": rows, "count": len(rows), "price_settings": settings, "totals": totals}
 
 

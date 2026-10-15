@@ -117,8 +117,8 @@ def export_products(
         df["tags"] = df["tags"].map(lambda v: ", ".join(v) if isinstance(v, list) else v)
     order = [c for c in ["article", "name", "brand", "subject", "size", "sizes_count",
                          "barcode", "volume_l", "composition", "net_cost", "replenishable",
-                         "tags", "own_stock", "mp_stock", "recommended_price", "min_price",
-                         "markup"]
+                         "tags", "start_qty", "received", "shipped", "own_stock", "mp_stock",
+                         "stock_value", "recommended_price", "min_price", "markup"]
              if c in df.columns]
     if order:
         df = df[order]

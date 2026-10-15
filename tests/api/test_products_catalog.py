@@ -45,7 +45,8 @@ def test_products_stocks_and_price(api_client, db):
 
     data = api_client.get("/api/products", params={"stocks": 1}).json()
     by = {p["article"]: p for p in data["rows"]}
-    assert "own_stock" in by["TST-1"] and "mp_stock" in by["TST-1"]
+    for k in ("start_qty", "received", "shipped", "own_stock", "mp_stock", "stock_value"):
+        assert k in by["TST-1"], f"нет складской колонки {k}"
     assert by["TST-1"]["recommended_price"] == 1049.0
     assert by["TST-1"]["markup"] > 1
 
