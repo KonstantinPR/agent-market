@@ -8,8 +8,8 @@ from sqlalchemy import select
 
 from app import models
 from app.services.replenish import (
-    WB_SORT_VELOCITY_DAYS, apply_sort_budget, profit_factor, replenish_rows,
-    wb_profit_factors, wb_sorting_plan,
+    WB_SORT_VELOCITY_DAYS, apply_sort_budget, apply_wish, parse_wish_step,
+    profit_factor, replenish_rows, wb_profit_factors, wb_sorting_plan,
 )
 
 TODAY = date(2026, 9, 20)
@@ -1099,5 +1099,244 @@ def test_sort_budget_applied_to_real_plan(db):
     assert sum(s["to_sort"] for s in plan["BUDR-1"]["sizes"]) == 1
     # выдали продающемуся размеру (42 продавался активнее)
     assert max(plan["BUDR-1"]["sizes"], key=lambda s: s["to_sort"])["size"] == "42"
+
+
+# — «Пожелание»: ручной объём N шт + шаг размера ————————————————————————
+
+def _wish_plan():
+    """План-заглушка: два артикула по четыре размера-«лесенки».
+
+    Индекс размера в списке — позиция в лесенке (0 — самый мелкий). У всех
+    размеров план «дослать» = 5. Рейтинг выгоды = маржа × скорость, поэтому
+    W-A (маржа 200) стоит выше W-B (маржа 100).
+    """
+    def entry(art, speeds):
+        sizes = [{"size": s, "to_sort": base, "vel": vel}
+                 for s, base, vel in speeds]
+        return {"article": art, "sizes": sizes,
+                "total": sum(s["to_sort"] for s in sizes)}
+    return {
+        "W-A": entry("W-A", [("A0", 5, 10.0), ("A1", 5, 8.0),
+                             ("A2", 5, 6.0), ("A3", 5, 4.0)]),
+        "W-B": entry("W-B", [("B0", 5, 5.0), ("B1", 5, 4.0),
+                             ("B2", 5, 3.0), ("B3", 5, 2.0)]),
+    }
+
+
+_WISH_MARGIN = {"W-A": 200.0, "W-B": 100.0}
+
+
+def _wish_sizes(plan, art):
+    return [s["to_sort"] for s in plan[art]["sizes"]]
+
+
+def test_parse_wish_step_valid():
+    assert parse_wish_step("2") == (2, 2)
+    assert parse_wish_step("2-4") == (2, 4)
+    assert parse_wish_step(" 3 ") == (3, 3)
+    assert parse_wish_step("") == (1, 1)
+    assert parse_wish_step(None) == (1, 1)
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "4-2", "a", "2-4-6", "2-", "x-y"])
+def test_parse_wish_step_invalid(bad):
+    with pytest.raises(ValueError):
+        parse_wish_step(bad)
+
+
+def test_wish_zero_total_is_noop():
+    plan = _wish_plan()
+    before = _wish_sizes(plan, "W-A")
+    summary = apply_wish(plan, 0, "", _WISH_MARGIN)
+    assert summary["reason"] == "off"
+    assert _wish_sizes(plan, "W-A") == before
+
+
+def test_wish_empty_plan():
+    summary = apply_wish({}, 5, "", {})
+    assert summary["reason"] == "empty"
+
+
+def test_wish_total_scales_without_step():
+    """Инвариант: итог по всем размерам всегда равен пожеланию N."""
+    for total in (1, 7, 40, 41, 999):
+        plan = _wish_plan()
+        summary = apply_wish(plan, total, "", _WISH_MARGIN)
+        sizes = [s for e in plan.values() for s in e["sizes"]]
+        assert sum(s["to_sort"] for s in sizes) == total, total
+        assert summary["placed"] + summary["short"] == total
+        assert summary["step"] == "1"
+        for e in plan.values():
+            assert e["total"] == sum(s["to_sort"] for s in e["sizes"])
+
+
+def test_wish_circles_by_rank_when_total_le_base():
+    """N не больше плана: раздача кругами по рейтингу выгоды."""
+    plan = _wish_plan()
+    apply_wish(plan, 6, "", _WISH_MARGIN)
+    # ранг: A0,A1,A2,A3,B0,B1,B2,B3 -> по кругу +1 первым шести
+    assert _wish_sizes(plan, "W-A") == [1, 1, 1, 1]
+    assert _wish_sizes(plan, "W-B") == [1, 1, 0, 0]
+    assert plan["W-A"]["total"] == 4
+    assert plan["W-B"]["total"] == 2
+
+
+def test_wish_grow_above_plan_goes_to_live():
+    """N больше плана: все получают план, остаток — живым по кругу."""
+    plan = _wish_plan()
+    apply_wish(plan, 45, "", _WISH_MARGIN)
+    assert _wish_sizes(plan, "W-A") == [6, 6, 6, 6]
+    assert _wish_sizes(plan, "W-B") == [6, 5, 5, 5]
+
+
+def test_wish_step_two_uses_even_positions():
+    plan = _wish_plan()
+    apply_wish(plan, 4, "2", _WISH_MARGIN)
+    # шаг 2: участвуют только позиции 0 и 2 (самый мелкий и через один)
+    assert _wish_sizes(plan, "W-A") == [1, 0, 1, 0]
+    assert _wish_sizes(plan, "W-B") == [1, 0, 1, 0]
+
+
+def test_wish_step_range_halves():
+    plan = _wish_plan()
+    apply_wish(plan, 40, "2-4", _WISH_MARGIN)
+    a, b = _wish_sizes(plan, "W-A"), _wish_sizes(plan, "W-B")
+    # первая половина рейтинга (A0,A1,A2,A3) — шаг 2: позиции 0,2
+    # вторая половина (B0..B3) — шаг 4: только позиция 0
+    assert a[1] == a[3] == 0
+    assert b[1] == b[2] == b[3] == 0
+    assert a[0] >= a[2] >= b[0] > 0
+    assert sum(a) + sum(b) == 40
+
+
+def test_wish_clamped_when_no_live_sizes():
+    """Живых размеров нет — остаток разместить некуда, short > 0."""
+    plan = {"W-C": {"article": "W-C", "total": 4, "sizes": [
+        {"size": "C0", "to_sort": 2, "vel": 0.0},
+        {"size": "C1", "to_sort": 2, "vel": 0.0},
+    ]}}
+    summary = apply_wish(plan, 10, "", {"W-C": 50.0})
+    assert summary["placed"] == 4
+    assert summary["short"] == 6
+    assert sum(s["to_sort"] for s in plan["W-C"]["sizes"]) == 4
+
+
+def test_wish_excludes_unprofitable_article():
+    plan = {
+        "GOOD": {"article": "GOOD", "factor": 1.5, "total": 3,
+                 "sizes": [{"size": "g0", "to_sort": 3, "vel": 5.0}]},
+        "BAD": {"article": "BAD", "factor": 0, "total": 7,
+                "sizes": [{"size": "b0", "to_sort": 7, "vel": 5.0}]},
+    }
+    apply_wish(plan, 2, "", {"GOOD": 10.0, "BAD": 9999.0})
+    assert plan["GOOD"]["total"] == 2
+    assert plan["BAD"]["total"] == 0
+
+
+def test_wish_no_eligible_leaves_plan_untouched():
+    """Все артикулы убыточны — пожелание не применяем, таблицу не обнуляем."""
+    plan = {"BAD": {"article": "BAD", "factor": 0, "total": 5,
+                    "sizes": [{"size": "b0", "to_sort": 5, "vel": 3.0}]}}
+    summary = apply_wish(plan, 4, "", {"BAD": 10.0})
+    assert summary["reason"] == "no_eligible"
+    assert summary["short"] == 4
+    assert plan["BAD"]["total"] == 5
+    assert plan["BAD"]["sizes"][0]["to_sort"] == 5
+
+
+def test_wish_applied_to_real_plan(db):
+    _card_size(db, "wb", "WISH-1", "42")
+    _card_size(db, "wb", "WISH-1", "44")
+    _card_size(db, "wb", "WISH-1", "46")
+    db.add(_wb_size_row("wish42", "WISH-1", "42", TODAY, qty=300))
+    db.add(_wb_size_row("wish44", "WISH-1", "44", TODAY, qty=200))
+    db.add(_wb_size_row("wish46", "WISH-1", "46", TODAY, qty=100))
+    db.commit()
+
+    plan = wb_sorting_plan(db, TODAY, articles=["WISH-1"], target_days=30)
+    apply_wish(plan, 5, "", {"WISH-1": 100.0})
+    sizes = plan["WISH-1"]["sizes"]
+    assert sum(s["to_sort"] for s in sizes) == 5
+    assert plan["WISH-1"]["total"] == 5
+
+
+def test_replenish_rows_wish_sets_meta_and_total(db):
+    db.add(models.Product(article="WROWS", name="Товар", net_cost=50.0))
+    _card_size(db, "wb", "WROWS", "42")
+    _card_size(db, "wb", "WROWS", "44")
+    db.add(_wb_size_row("wrows42", "WROWS", "42", TODAY, qty=10))
+    db.add(_wb_size_row("wrows44", "WROWS", "44", TODAY, qty=10))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                       wish=5, wish_step="")
+    assert r["meta"]["wish"] == {"total": 5, "step": "1", "placed": 5,
+                                 "short": 0, "reason": ""}
+    row = next(x for x in r["rows"] if x["article"] == "WROWS")
+    assert row["to_sort"] == 5
+    assert row["wb_def"] == 5
+
+
+def test_size_view_wish_keeps_hidden_zero_size(db):
+    """С пожеланием «везде 0» размер со штуками нельзя прятать (футер = N)."""
+    db.add(models.Product(article="WSZ", name="Товар", net_cost=50.0))
+    _card_size(db, "wb", "WSZ", "42")
+    _card_size(db, "wb", "WSZ", "46")
+    db.add(_wb_size_row("wsz42", "WSZ", "42", TODAY, qty=10))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30, view="sizes",
+                       hide_zero_sizes=True, wish=100, wish_step="")
+    to_sorts = {x["size"]: x["to_sort"] for x in r["rows"]
+                if x["article"] == "WSZ"}
+    assert sum(to_sorts.values()) == 100
+    assert to_sorts.get("46", 0) >= 1
+    assert r["meta"]["wish"]["placed"] == 100
+
+
+def _seed_wish_article(db, art="WAPI"):
+    db.add(models.Product(article=art, name="Товар", net_cost=50.0))
+    _card_size(db, "wb", art, "42")
+    _card_size(db, "wb", art, "44")
+    db.add(_wb_size_row(f"{art}42", art, "42", TODAY, qty=10))
+    db.add(_wb_size_row(f"{art}44", art, "44", TODAY, qty=10))
+    db.commit()
+
+
+def test_api_replenish_wish_sets_total(db, api_client):
+    _seed_wish_article(db)
+    resp = api_client.get("/api/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "target_days": 30, "window_days": 30, "wish": 5, "wish_step": "",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["meta"]["wish"]["placed"] == 5
+    assert sum(x["to_sort"] for x in data["rows"]) == 5
+
+
+def test_api_replenish_wish_bad_step_400(db, api_client):
+    _seed_wish_article(db)
+    resp = api_client.get("/api/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "wish": 5, "wish_step": "abc",
+    })
+    assert resp.status_code == 400
+
+
+def test_api_replenish_export_wish_and_bad_step(db, api_client):
+    _seed_wish_article(db)
+    ok = api_client.get("/api/export/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "wish": 5, "wish_step": "2",
+    })
+    assert ok.status_code == 200 and ok.content.startswith(b"PK")
+    bad = api_client.get("/api/export/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "wish": 5, "wish_step": "0",
+    })
+    assert bad.status_code == 400
+
+
 
 

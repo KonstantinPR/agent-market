@@ -135,6 +135,19 @@ def test_limit_zero_falls_back_to_one(pdf_api):
     assert r.headers["X-Count"] == "1"
 
 
+def test_pdf_wish_bad_step_400(pdf_api):
+    r = pdf_api.get("/api/export/replenish/pdf", params={"wish": 5, "wish_step": "abc"})
+    assert r.status_code == 400
+
+
+def test_pdf_with_wish_returns_pdf(pdf_api, photo_tree):
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "wish": 5, "wish_step": "2"})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == PDF_MEDIA
+    assert r.content.startswith(b"%PDF")
+
+
 def test_default_limit_header_is_default(pdf_api):
     r = pdf_api.get("/api/export/replenish/pdf")
     assert r.headers["X-Count"] <= str(PDF_DEFAULT_LIMIT)

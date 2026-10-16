@@ -320,6 +320,28 @@ assert.ok(jsSrc.includes('hide_zero_sizes: $("#replenishHideZeroSizes")'),
 assert.ok(apiSrc.includes("hide_zero_sizes: int = 0"),
   "в /api/replenish есть параметр hide_zero_sizes");
 
+// «Пожелание» (T-43): ручной объём отгрузки на WB + шаг размера. Клиентский
+// parseWishStep обязан совпадать с серверным parse_wish_step.
+assert.ok(htmlSrc.includes('id="replenishWish"'),
+  "в тулбаре Потребности нет поля «Пожелание»");
+assert.ok(htmlSrc.includes('id="replenishWishStep"'),
+  "в тулбаре Потребности нет селектора шага размера");
+assert.ok(jsSrc.includes('q.wish = wish') && jsSrc.includes('q.wish_step ='),
+  "replenishQs не передаёт wish/wish_step в запрос");
+assert.ok(apiSrc.includes("wish: int = 0"), "в /api/replenish нет параметра wish");
+assert.ok(apiSrc.includes("parse_wish_step"), "эндпоинт не валидирует шаг через parse_wish_step");
+const { parseWishStep } = sandbox;
+const step = (s) => [...parseWishStep(s)];
+assert.deepStrictEqual(step("2"), [2, 2], "шаг 2 → [2,2]");
+assert.deepStrictEqual(step("2-4"), [2, 4], "шаг 2-4 → [2,4]");
+assert.deepStrictEqual(step(""), [1, 1], "пустой шаг → все размеры [1,1]");
+assert.deepStrictEqual(step(null), [1, 1], "null → все размеры");
+for (const bad of ["0", "-1", "4-2", "a", "2-4-6", "2-", "x-y"]) {
+  let threw = false;
+  try { parseWishStep(bad); } catch (e) { threw = true; }
+  assert.ok(threw, "parseWishStep должен ругаться на " + JSON.stringify(bad));
+}
+
 // «Дослать» — колонка плана подсортировки (как PDF) в обоих видах и в Excel.
 assert.ok(jsSrc.includes('{ k: "to_sort", label: "Дослать"'),
   "в «По артикулам» нет колонки «Дослать»");

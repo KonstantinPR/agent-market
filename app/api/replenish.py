@@ -23,6 +23,8 @@ def api_replenish(
     show_inactive: int = 0,
     hide_zero_sizes: int = 0,
     view: str = "article",
+    wish: int = 0,
+    wish_step: str = "",
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
@@ -33,10 +35,16 @@ def api_replenish(
     даты окна. sort: urgency | margin | name. view: article | sizes —
     размерный разрез (WB) по той же логике. hide_zero_sizes — в разрезе
     «по размерам» скрыть размеры без продаж и остатков (везде 0).
-    cabinet — локальный выбор связки в разделе (None — активная из куки).
+    wish/wish_step — «Пожелание»: ручной объём N шт на WB и шаг размера
+    («2»/«2-4»); кривой шаг — 400. cabinet — локальный выбор связки в разделе
+    (None — активная из куки).
     """
     inf = _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
+    try:
+        replenish_service.parse_wish_step(wish_step)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if date_from is None and date_to is None:
         # окно задано не фильтрами, а window_days: двигаем назад от даты to_.
         back = max(1, int(window_days or settings.sync_days_default))
@@ -51,7 +59,7 @@ def api_replenish(
         db, from_, to_, target_days=target_days, span_days=span,
         marketplace=marketplace, sort=sort, article_like=article_like,
         show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
-        view=view,
+        view=view, wish=wish, wish_step=wish_step,
     )
     result["date_from"] = from_.isoformat()
     result["date_to"] = to_.isoformat()

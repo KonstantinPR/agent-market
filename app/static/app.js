@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "109";
+const UI_VERSION = "110";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2306,7 +2306,7 @@ const replenishHeaders = [
   { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады WB (уже отгружен со склада WB-поставщика или в поставке)." },
   { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на WB в днях: доступно ÷ спрос в день. Идеал — целевой запас (по умолчанию 30 дн)." },
   { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит WB до целевого запаса. Считается как «Дослать» из плана подсортировки (как PDF: скорость 180 дн, +1 шт в пустой размер карточки, учёт прибыльности) — чтобы в окне без WB-продаж не было 0 при пустой карточке. Что нужно довезти на WB." },
-  { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB, как в PDF: итог по карточке = скорость продаж 180 дн за вычетом доступного, +1 шт в пустой размер, с учётом прибыльности. То же значение, что «WB дефицит» (для артикулов с WB)." },
+  { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB, как в PDF: итог по карточке = скорость продаж 180 дн за вычетом доступного, +1 шт в пустой размер, с учётом прибыльности. То же значение, что «WB дефицит» (для артикулов с WB). При заданном «Пожелании» — ручной итог: N шт раскидываются по размерам по выгоде товара, шаг размера — из тулбара." },
   { k: "oz_avail", label: "Ozon доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на Ozon: остатки на складах + в пути." },
   { k: "oz_in_way", label: "Ozon в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады Ozon." },
   { k: "oz_doc", label: "Ozon, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на Ozon в днях: доступно ÷ спрос в день. Идеал — целевой запас." },
@@ -2338,7 +2338,7 @@ const replenishSizeHeaders = [
   { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "В пути на склады WB по этому размеру." },
   { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас этого размера на WB в днях: доступно ÷ спрос в день." },
   { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит размера на WB до целевого запаса. Считается как «Дослать» из плана подсортировки (как PDF: скорость 180 дн, +1 шт в пустой размер карточки, учёт прибыльности) — чтобы пустой живой размер не показывал 0." },
-  { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB по этому размеру, как в PDF: скорость 180 дн за вычетом доступного, +1 шт в пустой размер карточки, с учётом прибыльности. То же значение, что «WB дефицит»." },
+  { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB по этому размеру, как в PDF: скорость 180 дн за вычетом доступного, +1 шт в пустой размер карточки, с учётом прибыльности. То же значение, что «WB дефицит». При «Пожелании» размер входит в план по шагу лесенки (см. тулбар)." },
   { k: "ship_wb", label: "Отгрузить WB", num: true, render: (v) => (v || 0) > 0 ? `<b>${fmt(v)}</b>` : "—", tip: "Сколько отгрузить этого размера с нашего склада на WB: покрытие дефицита размера; приоритет — самому низкому запасу в днях." },
   { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе — по всему артикулу (по размерам склад не ведётся)." },
   { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа/шт по артикулу целиком (по размерам не раскладывается)." },
@@ -2383,6 +2383,10 @@ function syncReplenishView() {
   if (ozView && sel.value !== "article") sel.value = "article";
   const hz = $("#replenishHideZeroSizes");
   if (hz) hz.disabled = !!ozView;
+  const wsh = $("#replenishWish");
+  if (wsh) wsh.disabled = !!ozView;
+  const wshStep = $("#replenishWishStep");
+  if (wshStep) wshStep.disabled = !!ozView;
   sel.title = ozView
     ? "Связка Ozon: доступен только разрез по артикулам — размеров в продажах Ozon нет"
     : "Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)";
@@ -2495,7 +2499,43 @@ function replenishQs(f) {
   if (cab && cab.value) q.cabinet = cab.value;
   const like = tabLike("replenishLike");
   if (like) q.article_like = like;
+  const wish = replenishWishValue();
+  if (wish > 0) {
+    let step = ($("#replenishWishStep") || {}).value || "2";
+    try { parseWishStep(step); } catch (e) { step = "2"; }
+    q.wish = wish;
+    q.wish_step = step;
+  }
   return qs(q);
+}
+
+// «Пожелание» — ручной объём отгрузки на WB. Пусто/0 → без пожелания.
+function replenishWishValue() {
+  const el = $("#replenishWish");
+  const n = parseInt((el || {}).value, 10);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
+// Разбор шага размера «Пожелания»: "2" → [2, 2], "2-4" → [2, 4]. Пусто —
+// без шага (все размеры): [1, 1]. Мусор (0, отрицательное, обратный
+// диапазон, буквы, лишний дефис) — Error, как в
+// app/services/replenish.py::parse_wish_step.
+function parseWishStep(spec) {
+  const s = String(spec == null ? "" : spec).trim();
+  if (s === "") return [1, 1];
+  const parts = s.split("-");
+  if (parts.length > 2) throw new Error("Некорректный шаг размера: " + s);
+  const a = parts[0];
+  const b = parts.length === 2 ? parts[1] : a;
+  if (!/^\d+$/.test(a) || !/^\d+$/.test(b)) {
+    throw new Error("Некорректный шаг размера: " + s);
+  }
+  const s1 = parseInt(a, 10);
+  const s2 = parseInt(b, 10);
+  if (s1 < 1 || s2 < 1 || s1 > s2) {
+    throw new Error("Некорректный шаг размера: " + s);
+  }
+  return [s1, s2];
 }
 
 async function renderReplenish() {
@@ -2533,6 +2573,12 @@ async function renderReplenish() {
       parts.push("Докупить: " + fmt(m.need_total) + " шт");
     }
     parts.push(isSize ? "Отгрузить на WB: " + fmt(m.ship_total) + " шт" : "Отгрузить: " + fmt(m.ship_total) + " шт");
+    const wsh = m.wish;
+    if (wsh && wsh.total > 0) {
+      parts.push(wsh.reason === ""
+        ? "Пожелание: " + fmt(wsh.placed) + " из " + fmt(wsh.total) + " шт"
+        : "Пожелание не применено: " + fmt(wsh.total) + " шт");
+    }
     const full = parts.join(" · ");
     if (full.length > 150) {
       msg.textContent = full.slice(0, 150) + "…";
@@ -8079,7 +8125,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     .forEach(([id, tab]) => onTabInput(id, tab));
   onTabChange("marginDetailCompare", "margin-detail");
   onTabChange("marginOzonDetailCompare", "margin-ozon-detail");
-  ["replenishWindow", "replenishTarget", "replenishSort", "replenishShowInactive", "replenishView"]
+  ["replenishWindow", "replenishTarget", "replenishSort", "replenishShowInactive", "replenishView",
+   "replenishWish", "replenishWishStep"]
     .forEach((id) => onTabChange(id, "replenish"));
   onTabChange("replenishCabinet", "replenish", () => {
     syncReplenishView();

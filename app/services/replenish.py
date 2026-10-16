@@ -412,22 +412,32 @@ def wb_sorting_plan(
 
 def _wb_sort_plan(
     db: Session, date_to, keys, target_days: int = 30,
-) -> dict:
+    wish: int = 0, wish_step: str = "", margin_by_art: Optional[dict] = None,
+):
     """План подсортировки на WB (как PDF по умолчанию) для набора артикулов.
 
     UI считает «Дослать» и «WB дефицит» из того же плана и с теми же
     параметрами, что PDF из коробки: скорость за 180 дней, пол 1 шт в пустой
     размер карточки и учёт прибыльности. Иначе окно без WB-продаж даёт
     дефицит 0, хотя карточка пуста, — экран и PDF разойдутся.
+
+    При ``wish > 0`` поверх плана применяется «Пожелание» — ручной объём на WB
+    (``apply_wish``), с учётом ``wish_step`` и удельной маржи ``margin_by_art``.
+    Возвращает ``(plan, wish_summary)``: сводка ``None``, если пожелание не
+    задано, иначе ``{total, step, placed, short, reason}`` для ``meta.wish``.
     """
     if not keys:
-        return {}
+        return {}, None
     articles = sorted(keys)
     factors = wb_profit_factors(db, date_to, articles=articles)
-    return wb_sorting_plan(
+    plan = wb_sorting_plan(
         db, date_to, target_days=target_days, articles=articles,
         profit_factor=factors,
     )
+    summary = None
+    if int(wish or 0) > 0:
+        summary = apply_wish(plan, wish, wish_step, margin_by_art or {})
+    return plan, summary
 
 
 def apply_sort_budget(plan: dict, budgets: dict) -> dict:
@@ -486,6 +496,176 @@ def apply_sort_budget(plan: dict, budgets: dict) -> dict:
             it["to_sort"] = v
         entry["total"] = sum(new)
     return plan
+
+
+def parse_wish_step(spec) -> tuple:
+    """Разобрать шаг размера для «Пожелания»: "2" → (2, 2), "2-4" → (2, 4).
+
+    Пустая строка — без шага, участвуют все размеры: (1, 1). Любой мусор
+    (буквы, ноль, отрицательное, обратный диапазон, лишний дефис) —
+    ``ValueError``. Шаг "2-4" означает: первая половина рейтинга размера
+    идёт с шагом 2, вторая — с шагом 4 (см. ``apply_wish``).
+    """
+    s = str(spec or "").strip()
+    if s == "":
+        return (1, 1)
+    if "-" in s:
+        parts = s.split("-")
+        if len(parts) != 2:
+            raise ValueError(f"Некорректный шаг размера: {spec!r}")
+        a, b = parts
+    else:
+        a = b = s
+    try:
+        s1, s2 = int(a), int(b)
+    except (TypeError, ValueError):
+        raise ValueError(f"Некорректный шаг размера: {spec!r}")
+    if s1 < 1 or s2 < 1 or s1 > s2:
+        raise ValueError(f"Некорректный шаг размера: {spec!r}")
+    return (s1, s2)
+
+
+def _format_step(s1: int, s2: int) -> str:
+    return f"{s1}" if s1 == s2 else f"{s1}-{s2}"
+
+
+def _margin_by_art(detail_maps: dict) -> dict:
+    """Удельная маржа по артикулу, как колонка «Маржа/шт»: маржа / нетто-штуки.
+
+    Нетто по каждому МП — ``max(0, sells)`` (в детализациях WB продажи уже
+    нетто, Ozon — по размерам), суммируется WB и Ozon, как в ``replenish_rows``.
+    """
+    out: dict = {}
+    arts = set(detail_maps.get("wb", {})) | set(detail_maps.get("ozon", {}))
+    for key in arts:
+        margin = 0.0
+        net = 0
+        for code in ("wb", "ozon"):
+            d = detail_maps.get(code, {}).get(key)
+            if not d:
+                continue
+            margin += _num(d.get("margin"))
+            net += max(0, int(_num(d.get("sells"))))
+        out[key] = round(margin / net, 2) if net > 0 else 0.0
+    return out
+
+
+def apply_wish(
+    plan: dict, total, step_spec: str = "", margin_by_art: Optional[dict] = None,
+) -> dict:
+    """Раскидать ручной объём «Пожелание» N шт по размерам плана WB.
+
+    Владелец задаёт, сколько всего штук отгрузить на WB; сервис сам
+    распределяет их по (артикул, размер) текущей выборки, соблюдая «шаг
+    размера» (``step_spec``: "2" — каждый второй размер лесенки, "2-4" —
+    первая половина рейтинга идёт с шагом 2, вторая с шагом 4).
+
+    Кандидаты — все размеры плана; рейтинг по выгоде
+    ``margin_per_one(артикул) × скорость(размер)`` (при равенстве: маржа,
+    скорость, исходный порядок). Размер участвует, только если его позиция в
+    лесенке размеров (0 — самый мелкий) кратна его шагу; убыточные артикулы
+    (``factor == 0``) исключены.
+
+    Если N не больше суммы плановых «дослать» по участвующим — N раздаётся
+    кругами по рейтингу, каждый не выше плана. Иначе все участники получают
+    план, а остаток раздаётся кругами по размерам со скоростью > 0 без
+    предела. Живых размеров нет — остаток не разместить: план клампится к
+    достижимому, ``short`` > 0. Инвариант ``sum(to_sort) == total`` (кроме
+    клампа). Размеры вне шага обнуляются, чтобы футер «Итого дослать» остался
+    равен пожеланию.
+
+    Возвращает сводку ``{total, step, placed, short, reason}``. При ``total <= 0``
+    и при пустом плане/отсутствии участников план не меняется
+    (``reason`` = "off"/"empty"/"no_eligible"). Изменяет ``plan`` на месте.
+    """
+    total = max(0, int(total or 0))
+    s1, s2 = parse_wish_step(step_spec)
+    summary = {
+        "total": total, "step": _format_step(s1, s2),
+        "placed": 0, "short": 0, "reason": "",
+    }
+    if total <= 0:
+        summary["reason"] = "off"
+        return summary
+    margin_by_art = margin_by_art or {}
+    cands: list = []
+    for art, entry in plan.items():
+        factor = entry.get("factor")
+        m = _num(margin_by_art.get(art))
+        for pos, it in enumerate(entry.get("sizes") or []):
+            vel = _num(it.get("vel"))
+            cands.append({
+                "item": it, "pos": pos,
+                "base": max(0, int(it.get("to_sort") or 0)),
+                "vel": vel, "margin": m, "factor": factor,
+                "idx": len(cands),
+            })
+    if not cands:
+        summary["reason"] = "empty"
+        return summary
+    half = len(cands) // 2
+    cands.sort(key=lambda c: (
+        -(c["margin"] * c["vel"]), -c["margin"], -c["vel"], c["idx"],
+    ))
+    for rank, c in enumerate(cands):
+        step = s1 if rank < half else s2
+        eligible = c["pos"] % step == 0
+        if c["factor"] is not None and float(c["factor"]) == 0:
+            eligible = False
+        c["eligible"] = eligible
+    eligible_cands = [c for c in cands if c["eligible"]]
+    if not eligible_cands:
+        # пожелание применить не к чему — план не трогаем, чтобы не обнулить
+        # таблицу; владелец должен увидеть предупреждение (meta.wish.reason).
+        summary["reason"] = "no_eligible"
+        summary["short"] = total
+        return summary
+    for c in cands:
+        if not c["eligible"] or c["base"] == 0:
+            c["item"]["to_sort"] = 0
+    pool = [c for c in eligible_cands if c["base"] > 0]
+    base_total = sum(c["base"] for c in pool)
+    if total <= base_total:
+        # сначала обнуляем участников — иначе круг не смог бы ничего выдать:
+        # они уже стоят на плановом значении
+        for c in pool:
+            c["item"]["to_sort"] = 0
+        rem = total
+        while rem > 0:
+            progress = False
+            for c in pool:
+                if rem <= 0:
+                    break
+                if c["item"]["to_sort"] < c["base"]:
+                    c["item"]["to_sort"] += 1
+                    rem -= 1
+                    progress = True
+            if not progress:
+                break
+        placed, short = total - rem, 0
+    else:
+        for c in pool:
+            c["item"]["to_sort"] = c["base"]
+        rem = total - base_total
+        placed = base_total
+        live = [c for c in eligible_cands if c["vel"] > 0]
+        if live:
+            j = 0
+            while rem > 0:
+                live[j % len(live)]["item"]["to_sort"] += 1
+                rem -= 1
+                j += 1
+            placed, short = total, 0
+        else:
+            short = rem
+    for entry in plan.values():
+        entry["total"] = sum(
+            max(0, int(it.get("to_sort") or 0))
+            for it in (entry.get("sizes") or [])
+        )
+    summary["placed"] = placed
+    summary["short"] = short
+    return summary
 
 
 def _wb_sizes(db: Session, date_from, date_to) -> dict:
@@ -566,6 +746,8 @@ def replenish_rows(
     show_inactive: bool = False,
     hide_zero_sizes: bool = False,
     view: str = "article",
+    wish: int = 0,
+    wish_step: str = "",
 ) -> dict:
     """Главный расчёт. Возвращает {'rows': [...], 'meta': {...}}.
 
@@ -577,6 +759,9 @@ def replenish_rows(
     «Дослать» и «WB дефицит» идут из плана подсортировки на WB
     (``wb_sorting_plan``, параметры PDF по умолчанию) — см. артикульный
     расчет ниже; в размерном разрезе — по каждому размеру.
+
+    ``wish``/``wish_step`` — «Пожелание»: ручной объём N шт на WB и шаг
+    размера ("2"/"2-4"), поверх плана (``apply_wish``); сводка в ``meta.wish``.
     """
     span = span_days or _span_days(date_from, date_to)
     target_days = max(1, int(target_days or 30))
@@ -592,6 +777,7 @@ def replenish_rows(
             db, date_from, date_to, target_days=target_days, span=span,
             codes=codes, sort=sort, article_like=article_like,
             show_inactive=show_inactive, hide_zero_sizes=hide_zero_sizes,
+            wish=wish, wish_step=wish_step,
         )
 
     wb_df, oz_df = _detail_aggregates(db, date_from, date_to)
@@ -625,11 +811,18 @@ def replenish_rows(
 
     # План подсортировки на WB (как PDF) — источник «Дослать» и «WB дефицит»,
     # чтобы в окне без WB-продаж дефицит не был 0 при пустой карточке.
-    plan_total = (
-        {k: int(e.get("total") or 0) for k, e in _wb_sort_plan(
-            db, date_to, sorted(keys), target_days).items()}
-        if "wb" in codes else {}
-    )
+    plan_total: dict = {}
+    wish_summary = None
+    if "wb" in codes:
+        plan, wish_summary = _wb_sort_plan(
+            db, date_to, sorted(keys), target_days,
+            wish=wish, wish_step=wish_step,
+            margin_by_art=_margin_by_art(detail_maps),
+        )
+        plan_total = {k: int(e.get("total") or 0) for k, e in plan.items()}
+    # «Пожелание» применено (план реально переписан) — тогда «Отгрузить WB»
+    # не должно превышать «Дослать» через оконный фолбэк ниже.
+    wish_active = bool(wish_summary and wish_summary.get("reason") == "")
 
     prods = db.execute(
         select(models.Product).where(models.Product.article.in_(sorted(keys)))
@@ -718,8 +911,10 @@ def replenish_rows(
             # План подсортировки мог обнулить дефицит МП (to_sort=0), хотя в
             # окне спроса он есть. Если мы всё равно докупаем (need_buy>0),
             # товар кому-то адресован — закрываем оконный дефицит этого МП.
+            # Но при активном «Пожелании» WB-фолбэк выключается: иначе
+            # «Отгрузить WB» ушло бы за ручной объём владельца.
             t = d_
-            if t == 0 and need_buy > 0 and win_d > 0:
+            if t == 0 and need_buy > 0 and win_d > 0 and not (wish_active and code == "wb"):
                 t = win_d
             defs.append((code, t, doc, merit))
         defs = [x for x in defs if x[1] > 0]
@@ -808,6 +1003,8 @@ def replenish_rows(
     meta = _meta(len(rows), rows, target_days, span, codes)
     if inactive_total:
         meta["inactive_total"] = inactive_total
+    if wish_summary is not None:
+        meta["wish"] = wish_summary
     return {"rows": rows, "meta": meta}
 
 
@@ -815,6 +1012,7 @@ def _size_view(
     db: Session, date_from, date_to, target_days: int = 30, span: int = 1,
     codes=None, sort: str = "urgency", article_like: Optional[str] = None,
     show_inactive: bool = False, hide_zero_sizes: bool = False,
+    wish: int = 0, wish_step: str = "",
 ) -> dict:
     """Плоский разрез «по размерам».
 
@@ -875,12 +1073,20 @@ def _size_view(
     # по каждому размеру карточки. Размер вне плана (например, только Ozon)
     # остаётся на расчёте по окну спроса.
     plan_sz = {}
+    wish_summary = None
     if "wb" in codes:
-        plan = _wb_sort_plan(db, date_to, sorted(keys), target_days)
+        plan, wish_summary = _wb_sort_plan(
+            db, date_to, sorted(keys), target_days,
+            wish=wish, wish_step=wish_step,
+            margin_by_art=_margin_by_art(detail_maps),
+        )
         plan_sz = {
             art: {it["size"]: it for it in (entry.get("sizes") or [])}
             for art, entry in plan.items()
         }
+    # Пожелание реально переписало план: скрывать «везде 0» размеры нельзя,
+    # если они несут штуки, иначе футер «Итого дослать» будет меньше N.
+    wish_active = bool(wish_summary and wish_summary.get("reason") == "")
 
     def _zero_size(s: str, wbs: dict) -> bool:
         """Размер «везде 0»: без продаж за окно и без остатков/в пути на МП."""
@@ -973,7 +1179,7 @@ def _size_view(
         # он отражается на строке артикула (Ozon/резерв).
 
         for s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort in size_defs:
-            if hide_zero_sizes and _zero_size(s, wbs):
+            if hide_zero_sizes and _zero_size(s, wbs) and not (wish_active and to_sort > 0):
                 continue
             if not actual:
                 status = "inactive"
@@ -1031,6 +1237,8 @@ def _size_view(
     meta = _meta(len(rows), rows, target_days, span, codes, unit="sizes")
     if inactive_total:
         meta["inactive_total"] = inactive_total
+    if wish_summary is not None:
+        meta["wish"] = wish_summary
     return {"rows": rows, "meta": meta}
 
 

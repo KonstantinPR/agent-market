@@ -140,11 +140,17 @@ def export_replenish(
     hide_zero_sizes: int = 0,
     view: str = "article",
     cols: Optional[str] = None,
+    wish: int = 0,
+    wish_step: str = "",
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
+    try:
+        replenish_service.parse_wish_step(wish_step)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if date_from is None and date_to is None:
         back = max(1, int(window_days or settings.sync_days_default))
         from_ = to_ - timedelta(days=back - 1)
@@ -153,7 +159,7 @@ def export_replenish(
         db, from_, to_, target_days=target_days, span_days=span,
         marketplace=marketplace, sort=sort, article_like=article_like,
         show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
-        view=view,
+        view=view, wish=wish, wish_step=wish_step,
     )
     df = pd.DataFrame(result["rows"])
     if df.empty:
@@ -188,6 +194,8 @@ def export_replenish_pdf(
     vel_days: int = replenish_service.WB_SORT_VELOCITY_DAYS,
     profit: int = 1,
     limit: int = PDF_DEFAULT_LIMIT,
+    wish: int = 0,
+    wish_step: str = "",
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
@@ -203,10 +211,17 @@ def export_replenish_pdf(
     целевой уровень домножается на коэффициент по рентабельности (0…2).
     При ``profit=0`` работает как раньше: покрытие = «Запас», без коэффициента.
 
+    ``wish``/``wish_step`` — «Пожелание»: ручной объём N шт на WB и шаг размера;
+    при заданном пожелании PDF-план строится из него (кроме режима файла).
+
     PDF из Excel-файла с правками — отдельный ``POST /export/replenish/pdf``.
     """
     _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
+    try:
+        replenish_service.parse_wish_step(wish_step)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if date_from is None and date_to is None:
         back = max(1, int(window_days or settings.sync_days_default))
         from_ = to_ - timedelta(days=back - 1)
@@ -227,7 +242,7 @@ def export_replenish_pdf(
         from_=from_, to_=to_, span=span, truncated=truncated,
         target_days=target_days, vel_days=vel_days, profit=profit,
         cols=cols, with_photos=with_photos, photo_count=photo_count,
-        article_like=article_like,
+        article_like=article_like, wish=wish, wish_step=wish_step,
     )
 
 
@@ -325,6 +340,8 @@ def _replenish_pdf_build(
     article_like: Optional[str] = None,
     budgets: Optional[dict] = None,
     subtitle_extra: str = "",
+    wish: int = 0,
+    wish_step: str = "",
 ) -> Response:
     """Общая сборка PDF-потребности: план подсортировки, фото, карточки.
 
@@ -332,7 +349,9 @@ def _replenish_pdf_build(
     ``budgets`` не None = режим файла (PDF из Excel): «Итого дослать»
     берёт бюджет из колонки «WB дефицит» по артикулу, а отбраковка
     убыточных/полных карточек не применяется — файл есть истина
-    (см. ``replenish.apply_sort_budget``).
+    (см. ``replenish.apply_sort_budget``). В этом режиме пожелание игнорируется.
+    ``wish``/``wish_step`` — ручной объём N шт на WB: поверх плана применяется
+    ``replenish.apply_wish`` (маржа из ``rows[].margin_per_one``).
     ``subtitle_extra`` — приписка в шапке (имя Excel-файла).
     """
     vel_days = int(vel_days or 0)
@@ -360,20 +379,33 @@ def _replenish_pdf_build(
         coverage_days=coverage, profit_factor=factors,
     )
 
+    wish_note = ""
     if budgets is not None:
         # Режим Excel: «Итого дослать» и распределение по размерам идут по
         # колонке «WB дефицит» из файла (пустые ячейки не задают бюджет).
+        # Файл есть истина — пожелание не применяется.
         replenish_service.apply_sort_budget(plan, budgets)
-    elif use_profit:
-        # убыточные и уже полные товары в шопинг-листе не нужны: иначе PDF
-        # наполовину состоит из нулей. Считаем отбракованные, чтобы X-Truncated
-        # остался честным. В режиме Excel не применяется: файл есть истина.
-        alive = [r for r in rows if plan.get(
-            str(r.get("article") or "").strip().upper(), {"total": 0}
-        )["total"] > 0]
-        truncated += len(rows) - len(alive)
-        rows = alive
-        plan = {k: v for k, v in plan.items() if v["total"] > 0}
+    else:
+        if int(wish or 0) > 0:
+            margin_by_art = {
+                str(r.get("article") or "").strip().upper():
+                    float(r.get("margin_per_one") or 0)
+                for r in rows
+            }
+            summary = replenish_service.apply_wish(
+                plan, wish, wish_step, margin_by_art)
+            if summary.get("reason") != "no_eligible":
+                wish_note = f" · пожелание: {int(wish)} шт, шаг {summary['step']}"
+        if use_profit:
+            # убыточные и уже полные товары в шопинг-листе не нужны: иначе PDF
+            # наполовину состоит из нулей. Считаем отбракованные, чтобы X-Truncated
+            # остался честным. В режиме Excel не применяется: файл есть истина.
+            alive = [r for r in rows if plan.get(
+                str(r.get("article") or "").strip().upper(), {"total": 0}
+            )["total"] > 0]
+            truncated += len(rows) - len(alive)
+            rows = alive
+            plan = {k: v for k, v in plan.items() if v["total"] > 0}
 
     # Дальше идёт только CPU-работа (обход фото, ReportLab) — она занимает
     # секунды-двадцать. Соединение из пула (5 + overflow 10) держим ровно
@@ -450,6 +482,7 @@ def _replenish_pdf_build(
             + (f" · пустой размер ≥ {replenish_service.WB_SORT_MIN_SIZE_STOCK} шт"
                if use_profit else "")
             + " · WB"
+            + wish_note
             + subtitle_extra
         ),
     )

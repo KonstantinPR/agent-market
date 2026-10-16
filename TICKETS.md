@@ -120,7 +120,12 @@
 
 ## В работе
 
-_(пусто)_
+- [T-43] (high) Потребность: «Пожелание» (ручной объём N шт) + шаг размера
+    > где: replenish.apply_wish/parse_wish_step (рядом с apply_sort_budget),
+    > hook в _wb_sort_plan; api/replenish.py, export_reports.py (Excel/PDF),
+    > pdf_demand (сабтитл); index.html+app.js (поля, LS, parseWishStep), UI v110
+    > состояние: реализовано, ждёт коммита (ручной объём «Пожелание» N шт +
+    > шаг размера 2/2-4; равномерные круги по рангу выгодности, инвариант sum==N)
 
 ## Заблокированные
 
