@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "110";
+const UI_VERSION = "111";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2387,6 +2387,9 @@ function syncReplenishView() {
   if (wsh) wsh.disabled = !!ozView;
   const wshStep = $("#replenishWishStep");
   if (wshStep) wshStep.disabled = !!ozView;
+  const wshBtn = $("#btnReplenishWish");
+  if (wshBtn) wshBtn.disabled = !!ozView;
+  syncReplenishWishBtn();
   sel.title = ozView
     ? "Связка Ozon: доступен только разрез по артикулам — размеров в продажах Ozon нет"
     : "Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)";
@@ -6922,6 +6925,54 @@ function initPricingModeMenu(saved) {
   refresh();
 }
 
+// «Пожелание» свёрнуто в меню-селектор, как «PDF ▾»: кнопка показывает, задан
+// ли ручной объём (и его величину), а поля «штук» и «шаг» живут в панели.
+function syncReplenishWishBtn() {
+  const btn = $("#btnReplenishWish");
+  if (!btn) return;
+  const n = replenishWishValue();
+  const step = ($("#replenishWishStep") || {}).value || "2";
+  btn.textContent = (n > 0 ? "Пожелание: " + fmt(n) + " шт · шаг " + step : "Пожелание") + " \u25BE";
+  btn.classList.toggle("active", n > 0);
+}
+
+function initReplenishWishMenu() {
+  const btn = $("#btnReplenishWish");
+  const menu = $("#replenishWishMenu");
+  const panel = $("#replenishWishPanel");
+  if (!btn || !menu || !panel) return;
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  const stepSel = $("#replenishWishStep");
+  if (stepSel) initMenuSelect(stepSel);
+  const onWishChange = () => syncReplenishWishBtn();
+  const wsh = $("#replenishWish");
+  if (wsh) wsh.addEventListener("change", onWishChange);
+  if (stepSel) stepSel.addEventListener("change", onWishChange);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasHidden = panel.classList.contains("hidden");
+    document.querySelectorAll(".view-menu-panel").forEach((p) => {
+      if (p !== panel) p.classList.add("hidden");
+    });
+    document.querySelectorAll(".view-menu.open").forEach((m) => {
+      if (m !== menu) m.classList.remove("open");
+    });
+    if (wasHidden) {
+      syncReplenishWishBtn();
+      panel.classList.remove("hidden");
+      menu.classList.add("open");
+    } else {
+      panel.classList.add("hidden");
+      menu.classList.remove("open");
+    }
+  });
+  document.addEventListener("click", () => {
+    panel.classList.add("hidden");
+    menu.classList.remove("open");
+  });
+  syncReplenishWishBtn();
+}
+
 function collectPricingSettings() {
   const box = $("#pricingSettings");
   const s = loadPricingSettings();
@@ -8270,6 +8321,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   syncHeaderForTab(currentTab);
   for (const t of Object.keys(_COLVIEWS)) initColViewMenu(t);
   initReplenishPdfMenu();
+  initReplenishWishMenu();
   const btnExportMarginDetail = $("#exportMarginDetail");
   if (btnExportMarginDetail) {
     btnExportMarginDetail.addEventListener("click", () => {

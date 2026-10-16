@@ -425,11 +425,6 @@
       <select id="replenishCabinet" title="Связка: чьи продажи/остатки маркетплейсов показывать. Наш склад общий для всех связок."></select>
       <label title="Окно спроса (дней), за которое считается скорость продаж">Спрос <input type="number" class="tool-input num" id="replenishWindow" min="1" max="365" value="30"> дн.</label>
       <label title="Целевой запас в днях продаж, до которого пополняем наш склад и маркетплейсы">Запас <input type="number" class="tool-input num" id="replenishTarget" min="1" max="366" value="30"> дн.</label>
-      <label title="«Пожелание»: сколько всего штук отгрузить на WB. Пусто или 0 — без пожелания (план как обычно). Число раскидывается по размерам по выгоде товара с учётом шага размера.">Пожелание <input type="number" class="tool-input num" id="replenishWish" min="0" step="1" placeholder="—"> шт</label>
-      <select id="replenishWishStep" title="Шаг размера для «Пожелания»: «2» — каждый второй размер лесенки (самый мелкий и через один); «2-4» — в первой половине рейтинга шаг 2, во второй 4.">
-        <option value="2">шаг 2</option>
-        <option value="2-4">шаг 2-4</option>
-      </select>
       <select id="replenishView" title="Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)">
         <option value="article">Вид: артикулы</option>
         <option value="sizes">Вид: размеры</option>
@@ -446,6 +441,21 @@
         <div class="view-menu" id="replenishViewMenu">
           <button type="button" class="btn" id="btnreplenishView">Вид таблицы &#9662;</button>
           <div class="view-menu-panel hidden" id="replenishViewPanel"></div>
+        </div>
+        <div class="view-menu" id="replenishWishMenu">
+          <button type="button" class="btn" id="btnReplenishWish" title="«Пожелание»: ручной объём отгрузки на WB. Число штук раскидывается по размерам по выгоде товара с учётом шага.">Пожелание &#9662;</button>
+          <div class="view-menu-panel hidden" id="replenishWishPanel">
+            <label class="chk" title="Сколько всего штук отгрузить на WB. Пусто или 0 — без пожелания (план как обычно). Число раскидывается по размерам по выгоде товара с учётом шага размера.">Штук:
+              <input type="number" class="tool-input num" id="replenishWish" min="0" step="1" placeholder="—">
+            </label>
+            <label class="chk" title="Шаг размера: «2» — каждый второй размер лесенки (самый мелкий и через один); «2-4» — в первой половине рейтинга шаг 2, во второй 4.">Шаг:
+              <select id="replenishWishStep">
+                <option value="2">2</option>
+                <option value="2-4">2-4</option>
+              </select>
+            </label>
+            <div class="wish-hint">Пожелание задаёт ручной итог отгрузки на WB: N шт раскидываются по размерам по выгоде, шаг отбирает размеры лесенки. Пусто — обычный план.</div>
+          </div>
         </div>
         <div class="view-menu" id="replenishPdfMenu">
           <button type="button" class="btn" id="btnReplenishPdf">PDF &#9662;</button>
@@ -1019,7 +1029,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=110"></script>
+<script src="/static/app.js?v=111"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

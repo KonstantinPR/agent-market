@@ -326,6 +326,18 @@ assert.ok(htmlSrc.includes('id="replenishWish"'),
   "в тулбаре Потребности нет поля «Пожелание»");
 assert.ok(htmlSrc.includes('id="replenishWishStep"'),
   "в тулбаре Потребности нет селектора шага размера");
+assert.ok(htmlSrc.includes('id="replenishWishMenu"') && htmlSrc.includes('id="btnReplenishWish"'),
+  "«Пожелание» не свёрнуто в меню-селектор (как PDF)");
+assert.ok(jsSrc.includes("function initReplenishWishMenu") &&
+  jsSrc.includes("initReplenishWishMenu()"),
+  "нет инициализации меню «Пожелание»");
+assert.ok(htmlSrc.indexOf('id="replenishWishMenu"') < htmlSrc.indexOf('id="replenishPdfMenu"'),
+  "меню «Пожелание» должно стоять рядом с «PDF ▾» (перед ним)");
+// Runtime assertions: функции должны быть глобальными (не вложены)
+assert.strictEqual(typeof sandbox.initReplenishWishMenu, "function",
+  "initReplenishWishMenu не глобальная функция");
+assert.strictEqual(typeof sandbox.syncReplenishWishBtn, "function",
+  "syncReplenishWishBtn не глобальная функция");
 assert.ok(jsSrc.includes('q.wish = wish') && jsSrc.includes('q.wish_step ='),
   "replenishQs не передаёт wish/wish_step в запрос");
 assert.ok(apiSrc.includes("wish: int = 0"), "в /api/replenish нет параметра wish");

@@ -507,6 +507,13 @@ table.stck tr.totals-row th.stck-col { background: #f0f4f8; }
   white-space: nowrap;
 }
 .pdf-x-clear { padding: 0 8px; line-height: 1.6; font-weight: bold; }
+.wish-hint {
+  font-size: 12px;
+  color: #666;
+  max-width: 300px;
+  line-height: 1.35;
+}
+.view-menu-panel .chk { cursor: default; }
 .pager {
   display: flex;
   align-items: center;
