@@ -120,7 +120,11 @@
 
 ## В работе
 
-_(пусто)_
+- [T-42] (high) Потребность: остатки WB не сопоставлялись по nmID (+ итоги колонок)
+    > где: refresh._wb_nmid_to_article() (читала nm_articles из public, а не из схемы
+    > связки) + pull_wb_stocks; replenish._mp_stocks; app.js футеры обоих видов
+    > состояние: реализовано, ждёт коммита (oo_joinco: остатки WB = 0, т.к. stocks.article
+    > = nmID вместо vendorCode; + итоги колонок в «Потребности»)
 
 ## Заблокированные
 

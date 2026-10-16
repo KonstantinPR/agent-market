@@ -62,29 +62,39 @@ def _pick_col(df: pd.DataFrame, names) -> Optional[pd.Series]:
 
 
 # ---------------------------------------------------- карта nmID -> артикул WB
-_NM_CACHE = {"ts": 0.0, "data": {}}
+_NM_CACHE = {"schema": None, "data": {}}
 
 
-def _wb_nmid_to_article() -> dict:
+def _wb_nmid_to_article(db=None) -> dict:
     """Карта nmId -> артикул продавца. Источник: таблица nm_articles,
-    заполняется при скачивании 'WB API ▸ Карточки товара' (без v5 rate-лимита)."""
-    if time.time() - _NM_CACHE["ts"] < 3600:
-        return _NM_CACHE["data"]
-    db = SessionLocal()
+    заполняется при скачивании 'WB API ▸ Карточки товара' (без v5 rate-лимита).
+
+    Таблица per-cabinet (cabinet_migrate.WB_ONLY_TABLES): читаем через сессию
+    кабинета (её search_path), иначе из public карта всегда пуста и остатки/
+    воронка падают на nmId вместо vendorCode. Кэш — по схеме (current_schema());
+    без сессии открываем свою (в штатном старте это public)."""
+    own = db is None
+    if own:
+        db = SessionLocal()
     try:
+        schema = db.execute(text("select current_schema()")).scalar()
+        if schema and _NM_CACHE["schema"] == schema:
+            return _NM_CACHE["data"]
         pairs = db.execute(select(models.NmArticle.nm_id, models.NmArticle.article)).all()
-        _NM_CACHE["data"] = {nm: art.strip() for nm, art in pairs if art and art.strip()}
-        _NM_CACHE["ts"] = time.time()
+        data = {nm: art.strip() for nm, art in pairs if art and art.strip()}
+        _NM_CACHE["schema"] = schema
+        _NM_CACHE["data"] = data
+        return data
     except Exception:  # noqa: BLE001
-        pass
+        return {}
     finally:
-        db.close()
-    return _NM_CACHE["data"]
+        if own:
+            db.close()
 
 
 def _wb_nm_cache_reset():
     _NM_CACHE["data"] = {}
-    _NM_CACHE["ts"] = 0.0
+    _NM_CACHE["schema"] = None
 
 
 def _wb_card_dims(db) -> dict:
@@ -221,16 +231,17 @@ def _stat_block_json(df: pd.DataFrame, block: str) -> pd.Series:
     return pd.Series(vals, index=df.index)
 
 
-def _funnel_to_db(df: pd.DataFrame, from_, to_) -> pd.DataFrame:
+def _funnel_to_db(df: pd.DataFrame, from_, to_, db=None) -> pd.DataFrame:
     """Воронка WB -> схема funnel_metric.
 
     Артикул берётся напрямую из vendorCode реального ответа (product.vendorCode),
     иначе через кэш nmID->артикул; метрики читаются из statistic.selected.*.
-    Устойчив к вариантам имён и к полному отсутствию идентификатора.
+    Устойчив к вариантам имён и к полному отсутствию идентификатора. db — сессия
+    кабинета (search_path) для карты nmID->артикул из nm_articles этой связки.
     """
     if df.empty:
         return df
-    nm_map = _wb_nmid_to_article()
+    nm_map = _wb_nmid_to_article(db)
 
     nm_id = _pick_col(df, FUNNEL_NM_CANDIDATES)
     vendor = _pick_col(df, FUNNEL_VENDOR_CANDIDATES)
@@ -456,7 +467,7 @@ def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
     n = 0
     if not raw.empty:
         if "vendorCode" not in raw.columns:
-            nm_map = _wb_nmid_to_article()
+            nm_map = _wb_nmid_to_article(db)
         else:
             nm_map = {}
         qty = pd.to_numeric(
@@ -508,7 +519,7 @@ def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None,
     n = 0
     if write_db and not df.empty:
         progress_service.report(stage="запись в БД")
-        fdf = _funnel_to_db(df, from_, to_)
+        fdf = _funnel_to_db(df, from_, to_, db)
         n = sync_service.upsert_funnel(db, fdf)
     window = f"{from_.isoformat()} — {to_.isoformat()}"
     sync_service.record_api_pull(db, "wb", "funnel", len(df), n, window)

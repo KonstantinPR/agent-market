@@ -327,6 +327,37 @@ assert.ok((jsSrc.match(/\{ k: "to_sort", label: "Дослать"/g) || []).lengt
   "«Дослать» должна быть и в «По артикулам», и в «По размерам»");
 assert.ok(jsSrc.includes('to_sort: _footSum(rows, "to_sort")'),
   "в итогах Потребности нет суммы «Дослать»");
+
+// Итоги Потребности: суммы по аддитивным колонкам + среднее по неаддитивным.
+// В размерном виде склад/маржа/рентабельность заданы по артикулу целиком и
+// повторяются в каждом размере — берём их по уникальным артикулам (иначе 2×/N×).
+const footRows = [
+  { article: "A", our_stock: 10, our_cost: 100, margin_per_one: 2, margin_pct: 10,
+    wb_sells: 3, wb_net: 3, wb_ret: 0, wb_qty: 5, sells: 3, returns_qty: 0,
+    income: 900, oz_qty: 1 },
+  { article: "A", our_stock: 10, our_cost: 100, margin_per_one: 2, margin_pct: 10,
+    wb_sells: 0, wb_net: 0, wb_ret: 1, wb_qty: 2, sells: 3, returns_qty: 0,
+    income: 900, oz_qty: 1 },
+  { article: "B", our_stock: 7, our_cost: 200, margin_per_one: 4, margin_pct: 20,
+    wb_sells: 1, wb_net: 1, wb_ret: 0, wb_qty: 4, sells: 1, returns_qty: 2,
+    income: 300, oz_qty: 3 },
+];
+const fa = sandbox.replenishFooters(footRows);
+assert.strictEqual(fa.sells, 7, "итог «Продано, шт» — сумма");
+assert.strictEqual(fa.returns_qty, 2, "итог «Возвраты, шт» — сумма");
+assert.strictEqual(fa.income, 2100, "итог «К перечислению» — сумма");
+assert.strictEqual(fa.oz_qty, 5, "итог «Ozon склад» — сумма");
+assert.strictEqual(fa.wb_qty, 11, "итог «WB склад» — сумма");
+assert.strictEqual(fa.our_cost.avg, 400 / 3, "итог «Себест-ть» — среднее (≈)");
+
+const fsz = sandbox.replenishSizeFooters(footRows);
+assert.strictEqual(fsz.our_stock, 17, "склад по уникальным артикулам (A=10, B=7)");
+assert.strictEqual(fsz.margin_per_one.avg, 3, "маржа/шт по уникальным артикулам ((2+4)/2)");
+assert.strictEqual(fsz.margin_pct.avg, 15, "рент-сть по уникальным артикулам ((10+20)/2)");
+assert.strictEqual(fsz.wb_net, 4, "итог «Продажи WB нетто» — сумма");
+assert.strictEqual(fsz.wb_ret, 1, "итог «Возвраты WB» — сумма");
+assert.strictEqual(fsz.wb_qty, 11, "итог «WB склад» (размеры) — сумма");
+assert.ok(!("margin" in fsz), "в размерном виде нет мёртвого итога «Маржа руб»");
 const toSortLabels = ["_REPLENISH_EXPORT", "_REPLENISH_EXPORT_SIZES"].map(
   (n) => (colsJson.dicts[n] || []).find((c) => c.k === "to_sort")?.label);
 assert.deepStrictEqual(toSortLabels, ["Дослать", "Дослать"],

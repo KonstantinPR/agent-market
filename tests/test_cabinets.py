@@ -105,6 +105,35 @@ def test_search_path_routes_queries_into_cab_schema(db_engine):
         conn.execute(text("drop table public.refresh_runs_like"))
 
 
+def test_wb_nmid_to_article_reads_cabinet_schema(db_engine):
+    """Карта nmID->артикул читается из схемы связки (nm_articles per-cabinet),
+    а не из public: иначе остатки/воронка WB падают на nmID вместо vendorCode и
+    «наши» запасы на WB кажутся нулевыми. Кэш — по схеме (не протекает между)."""
+    _drop_cab_schemas()
+    with SessionLocal() as db:
+        user = cabinet_service.seed_user(db)
+        c1 = _mk_cab(db, code="c1", schema=CAB_OO, marketplace="wb", user=user)
+        c2 = _mk_cab(db, code="c2", schema=CAB_IP, marketplace="wb", user=user)
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c1, c2])
+    with SessionLocal() as db:
+        cabinet_service.apply_search_path(db, CAB_OO)
+        db.add(models.NmArticle(nm_id="111", article="ART-OO"))
+        db.commit()
+    with SessionLocal() as db:
+        cabinet_service.apply_search_path(db, CAB_IP)
+        db.add(models.NmArticle(nm_id="222", article="ART-IP"))
+        db.commit()
+
+    refresh_service._wb_nm_cache_reset()
+    with SessionLocal() as db:
+        cabinet_service.apply_search_path(db, CAB_OO)
+        assert refresh_service._wb_nmid_to_article(db) == {"111": "ART-OO"}
+    with SessionLocal() as db:
+        cabinet_service.apply_search_path(db, CAB_IP)
+        assert refresh_service._wb_nmid_to_article(db) == {"222": "ART-IP"}
+    refresh_service._wb_nm_cache_reset()
+
+
 def test_ensure_cabinet_schemas_creates_schemas_and_tables(db_engine):
     _drop_cab_schemas()
     with SessionLocal() as db:

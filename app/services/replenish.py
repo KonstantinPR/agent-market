@@ -122,6 +122,11 @@ def _mp_stocks(db: Session, code: str, date_to):
     Возвращает (по_артикулам, по_размерам):
     {UPPER(article): [quantity_full, quantity, in_way]} и
     {(UPPER(article), UPPER(size)): [quantity_full, quantity, in_way, barcode]}.
+
+    WB-отчёты об остатках приходят с nmID в колонке article (а не vendorCode),
+    поэтому для WB ключом служит nmID; резолвим его в артикул продавца через
+    per-cabinet таблицу nm_articles (карточки товара). Без карты остатки не
+    стыкуются с планом (артикул ≠ nmID) и «наши» запасы кажутся нулевыми.
     """
     mp = _mp_id(db, code)
     if mp is None:
@@ -133,6 +138,14 @@ def _mp_stocks(db: Session, code: str, date_to):
     ).scalar_one_or_none()
     if snap is None:
         return {}, {}
+    nm_map: dict = {}
+    if code == "wb":
+        nm_map = {
+            str(nm).strip().upper(): (art or "").strip().upper()
+            for nm, art in db.execute(
+                select(models.NmArticle.nm_id, models.NmArticle.article)).all()
+            if nm and art and str(art).strip()
+        }
     by_art: dict = {}
     by_size: dict = {}
     rows = db.execute(
@@ -144,6 +157,7 @@ def _mp_stocks(db: Session, code: str, date_to):
         a = (art or "").strip().upper()
         if not a:
             continue
+        a = nm_map.get(a, a)
         cur = by_art.get(a, [0, 0, 0])
         cur[0] += int(qf or 0)
         cur[1] += int(qty or 0)

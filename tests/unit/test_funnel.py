@@ -6,7 +6,7 @@ from app.services import refresh as r
 
 @pytest.fixture(autouse=True)
 def _no_nm_map(monkeypatch):
-    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda: {"1001": "ART-1"})
+    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda *a, **k: {"1001": "ART-1"})
 
 
 def _real_df():
@@ -99,7 +99,7 @@ def _real_df():
 
 
 def test_maps_real_namespaced_columns(monkeypatch):
-    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda: {})
+    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda *a, **k: {})
     out = r._funnel_to_db(_real_df(), "2026-08-13", "2026-09-12")
     assert out["article"].tolist() == ["SK012", "SK015"]
     assert out["nm_id"].tolist() == ["1001", "1002"]
@@ -114,7 +114,7 @@ def test_maps_real_namespaced_columns(monkeypatch):
 
 
 def test_maps_extended_api_fields(monkeypatch):
-    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda: {})
+    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda *a, **k: {})
     out = r._funnel_to_db(_real_df(), "2026-08-13", "2026-09-12")
     assert out["subject_name"].tolist() == ["Куртки", "Обувь"]
     assert out["brand_name"].tolist() == ["Бренд A", "Бренд B"]
@@ -149,7 +149,7 @@ def test_raw_json_preserves_original_object():
 
 
 def test_legacy_df_without_extras_defaults_to_empty(monkeypatch):
-    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda: {})
+    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda *a, **k: {})
     df = pd.DataFrame([
         {"product.nmId": "2001", "product.vendorCode": "X-1",
          "statistic.selected.openCount": 5, "statistic.selected.cartCount": 1,
@@ -194,7 +194,7 @@ def test_empty_df_passthrough():
 
 
 def test_missing_buyout_columns_defaults_to_zero(monkeypatch):
-    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda: {})
+    monkeypatch.setattr(r, "_wb_nmid_to_article", lambda *a, **k: {})
     df = pd.DataFrame([
         {"product.nmId": "2001", "product.vendorCode": "X-1",
          "statistic.selected.openCount": 5, "statistic.selected.cartCount": 1,

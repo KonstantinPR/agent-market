@@ -149,6 +149,24 @@ def test_replenish_ship_when_plan_zeroes_wb_deficit(db):
     assert row["need_buy"] > 0             # докупаем: 30 дн × 5/30 − 2
     assert row["ship_wb"] > 0              # но не 0 — адрес докупки
 
+def test_replenish_stock_nmid_resolves_to_article(db):
+    """Остатки WB приходят с nmID в колонке article: сопоставляем с планом через
+    карту nm_articles (nmID -> vendorCode). Иначе «наши» остатки на WB кажутся
+    нулевыми (связка oo_joinco), хотя товар лежит на складе WB."""
+    db.add(models.Product(article="WB-9", name="НМИД", net_cost=100.0,
+                          replenishable=True))
+    _card(db, "wb", vendor="WB-9")
+    db.add(models.NmArticle(nm_id="111", article="WB-9"))
+    db.add(_wb_row("w9", "WB-9", TODAY, qty=30, income=27000.0, amount=30000.0))
+    _stock(db, "wb", "111", TODAY, qty=4, qf=5, way=1)   # article = nmID, не vendor
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row = {x["article"]: x for x in r["rows"]}["WB-9"]
+    assert row["wb_avail"] == 6            # qf 5 + way 1 (nmID найден по карте)
+    assert row["wb_qty"] == 4              # quantity
+    assert all(x["article"] != "111" for x in r["rows"])   # nmID не отдельной строкой
+
 def test_replenish_returns_net_demand(db):
     """Возвраты вычтены из sells у обоих МП (нетто); в return_rate — отдельно."""
     db.add(models.Product(article="NET-1", name="Нетто", net_cost=100.0))

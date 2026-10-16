@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "108";
+const UI_VERSION = "109";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2403,6 +2403,24 @@ function _footAvg(rows, k, dp) {
   return o;
 }
 
+// Строки вида «по размерам»: значения, заданные по артикулу целиком (склад,
+// маржа/шт, рентабельность), повторяются в каждом размере — для итогов берём
+// их один раз на уникальный артикул.
+function _uniqByArticle(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    const a = r.article == null ? "" : String(r.article);
+    if (seen.has(a)) continue;
+    seen.add(a); out.push(r);
+  }
+  return out;
+}
+
+function _footSumByArticle(rows, k) { return _footSum(_uniqByArticle(rows), k); }
+
+function _footAvgByArticle(rows, k, dp) { return _footAvg(_uniqByArticle(rows), k, dp); }
+
 // Итоги вида «По артикулам»: сумма — для остатков/дефицитов/отгрузок/докупки,
 // среднее (≈) — для скоростей, дней запаса, долей возвратов и маржи/шт.
 function replenishFooters(rows) {
@@ -2410,12 +2428,16 @@ function replenishFooters(rows) {
   const t = {
     wb_sells: _footSum(rows, "wb_sells"),
     our_stock: _footSum(rows, "our_stock"),
+    our_cost: _footAvg(rows, "our_cost", 2),
     wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
     wb_def: _footSum(rows, "wb_def"), to_sort: _footSum(rows, "to_sort"),
     oz_avail: _footSum(rows, "oz_avail"), oz_in_way: _footSum(rows, "oz_in_way"),
     oz_def: _footSum(rows, "oz_def"),
     ship_wb: _footSum(rows, "ship_wb"), ship_oz: _footSum(rows, "ship_oz"),
     need_buy: _footSum(rows, "need_buy"), margin: _footSum(rows, "margin"),
+    sells: _footSum(rows, "sells"), returns_qty: _footSum(rows, "returns_qty"),
+    income: _footSum(rows, "income"),
+    oz_qty: _footSum(rows, "oz_qty"), wb_qty: _footSum(rows, "wb_qty"),
     demand: _footAvg(rows, "demand", 2),
     demand_wb: _footAvg(rows, "demand_wb", 2), demand_oz: _footAvg(rows, "demand_oz", 2),
     return_rate: _footAvg(rows, "return_rate", "pct"),
@@ -2427,18 +2449,21 @@ function replenishFooters(rows) {
   return t;
 }
 
-// Итоги вида «По размерам»: те же принципы — сумма/среднее.
+// Итоги вида «По размерам»: те же принципы — сумма/среднее. Склад, маржа/шт и
+// рентабельность заданы по артикулу целиком (повторяются в каждой строке
+// размера), поэтому их берём по уникальным артикулам, иначе двойной счёт.
 function replenishSizeFooters(rows) {
   if (!rows || !rows.length) return null;
   const t = {
     wb_sells: _footSum(rows, "wb_sells"),
+    wb_net: _footSum(rows, "wb_net"), wb_ret: _footSum(rows, "wb_ret"),
     wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
     wb_def: _footSum(rows, "wb_def"), to_sort: _footSum(rows, "to_sort"),
-    ship_wb: _footSum(rows, "ship_wb"), our_stock: _footSum(rows, "our_stock"),
-    margin: _footSum(rows, "margin"),
+    ship_wb: _footSum(rows, "ship_wb"), wb_qty: _footSum(rows, "wb_qty"),
+    our_stock: _footSumByArticle(rows, "our_stock"),
     wb_vel: _footAvg(rows, "wb_vel", 2), wb_doc: _footAvg(rows, "wb_doc", 1),
-    margin_per_one: _footAvg(rows, "margin_per_one", 2),
-    margin_pct: _footAvg(rows, "margin_pct", "pct"),
+    margin_per_one: _footAvgByArticle(rows, "margin_per_one", 2),
+    margin_pct: _footAvgByArticle(rows, "margin_pct", "pct"),
   };
   Object.keys(t).forEach((k) => { if (t[k] == null) delete t[k]; });
   return t;
@@ -5520,9 +5545,9 @@ function fillMainCabinet() {
     if (!links.length) continue;
     h += '<optgroup label="' + escapeHtml(comp.name || "Без фирмы") + '">';
     for (const lk of links) {
-      const mp = MP_SHORT[lk.marketplace] || MP_LABELS[lk.marketplace] || lk.marketplace || "";
+      // owner уже включает маркетплейс («Фирма · WB») — не дублируем его.
       h += '<option value="' + lk.id + '">' +
-        escapeHtml(lk.owner || lk.name || "") + (mp ? " · " + escapeHtml(mp) : "") + "</option>";
+        escapeHtml(lk.owner || lk.name || "") + "</option>";
     }
     h += "</optgroup>";
   }
