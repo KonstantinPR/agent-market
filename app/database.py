@@ -186,7 +186,8 @@ def get_db(request: Request = None):
     Вне HTTP (скрипты/тесты) активного кабинета нет — работа с общим public.
     """
     from app.services.cabinets import (
-        CABINET_COOKIE, apply_search_path, resolve_active, set_active,
+        CABINET_COOKIE, apply_search_path, pin_search_path, resolve_active,
+        set_active,
     )
 
     db = SessionLocal()
@@ -196,6 +197,12 @@ def get_db(request: Request = None):
             info = resolve_active(db, request.cookies.get(CABINET_COOKIE))
             if info is not None and info.schema:
                 apply_search_path(db, info.schema)
+                # commit внутри эндпоинта возвращает соединение в пул и теряет
+                # SET (эндпоинт в другом треде threadpool) — следующий запрос мог
+                # уйти в чужую/дефолтную схему и упасть на «X не существует»
+                # (напр. /promo/refresh → wb_promo_nomenclatures). Pin повторяет
+                # SET при начале каждой новой транзакции сессии.
+                pin_search_path(db, info.schema)
                 search_path_applied = True
             # Contextvar виден только в треде get_db; эндпоинт (другой тред
             # threadpool) его не увидит — дублируем инфо на сессии.

@@ -176,6 +176,48 @@ def test_upload_error_detail_none_for_non_json():
     assert _upload_error_detail(Resp()) is None
 
 
+def test_upload_error_detail_reads_error_text():
+    """Текущая схема WB: {"error": true, "errorText": "…"} (upload/task 400)."""
+
+    class Resp:
+        text = '{"data":null,"error":true,"errorText":"Specified prices and discounts are already set"}'
+
+        def json(self):
+            return {"data": None, "error": True,
+                    "errorText": "Specified prices and discounts are already set"}
+
+    assert _upload_error_detail(Resp()) == "Specified prices and discounts are already set"
+
+
+def test_upload_error_detail_raw_text_fallback():
+    """Незнакомое тело (не JSON) → возвращаем сырой текст, а не теряем причину."""
+
+    class Resp:
+        text = "  <html>400 Bad Request</html>  "
+
+        def json(self):
+            raise ValueError("нет json")
+
+    assert _upload_error_detail(Resp()) == "<html>400 Bad Request</html>"
+
+
+def test_update_prices_surfaces_error_text(monkeypatch):
+    """upload/task 400 с errorText → читаемая WbApiError (а не «400 Client Error»)."""
+    provider = WbProvider()
+    resp = requests.Response()
+    resp.status_code = 400
+    resp.json = lambda: {"data": None, "error": True,
+                         "errorText": "Specified prices and discounts are already set"}
+
+    def boom(url, payload, num_retries=6, finance=False, key=None):
+        raise requests.HTTPError("400 Client Error", response=resp)
+
+    monkeypatch.setattr(provider, "_session_post", boom)
+    with pytest.raises(WbApiError) as exc:
+        provider.update_prices([{"nmID": 1863439715, "price": 1900, "discount": 3}])
+    assert "already set" in str(exc.value)
+
+
 def test_update_prices_raises_readable_wbapierror(monkeypatch):
     provider = WbProvider()
     resp = requests.Response()

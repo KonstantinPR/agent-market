@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.providers import factory as provider_factory
 from app.services import margin as margin_service
-from app.services.cabinets import active_credentials, resolve_main, run_per_link
+from app.services.cabinets import active_credentials, db_active_info, resolve_main, run_per_link
 from app.services.pricing import (
     PRICING_DEFAULTS,
     _canon_article,
@@ -98,9 +98,16 @@ def _oz_id(db: Session) -> int:
     ).scalar_one()
 
 
-def _oz_provider():
-    """Провайдер Ozon с creds активного кабинета (иначе из .env)."""
+def _oz_provider(db=None):
+    """Провайдер Ozon с creds активного кабинета (иначе из .env).
+
+    См. `pricing._cab_provider`: при пустом contextvar (эндпоинт в другом треде
+    threadpool, чем get_db) читаем связку из сессии, чтобы не уйти на .env.
+    """
     creds = active_credentials("ozon")
+    if not creds and db is not None:
+        info = db_active_info(db)
+        creds = info.creds_for("ozon") if info else {}
     return provider_factory.get_oz_provider(credentials=creds or None)
 
 
@@ -159,7 +166,7 @@ def resolve_ozon_prices(
         return df, updated_at, "db"
     if not allow_network:
         return None, None, "db"
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db)
     return prov.get_prices(), None, "ozon_api"
 
 
@@ -884,7 +891,7 @@ def apply_recommendations_ozon(
     now = datetime.now()
     applied_past = _recent_applied(db, int(s["cooldown_days"]))
     items = _pushed_items_ozon(rows, s, applied_past)
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db)
 
     if not items:
         _record_ozon(db, rows, applied_at=now)
@@ -917,7 +924,7 @@ def apply_rows_ozon(
     now = datetime.now()
     applied_past = _recent_applied(db, int(s["cooldown_days"]))
     items = _pushed_items_ozon(rows, s, applied_past)
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db)
     if not items:
         _record_ozon(db, rows, applied_at=now)
         return {"applied": [], "rows": rows, "pushed": 0,
@@ -972,7 +979,7 @@ def apply_min_prices_ozon(
         return {"applied": [], "pushed": 0, "skipped": no_offer,
                 "note": "Нет товаров с ценой ниже безубыточного минимума."}
 
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db)
     items = []
     for r in targets:
         pushed = _expand_offers(r)

@@ -20,12 +20,20 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.providers import factory as provider_factory
-from app.services.cabinets import active_credentials, run_per_link
+from app.services.cabinets import active_credentials, db_active_info, run_per_link
 
 
-def _cab_provider():
-    """Провайдер WB с creds активного кабинета (иначе из .env)."""
+def _cab_provider(db=None):
+    """Провайдер WB с creds активного кабинета (иначе из .env).
+
+    Contextvar активной связки виден не всегда (эндпоинт в другом треде
+    threadpool, чем get_db) — тогда читаем связку из сессии, чтобы не уйти
+    молча на .env-ключ другого продавца.
+    """
     creds = active_credentials("wb")
+    if not creds and db is not None:
+        info = db_active_info(db)
+        creds = info.creds_for("wb") if info else {}
     return provider_factory.get_wb_provider(credentials=creds or None)
 
 PRICING_DEFAULTS = {
@@ -272,7 +280,7 @@ def resolve_prices(
         return df, updated_at, "db"
     if not allow_network:
         return None, None, "db"
-    prov = provider or _cab_provider()
+    prov = provider or _cab_provider(db)
     return prov.get_prices(), None, "wb_api"
 
 
@@ -2230,7 +2238,7 @@ def apply_recommendations(
 
     items = _pushed_items(rows, s, applied_past)
     now = datetime.now()
-    prov = provider or _cab_provider()
+    prov = provider or _cab_provider(db)
 
     if not items:
         _record(db, rows, applied_at=now)
@@ -2288,7 +2296,7 @@ def apply_rows(
         )
     ).all())
     items = _pushed_items(rows, s, applied_past)
-    prov = provider or _cab_provider()
+    prov = provider or _cab_provider(db)
 
     if not items:
         _record(db, rows, applied_at=now)
@@ -2360,7 +2368,7 @@ def apply_min_prices(
         return {"applied": [], "pushed": 0, "skipped": no_nm,
                 "note": "Нет товаров с ценой ниже безубыточного минимума."}
 
-    prov = provider or _cab_provider()
+    prov = provider or _cab_provider(db)
     items = [{"nmID": r["nm_id"], "price": r["_min_price"], "discount": 0}
              for r in targets]
     get_min = getattr(prov, "get_min_prices", None)

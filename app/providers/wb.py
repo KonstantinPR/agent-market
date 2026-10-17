@@ -20,24 +20,46 @@ from app.providers.errors import (
 from app.services import progress
 
 
+def _short_body_text(resp) -> Optional[str]:
+    """Неразобранное тело ответа как есть (обрезанное) — для диагностики."""
+    text = (getattr(resp, "text", "") or "").strip()
+    return text[:500] or None
+
+
 def _upload_error_detail(resp) -> Optional[str]:
     """Читает ошибку WB в ответе upload/task (400) → короткое русское описание.
 
-    WB присылает в теле {"title": ..., "errors": [...]} или {"data":
-    [{"nmID": ..., "errors": [...]}]}. Возвращает None, если тело не читается.
+    WB отдаёт ошибку валидации как {"data": null, "error": true,
+    "errorText": "Specified prices and discounts are already set"} — раньше
+    `errorText` не читался, и наружу уходил невнятный «400 Client Error».
+    Также поддерживаем {"title": ..., "errors": [...]} и
+    {"data": [{"nmID": ..., "errors": [...]}]}. Если структура незнакома —
+    возвращаем сырое тело (обрезанное), чтобы причина не терялась.
     """
     try:
         body = resp.json()
     except (ValueError, TypeError):
-        return None
+        return _short_body_text(resp)
     if not isinstance(body, dict):
-        return None
+        return _short_body_text(resp)
     parts: list = []
     title = body.get("title")
     if title:
         parts.append(str(title))
+    # Текущая схема ошибок WB: error: true, errorText: "…".
+    for key in ("errorText", "message"):
+        val = body.get(key)
+        if val:
+            parts.append(str(val))
     if isinstance(body.get("errors"), list):
         parts.extend(str(e) for e in body["errors"] if e)
+    add = body.get("additionalErrors")
+    if isinstance(add, str) and add:
+        parts.append(add)
+    elif isinstance(add, list):
+        parts.extend(str(e) for e in add if e)
+    elif isinstance(add, dict):
+        parts.extend(str(v) for v in add.values() if v)
     data = body.get("data")
     if isinstance(data, list):
         for item in data:
@@ -52,7 +74,7 @@ def _upload_error_detail(resp) -> Optional[str]:
         if isinstance(errs, list):
             parts.extend(str(e) for e in errs if e)
     if not parts:
-        return None
+        return _short_body_text(resp)
     seen, out = set(), []
     for p in parts:
         if p not in seen:

@@ -48,15 +48,31 @@ from app.services.window import parse_window
 from app.services.columns import export_cols
 
 
-def _wb_creds():
-    """WB-ключи активного кабинета для провайдера (None — фолбэк на .env)."""
+def _wb_creds(db=None):
+    """WB-ключи активного кабинета для провайдера (None — фолбэк на .env).
+
+    Contextvar активной связки виден не всегда: эндпоинт может выполняться в
+    другом треде threadpool, чем get_db, и тогда `active_credentials` пуст.
+    Раньше это молча уводило провайдер на .env-ключ (другой продавец) — при
+    смене связки задачи уходили не тому продавцу. При пустом contextvar берём
+    активную связку из сессии.
+    """
     creds = active_credentials("wb")
+    if not creds and db is not None:
+        info = cabinet_service.db_active_info(db)
+        creds = info.creds_for("wb") if info else {}
     return creds or None
 
 
-def _oz_creds():
-    """Ozon-ключи активного кабинета для провайдера (None — фолбэк на .env)."""
+def _oz_creds(db=None):
+    """Ozon-ключи активного кабинета для провайдера (None — фолбэк на .env).
+
+    См. `_wb_creds`: при пустом contextvar читаем активную связку из сессии.
+    """
     creds = active_credentials("ozon")
+    if not creds and db is not None:
+        info = cabinet_service.db_active_info(db)
+        creds = info.creds_for("ozon") if info else {}
     return creds or None
 
 

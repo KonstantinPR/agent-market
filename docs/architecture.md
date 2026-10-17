@@ -36,14 +36,14 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 |---|---|---|
 | `app/static/app.js` | 8450 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/static/columns.json` | 6042 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/api/ (19 файлов)` | 5337 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/api/ (19 файлов)` | 5353 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/services/sync.py` | 2661 | запись выгрузок WB/Ozon в БД |
-| `app/services/pricing.py` | 2410 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
+| `app/services/pricing.py` | 2418 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/refresh.py` | 1473 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `tests/api/test_endpoints.py` | 1394 | HTTP-эндпоинты через TestClient |
 | `app/services/replenish.py` | 1307 | подсортировка WB, план дефицита, скорость продаж |
 | `app/static/style.css` | 1278 | стили (панели «Вид таблицы», тулбары, таблицы) |
-| `app/providers/wb.py` | 1150 | HTTP к Wildberries |
+| `app/providers/wb.py` | 1172 | HTTP к Wildberries |
 | `app/providers/ozon.py` | 1039 | HTTP к Ozon |
 | `app/static/index.html` | 1034 | разметка: навигация `data-tab` + секции `tab-*` |
 | `tests/unit/test_margin.py` | 927 | юнит-тесты маржинальности |
@@ -56,8 +56,8 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 255 | индекс фото на диске, выбор папки, fallback по префиксу |
+| `app/database.py` | 218 | engine/session PostgreSQL |
 | `scripts/load_sample.py` | 216 | демо-данные |
-| `app/database.py` | 211 | engine/session PostgreSQL |
 | `app/services/base_price.py` | 178 | рекомендуемая (базовая) цена |
 | `app/services/thumbs.py` | 144 | миниатюры PDF в `data/thumbs/` |
 | `app/services/excel_import.py` | 137 | разбор отредактированного Excel «Потребность» |

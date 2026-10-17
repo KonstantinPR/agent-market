@@ -113,7 +113,7 @@ def products_prices_apply(payload: dict = Body(default={}), db: Session = Depend
     if not items:
         return {"ok": True, "pushed": 0, "skipped": len(skipped),
                 "note": "Ни один из видимых товаров не заведён в WB (нет nm_id)."}
-    prov = provider_factory.get_wb_provider(credentials=_wb_creds())
+    prov = provider_factory.get_wb_provider(credentials=_wb_creds(db))
     if mode == "min":
         wb_min_prices = {}
         try:

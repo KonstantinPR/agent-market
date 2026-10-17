@@ -37,7 +37,7 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
     применяет ровно их (то, что видит пользователь с учётом фильтров поиска и
     скрытых колонок). Иначе пересчитывает рекомендации и применяет всё.
     """
-    prov = provider_factory.get_wb_provider(credentials=_wb_creds())
+    prov = provider_factory.get_wb_provider(credentials=_wb_creds(db))
     ui_rows = payload.get("ui_rows")
     try:
         if ui_rows:
@@ -67,7 +67,7 @@ def pricing_apply_min(payload: dict = Body(default={}), db: Session = Depends(ge
     Тело — настройки автопилота (как /pricing/apply); опционально ui_rows (видимые
     строки таблицы) — тогда отправляются только они, иначе сервер пересчитает всё.
     """
-    prov = provider_factory.get_wb_provider(credentials=_wb_creds())
+    prov = provider_factory.get_wb_provider(credentials=_wb_creds(db))
     ui_rows = payload.get("ui_rows")
     try:
         res = pricing_service.apply_min_prices(

@@ -614,7 +614,7 @@ def pull_wb_promotions(db, provider: Optional[WbProvider] = None,
     Для активных regular-акций дополнительно тянется номенклатура
     (planDiscount/planPrice) — источник потолка скидки автопилота (R19).
     """
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     from_ = date.today() - timedelta(days=30)
     to_ = date.today() + timedelta(days=90)
     df = prov.get_promotions(from_, to_, all_promo=False)

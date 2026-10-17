@@ -385,6 +385,34 @@ def test_replenish_cabinet_param_reads_selected_schema(db_engine, api_client, db
         Base.metadata.create_all(conn, checkfirst=True)
 
 
+def test_wb_oz_creds_fall_back_to_session_active_cabinet(db):
+    """_wb_creds/_oz_creds берут ключи активной связки из сессии, если contextvar пуст.
+
+    Регресс: get_db и эндпоинт выполняются в разных тредах threadpool FastAPI, и
+    contextvar активной связки туда не попадает. Раньше `_wb_creds()` (только
+    contextvar) возвращал пусто → провайдер молча уходил на .env-ключ другого
+    продавца, и «Применить в WB» падал с 400 «All item Nos. are specified
+    incorrectly» (nmID чужой связки).
+    """
+    from app.api._common import _oz_creds, _wb_creds
+    from app.services.cabinets import reset_active
+
+    reset_active(None)  # contextvar пуст, как в треде эндпоинта
+    creds = secrets.encrypt({
+        "wb": {"standard": "cab-wb-token"},
+        "ozon": {"client_id": "cid", "api_key": "oz-key"},
+    })
+    c = _mk_cab(db, code="creds1", marketplace="wb", creds=creds)
+    info = cabinet_service.resolve_active(db, str(c.id))
+    db._active_info = info  # как кладёт get_db
+
+    assert _wb_creds(db) == {"standard": "cab-wb-token"}
+    assert _oz_creds(db) == {"client_id": "cid", "api_key": "oz-key"}
+    # без сессии (contextvar пуст) — None: провайдер ушёл бы на .env
+    assert _wb_creds() is None
+    assert _oz_creds() is None
+
+
 def test_api_pricing_settings_roundtrip_and_copy(api_client, db):
     _drop_cab_schemas()
     user = cabinet_service.seed_user(db)
@@ -514,3 +542,45 @@ def test_refresh_worker_targets_cabinet_schema(db_engine, patch_factory):
     with engine.begin() as conn:
         conn.execute(text(f'drop schema if exists "{CAB_OO}" cascade'))
         conn.execute(text("truncate public.refresh_runs"))
+
+
+# ---------------------------------------------------------------------------
+# Эндпоинт /promo/refresh пиннит search_path (регресс UndefinedTable)
+# ---------------------------------------------------------------------------
+def test_promo_refresh_endpoint_pins_cabinet_schema(db_engine, patch_factory, monkeypatch):
+    """/promo/refresh коммитит внутри pull_wb_promotions и затем читает
+    wb_promo_nomenclatures. Без pin search_path терялся → 500 UndefinedTable.
+    Здесь идёт реальный get_db (не override), поэтому проверяем и то, что связка
+    пиннится, и то, что эндпоинт отвечает 200."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    _drop_cab_schemas()
+    with SessionLocal() as db:
+        user = cabinet_service.seed_user(db)
+        c = _mk_cab(db, code="prm", schema=CAB_OO, marketplace="wb", user=user,
+                    creds=secrets.encrypt({"wb": {"standard": "x", "finance": "y"}}))
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c])
+
+    pinned = []
+    real_pin = cabinet_service.pin_search_path
+
+    def _spy(db, schema):
+        pinned.append(schema)
+        return real_pin(db, schema)
+
+    monkeypatch.setattr(cabinet_service, "pin_search_path", _spy)
+
+    with TestClient(app) as client:
+        r = client.post("/api/promo/refresh", cookies={"agent_cabinet": str(c.id)})
+    assert r.status_code == 200, r.text
+    assert r.json()["db_rows"] >= 1
+    assert CAB_OO in pinned
+
+    with engine.begin() as conn:
+        conn.execute(text(f'drop schema if exists "{CAB_OO}" cascade'))
+        Base.metadata.create_all(conn, checkfirst=True)
+        conn.execute(text(
+            "truncate refresh_runs, wb_promotions, wb_promo_nomenclatures "
+            "restart identity cascade"))

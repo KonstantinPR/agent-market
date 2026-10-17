@@ -31,7 +31,7 @@ def pricing_ozon_apply(payload: dict = Body(default={}), db: Session = Depends(g
     Если передан list `ui_rows` (видимые строки таблицы) — применяет ровно их,
     иначе пересчитывает рекомендации и применяет всё.
     """
-    prov = provider_factory.get_oz_provider(credentials=_oz_creds())
+    prov = provider_factory.get_oz_provider(credentials=_oz_creds(db))
     ui_rows = payload.get("ui_rows")
     try:
         if ui_rows:
@@ -52,7 +52,7 @@ def pricing_ozon_apply(payload: dict = Body(default={}), db: Session = Depends(g
 @router.post("/pricing-ozon/apply-min")
 def pricing_ozon_apply_min(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """Минимальные (break-even) цены Ozon: где витрина ниже пола — поднимаем до пола."""
-    prov = provider_factory.get_oz_provider(credentials=_oz_creds())
+    prov = provider_factory.get_oz_provider(credentials=_oz_creds(db))
     ui_rows = payload.get("ui_rows")
     try:
         return pricing_ozon_service.apply_min_prices_ozon(
