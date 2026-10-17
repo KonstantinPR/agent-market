@@ -34,7 +34,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 8400 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/app.js` | 8411 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/static/columns.json` | 5971 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/api/ (19 файлов)` | 5321 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/services/sync.py` | 2661 | запись выгрузок WB/Ozon в БД |
@@ -49,7 +49,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `tests/unit/test_margin.py` | 927 | юнит-тесты маржинальности |
 | `app/services/margin.py` | 815 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/models.py` | 791 | SQLAlchemy-модели (схема БД) |
-| `tests/js/test_js_helpers.py` | 741 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 749 | проверка app.js через Node `vm` |
 | `app/services/pdf_demand.py` | 623 | PDF «Потребность в товаре» |
 | `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/dashboard.py` | 512 | сводные панели дашборда |

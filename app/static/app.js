@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "112";
+const UI_VERSION = "113";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -5672,6 +5672,14 @@ async function loadCabinets() {
   } catch (err) {
     return;
   }
+  // Автопилот цен идёт по маркетплейсу активной связки: связка
+  // (фирма × маркетплейс) закреплена за одним маркетплейсом, поэтому у
+  // Ozon-связки автоматически выбрана кнопка Ozon, у WB — WB.
+  const activeLink = cabState.current || cabLinkActive();
+  const cabMp = activeLink && activeLink.marketplace;
+  if (cabMp === "ozon") setPricingMp("oz");
+  else if (cabMp === "wb") setPricingMp("wb");
+
   const label = $("#cabBtnLabel");
   if (label) {
     // current может не прийти (нет активной связки) — берём из списка активную.
@@ -5691,6 +5699,7 @@ async function loadCabinets() {
   fillMainCabinet();
   fillReplenishCabinet();
   updateMpNav();
+  syncPricingMpUi();
   updateCabPricingControls();
   if (cabSyncPricingOn()) await ensurePricingSettings();
 }
@@ -6773,6 +6782,8 @@ registerColView("pricing", {
 });
 
 // Текущий маркетплейс вкладки «Автопилот цен»: "wb" (по умолчанию) или "oz".
+// Значение выставляет loadCabinets() по маркетплейсу активной связки; кнопки
+// WB/Ozon могут переопределить его вручную.
 function pricingMpCurrent() {
   return localStorage.getItem("pricing-mp") === "oz" ? "oz" : "wb";
 }

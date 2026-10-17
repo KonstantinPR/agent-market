@@ -318,6 +318,14 @@ assert.strictEqual(pricingAgeText(72), "3 дн", "сутки");
 assert.ok(htmlSrc.includes('id="pricingPricesAge"'), "в index.html есть плашка актуальности цен");
 assert.ok(htmlSrc.includes('id="pricingPriceRefresh"'), "в index.html есть кнопка обновления цен");
 assert.ok(jsSrc.includes("/api/wb/prices"), "кнопка зовёт существующий эндпоинт цен");
+// Автопилот цен следует маркетплейсу активной связки: у Ozon-связки
+// автоматически выбрана кнопка Ozon (иначе по умолчанию открывался WB).
+const cabFn = jsSrc.slice(jsSrc.indexOf("async function loadCabinets"),
+                          jsSrc.indexOf("function fillReplenishCabinet"));
+assert.ok(cabFn.includes('cabMp === "ozon"') && cabFn.includes('setPricingMp("oz")'),
+  "loadCabinets должен выбирать Ozon по маркетплейсу активной связки");
+assert.ok(cabFn.includes("syncPricingMpUi()"),
+  "loadCabinets должен синхронизировать кнопки маркетплейса автопилота цен");
 
 // Меню PDF «Потребности»: галка прибыльности включена по умолчанию, едет в URL.
 const { pdfParams, savePdfParams } = sandbox;
