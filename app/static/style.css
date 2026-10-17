@@ -451,6 +451,7 @@ table.stck { border-collapse: separate; border-spacing: 0; }
 td.stck-col { position: sticky; left: 0; background: #fff; z-index: 1; }
 th.stck-col { position: sticky; left: 0; background: #fff; z-index: 3; }
 table.stck tr.totals-row th.stck-col { background: #f0f4f8; }
+table.stck tr.filter-row th.stck-col { background: #fafbfc; }
 .colview-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; white-space: nowrap; }
 .colview-row > .chk:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .colview-row .pin { margin-left: auto; font-size: 12px; }
@@ -556,6 +557,26 @@ th.sortable:hover { background: #f6f8fa; }
   border-bottom: 1px solid #cfd6dd;
   font-variant-numeric: tabular-nums;
 }
+/* Полоса фильтров по колонкам — между шапкой и «Итого» (sticky top задаёт JS). */
+.table-wrap thead tr.filter-row th {
+  background: #fafbfc;
+  padding: 3px 6px;
+  box-shadow: inset 0 -1px 0 #e5e5e5;
+}
+.filter-cell input.filter-inp {
+  width: 100%;
+  min-width: 64px;
+  box-sizing: border-box;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #111;
+  background: #fff;
+}
+.filter-cell input.filter-inp::placeholder { color: #aab; }
+.filter-empty td { text-align: center; color: #888; padding: 16px; font-size: 13px; }
 td.num, th.num { text-align: right; }
 .pos { color: #1a7f37; font-weight: 600; }
 .neg { color: #cf222e; font-weight: 600; }
@@ -1059,30 +1080,6 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   font-family: inherit;
 }
 
-/* ---------- Автопилот: фильтр по колонкам ---------- */
-.pfilter-bar {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  margin-bottom: 12px;
-  padding: 8px 10px;
-  border: 1px solid #e3e3e3;
-  border-radius: 5px;
-  background: #fafbfc;
-}
-.pfilter { display: inline-flex; flex-direction: column; gap: 2px; font-size: 11px; color: #666; }
-.pfilter-lbl { white-space: nowrap; }
-.pfilter input {
-  border: 1px solid #ccc;
-  border-radius: 3px;
-  padding: 3px 6px;
-  font-size: 12px;
-  width: 130px;
-  max-width: 170px;
-  background: #fff;
-  color: #111;
-}
 .btn.active { background: #eef4ff; border-color: #0a58ca; color: #0a58ca; }
 
 /* Мелкая дельта цели (→) — третий цвет между красным и зелёным */

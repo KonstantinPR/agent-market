@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "111";
+const UI_VERSION = "112";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -178,8 +178,6 @@ const LS_KEYS = {
   "dash-order": "порядок секций дашборда",
   "replenishPdf": "параметры PDF вкладки «Потребность в товаре»",
   "products_price_settings": "настройки цен в прайсе товаров",
-  "pricing_filters": "колоночные фильтры автопилота (JSON)",
-  "pricing_filters_on": "панель колоночных фильтров автопилота включена",
   "pricing_settings": "настройки автопилота цен (JSON)",
   "pricing_hide_skip": "скрыть «держать»/«пропустить» в автопилоте",
   "pricing_settings_visible": "меню «Настройки» автопилота развёрнуто",
@@ -385,8 +383,50 @@ async function apiPut(path, body) {
   return resp.json();
 }
 
-function table(headers, rows, sort, footers) {
-  if (!rows.length) return '<div class="empty">Нет данных за выбранный период</div>';
+// ── Фильтр по колонкам таблиц: один input под каждой колонкой ────────────────
+// Значение хранится в объекте filters (ключ — k колонки). Числовые колонки —
+// numMatch (диапазон «10..50», «>100», «<5», «=200», точное число), остальные —
+// вхождение подстроки без учёта регистра.
+function filterActive(headers, filters) {
+  if (!filters) return false;
+  for (const h of headers) if (String(filters[h.k] || "").trim()) return true;
+  return false;
+}
+function rowPassesFilters(r, headers, filters) {
+  for (const h of headers) {
+    const raw = String(filters[h.k] || "").trim();
+    if (!raw) continue;
+    if (h.num) {
+      if (!numMatch(r[h.k], raw)) return false;
+    } else if (!String(r[h.k] == null ? "" : r[h.k]).toLowerCase().includes(raw.toLowerCase())) {
+      return false;
+    }
+  }
+  return true;
+}
+// Пересчёт «Итого» по отфильтрованному набору: форма серверного значения задаёт
+// агрегат — число = сумма, {avg:…} = среднее (как в totCell). Если числовых
+// значений нет — оставляем серверное значение; пустой набор строк — пусто.
+function recomputeFooters(headers, footers, rows) {
+  if (!footers) return footers;
+  if (!rows.length) return {};
+  const out = {};
+  for (const c of headers) {
+    const base = footers[c.k];
+    if (base == null) continue;
+    let sum = 0, cnt = 0;
+    for (const r of rows) {
+      const n = Number(r[c.k]);
+      if (r[c.k] != null && r[c.k] !== "" && isFinite(n)) { sum += n; cnt++; }
+    }
+    if (!cnt) { out[c.k] = base; continue; }
+    out[c.k] = (typeof base === "object" && base !== null)
+      ? Object.assign({}, base, { avg: sum / cnt })
+      : sum;
+  }
+  return out;
+}
+function tableHeadHtml(headers, sort, filters, footers) {
   let h = "<thead><tr>";
   for (const c of headers) {
     let arrow = "";
@@ -396,28 +436,56 @@ function table(headers, rows, sort, footers) {
       '"' + tip + (c.tip ? "" : ' title="Сортировать"') + ">" + c.label + arrow + "</th>";
   }
   h += "</tr>";
-  if (footers) {
-    h += '<tr class="totals-row">';
-    for (let i = 0; i < headers.length; i++) {
-      const c = headers[i];
-      const v = footers[c.k];
-      if (i === 0) {
-        h += '<th class="totals"><b>ИТОГО</b></th>';
-      } else if (v == null) {
-        h += "<th class=\"totals\"></th>";
-      } else {
-        h += totCell(c, v);
-      }
+  if (filters) {
+    h += '<tr class="filter-row">';
+    for (const c of headers) {
+      const ph = c.num ? "мин..макс" : "содержит…";
+      const title = c.num
+        ? "Диапазон «10..50», оператор «>100», «<5», «=200» или точное число"
+        : "Текст, который должен содержаться в ячейке";
+      h += '<th class="filter-cell' + (c.num ? " num" : "") + '">' +
+        '<input class="filter-inp" data-k="' + c.k + '" type="text" value="' +
+        escapeHtml(filters[c.k] || "") + '" placeholder="' + ph + '" title="' + title + '"></th>';
     }
     h += "</tr>";
   }
-  h += "</thead><tbody>";
+  if (footers) h += totalsRowHtml(headers, footers);
+  return h + "</thead>";
+}
+function totalsRowHtml(headers, footers) {
+  let h = '<tr class="totals-row">';
+  for (let i = 0; i < headers.length; i++) {
+    const c = headers[i];
+    const v = footers[c.k];
+    if (i === 0) {
+      h += '<th class="totals"><b>ИТОГО</b></th>';
+    } else if (v == null) {
+      h += "<th class=\"totals\"></th>";
+    } else {
+      h += totCell(c, v);
+    }
+  }
+  return h + "</tr>";
+}
+function tbodyRowsHtml(headers, rows) {
+  if (!rows.length) {
+    return '<tr class="filter-empty"><td colspan="' + headers.length +
+      '">Нет строк по фильтру</td></tr>';
+  }
+  let h = "";
   for (const r of rows) {
     h += "<tr>";
     for (const c of headers) h += '<td class="' + (c.num ? "num" : "") + '">' + c.render(r[c.k], r) + "</td>";
     h += "</tr>";
   }
-  return "<table>" + h + "</tbody></table>";
+  return h;
+}
+function table(headers, rows, sort, footers, filters, opts) {
+  if (!rows.length && !(opts && opts.keepHead)) {
+    return '<div class="empty">Нет данных за выбранный период</div>';
+  }
+  return "<table>" + tableHeadHtml(headers, sort, filters, footers) +
+    "<tbody>" + tbodyRowsHtml(headers, rows) + "</tbody></table>";
 }
 
 // Ячейка строки «Итого»: v — число (сумма) или {avg: n, dp: decimals} (среднее;
@@ -462,45 +530,28 @@ const cellFmts = {
   tag: (v) => `<span class="tag ${v}">${MP_LABELS[v] || v}</span>`,
 };
 
-function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
-  if (!container._pt) container._pt = { limit: 100, showAll: false, sort: null };
+function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
+  opts = opts || {};
+  if (!container._pt) container._pt = { limit: 100, showAll: false, sort: null, filters: {} };
   const st = container._pt;
+  if (!st.filters) st.filters = {};
   st.headers = headers;
   st.rows = rows;
   st.footers = footers || null;
   st.pagerSel = pagerSel || null;
   st.pinned = pinned || null;
+  st.footersFn = opts.footersFn || null;
+  st.onFilter = opts.onFilter || null;
   if (!pagerSel && container.id) {
     const auto = document.getElementById(container.id + "Pager");
     if (auto) st.pagerSel = "#" + auto.id;
   }
   if (st.sort && !st.headers.some((x) => x.k === st.sort.k)) st.sort = null;
-  if (!container._bound) {
-    container._bound = true;
-    container.addEventListener("click", (ev) => {
-      const th = ev.target.closest("th[data-k]");
-      if (!th || !container._pt) return;
-      const k = th.dataset.k;
-      const s = container._pt.sort;
-      if (s && s.k === k) {
-        s.dir = s.dir === "asc" ? "desc" : "asc";
-      } else {
-        container._pt.sort = { k, dir: "asc" };
-      }
-      paint();
-    });
+  // Сбрасываем фильтры по колонкам, которых больше нет (смена «Вида таблицы»).
+  for (const k of Object.keys(st.filters)) {
+    if (!st.headers.some((x) => x.k === k)) delete st.filters[k];
   }
-  const paint = () => {
-    // Сохраняем позицию прокрутки (горизонт. и вертик.), чтобы после
-    // сортировки/перерисовки таблица не «улетала» в начало.
-    const prevSc = container._pt && container._pt._sc ? container._pt._sc : { left: 0, top: 0 };
-    container.innerHTML = "";
-    const pagerHost = st.pagerSel ? document.querySelector(st.pagerSel) : null;
-    if (pagerHost) pagerHost.innerHTML = "";
-    if (!st.rows || !st.rows.length) {
-      container.innerHTML = '<div class="empty">Нет данных за выбранный период</div>';
-      return;
-    }
+  const computeList = () => {
     let list = st.rows;
     if (st.sort) {
       const hd = st.headers.find((x) => x.k === st.sort.k);
@@ -519,6 +570,48 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
         });
       }
     }
+    if (filterActive(st.headers, st.filters)) {
+      list = list.filter((r) => rowPassesFilters(r, st.headers, st.filters));
+    }
+    return list;
+  };
+  const footersForTable = (list) => {
+    if (st.footersFn) return st.footersFn(list);
+    if (!filterActive(st.headers, st.filters)) return st.footers;
+    return recomputeFooters(st.headers, st.footers, list);
+  };
+  const pagerHostOf = () => (st.pagerSel ? document.querySelector(st.pagerSel) : null);
+  const labelText = (list, visible) => {
+    let s = "Показано " + fmt(visible.length) + " из " + fmt(list.length);
+    if (filterActive(st.headers, st.filters) && list.length !== st.rows.length) {
+      s += " · всего " + fmt(st.rows.length);
+    }
+    return s;
+  };
+  // Sticky-смещения шапки: заголовок на 0, полоса фильтров под ним, «Итого» — ниже.
+  const applyStickyRows = (wrap) => {
+    const hdr = wrap.querySelector("thead tr:not(.totals-row):not(.filter-row)");
+    const fr = wrap.querySelector("thead tr.filter-row");
+    const tr = wrap.querySelector("thead tr.totals-row");
+    const h = hdr ? hdr.offsetHeight : 0;
+    if (fr) fr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
+    if (tr) {
+      const fh = fr ? fr.offsetHeight : 0;
+      tr.querySelectorAll("th").forEach((th) => { th.style.top = (h + fh) + "px"; });
+    }
+  };
+  const paint = () => {
+    // Сохраняем позицию прокрутки (горизонт. и вертик.), чтобы после
+    // сортировки/перерисовки таблица не «улетала» в начало.
+    const prevSc = container._pt && container._pt._sc ? container._pt._sc : { left: 0, top: 0 };
+    container.innerHTML = "";
+    const pagerHost = pagerHostOf();
+    if (pagerHost) pagerHost.innerHTML = "";
+    if (!st.rows || !st.rows.length) {
+      container.innerHTML = '<div class="empty">Нет данных за выбранный период</div>';
+      return;
+    }
+    const list = computeList();
     const bar = document.createElement("div");
     bar.className = "pager";
     const span = document.createElement("span");
@@ -537,12 +630,12 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "btn pager-all";
-      btn.textContent = "Загрузить все (" + fmt(Math.max(0, st.rows.length - st.limit)) + ")";
+      btn.textContent = "Загрузить все (" + fmt(Math.max(0, list.length - st.limit)) + ")";
       bar.appendChild(btn);
       input.addEventListener("change", () => {
         let v = parseInt(input.value, 10);
         if (!v || v < 1) v = 1;
-        st.limit = Math.min(v, st.rows.length);
+        st.limit = Math.min(v, Math.max(1, st.rows.length));
         paint();
       });
       btn.addEventListener("click", () => {
@@ -551,21 +644,16 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
       });
     }
     const visible = st.showAll ? list : list.slice(0, st.limit);
-    span.textContent = "Показано " + fmt(visible.length) + " из " + fmt(st.rows.length);
+    span.textContent = labelText(list, visible);
     (pagerHost || container).appendChild(bar);
     container.classList.add("paged");
     const tscroll = document.createElement("div");
     tscroll.className = "tscroll";
     const wrap = document.createElement("div");
-    wrap.innerHTML = table(st.headers, visible, st.sort, st.footers);
+    wrap.innerHTML = table(st.headers, visible, st.sort, footersForTable(list), st.filters, { keepHead: true });
     tscroll.appendChild(wrap);
     container.appendChild(tscroll);
-    const tr = wrap.querySelector("tr.totals-row");
-    if (tr) {
-      const hdr = wrap.querySelector("thead tr:not(.totals-row)");
-      const h = hdr ? hdr.offsetHeight : 0;
-      tr.querySelectorAll("th").forEach((th) => { th.style.top = h + "px"; });
-    }
+    applyStickyRows(wrap);
     applyStickyCols(wrap, st.headers, st.pinned);
     // Возвращаем позицию прокрутки после пересборки DOM (до mountXBar,
     // чтобы нижний скроллбар синхронизировался с восстановленной позицией).
@@ -574,7 +662,53 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned) {
     if (prevSc.top) container.scrollTop = prevSc.top;
     container._pt._sc = { left: tsc ? tsc.scrollLeft : 0, top: container.scrollTop };
     mountXBar(container, tscroll);
+    if (st.onFilter) st.onFilter(list, st.rows);
   };
+  // Перерисовка только тела и «Итого» при вводе в фильтр — шапку (и фокус в
+  // полосе фильтров) не трогаем, поэтому курсор не слетает.
+  const refreshBody = () => {
+    const wrap = container.querySelector(".tscroll > div");
+    if (!wrap) { paint(); return; }
+    const list = computeList();
+    const visible = st.showAll ? list : list.slice(0, st.limit);
+    const tb = wrap.querySelector("tbody");
+    if (tb) tb.innerHTML = tbodyRowsHtml(st.headers, visible);
+    const f = footersForTable(list);
+    const oldTr = wrap.querySelector("thead tr.totals-row");
+    if (oldTr && f) oldTr.outerHTML = totalsRowHtml(st.headers, f);
+    const host = pagerHostOf() || container;
+    const span = host.querySelector(".pager-lbl");
+    if (span) span.textContent = labelText(list, visible);
+    const btn = host.querySelector(".pager-all");
+    if (btn) btn.textContent = "Загрузить все (" + fmt(Math.max(0, list.length - st.limit)) + ")";
+    applyStickyRows(wrap);
+    applyStickyCols(wrap, st.headers, st.pinned);
+    if (st.onFilter) st.onFilter(list, st.rows);
+  };
+  if (!container._bound) {
+    container._bound = true;
+    container.addEventListener("click", (ev) => {
+      const th = ev.target.closest("th[data-k]");
+      if (!th || !container._pt) return;
+      const k = th.dataset.k;
+      const s = container._pt.sort;
+      if (s && s.k === k) {
+        s.dir = s.dir === "asc" ? "desc" : "asc";
+      } else {
+        container._pt.sort = { k, dir: "asc" };
+      }
+      paint();
+    });
+    container.addEventListener("input", (ev) => {
+      const inp = ev.target.closest ? ev.target.closest("input.filter-inp") : null;
+      if (!inp || !container._pt) return;
+      container._pt.filters[inp.dataset.k] = inp.value;
+      // Небольшая задержка: перерисовка тела + пересчёт sticky-колонок дешевле
+      // не на каждый символ (фокус в input при этом сохраняется — шапку не трогаем).
+      clearTimeout(container._pt._ft);
+      container._pt._ft = setTimeout(refreshBody, 120);
+    });
+  }
   paint();
 }
 
@@ -6667,20 +6801,8 @@ function syncPricingMpUi() {
   if (minBtn) minBtn.title = oz ? "Поднять цены витрины Ozon до безубыточного минимума там, где цена ниже пола" : "Отправить в WB минимальные цены (break-even)";
 }
 
-// ----------------------------------------------------- Фильтр по колонкам таблицы автопилота
-let _pricingColFilters = loadPricingColFilters();
-function loadPricingColFilters() {
-  try { return JSON.parse(localStorage.getItem("pricing_filters") || "{}"); }
-  catch (e) { return {}; }
-}
-function savePricingColFilters(f) { localStorage.setItem("pricing_filters", JSON.stringify(f)); }
-function pricingFiltersOn() {
-  const v = localStorage.getItem("pricing_filters_on");
-  return v == null ? false : v === "1";
-}
-function setPricingFiltersOn(on) { localStorage.setItem("pricing_filters_on", on ? "1" : "0"); }
-
-// Числовой фильтр: диапазон «10..50», оператор «>100», «<5», «>=3», «=200» или точное число.
+// Числовой фильтр колонок таблиц: диапазон «10..50», оператор «>100», «<5»,
+// «>=3», «=200» или точное число. Используется общим фильтром pagedTable.
 function numMatch(v, raw) {
   if (v == null || v === "") return false;
   const n = Number(v);
@@ -6703,67 +6825,6 @@ function numMatch(v, raw) {
     case ">=": return n >= num;
     default: return Number(n) === num;
   }
-}
-function pricingRowMatches(r, filters) {
-  for (const k of Object.keys(filters)) {
-    const raw = String(filters[k] || "").trim();
-    if (!raw) continue;
-    const hd = pricingActiveHeaders().find((x) => x.k === k);
-    if (hd && hd.num) {
-      if (!numMatch(r[k], raw)) return false;
-    } else {
-      const label = String(r[k] == null ? "" : r[k]).toLowerCase();
-      if (!label.includes(raw.toLowerCase())) return false;
-    }
-  }
-  return true;
-}
-
-const schedulePricingFilter = debounceRun(() => {
-  if (currentTab === "pricing") renderPricing(false);
-}, 300);
-// Бар фильтров: один input на каждую видимую колонку. Перестраивается только при смене набора
-// колонок (чтобы не терять фокус при вводе), значения живут в _pricingColFilters.
-function buildPricingFilterBar() {
-  const host = $("#pricingFilters");
-  if (!host) return;
-  const headers = colViewHeaders("pricing", pricingActiveHeaders());
-  const sig = headers.map((h) => h.k).join(",");
-  if (host._sig === sig) return;
-  host._sig = sig;
-  host.innerHTML = "";
-  for (const h of headers) {
-    const lbl = document.createElement("label");
-    lbl.className = "pfilter";
-    const t = document.createElement("span");
-    t.className = "pfilter-lbl";
-    t.textContent = h.label;
-    lbl.appendChild(t);
-    const inp = document.createElement("input");
-    inp.dataset.k = h.k;
-    inp.placeholder = h.num ? "мин..макс" : "содержит…";
-    inp.title = h.num
-      ? "Диапазон «10..50», оператор «>100», «<5», «=200» или точное число"
-      : "Текст, который должен содержаться в ячейке";
-    inp.value = _pricingColFilters[h.k] || "";
-    inp.addEventListener("input", (e) => {
-      _pricingColFilters[h.k] = e.target.value;
-      savePricingColFilters(_pricingColFilters);
-      schedulePricingFilter();
-    });
-    lbl.appendChild(inp);
-    host.appendChild(lbl);
-  }
-}
-// Активные фильтры — только по тем колонкам, что сейчас видимы и непусты.
-function pricingEffectiveColFilters() {
-  const visible = new Set(colViewHeaders("pricing", pricingActiveHeaders()).map((h) => h.k));
-  const out = {};
-  for (const k of Object.keys(_pricingColFilters)) {
-    const v = String(_pricingColFilters[k] || "").trim();
-    if (visible.has(k) && v) out[k] = v;
-  }
-  return out;
 }
 
 // ── Синхронизация автопилота цен: настройки на каждый кабинет (на сервере) ──
@@ -7463,10 +7524,6 @@ async function renderPricing(apply) {
   const q = likeEl.value.trim().toLowerCase();
   const hideSkipEl = $("#pricingHideSkip");
   const hidePassive = hideSkipEl ? hideSkipEl.checked : false;
-  buildPricingFilterBar();
-  const filtersHost = $("#pricingFilters");
-  if (filtersHost) filtersHost.classList.toggle("hidden", !pricingFiltersOn());
-  const colFilters = pricingEffectiveColFilters();
   msg.textContent = "Считаю рекомендации…";
   try {
     const data = await apiPost("/pricing/recommendations", s);
@@ -7480,43 +7537,48 @@ async function renderPricing(apply) {
       );
     }
     const hiddenPassive = hidePassive ? pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length : 0;
-    const rows = pre.filter((r) =>
-      (!hidePassive || (r.action !== "SKIP" && r.action !== "HOLD")) && pricingRowMatches(r, colFilters)
-    );
-    _pricingRows = rows;
-    const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE").length;
-    const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
-    let summary = "Товаров: " + fmt(rows.length);
-    if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
-    summary += ", решений: " + fmt(actionable);
-    if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
-    const hiddenDead = Number(data.hidden_dead || 0);
-    if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
-    const nonWb = Number(data.non_wb || 0);
-    if (nonWb > 0) summary += ", артикулов не из WB-карточек: " + fmt(nonWb) + " (исключены)";
-    if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
-    if (data.settings && data.settings.mode === "old") summary += " · старая модель (не рекомендуется)";
-    if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
-    if (data.as_of) summary += " · на " + data.as_of;
-    if (data.note) summary += " · " + data.note;
-    // Добавляем информацию о снимке цен WB (как давно обновляли)
-    try {
-      if (data.prices_updated_at) {
-        const t = Date.parse(data.prices_updated_at);
-        if (isFinite(t)) {
-          const hours = (Date.now() - t) / 36e5;
-          summary += " · цены WB: " + pricingAgeText(hours) + " назад";
+    const rows = pre.filter((r) => !hidePassive || (r.action !== "SKIP" && r.action !== "HOLD"));
+    // Сводка пересчитывается по видимым (отфильтрованным по колонкам) строкам —
+    // onFilter в pagedTable вызывает её при каждой фильтрации.
+    const updateSummary = (visible) => {
+      const actionable = visible.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE").length;
+      const underCooldown = visible.filter((r) => r.status === "skipped_cooldown").length;
+      let summary = "Товаров: " + fmt(visible.length);
+      if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
+      summary += ", решений: " + fmt(actionable);
+      if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      const hiddenDead = Number(data.hidden_dead || 0);
+      if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
+      const nonWb = Number(data.non_wb || 0);
+      if (nonWb > 0) summary += ", артикулов не из WB-карточек: " + fmt(nonWb) + " (исключены)";
+      if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
+      if (data.settings && data.settings.mode === "old") summary += " · старая модель (не рекомендуется)";
+      if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
+      if (data.as_of) summary += " · на " + data.as_of;
+      if (data.note) summary += " · " + data.note;
+      // Добавляем информацию о снимке цен WB (как давно обновляли)
+      try {
+        if (data.prices_updated_at) {
+          const t = Date.parse(data.prices_updated_at);
+          if (isFinite(t)) {
+            const hours = (Date.now() - t) / 36e5;
+            summary += " · цены WB: " + pricingAgeText(hours) + " назад";
+          } else if (data.prices_source === "wb_api") {
+            summary += " · цены WB: из API";
+          }
         } else if (data.prices_source === "wb_api") {
           summary += " · цены WB: из API";
         }
-      } else if (data.prices_source === "wb_api") {
-        summary += " · цены WB: из API";
-      }
-    } catch (e) { /* ignore */ }
-    // Сводка — в общую зелёную строку состояния шапки (как везде); полный
-    // текст длиннее HEADER_MSG_MAX — уходит в тултип через normalizeStatus.
-    msg.textContent = summary;
-    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, pricingFooters(rows), null, colViewPinKeys("pricing"));
+      } catch (e) { /* ignore */ }
+      // Сводка — в общую зелёную строку состояния шапки (как везде); полный
+      // текст длиннее HEADER_MSG_MAX — уходит в тултип через normalizeStatus.
+      msg.textContent = summary;
+    };
+    updateSummary(rows);
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, null, null, colViewPinKeys("pricing"), {
+      footersFn: pricingFooters,
+      onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
+    });
     await renderPricingHistory();
     refreshApplyButton();
   } catch (err) {
@@ -7537,10 +7599,6 @@ async function renderPricingOzon(apply) {
   const q = likeEl.value.trim().toLowerCase();
   const hideSkipEl = $("#pricingHideSkip");
   const hidePassive = hideSkipEl ? hideSkipEl.checked : false;
-  buildPricingFilterBar();
-  const filtersHost = $("#pricingFilters");
-  if (filtersHost) filtersHost.classList.toggle("hidden", !pricingFiltersOn());
-  const colFilters = pricingEffectiveColFilters();
   msg.textContent = "Считаю рекомендации Ozon…";
   try {
     const data = await apiPost("/pricing-ozon/recommendations", s);
@@ -7554,22 +7612,25 @@ async function renderPricingOzon(apply) {
       );
     }
     const hiddenPassive = hidePassive ? pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length : 0;
-    const rows = pre.filter((r) =>
-      (!hidePassive || (r.action !== "SKIP" && r.action !== "HOLD")) && pricingRowMatches(r, colFilters)
-    );
-    _pricingRows = rows;
-    const actionable = rows.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
-    const underCooldown = rows.filter((r) => r.status === "skipped_cooldown").length;
-    let summary = "Ozon · товаров: " + fmt(rows.length);
-    if (allRows.length !== rows.length) summary += " из " + fmt(allRows.length);
-    summary += ", решений: " + fmt(actionable);
-    if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
-    if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
-    if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
-    if (data.as_of) summary += " · на " + data.as_of;
-    if (data.note) summary += " · " + data.note;
-    msg.textContent = summary;
-    pagedTable($("#pricingTable"), colViewHeaders("pricing", ozPricingHeaders), rows, pricingFooters(rows), null, colViewPinKeys("pricing"));
+    const rows = pre.filter((r) => !hidePassive || (r.action !== "SKIP" && r.action !== "HOLD"));
+    const updateSummary = (visible) => {
+      const actionable = visible.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
+      const underCooldown = visible.filter((r) => r.status === "skipped_cooldown").length;
+      let summary = "Ozon · товаров: " + fmt(visible.length);
+      if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
+      summary += ", решений: " + fmt(actionable);
+      if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
+      if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
+      if (data.as_of) summary += " · на " + data.as_of;
+      if (data.note) summary += " · " + data.note;
+      msg.textContent = summary;
+    };
+    updateSummary(rows);
+    pagedTable($("#pricingTable"), colViewHeaders("pricing", ozPricingHeaders), rows, null, null, colViewPinKeys("pricing"), {
+      footersFn: pricingFooters,
+      onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
+    });
     await renderPricingHistory();
     refreshApplyButton();
   } catch (err) {
@@ -8292,17 +8353,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   onTabInput("pricingLike", "pricing", () => renderPricing(false), 350);
   initPricingShowMenu();
-  const pricingFiltersBtn = $("#pricingFiltersBtn");
-  if (pricingFiltersBtn) {
-    pricingFiltersBtn.classList.toggle("active", pricingFiltersOn());
-    pricingFiltersBtn.addEventListener("click", () => {
-      setPricingFiltersOn(!pricingFiltersOn());
-      pricingFiltersBtn.classList.toggle("active", pricingFiltersOn());
-      buildPricingFilterBar();
-      const fh = $("#pricingFilters");
-      if (fh) fh.classList.toggle("hidden", !pricingFiltersOn());
-    });
-  }
   initPricingSettingsMenu();
   const pricingSettingsBox = $("#pricingSettings");
   if (pricingSettingsBox) {

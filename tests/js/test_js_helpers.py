@@ -66,6 +66,41 @@ assert.strictEqual(
 );
 assert.strictEqual(qs({}), "", "qs empty");
 
+// Фильтр по колонкам таблиц: числовые — numMatch (диапазон/оператор), текст —
+// вхождение подстроки без регистра; «Итого» пересчитывается по отфильтрованным.
+const { numMatch, filterActive, rowPassesFilters, recomputeFooters } = sandbox;
+const fHeaders = [{ k: "article" }, { k: "stock", num: true }];
+assert.strictEqual(filterActive(fHeaders, {}), false, "нет активных фильтров");
+assert.strictEqual(filterActive(fHeaders, { stock: "   " }), false, "пробел не фильтр");
+assert.strictEqual(filterActive(fHeaders, { article: "a" }), true, "текстовый фильтр активен");
+assert.strictEqual(numMatch(120, ">100"), true, "numMatch >");
+assert.strictEqual(numMatch(50, ">100"), false, "numMatch > reject");
+assert.strictEqual(numMatch(30, "10..50"), true, "numMatch диапазон");
+assert.strictEqual(numMatch(5, "10..50"), false, "numMatch диапазон reject");
+const fRows = [
+  { article: "Apple", stock: 10 },
+  { article: "Pear", stock: 200 },
+  { article: "apricot", stock: 3 },
+];
+assert.strictEqual(
+  fRows.filter((r) => rowPassesFilters(r, fHeaders, { article: "pea" })).length, 1,
+  "подстрока без учёта регистра (Pear)");
+assert.strictEqual(
+  fRows.filter((r) => rowPassesFilters(r, fHeaders, { article: "APPLE" })).length, 1,
+  "регистронезависимо (APPLE → Apple)");
+assert.strictEqual(
+  fRows.filter((r) => rowPassesFilters(r, fHeaders, { stock: ">100" })).length, 1,
+  "числовой оператор в rowPassesFilters");
+const jf = (o) => JSON.stringify(o);
+assert.strictEqual(jf(recomputeFooters(fHeaders, { stock: 213 }, fRows)), jf({ stock: 213 }),
+  "сумма по всем строкам");
+assert.strictEqual(jf(recomputeFooters(fHeaders, { stock: 213 }, fRows.slice(0, 2))), jf({ stock: 210 }),
+  "сумма по отфильтрованным");
+assert.strictEqual(jf(recomputeFooters(fHeaders, { stock: { avg: 71 } }, fRows.slice(0, 2))),
+  jf({ stock: { avg: 105 } }), "среднее по отфильтрованным");
+assert.strictEqual(jf(recomputeFooters(fHeaders, { stock: 213 }, [])), jf({}),
+  "пустой набор — пустые итоги");
+
 // «в разрезе размеров» OZON: переключатель в тулбаре каждого раздела, состояние
 // своё у каждого (ключ localStorage «ozBySize:<tab>»), по умолчанию выключено.
 const { ozBySize, setOzBySize, ozBySizeParam } = sandbox;
