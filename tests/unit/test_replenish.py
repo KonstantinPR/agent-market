@@ -1294,6 +1294,46 @@ def test_size_view_wish_keeps_hidden_zero_size(db):
     assert r["meta"]["wish"]["placed"] == 100
 
 
+def test_size_view_wish_ignores_ghost_plan_size(db):
+    """Пожелание не утекает в размер плана, которого нет в разрезе.
+
+    Размер «44» продавался только 100 дней назад: он есть в 180-дневном окне
+    плана подсортировки, но вне 30-дневного окна разреза и без карточки/остатка,
+    поэтому в таблице его нет. Раньше N распределялось и по нему, и футер
+    «Итого дослать» выходил меньше пожелания.
+    """
+    db.add(models.Product(article="GHOST-1", name="Призрак", net_cost=50.0))
+    _card_size(db, "wb", "GHOST-1", "42")
+    db.add(_wb_size_row("gh42", "GHOST-1", "42", TODAY, qty=10))
+    db.add(_wb_size_row("gh44", "GHOST-1", "44", TODAY - timedelta(days=100),
+                        qty=5))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                       view="sizes", wish=20, wish_step="")
+    rows = [x for x in r["rows"] if x["article"] == "GHOST-1"]
+    assert [x["size"] for x in rows] == ["42"]     # «44» — призрак, не в разрезе
+    assert sum(x["to_sort"] for x in rows) == 20   # футер «Итого дослать» = N
+    assert r["meta"]["wish"]["placed"] == 20
+
+
+def test_size_view_wish_ignores_inactive_article(db):
+    """Пожелание распределяется только по показанным (не скрытым) строкам."""
+    db.add(models.Product(article="ACT-1", name="Актив", net_cost=50.0))
+    _card_size(db, "wb", "ACT-1", "42")
+    db.add(_wb_size_row("act42", "ACT-1", "42", TODAY, qty=10))
+    db.add(models.Product(article="INACT-1", name="Неактив", net_cost=50.0))
+    db.add(_wb_size_row("inact42", "INACT-1", "42", TODAY, qty=10))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                       view="sizes", wish=10, wish_step="")
+    assert "INACT-1" not in {x["article"] for x in r["rows"]}
+    to_sort = sum(x["to_sort"] for x in r["rows"] if x["article"] == "ACT-1")
+    assert to_sort == 10
+    assert r["meta"]["wish"]["placed"] == 10
+
+
 def _seed_wish_article(db, art="WAPI"):
     db.add(models.Product(article=art, name="Товар", net_cost=50.0))
     _card_size(db, "wb", art, "42")

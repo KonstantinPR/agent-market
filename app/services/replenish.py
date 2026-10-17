@@ -1072,21 +1072,25 @@ def _size_view(
     # План подсортировки на WB (как PDF) — источник «Дослать» и «WB дефицит»
     # по каждому размеру карточки. Размер вне плана (например, только Ozon)
     # остаётся на расчёте по окну спроса.
+    plan = {}
     plan_sz = {}
-    wish_summary = None
+    margin_by_art = _margin_by_art(detail_maps)
     if "wb" in codes:
-        plan, wish_summary = _wb_sort_plan(
+        # Базовый план без «Пожелания»: N раздаём отдельно, только по размерам
+        # показанных строк (ниже). Иначе часть штук уезжает в размеры плана,
+        # которых нет в разрезе (180-дневное окно скорости), и футер
+        # «Итого дослать» оказывается меньше пожелания.
+        plan, _ = _wb_sort_plan(
             db, date_to, sorted(keys), target_days,
-            wish=wish, wish_step=wish_step,
-            margin_by_art=_margin_by_art(detail_maps),
+            wish=0, wish_step="", margin_by_art=margin_by_art,
         )
         plan_sz = {
             art: {it["size"]: it for it in (entry.get("sizes") or [])}
             for art, entry in plan.items()
         }
-    # Пожелание реально переписало план: скрывать «везде 0» размеры нельзя,
-    # если они несут штуки, иначе футер «Итого дослать» будет меньше N.
-    wish_active = bool(wish_summary and wish_summary.get("reason") == "")
+    # Кандидаты «Пожелания» — только размеры, которые попадут в разрез.
+    wish_plan: dict = {}
+    wish_rows: list = []
 
     def _zero_size(s: str, wbs: dict) -> bool:
         """Размер «везде 0»: без продаж за окно и без остатков/в пути на МП."""
@@ -1165,6 +1169,22 @@ def _size_view(
                 df_ = to_sort
             size_defs.append((s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort))
 
+        # Кандидаты «Пожелания» — только размеры этой строки, которые есть в
+        # разрезе: иначе штуки уедут в размеры плана, которых в таблице нет
+        # (180-дневное окно скорости), и футер «Итого дослать» станет < N.
+        # Скрытые артикулы (inactive) не участвуют — пожелание видно только
+        # по показанным строкам.
+        if actual or show_inactive:
+            pruned = []
+            for s, _wbs, _wb_s, _wb_avail, _vel, _doc, _df, _ts in size_defs:
+                pit = plan_sz.get(key, {}).get(s or "—")
+                if pit is None:
+                    continue
+                pruned.append(pit)
+            if pruned:
+                wish_plan[key] = {"sizes": pruned,
+                                  "factor": (plan.get(key) or {}).get("factor")}
+
         rem = max(0, our)
         ship = {}
         for s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort in size_defs:
@@ -1179,8 +1199,7 @@ def _size_view(
         # он отражается на строке артикула (Ozon/резерв).
 
         for s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort in size_defs:
-            if hide_zero_sizes and _zero_size(s, wbs) and not (wish_active and to_sort > 0):
-                continue
+            zero = _zero_size(s, wbs)
             if not actual:
                 status = "inactive"
             elif wbs["net"] <= 0:
@@ -1191,7 +1210,7 @@ def _size_view(
                 status = "urgent"
             else:
                 status = "normal"
-            rows.append({
+            row = {
                 "article": prod.article if prod and prod.article else key,
                 "size": s or "—",
                 "barcode": (prodsizes.get((key, s)) or card_bc.get(s)
@@ -1209,7 +1228,32 @@ def _size_view(
                 "our_stock": our,
                 "margin_per_one": margin_per_one, "margin_pct": margin_pct,
                 "margin": round(margin_total, 2),
-            })
+                "~zero": zero,
+            }
+            pit = plan_sz.get(key, {}).get(s or "—")
+            if pit is not None:
+                wish_rows.append((row, pit))
+            rows.append(row)
+
+    # «Пожелание»: N раздаём поверх плана, но только по размерам, которые
+    # попадут в разрез (показанный артикул и размер из плана).
+    wish_summary = None
+    if "wb" in codes and int(wish or 0) > 0:
+        wish_summary = apply_wish(wish_plan, wish, wish_step, margin_by_art)
+        for row, pit in wish_rows:
+            row["to_sort"] = int(pit.get("to_sort") or 0)
+            row["wb_def"] = row["to_sort"]
+
+    wish_active = bool(wish_summary and wish_summary.get("reason") == "")
+    # hide_zero_sizes: «везде 0» размеры прячем, но держим те, что несут штуки
+    # активного пожелания — иначе футер «Итого дослать» окажется меньше N.
+    kept = []
+    for r in rows:
+        z = r.pop("~zero", False)
+        if hide_zero_sizes and z and not (wish_active and r["to_sort"] > 0):
+            continue
+        kept.append(r)
+    rows = kept
 
     if sort == "margin":
         rows.sort(key=lambda r: (r["margin_per_one"], r["wb_vel"]), reverse=True)
