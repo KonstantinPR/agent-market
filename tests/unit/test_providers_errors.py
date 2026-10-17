@@ -204,3 +204,59 @@ def test_update_prices_without_detail_re_raises_http(monkeypatch):
     monkeypatch.setattr(provider, "_session_post", boom)
     with pytest.raises(requests.HTTPError):
         provider.update_prices([{"nmID": 123456, "price": 100, "discount": 0}])
+
+
+def test_request_with_net_retry_retries_transient_ssl(monkeypatch):
+    from app.providers.errors import request_with_net_retry
+
+    calls = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.exceptions.SSLError("bad record mac")
+        return _post_resp(200)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    resp = request_with_net_retry(
+        "GET", "https://example.invalid/x", timeout=1, attempts=3, backoff=0)
+    assert resp.status_code == 200
+    assert len(calls) == 2
+
+
+def test_request_with_net_retry_gives_up_after_attempts(monkeypatch):
+    from app.providers.errors import request_with_net_retry
+
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(url)
+        raise requests.exceptions.ConnectionError("boom")
+
+    monkeypatch.setattr("requests.post", fake_post)
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    with pytest.raises(requests.exceptions.ConnectionError):
+        request_with_net_retry(
+            "POST", "https://example.invalid/x", json={}, timeout=1,
+            attempts=3, backoff=0)
+    assert len(calls) == 3
+
+
+def test_session_get_absorbs_transient_ssl_error(monkeypatch):
+    """Одиночный SSL-сбой выкачки не роняет шаг: _session_get повторяет запрос."""
+    provider = WbProvider(credentials={"standard": "k"})
+
+    calls = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.exceptions.SSLError("bad record mac")
+        return _post_resp(200)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    resp = provider._session_get("https://example.invalid/cards")
+    assert resp.status_code == 200
+    assert len(calls) == 2

@@ -4,9 +4,34 @@
 что даёт стабильные типы для проверок в тестах и понятные HTTP-ответы.
 """
 
+import time
 from typing import Optional
 
 import requests
+
+
+def request_with_net_retry(method, url, *, headers=None, params=None,
+                           json=None, timeout=60, attempts=3, backoff=1.5):
+    """HTTP-запрос с повтором на транспортных сбоях.
+
+    TLS/соединение у WB и Ozon рвутся на отдельных запросах длинных выкачек
+    (`SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC`, обрыв соединения, таймаут) —
+    это кратковременные сетевые сбои, и один-два повтора спасают весь шаг.
+    HTTP-ошибки статуса (4xx/5xx) здесь НЕ повторяются: `raise_for_status`
+    вызывается вызывающим кодом уже после возврата.
+    """
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            if method.upper() == "GET":
+                return requests.get(url, headers=headers, params=params,
+                                    timeout=timeout)
+            return requests.post(url, headers=headers, json=json, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(backoff * (attempt + 1))
+    raise last_exc
 
 
 class MarketError(RuntimeError):

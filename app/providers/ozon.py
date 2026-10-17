@@ -22,7 +22,9 @@ import requests
 
 from app.config import settings
 from app.providers.base import BaseProvider
-from app.providers.errors import OzonApiError, retry_after_seconds
+from app.providers.errors import (
+    OzonApiError, request_with_net_retry, retry_after_seconds,
+)
 from app.services import progress
 
 OZON_API = "https://api-seller.ozon.ru"
@@ -65,7 +67,8 @@ class OzonProvider(BaseProvider):
 
     def _post(self, url, payload, num_retries=4):
         for attempt in range(num_retries):
-            resp = requests.post(url, headers=self._headers(), json=payload, timeout=90)
+            resp = request_with_net_retry(
+                "POST", url, headers=self._headers(), json=payload, timeout=90)
             if resp.status_code == 429:
                 if self.fail_fast_429:
                     raise OzonApiError(

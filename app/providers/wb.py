@@ -14,7 +14,9 @@ import requests
 
 from app.config import settings
 from app.providers.base import BaseProvider
-from app.providers.errors import WbApiError, retry_after_seconds
+from app.providers.errors import (
+    WbApiError, request_with_net_retry, retry_after_seconds,
+)
 from app.services import progress
 
 
@@ -170,7 +172,8 @@ class WbProvider(BaseProvider):
 
     def _session_get(self, url, params=None, num_retries=6, finance: bool = False):
         for attempt in range(num_retries):
-            resp = requests.get(url, headers=self._headers(finance), params=params, timeout=60)
+            resp = request_with_net_retry(
+                "GET", url, headers=self._headers(finance), params=params, timeout=60)
             if resp.status_code == 429:
                 if self.fail_fast_429:
                     raise WbApiError(
@@ -191,8 +194,9 @@ class WbProvider(BaseProvider):
     def _session_post(self, url, payload, num_retries=6, finance: bool = False,
                       key: Optional[str] = None):
         for attempt in range(num_retries):
-            resp = requests.post(url, headers=self._headers(finance, key),
-                                 json=payload, timeout=600)
+            resp = request_with_net_retry(
+                "POST", url, headers=self._headers(finance, key),
+                json=payload, timeout=600)
             if resp.status_code == 429:
                 # Лимит запроса занят. Пытаемся ротироваться на запасной
                 # finance-ключ; если и он отдал 429 — берём подсказку из ответа
@@ -203,7 +207,8 @@ class WbProvider(BaseProvider):
                 if alt is None:
                     alt = settings.wb_finance_api_key_2 if finance else None
                 if alt:
-                    resp_alt = requests.post(
+                    resp_alt = request_with_net_retry(
+                        "POST",
                         url,
                         headers={
                             "Authorization": alt,

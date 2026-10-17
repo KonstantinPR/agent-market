@@ -2005,8 +2005,12 @@ def upsert_promo_nomenclatures(db, promo_id: int,
     if not rows:
         return 0
     ins = insert(models.PromoNomenclature)
+    # ON CONFLICT по колонкам, а не по имени констрейнта: в схемах кабинетов
+    # (cab_*) таблица создаётся через `LIKE public.t INCLUDING ALL`, из-за чего
+    # уникальный индекс получает авто-имя (`..._promo_id_nm_id_key`), а не
+    # `uq_promo_nom_promo_nm` из модели. Инференс по колонкам работает везде.
     stmt = ins.on_conflict_do_update(
-        constraint="uq_promo_nom_promo_nm",
+        index_elements=["promo_id", "nm_id"],
         set_={
             "in_action": ins.excluded.in_action,
             "price": ins.excluded.price,
