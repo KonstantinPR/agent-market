@@ -3333,20 +3333,55 @@
         "def": false
        },
        {
+        "k": "views",
+        "label": "Просмотры",
+        "def": false
+       },
+       {
+        "k": "adds",
+        "label": "Добавления в корзину",
+        "def": false
+       },
+       {
+        "k": "orders",
+        "label": "Заказы",
+        "def": true
+       },
+       {
+        "k": "cancelled",
+        "label": "Отмены",
+        "def": false
+       },
+       {
         "k": "buyouts",
-       "label": "Выкупы, шт",
-       "def": true
-      },
-      {
-       "k": "backlog",
-       "label": "В корзине",
-       "def": true
-      },
-      {
-       "k": "conv_pct",
-       "label": "Конверсия, %",
-       "def": true
-      },
+        "label": "Выкупы, шт",
+        "def": true
+       },
+       {
+        "k": "backlog",
+        "label": "В корзине",
+        "def": true
+       },
+       {
+        "k": "conv_pct",
+        "label": "Конверсия, %",
+        "def": true
+       },
+       {
+        "k": "conv_to_cart_percent",
+        "label": "Просмотр→Корзина, %",
+        "def": false
+       },
+       {
+        "k": "conv_cart_to_order_percent",
+        "label": "Корзина→Заказ, %",
+        "def": false
+       },
+       {
+        "k": "avg_orders_per_day",
+        "label": "Заказов в день",
+        "def": false
+       },
       {
        "k": "margin_pct",
        "label": "Маржа факт, % от выручки",
@@ -3766,13 +3801,21 @@
       "detail_returns_qty"
      ]
     },
-    {
-     "title": "Воронка и конверсия",
-     "keys": [
-      "backlog",
-      "conv_pct"
-     ]
-    },
+     {
+      "title": "Воронка и конверсия",
+      "keys": [
+       "views",
+       "adds",
+       "orders",
+       "cancelled",
+       "buyouts",
+       "backlog",
+       "conv_pct",
+       "conv_to_cart_percent",
+       "conv_cart_to_order_percent",
+       "avg_orders_per_day"
+      ]
+     },
     {
       "title": "Экономика на единицу",
       "keys": [
@@ -4622,14 +4665,42 @@
     "k": "conv_buyout_percent",
     "label": "Конв. выкупа, %"
    },
-   {
-    "k": "cancel_sum",
-    "label": "Отмены, руб"
-   },
-   {
-    "k": "add_to_wishlist",
-    "label": "В избранное"
-   },
+    {
+      "k": "views",
+      "label": "Просмотры"
+     },
+     {
+      "k": "adds",
+      "label": "Добавления в корзину"
+     },
+     {
+      "k": "orders",
+      "label": "Заказы"
+     },
+     {
+      "k": "cancelled",
+      "label": "Отмены"
+     },
+     {
+      "k": "conv_to_cart_percent",
+      "label": "Просмотр→Корзина, %"
+     },
+     {
+      "k": "conv_cart_to_order_percent",
+      "label": "Корзина→Заказ, %"
+     },
+     {
+      "k": "avg_orders_per_day",
+      "label": "Заказов в день"
+     },
+    {
+      "k": "cancel_sum",
+      "label": "Отмены, руб"
+     },
+    {
+     "k": "add_to_wishlist",
+     "label": "В избранное"
+    },
    {
     "k": "stock_wb",
     "label": "Остаток WB"

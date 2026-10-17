@@ -1796,6 +1796,16 @@ def test_apply_min_prices_clamps_by_wb_min(db):
     assert fake.applied_prices == [{"nmID": 111, "price": 900, "discount": 0}]
 
 
+def test_apply_min_prices_rounds_price_up_to_int(db):
+    """WB upload/task принимает только целые price: дробный пол округляется вверх."""
+    rows = [{"article": "F1", "nm_id": "111", "price": 2000.0, "current_vis": 500.0,
+             "current_discount": 75.0, "floor_price": 800.6}]
+    fake = _FakeProvider()
+    pricing_service.apply_min_prices(db, rows=rows, provider=fake, today=TODAY)
+    assert fake.applied_prices == [{"nmID": 111, "price": 801, "discount": 0}]
+    assert isinstance(fake.applied_prices[0]["price"], int)
+
+
 def test_apply_min_prices_does_not_break_cooldown_of_regular(db):
     """MIN пишется в журнал и не блокирует затем обычное (RAISE/LOWER) применение."""
     db.add(models.PriceChange(

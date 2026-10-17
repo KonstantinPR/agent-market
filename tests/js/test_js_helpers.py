@@ -327,6 +327,27 @@ assert.ok(cabFn.includes('cabMp === "ozon"') && cabFn.includes('setPricingMp("oz
 assert.ok(cabFn.includes("syncPricingMpUi()"),
   "loadCabinets должен синхронизировать кнопки маркетплейса автопилота цен");
 
+// T-46: поля воронки продаж в таблице автопилота (WB) + ярлык решения MIN.
+assert.ok(jsSrc.includes('{ k: "orders", label: "Заказы"'),
+  "в pricingHeaders нет колонки «Заказы»");
+assert.ok(jsSrc.includes('{ k: "views", label: "Просмотры"') &&
+          jsSrc.includes('{ k: "adds", label: "Добавления в корзину"') &&
+          jsSrc.includes('{ k: "cancelled", label: "Отмены"'),
+  "в pricingHeaders нет полей воронки (просмотры/корзина/отмены)");
+assert.ok(jsSrc.includes('label: "Просмотр\u2192Корзина, %"') &&
+          jsSrc.includes('label: "Корзина\u2192Заказ, %"') &&
+          jsSrc.includes('{ k: "avg_orders_per_day", label: "Заказов в день"'),
+  "в pricingHeaders нет конверсий/скорости заказов из воронки");
+assert.ok(jsSrc.includes('MIN: { txt: "минимальная цена", cls: "p-min" }'),
+  "PRICING_ACTION не содержит ярлык решения MIN");
+const pxDict = (colsJson.dicts || {}).pricing_export || [];
+for (const k of ["views", "adds", "orders", "cancelled",
+                 "conv_to_cart_percent", "conv_cart_to_order_percent",
+                 "avg_orders_per_day"]) {
+  assert.ok(pxDict.some((c) => c.k === k),
+    "в Excel-словаре pricing_export нет колонки " + k);
+}
+
 // Меню PDF «Потребности»: галка прибыльности включена по умолчанию, едет в URL.
 const { pdfParams, savePdfParams } = sandbox;
 assert.strictEqual(pdfParams().profit, true, "учёт прибыльности включён по умолчанию");

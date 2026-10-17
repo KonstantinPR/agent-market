@@ -166,6 +166,22 @@ def test_export_excel(db, api_client):
     assert db.execute(select(models.PriceChange)).first() is None
 
 
+def test_export_contains_funnel_columns(db, api_client):
+    """T-46: в Excel-выгрузку автопилота попали поля воронки продаж."""
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    r = api_client.post("/api/pricing/export", json={})
+    assert r.status_code == 200
+    df = _read_xlsx(r)
+    for col in ("Просмотры", "Добавления в корзину", "Заказы", "Отмены",
+                "Просмотр→Корзина, %", "Корзина→Заказ, %", "Заказов в день"):
+        assert col in df.columns, col
+    row = df.iloc[0]
+    assert int(row["Просмотры"]) == 200
+    assert int(row["Заказы"]) == 2
+    assert int(row["Добавления в корзину"]) == 3
+
+
 def test_replenishable_toggle(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))

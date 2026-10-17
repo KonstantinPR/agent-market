@@ -995,6 +995,10 @@ def _enriched(f: dict) -> dict:
         "conv_buyout_percent": _num(f.get("conv_buyout_percent")),
         "conv_to_cart_percent": _num(f.get("conv_to_cart_percent")),
         "conv_cart_to_order_percent": _num(f.get("conv_cart_to_order_percent")),
+        "views": int(f.get("views") or 0),
+        "adds": int(f.get("adds") or 0),
+        "orders": int(f.get("orders") or 0),
+        "cancelled": int(f.get("cancelled") or 0),
         "add_to_wishlist": int(f.get("add_to_wishlist") or 0),
         "share_order_percent": _num(f.get("share_order_percent")),
         "avg_orders_per_day": _num(f.get("avg_orders_per_day")),
@@ -2369,6 +2373,11 @@ def apply_min_prices(
             wb = _num((wb_min or {}).get(str(it["nmID"])))
             if wb > 0:
                 it["price"] = max(it["price"], wb)
+
+    # upload/task принимает только целые price и discount (0..99).
+    for it in items:
+        p = float(it["price"] or 0)
+        it["price"] = max(100, int(math.ceil(p - 1e-9)))
 
     now = datetime.now()
     try:

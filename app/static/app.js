@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "114";
+const UI_VERSION = "115";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -6510,6 +6510,7 @@ const PRICING_ACTION = {
   HALVE: { txt: "скидка ÷2", cls: "p-halve" },
   HOLD: { txt: "держать", cls: "p-hold" },
   SKIP: { txt: "пропустить", cls: "p-skip" },
+  MIN: { txt: "минимальная цена", cls: "p-min" },
 };
 
 function actionCell(v) {
@@ -6612,9 +6613,16 @@ const pricingHeaders = [
   { k: "stock", label: "Остаток", num: true, render: cellFmts.int , tip: "Остаток WB на складе по последнему срезу стоков (без «в пути»). Нет данных об остатках = автопилот пропускает товар (SKIP)."},
   { k: "in_way", label: "В пути", num: true, render: cellFmts.int , tip: "Товар «в пути» на склад WB (inWayToClient + inWayFromClient) по последнему срезу стоков. В остаток и в ценность остатка не входит."},
   { k: "stock_value", label: "Остаток, себест.", num: true, render: cellFmts.moneyZero , tip: "Ценность остатка = остаток × себестоимость. R15: при разгрузке акциями приоритет отдаётся товарам с большей замороженной суммой, а не с большим числом штук."},
+  { k: "views", label: "Просмотры", num: true, render: cellFmts.int , tip: "Просмотры карточки за срез воронки (openCount)." },
+  { k: "adds", label: "Добавления в корзину", num: true, render: cellFmts.int , tip: "Добавления в корзину за срез воронки (cartCount), шт." },
+  { k: "orders", label: "Заказы", num: true, render: cellFmts.int , tip: "Заказы за срез воронки (orderCount), шт." },
+  { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int , tip: "Отменённые заказы за срез воронки (cancelCount), шт." },
   { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int , tip: "Выкупы за срез воронки продаж: заказы, которые покупатель забрал. Отличаются от заказов из-за отмен и невыкупов."},
   { k: "backlog", label: "В корзине", num: true, render: cellFmts.int , tip: "Добавления в корзину минус заказы, не меньше нуля: спрос есть, а сделки нет. Используется как сигнал «много в корзинах, но не покупают»."},
   { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct , tip: "Заказы ÷ просмотры × 100 по воронке. Ниже 0,7% автопилот не увеличивает скидку, при большом «в корзине» — пропускает товар."},
+  { k: "conv_to_cart_percent", label: "Просмотр→Корзина, %", num: true, render: cellFmts.pct , tip: "Конверсия просмотр → корзина по воронке WB." },
+  { k: "conv_cart_to_order_percent", label: "Корзина→Заказ, %", num: true, render: cellFmts.pct , tip: "Конверсия корзина → заказ по воронке WB." },
+  { k: "avg_orders_per_day", label: "Заказов в день", num: true, render: cellFmts.num , tip: "Среднее число заказов в день по воронке WB." },
   { k: "margin_pct", label: "Маржа факт, % от выручки", num: true, render: cellFmts.pct , tip: "Рентабельность за окно по детализации: прибыль ÷ выручка × 100. Проверяйте согласованность с полем прибыли на единицу."},
   { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(2) , tip: "Средняя оценка по отзывам покупателей 1..5 из воронки (product.feedbackRating). Ключевой сигнал качества: ниже порога автопилот не поднимает цену, высокому «ценному» товару не увеличивает скидку."},
   { k: "action", label: "Решение", render: actionCell , tip: "Итоговое действие: RAISE — снизить скидку (поднять цену), LOWER — увеличить скидку, HALVE — пополам для мёртвых товаров, HOLD — не менять, SKIP — пропустить (нет данных, кулдаун, отказы по качеству)."},

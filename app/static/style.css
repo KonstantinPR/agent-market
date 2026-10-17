@@ -970,6 +970,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .p-halve { background: #eef3ff; color: #3450c4; border: 1px solid #c7d4f5; }
 .p-hold { background: #f5f5f5; color: #555; border: 1px solid #ddd; }
 .p-skip { background: #fff8e6; color: #8a6d00; border: 1px solid #f2e0b0; }
+.p-min { background: #eaf2ff; color: #0849a3; border: 1px solid #c5d7ff; }
 .pricing-h { font-size: 13px; color: #333; margin: 18px 0 8px; }
 .repl-toggle { width: 16px; height: 16px; cursor: pointer; }
 

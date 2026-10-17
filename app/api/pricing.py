@@ -111,6 +111,7 @@ def pricing_history(limit: int = 50, db: Session = Depends(get_db)):
 
 PRICING_ACTION_RU = {
     "RAISE": "поднять цену", "LOWER": "снизить цену", "HOLD": "держать", "SKIP": "пропустить",
+    "MIN": "минимальная цена",
 }
 
 
@@ -143,6 +144,9 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "promo_push_applied", "promo_delta_discount", "promo_score",
         "promo_score_confidence", "promo_plan_pct", "promo_cap_applied",
         "last_sale_days_ago",
+        "views", "adds", "orders", "cancelled",
+        "conv_to_cart_percent", "conv_cart_to_order_percent",
+        "avg_orders_per_day",
     ]
     df = df[[c for c in keep if c in df.columns]]
     df, ru = excel_io.project_export(df, export_cols("pricing_export"), cols)
