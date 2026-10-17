@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "113";
+const UI_VERSION = "114";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2756,6 +2756,9 @@ function pdfParams() {
     velDays: PDF_VEL_WINDOWS.some((w) => w.v === vd) ? vd : PDF_VEL_DEFAULT,
     // галка включена по умолчанию: подсорт по прибыльности полезнее плоских 1 шт
     profit: s.profit !== false,
+    // упрощённый PDF «для поставщика»: только фото, артикул, название и
+    // размеры с количеством — без аналитики. По умолчанию выключен.
+    supplier: s.supplier === true,
   };
 }
 
@@ -2846,6 +2849,26 @@ function buildReplenishPdfMenu() {
   if (!panel) return;
   panel.innerHTML = "";
   const p = pdfParams();
+
+  // Режим «для поставщика»: карточка без аналитики и остатков. Стоит первым —
+  // он меняет содержимое всего документа, а не отдельную колонку.
+  const supRow = document.createElement("label");
+  supRow.className = "chk";
+  const supCb = document.createElement("input");
+  supCb.type = "checkbox";
+  supCb.checked = p.supplier;
+  supCb.title = "Упрощённый PDF «для поставщика»: только фото, артикул, название "
+    + "и размеры с количеством к отгрузке (> 0). Без остатков, цен, маржи, "
+    + "прибыльности и прочей аналитики — чтобы отправить поставщику список "
+    + "«что и сколько нам нужно». Товары, где отгружать нечего, не печатаются";
+  supCb.addEventListener("change", (e) => {
+    p.supplier = e.target.checked;
+    savePdfParams(p);
+    buildReplenishPdfMenu();
+  });
+  supRow.appendChild(supCb);
+  supRow.appendChild(document.createTextNode(" Для поставщика (без аналитики)"));
+  panel.appendChild(supRow);
 
   const head = document.createElement("label");
   head.className = "chk";
@@ -2947,12 +2970,18 @@ function buildReplenishPdfMenu() {
   panel.appendChild(sep);
 
   const hint = document.createElement("div");
-  hint.textContent = "Поля карточки — колонки во «Вид таблицы».";
+  if (p.supplier) {
+    hint.textContent = "Для поставщика: фото, артикул, название, размеры с количеством.";
+    hint.title = "Упрощённый режим: аналитика и остатки не печатаются, а товары "
+      + "без количества к отгрузке в PDF не попадают.";
+  } else {
+    hint.textContent = "Поля карточки — колонки во «Вид таблицы».";
+    hint.title = "Карточка печатает колонки, включённые во «Вид таблицы» для вида "
+      + "«По артикулам»: включили колонку — она есть и в PDF. Артикул и размер "
+      + "печатаются всегда.";
+  }
   hint.style.fontSize = "12px";
   hint.style.color = "#666";
-  hint.title = "Карточка печатает колонки, включённые во «Вид таблицы» для вида "
-    + "«По артикулам»: включили колонку — она есть и в PDF. Артикул и размер "
-    + "печатаются всегда.";
   panel.appendChild(hint);
 
   // Дропзона Excel / карточка уже загруженного файла.
@@ -3019,6 +3048,7 @@ function buildReplenishPdfMenu() {
   go.type = "button";
   go.className = "btn";
   go.textContent = replenishExcel ? "Скачать PDF из Excel" : "Скачать PDF";
+  if (p.supplier) go.textContent += " — для поставщика";
   go.addEventListener("click", () => {
     panel.classList.add("hidden");
     downloadReplenishPdf();
@@ -3063,6 +3093,7 @@ function replenishPdfUrl() {
   params.set("photo_count", p.photoCount);
   params.set("vel_days", p.velDays);
   params.set("profit", p.profit ? 1 : 0);
+  params.set("supplier", p.supplier ? 1 : 0);
   const cols = replenishPdfCols().join(",");
   if (cols) params.set("cols", cols);
   return "/api/export/replenish/pdf?" + params.toString();

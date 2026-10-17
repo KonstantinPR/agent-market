@@ -253,3 +253,71 @@ def test_build_demand_pdf_compresses_the_same_document():
 
 def test_margin_respected():
     assert MARGIN > 0
+
+
+# ---------------------------------------------------------- режим поставщика
+
+def test_supplier_sizes_table_two_columns_positive_only():
+    """«Для поставщика»: две колонки (размер / кол-во) и только ненулевые размеры."""
+    doc = DemandPdf(rl_canvas.Canvas(io.BytesIO(), pagesize=A4), supplier=True)
+    tbl, _h, total = doc._sizes_table(sizes(("42", 15), ("44", 0), ("46", 8)))
+    assert total == 23
+    assert len(tbl._cellvalues[0]) == 2
+    texts = cell_texts(tbl)
+    assert "42" in texts and "46" in texts
+    assert "44" not in texts, "размер без количества в PDF для поставщика не печатается"
+    header = " ".join(texts[:2])
+    assert "Размер" in header and "Кол-во" in header
+
+
+def test_supplier_sizes_table_empty_when_nothing_to_ship():
+    doc = DemandPdf(rl_canvas.Canvas(io.BytesIO(), pagesize=A4), supplier=True)
+    tbl, _h, total = doc._sizes_table(sizes(("42", 0), ("44", 0)))
+    assert tbl is None and total == 0
+
+
+def test_supplier_mode_drops_attribute_grid_and_forces_name():
+    doc = DemandPdf(
+        rl_canvas.Canvas(io.BytesIO(), pagesize=A4),
+        cols=["need_buy"], supplier=True,
+    )
+    assert doc.attrs == [], "аналитические атрибуты в режиме поставщика не печатаются"
+    assert "name" in doc.cols, "название товара печатается всегда"
+
+
+def test_supplier_pdf_keeps_article_and_name_but_no_analytics():
+    cards = [({"article": "ART-001", "name": "Dress", "need_buy": 123},
+              sizes(("42", 15), ("44", 0)), [])]
+    labels = {"need_buy": "NEEDBUYLABEL"}
+    full = render(cards, cols=["name", "need_buy"], labels=labels)
+    assert b"NEEDBUYLABEL" in full, "в обычном режиме аналитика печатается"
+    sup = render(cards, cols=["name", "need_buy"], labels=labels, supplier=True)
+    assert b"ART-001" in sup and b"Dress" in sup
+    assert b"NEEDBUYLABEL" not in sup, "режим поставщика не печатает аналитику"
+
+
+def _pdf_text(data: bytes) -> str:
+    """Текст PDF через PyMuPDF: шрифт подмножество, в потоке кириллица не литерал."""
+    import fitz
+
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        return "\n".join(p.get_text() for p in doc)
+    finally:
+        doc.close()
+
+
+def test_supplier_mode_skips_profit_factor_line():
+    row = {"article": "ART-1"}
+    sz = [{"size": "42", "avail": 0, "to_sort": 5, "factor": 2.0}]
+    assert "прибыльности" in _pdf_text(render([(row, sz, [])], cols=[]))
+    assert "прибыльности" not in _pdf_text(
+        render([(row, sz, [])], cols=[], supplier=True)
+    )
+
+
+def test_build_demand_pdf_supplier_mode_is_valid():
+    cards = [({"article": "ART-1", "name": "Dress"}, sizes(("42", 2), ("44", 0)), [])]
+    data = build_demand_pdf(cards, cols=["need_buy"], with_photos=False, supplier=True)
+    assert data.startswith(b"%PDF")
+    assert data.rstrip().endswith(b"%%EOF")

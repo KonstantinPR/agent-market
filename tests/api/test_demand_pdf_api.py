@@ -676,3 +676,66 @@ def test_pdf_from_excel_limit_truncates(pdf_api, db):
     assert "PDF-ART-1" in _footer_all(r.content)   # порядок файла сохраняется
 
 
+# ------------------------------------- режим «для поставщика» (supplier=1) ---
+def test_supplier_pdf_hides_analytics_columns(pdf_api):
+    """В режиме поставщика карточка без аналитики: «Статус» не печатается."""
+    full = pdf_api.get("/api/export/replenish/pdf",
+                       params={"with_photos": 0, "cols": "status,name"})
+    assert full.status_code == 200
+    assert "Статус" in _footer_all(full.content)
+
+    sup = pdf_api.get("/api/export/replenish/pdf",
+                      params={"with_photos": 0, "cols": "status,name", "supplier": 1})
+    assert sup.status_code == 200
+    txt = _footer_all(sup.content)
+    assert "PDF-ART-1" in txt, "артикул печатается"
+    assert "Статус" not in txt, "аналитическая колонка в режиме поставщика скрыта"
+
+
+def test_supplier_pdf_prints_size_qty_header_without_stock(pdf_api):
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "supplier": 1})
+    assert r.status_code == 200
+    txt = _footer_all(r.content)
+    assert "Кол-во, шт" in txt, "в режиме поставщика колонка «Кол-во, шт»"
+    assert "Наличие" not in txt, "остатки в режиме поставщика не печатаются"
+
+
+def test_supplier_drops_articles_with_nothing_to_ship(pdf_api, db):
+    """Товары без количества к отгрузке в PDF для поставщика не попадают."""
+    db.add(models.Product(article="SUP-FULL", name="Полный", net_cost=100.0,
+                          replenishable=True))
+    db.add(models.MarketplaceCard(
+        marketplace_id=_mp_id(db, "wb"), chrt_id="c:SUP-FULL:42",
+        vendor_code="SUP-FULL", nm_id="", barcode="", size="42",
+    ))
+    db.add(models.Stock(
+        marketplace_id=_mp_id(db, "wb"), date=TODAY, article="SUP-FULL", size="42",
+        warehouse="Стек", quantity=100000, quantity_full=100000, in_way=0,
+    ))
+    db.commit()
+
+    base = pdf_api.get("/api/export/replenish/pdf",
+                       params={"with_photos": 0, "profit": 0,
+                               "article_like": "SUP-FULL"})
+    assert base.status_code == 200
+    assert base.headers["X-Count"] == "1"     # обычный режим печатает карточку
+
+    sup = pdf_api.get("/api/export/replenish/pdf",
+                      params={"with_photos": 0, "profit": 0, "supplier": 1,
+                              "article_like": "SUP-FULL"})
+    assert sup.status_code == 200
+    assert sup.headers["X-Count"] == "0"      # отгружать нечего — не печатаем
+    assert int(sup.headers["X-Truncated"]) >= 1
+
+
+def test_pdf_from_excel_supplier_hides_analytics(pdf_api):
+    """POST из Excel в режиме поставщика: аналитика из файла не печатается."""
+    rows = [{"article": "PDF-ART-1", "name": "Платье из файла", "need_buy": 777}]
+    r = _post_pdf(pdf_api, rows, supplier=1, cols="need_buy,name")
+    assert r.status_code == 200
+    txt = _footer_all(r.content)
+    assert "Платье из файла" in txt
+    assert "777" not in txt, "значения аналитических колонок скрыты"
+
+

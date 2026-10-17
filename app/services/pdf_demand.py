@@ -48,6 +48,8 @@ PER_ROW = 4                        # сколько фото в строке
 #: переносятся и товар на складе становится нечитаемым.
 SIZE_GROUPS = 1
 SIZE_COL_W = (0.42, 0.26, 0.32)   # доли ширины: размер / наличие / дослать
+#: Режим «для поставщика»: две колонки (размер / количество), без наличия.
+SUPPLIER_COL_W = (0.6, 0.4)
 
 # -- цвета ------------------------------------------------------------------
 
@@ -232,6 +234,7 @@ class DemandPdf:
         with_photos: bool = True,
         photo_count: int = 4,
         subtitle: str = "",
+        supplier: bool = False,
     ) -> None:
         self.c = canvas
         self.st = _styles()
@@ -240,11 +243,19 @@ class DemandPdf:
         self.with_photos = with_photos and photo_count > 0
         self.photo_count = max(0, int(photo_count))
         self.subtitle = subtitle
+        self.supplier = bool(supplier)
         self.y = TOP
         self.page_no = 0
-        self.attrs = [
-            c for c in self.cols if c not in ("article", "size", "name")
-        ]
+        if self.supplier:
+            # «Для поставщика»: только фото, артикул, название и «размер / кол-во».
+            # Блок атрибутов (аналитика) не печатаем вовсе, название — всегда.
+            if "name" not in self.cols:
+                self.cols = self.cols + ["name"]
+            self.attrs = []
+        else:
+            self.attrs = [
+                c for c in self.cols if c not in ("article", "size", "name")
+            ]
 
     # -- инфраструктура страниц ----------------------------------------
 
@@ -411,7 +422,7 @@ class DemandPdf:
         # «не подсортировываем», но бюджет из Excel («WB дефицит») может
         # задать «Дослать» вручную — тогда важнее факт ручной дослаты.
         factor_p = None
-        if sizes and sizes[0].get("factor") is not None:
+        if not self.supplier and sizes and sizes[0].get("factor") is not None:
             k = float(sizes[0].get("factor") or 0)
             if k <= 0:
                 txt = ("учёт прибыльности: подсорт ×1 — товар убыточный, не подсортировываем"
@@ -514,7 +525,43 @@ class DemandPdf:
         Итог = сумма «дослать» по размерам, он же уходит в «Итого» карточки.
         Столбцы идут тройками (размер / наличие / дослать) и заполняются сверху
         вниз: товар с 20 размерами занимает 7 строк вместо двадцати.
+
+        Режим «для поставщика»: только размеры с количеством > 0 и две колонки
+        (размер / количество) — без остатков и прочей служебной аналитики.
         """
+        if self.supplier:
+            items = []
+            for s in sizes:
+                qty = max(0, _int0(s.get("to_sort")))
+                if qty > 0:
+                    items.append((str(s.get("size") or "—"), qty))
+            if not items:
+                return None, 0.0, 0
+            head = ["Размер", "Кол-во, шт"]
+            data = [[Paragraph(h, self.st["sizeth"]) for h in head]]
+            for sz, qty in items:
+                data.append([
+                    Paragraph(_esc(sz), self.st["size"]),
+                    Paragraph(fmt_num(qty), self.st["sizeb"]),
+                ])
+            w = CONTENT_W / len(head)
+            col_w = [w * SUPPLIER_COL_W[0], w * SUPPLIER_COL_W[1]]
+            tbl = Table(data, colWidths=col_w, hAlign="LEFT", repeatRows=1)
+            tbl.setStyle(
+                TableStyle(
+                    [
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("TOPPADDING", (0, 0), (-1, -1), 1.5),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                        ("LINEBELOW", (0, 1), (-1, -2), 0.25, C_ZEBRA),
+                    ]
+                )
+            )
+            _, h = tbl.wrapOn(self.c, CONTENT_W, 1e6)
+            return tbl, h + 1.5 * mm, sum(qty for _sz, qty in items)
+
         items = []
         for s in sizes:
             items.append((
@@ -597,8 +644,13 @@ def build_demand_pdf(
     with_photos: bool = True,
     photo_count: int = 4,
     subtitle: str = "",
+    supplier: bool = False,
 ) -> bytes:
-    """Собрать PDF. ``cards`` = [(строка потребности, размеры, миниатюры), ...]."""
+    """Собрать PDF. ``cards`` = [(строка потребности, размеры, миниатюры), ...].
+
+    ``supplier=True`` — упрощённый режим «для поставщика»: только фото,
+    артикул, название и размеры с количеством (> 0), без аналитики.
+    """
     from reportlab.pdfgen import canvas as rl_canvas
 
     ensure_fonts()
@@ -609,7 +661,7 @@ def build_demand_pdf(
 
     doc = DemandPdf(
         c, cols=cols, labels=labels, with_photos=with_photos,
-        photo_count=photo_count, subtitle=subtitle,
+        photo_count=photo_count, subtitle=subtitle, supplier=supplier,
     )
     grand = 0
     hits = 0

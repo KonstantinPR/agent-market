@@ -470,6 +470,19 @@ assert.ok(pdfColsOf().includes("name"), "старый cols не перекрыв
 savePdfParams({});
 assert.strictEqual(pdfParams().photoCount, 6, "после сброса — снова 6 фото по умолчанию");
 
+// Режим «для поставщика»: галка в меню PDF, параметр supplier в URL.
+assert.strictEqual(pdfParams().supplier, false, "режим поставщика по умолчанию выключен");
+savePdfParams({ supplier: true });
+assert.strictEqual(pdfParams().supplier, true, "галка поставщика читается из localStorage");
+savePdfParams({ supplier: "yes" });
+assert.strictEqual(pdfParams().supplier, false, "нестроковое true не включает режим");
+savePdfParams({});
+assert.strictEqual(pdfParams().supplier, false, "сброс выключает режим поставщика");
+assert.ok(jsSrc.includes("Для поставщика (без аналитики)"),
+  "в меню PDF есть галка «Для поставщика»");
+assert.ok(jsSrc.includes('params.set("supplier", p.supplier ? 1 : 0)'),
+  "URL PDF содержит параметр supplier");
+
 // PDF из Excel: дропзона в меню, распознавание файла, сводка предпросмотра.
 const { isExcelFileName, replenishExcelSummary } = sandbox;
 assert.strictEqual(isExcelFileName("potrebnost_2026-09-01_2026-09-30.xlsx"), true,
