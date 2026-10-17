@@ -330,7 +330,7 @@
       <button id="pricingPriceRefresh" class="btn" title="Загрузить актуальные цены (WB/снимок Ozon) в базу">Обновить цены</button>
       <span id="pricingPricesAge" class="prices-age" title="Расчёт считается по снимку цен в базе"></span>
       <button id="pricingPromoRefresh" class="btn" title="Загрузить календарь акций WB (только для режима WB)">Акции WB</button>
-      <button id="pricingMinPrices" class="btn" title="Отправить минимальные цены: где текущая ниже безубыточного минимума — поднять до пола">Минимальные цены</button>
+      <button id="pricingMinPrices" class="btn" title="Минимальные (безубыточные) цены WB.&#10;Берёт видимые строки, где витрина ниже пола (витрина &lt; пол), и ставит базовую цену = пол, скидку 0%.&#10;Пол (break-even) = (логистика/шт + хранение/шт + услуги/шт + себестоимость) ÷ (1 − комиссия% − мин.маржа%/100), при знаменателе &gt; 0,05.&#10;Итог = max(пол; минимум WB), округление вверх до целого рубля.&#10;Пишется решение MIN; в кулдауне автопилота не участвует.">Минимальные цены</button>
       <div class="view-menu" id="pricingSettingsMenu">
         <button type="button" class="btn split-l" id="btnpricingSettings" title="Раскрыть панели настроек">Настройки</button>
         <button type="button" class="btn split-r" id="btnpricingSettingsCaret" title="Действия: обновить расчёт, развернуть всё">▾</button>
@@ -1027,7 +1027,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=115"></script>
+<script src="/static/app.js?v=116"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

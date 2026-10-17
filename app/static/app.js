@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "115";
+const UI_VERSION = "116";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -6848,7 +6848,9 @@ function syncPricingMpUi() {
   const priceBtn = $("#pricingPriceRefresh");
   if (priceBtn) priceBtn.textContent = oz ? "Обновить цены Ozon" : "Обновить цены WB";
   const minBtn = $("#pricingMinPrices");
-  if (minBtn) minBtn.title = oz ? "Поднять цены витрины Ozon до безубыточного минимума там, где цена ниже пола" : "Отправить в WB минимальные цены (break-even)";
+  if (minBtn) minBtn.title = oz
+    ? "Минимальные (безубыточные) цены Ozon.\nБерёт видимые строки, где витрина ниже пола безубытка, и поднимает витринную цену до пола.\nПол (break-even) = (логистика/шт + хранение/шт + услуги/шт + себестоимость) ÷ (1 − комиссия% − мин.маржа%/100), при знаменателе > 0,05.\nПишется решение MIN; в кулдауне автопилота не участвует."
+    : "Минимальные (безубыточные) цены WB.\nБерёт видимые строки, где витрина ниже пола (витрина < пол), и ставит базовую цену = пол, скидку 0%.\nПол (break-even) = (логистика/шт + хранение/шт + услуги/шт + себестоимость) ÷ (1 − комиссия% − мин.маржа%/100), при знаменателе > 0,05.\nИтог = max(пол; минимум WB), округление вверх до целого рубля.\nПишется решение MIN; в кулдауне автопилота не участвует.";
 }
 
 // Числовой фильтр колонок таблиц: диапазон «10..50», оператор «>100», «<5»,

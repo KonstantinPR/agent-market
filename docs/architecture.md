@@ -34,7 +34,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 8450 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/app.js` | 8452 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/static/columns.json` | 6042 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/api/ (19 файлов)` | 5353 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/services/sync.py` | 2661 | запись выгрузок WB/Ozon в БД |
