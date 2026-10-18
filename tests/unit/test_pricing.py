@@ -231,9 +231,40 @@ def test_r12_demand_raises_in_normal_zone(db):
     rec = recommendations(db, prices_df=_prices(("PD12", 1000, 20)), today=TODAY)
     row = _row(rec, "D12")
     assert row["action"] == "RAISE"
-    # +15% к витрине: 800 -> 920, скидка 20 -> 8 (обходим «половинный кап» 10)
-    assert row["target_discount"] == pytest.approx(8.0, abs=0.6)
+    # T-46: подъём масштабируется силой спроса. Здесь conv=5%, в корзине 10%
+    # (backlog 20 из 200) → сила ≈0.66 → рост ≈15+10·0.66 ≈ 21.6%:
+    # витрина 800 -> ~973, скидка 20 -> ~2.7 (R12 обходит «половинный кап» 10).
+    assert row["target_discount"] == pytest.approx(2.7, abs=0.6)
+    assert 0.5 <= row["demand_strength"] <= 0.8
     assert "устойчивый спрос" in row["reason"]
+
+
+def test_r12_demand_scales_raise_by_orders_and_carts(db):
+    """T-46 R12: чем больше заказов и «в корзине», тем сильнее подъём цены.
+
+    Слабый подтверждённый спрос → базовый подъём (demand_raise_pct=15%);
+    сильный (высокая конверсия заказов и доля корзины) → подъём к потолку
+    (demand_raise_pct_max=25%). Оба товара — в нормальной зоне DOC.
+    """
+    # Слабый спрос: заказов/корзин впритык к порогам сигналов → сила ≈ 0.
+    _seed(db, "DW", "PDW", stock=15, replenishable=True,
+          sales=[(2, 4, 0), (20, 4, 0), *_fallback_sales()],
+          funnel=(200, 6, 3, 0, 900),
+          funnel_extra={"buyouts": 6, "feedback_rating": 4.9})
+    # Сильный спрос: высокая конверсия заказов и большая доля корзины → сила 1.
+    _seed(db, "DS", "PDS", stock=15, replenishable=True,
+          sales=[(2, 4, 0), (20, 4, 0), *_fallback_sales()],
+          funnel=(200, 40, 15, 0, 900),
+          funnel_extra={"buyouts": 6, "feedback_rating": 4.9})
+    rec = recommendations(db, prices_df=_prices(("PDW", 1000, 20), ("PDS", 1000, 20)),
+                          today=TODAY)
+    weak, strong = _row(rec, "DW"), _row(rec, "DS")
+    assert weak["action"] == "RAISE" and strong["action"] == "RAISE"
+    assert weak["demand_strength"] < strong["demand_strength"]
+    # Слабый: база 15% → витрина 800 -> 920, скидка 20 -> 8.
+    assert weak["target_discount"] == pytest.approx(8.0, abs=0.6)
+    # Сильный: 25% → витрина упирается в базовую цену, скидка 20 -> 0.
+    assert strong["target_discount"] == pytest.approx(0.0, abs=0.6)
 
 
 def test_r12_demand_capped_by_doc(db):
@@ -282,6 +313,19 @@ def test_merge_settings_new_r12_r14_keys():
     assert s["no_econ_cost_floor"] is False
     assert s["velocity_from_funnel"] is False
     assert s["demand_min_buyouts"] == pytest.approx(5.0)
+
+
+def test_merge_settings_demand_scaling_keys():
+    """T-46: параметры градации R12 доходят из запроса и имеют дефолты."""
+    s = merge_settings({"demand_raise_pct_max": 30, "demand_conv_high_pct": 9,
+                        "demand_boost_min_orders": 5})
+    assert s["demand_raise_pct_max"] == pytest.approx(30.0)
+    assert s["demand_conv_high_pct"] == pytest.approx(9.0)
+    assert s["demand_boost_min_orders"] == pytest.approx(5.0)
+    d = merge_settings({})
+    assert d["demand_raise_pct_max"] == pytest.approx(25.0)
+    assert d["demand_conv_low_pct"] == pytest.approx(2.0)
+    assert d["demand_cart_high_pct"] == pytest.approx(12.0)
 
 
 def test_r3_high_returns_skips(db):

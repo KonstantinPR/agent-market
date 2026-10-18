@@ -145,7 +145,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "promo_push_applied", "promo_delta_discount", "promo_score",
         "promo_score_confidence", "promo_plan_pct", "promo_cap_applied",
         "last_sale_days_ago",
-        "views", "adds", "orders", "cancelled",
+        "views", "adds", "orders", "cancelled", "demand_strength",
         "conv_to_cart_percent", "conv_cart_to_order_percent",
         "avg_orders_per_day",
     ]

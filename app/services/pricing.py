@@ -129,6 +129,20 @@ PRICING_DEFAULTS = {
     "demand_min_signals": 2,
     "demand_raise_pct": 15.0,
     "demand_raise_max_doc": 120.0,
+    # T-46 (R20): градиент силы спроса для R12. Чем выше конверсия заказов
+    # (orders/views) и чем больше «в корзине, но не куплено» относительно
+    # просмотров (backlog/views, backlog = adds−orders), тем сильнее подъём:
+    # от demand_raise_pct (спрос едва подтверждён) до demand_raise_pct_max
+    # (очень сильный спрос). Ниже порогов *_low_pct компонента = 0, выше
+    # *_high_pct = 1; вес заказов выше, чем «в корзине» (сделка весомее интереса).
+    # demand_boost_min_orders — объёмный предохранитель: при меньшем числе
+    # заказов шкала пропорционально гасится (малая выборка не разгоняет цену).
+    "demand_raise_pct_max": 25.0,
+    "demand_conv_low_pct": 2.0,
+    "demand_conv_high_pct": 7.0,
+    "demand_cart_low_pct": 3.0,
+    "demand_cart_high_pct": 12.0,
+    "demand_boost_min_orders": 3,
     # T-32 (R13): скорость продаж из воронки, если по строке Sales за окно
     # пусто (нет выручки), но в воронке есть активность. Считаем v_proj =
     # funnel_velocity_field / дней среза воронки (buyouts по умолчанию).
@@ -1286,6 +1300,40 @@ def _demand_hot(f: dict, s: dict, doc: float) -> Optional[str]:
     return ", ".join(signals)
 
 
+def _demand_strength(f: dict, s: dict) -> float:
+    """R20 (T-32): сила спроса 0..1 по «Заказам» и «В корзине».
+
+    Две нормированные компоненты (0 ниже нижнего порога, 1 при высоком):
+    конверсия заказов ``orders/views`` (вес 0.65 — сделка весомее) и
+    «в корзине, но не куплено» относительно просмотров (``backlog/views``,
+    вес 0.35). При числе заказов ниже ``demand_boost_min_orders» шкала
+    пропорционально гасится — малая выборка не должна разгонять цену.
+    Результат используется в R12 для выбора величины подъёма между
+    ``demand_raise_pct`` и ``demand_raise_pct_max``.
+    """
+    views = int(f.get("views") or 0)
+    if views <= 0:
+        return 0.0
+    orders = int(f.get("orders") or 0)
+    backlog = max(int(f.get("adds") or 0) - orders, 0)
+    conv = orders / views * 100
+    cart = backlog / views * 100
+
+    def norm(value, lo, hi):
+        lo, hi = _num(lo), _num(hi)
+        if hi <= lo:
+            return 1.0 if value >= hi else 0.0
+        return _clamp((value - lo) / (hi - lo), 0.0, 1.0)
+
+    order_n = norm(conv, s.get("demand_conv_low_pct"), s.get("demand_conv_high_pct"))
+    cart_n = norm(cart, s.get("demand_cart_low_pct"), s.get("demand_cart_high_pct"))
+    strength = 0.65 * order_n + 0.35 * cart_n
+    min_orders = int(_num(s.get("demand_boost_min_orders"), 3))
+    if min_orders > 0:
+        strength *= _clamp(orders / min_orders, 0.0, 1.0)
+    return round(_clamp(strength, 0.0, 1.0), 3)
+
+
 def _promo_cap_pct(description) -> Optional[float]:
     """Потолок промо-скидки WB из описания акции («промо-скидка не более N%») → N.
 
@@ -1790,6 +1838,8 @@ def _decide(f: dict, s: dict) -> dict:
     floor = f["floor_price"]
     base = _base_row(f)
     base["eff"] = eff
+    # R12/T-46: сила спроса 0..1 (заказы + «в корзине») — масштабирует подъём.
+    base["demand_strength"] = _demand_strength(f, s)
 
     # T-24: включаемые пользователем факторы решения (панель-чекбоксы в UI).
     # Выключенный фактор не участвует в правилах; его данные остаются в колонках.
@@ -1928,12 +1978,18 @@ def _decide(f: dict, s: dict) -> dict:
             and doc >= doc_low):
         demand_reason = _demand_hot(f, s, doc)
         if demand_reason:
-            raise_pct = _num(s.get("demand_raise_pct"), 15.0)
+            # T-46: подъём растёт с силой спроса — от demand_raise_pct (спрос
+            # едва подтверждён) до demand_raise_pct_max (очень сильный спрос).
+            base_raise = _num(s.get("demand_raise_pct"), 15.0)
+            cap = _num(s.get("demand_raise_pct_max"), base_raise)
+            strength = _num(base.get("demand_strength"))
+            raise_pct = base_raise + max(0.0, cap - base_raise) * strength
             target_vis = min(price, cur_vis * (1 + raise_pct / 100))
             new_disc = (1 - target_vis / price) * 100
             if cur_disc - new_disc >= _num(s["min_delta_pp"]):
                 base.update(action="RAISE", status="suggested",
-                            reason=f"устойчивый спрос ({demand_reason}) — поднимаем цену",
+                            reason=f"устойчивый спрос ({demand_reason}) — поднимаем цену "
+                                   f"на {raise_pct:.0f}% (сила спроса {strength:.2f})",
                             target_discount=round(_clamp(new_disc, 0, 100), 1),
                             target_vis=round(price * (1 - new_disc / 100), 2),
                             margin_pct_at_target=_margin_pct(price * (1 - new_disc / 100), f))

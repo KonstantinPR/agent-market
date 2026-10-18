@@ -3368,6 +3368,11 @@
         "def": true
        },
        {
+        "k": "demand_strength",
+        "label": "Сила спроса",
+        "def": false
+       },
+       {
         "k": "conv_to_cart_percent",
         "label": "Просмотр→Корзина, %",
         "def": false
@@ -3816,13 +3821,14 @@
        "cancelled",
        "buyouts",
        "backlog",
-       "conv_pct",
-       "conv_to_cart_percent",
-       "conv_cart_to_order_percent",
-       "avg_orders_per_day"
-      ]
-     },
-    {
+        "conv_pct",
+        "demand_strength",
+        "conv_to_cart_percent",
+        "conv_cart_to_order_percent",
+        "avg_orders_per_day"
+       ]
+      },
+     {
       "title": "Экономика на единицу",
       "keys": [
        "margin_pct",
@@ -4618,6 +4624,10 @@
    {
     "k": "conv_pct",
     "label": "Конверсия, %"
+   },
+   {
+    "k": "demand_strength",
+    "label": "Сила спроса"
    },
    {
     "k": "backlog",
