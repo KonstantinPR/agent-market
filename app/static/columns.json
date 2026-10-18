@@ -3552,16 +3552,21 @@
        "label": "Цена базовая, руб",
        "def": false
       },
-      {
-       "k": "floor_price",
-       "label": "Пол (break-even), руб",
-       "def": false
-      },
-      {
-       "k": "eff",
-       "label": "База расчёта, руб",
-       "def": false
-      },
+       {
+        "k": "floor_price",
+        "label": "Пол (break-even), руб",
+        "def": false
+       },
+       {
+        "k": "minpromo_price",
+        "label": "Мин. цена автоакций, руб",
+        "def": true
+       },
+       {
+        "k": "eff",
+        "label": "База расчёта, руб",
+        "def": false
+       },
       {
        "k": "max_discount_item",
        "label": "Макс. скидка, %",
@@ -3780,6 +3785,7 @@
       "margin_pct_at_target",
       "price",
       "floor_price",
+      "minpromo_price",
       "eff",
       "max_discount_item"
      ]
@@ -4640,6 +4646,10 @@
    {
     "k": "floor_price",
     "label": "Пол (break-even), руб"
+   },
+   {
+    "k": "minpromo_price",
+    "label": "Мин. цена автоакций, руб"
    },
    {
     "k": "max_discount_item",

@@ -368,3 +368,76 @@ def test_recommendations_promo_plan_cap_api(db, api_client):
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx(1.0, abs=0.01)
     assert row["promo_cap_applied"] is True
+
+
+# --- T-48: минимальная цена автоакций WB ------------------------------------
+
+def test_minpromo_status_empty(db, api_client):
+    """До первой выгрузки статус пустой (last_export_at=None, expired=False)."""
+    r = api_client.get("/api/pricing/minpromo-status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["last_export_at"] is None
+    assert body["days_ago"] is None
+    assert body["validity_days"] == 30
+    assert body["expired"] is False
+
+
+def test_minpromo_export_writes_template_and_journal(db, api_client):
+    """Экспорт: файл-шаблон WB + журнал MINPRICE/exported + заголовки X-Count/Total."""
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    r = api_client.post("/api/pricing/minpromo-export", json={"minpromo_block": True,
+                                                              "minpromo_block_days": 7.0})
+    assert r.status_code == 200
+    assert r.headers["Content-Type"].startswith("application/vnd.openxmlformats")
+    assert int(r.headers["X-Count"]) >= 1
+    assert int(r.headers["X-Total"]) >= int(r.headers["X-Count"])
+    assert r.headers["X-Truncated"] in ("0", "1")
+
+    df = _read_xlsx(r)
+    assert list(df.columns) == [
+        "Артикул WB",
+        "Новая минимальная цена для применения скидки по автоакции",
+        "Новая блокировка применения скидки по автоакции",
+    ]
+    # Целые и не ниже 100 ₽; блокировка проставлена по настройкам
+    assert (df.iloc[:, 1] >= 100).all()
+    assert (df.iloc[:, 1] == df.iloc[:, 1].astype(int)).all()
+    assert (df.iloc[:, 2] == "на 7 дней").all()
+
+    # Журнал: запись MINPRICE/exported (без applied_at — в WB ещё не загружено)
+    rec = db.execute(select(models.PriceChange)
+                     .where(models.PriceChange.action == "MINPRICE")).scalars().first()
+    assert rec is not None
+    assert rec.status == "exported"
+    assert rec.applied_at is None
+
+    # Статус после выгрузки: дата есть, срок не истёк
+    st = api_client.get("/api/pricing/minpromo-status").json()
+    assert st["last_export_at"] is not None
+    assert st["days_ago"] == 0
+    assert st["expired"] is False
+
+
+def test_minpromo_export_honors_ui_rows(db, api_client):
+    """ui_rows (видимые строки) ограничивают файл — как в apply-min."""
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    _seed(db, "TST-2", "1002", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    all_rows = api_client.post("/api/pricing/recommendations", json={}).json()["rows"]
+    only = [r for r in all_rows if r["article"] == "TST-1"]
+    r = api_client.post("/api/pricing/minpromo-export", json={"ui_rows": only})
+    assert r.status_code == 200
+    df = _read_xlsx(r)
+    assert len(df) == 1  # только TST-1
+
+
+def test_minpromo_defaults_in_defaults_endpoint(api_client):
+    """minpromo-ключи есть в /pricing/defaults (merge_settings их знает)."""
+    d = api_client.get("/api/pricing/defaults").json()["defaults"]
+    assert d["minpromo_mode"] == "floor_reserve"
+    assert d["minpromo_reserve_pct"] == 5.0
+    assert d["minpromo_block"] is False
+    assert d["minpromo_block_days"] == 30.0

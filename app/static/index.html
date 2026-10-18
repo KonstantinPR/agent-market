@@ -331,6 +331,11 @@
       <span id="pricingPricesAge" class="prices-age" title="Расчёт считается по снимку цен в базе"></span>
       <button id="pricingPromoRefresh" class="btn" title="Загрузить календарь акций WB (только для режима WB)">Акции WB</button>
       <button id="pricingMinPrices" class="btn" title="Минимальные (безубыточные) цены WB.&#10;Берёт видимые строки, где витрина ниже пола (витрина &lt; пол), и ставит базовую цену = пол, скидку 0%.&#10;Пол (break-even) = (логистика/шт + хранение/шт + услуги/шт + себестоимость) ÷ (1 − комиссия% − мин.маржа%/100), при знаменателе &gt; 0,05.&#10;Итог = max(пол; минимум WB), округление вверх до целого рубля.&#10;Пишется решение MIN; в кулдауне автопилота не участвует.">Минимальные цены</button>
+      <div class="view-menu" id="pricingMinpromoMenu">
+        <button type="button" class="btn split-l" id="btnpricingMinpromo" title="Минимальная цена автоакций WB — НИЖНЯЯ ГРАНИЦА, ниже которой маркетплейс не должен опускать цену в автоакциях.&#10;Это НЕ фактическая цена и НЕ пол безубыточности автопилота («Минимальные цены» слева).&#10;Скачивает шаблон «Минимальные цены и блокировки для автоакций» для ручной загрузки: «Цены и скидки» → «Обновить через Excel».&#10;WB не публикует метода API (проверено 2026-10-17) — поэтому файлом.&#10;Загруженное значение действует 30 дней, потом нужна новая выгрузка.&#10;Формула, запас, округление и блокировка — в каретке ▾ справа.">Мин. цена автоакций</button>
+        <button type="button" class="btn split-r" id="btnpricingMinpromoCaret" title="Селектор расчёта минимальной цены автоакций WB и опции блокировки скидки">▾</button>
+        <div class="view-menu-panel hidden" id="pricingMinpromoPanel"></div>
+      </div>
       <div class="view-menu" id="pricingSettingsMenu">
         <button type="button" class="btn split-l" id="btnpricingSettings" title="Раскрыть панели настроек">Настройки</button>
         <button type="button" class="btn split-r" id="btnpricingSettingsCaret" title="Действия: обновить расчёт, развернуть всё">▾</button>
@@ -1027,7 +1032,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/app.js?v=116"></script>
+  <script src="/static/app.js?v=117"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

@@ -111,7 +111,7 @@ def pricing_history(limit: int = 50, db: Session = Depends(get_db)):
 
 PRICING_ACTION_RU = {
     "RAISE": "поднять цену", "LOWER": "снизить цену", "HOLD": "держать", "SKIP": "пропустить",
-    "MIN": "минимальная цена",
+    "MIN": "минимальная цена", "MINPRICE": "шаблон мин. цены автоакций",
 }
 
 
@@ -134,6 +134,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "doc", "velocity", "trend",
         "influenced_by_main", "main_delta_pct",
         "conv_pct", "backlog", "stock", "in_way", "stock_value", "avg_price", "eff", "floor_price",
+        "minpromo_price",
         "max_discount_item", "margin_pct_at_target", "replenishable",
         "feedback_rating", "buyouts", "conv_buyout_percent", "cancel_sum",
         "add_to_wishlist", "stock_wb", "return_rate", "margin_pct", "margin_per_one",
@@ -159,5 +160,66 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         headers={
             "Content-Disposition": f'attachment; filename="{fname}"',
             "X-Count": str(len(df)),
+        },
+    )
+
+
+# WB не публикует метод API для минимальной цены автоакций (раздел «Цены и
+# скидки» ограничен upload/task, club-discount, size, list и quarantine) —
+# доставка идёт Excel-шаблоном личного кабинета. Загруженное значение действует
+# 30 дней, поэтому дата последней выгрузки ведётся в журнале и подсказывается в UI.
+MINPROMO_VALIDITY_DAYS = 30
+
+
+@router.get("/pricing/minpromo-status")
+def pricing_minpromo_status(db: Session = Depends(get_db)):
+    """Дата последней выгрузки шаблона автоакций и остаток 30-дневного срока."""
+    last = pricing_service.minpromo_last_export(db)
+    days = None
+    if last is not None:
+        days = max(0, (date.today() - last.date()).days)
+    return {
+        "last_export_at": last.isoformat() if last else None,
+        "days_ago": days,
+        "validity_days": MINPROMO_VALIDITY_DAYS,
+        "expired": days is not None and days >= MINPROMO_VALIDITY_DAYS,
+    }
+
+
+@router.post("/pricing/minpromo-export")
+def pricing_minpromo_export(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Файл «Минимальные цены и блокировки для автоакций» WB (.xlsx).
+
+    Тело — настройки автопилота (как /pricing/export); при наличии ui_rows
+    выгружаются ровно видимые строки. Значения колонки «Мин. цена автоакций»
+    переносятся в шаблон WB как «Новая минимальная цена…»; при включённой
+    блокировке добавляется «Новая блокировка…» (7 дней / 30 дней / бессрочно).
+    Файл нужно вручную загрузить в кабинете WB: «Цены и скидки» → «Обновить
+    через Excel» → «Минимальные цены и блокировки для автоакций».
+    """
+    ui_rows = payload.get("ui_rows")
+    if ui_rows:
+        s = pricing_service.merge_settings(payload)
+        buf, count, total = pricing_service.minpromo_template(ui_rows, s)
+        pricing_service.record_minpromo_export(db, ui_rows, s)
+    else:
+        prices_df, _updated_at, _source = pricing_service.resolve_prices(db)
+        main_map = pricing_service.main_influence_map(db, payload)
+        rec = pricing_service.recommendations(
+            db, settings=payload, prices_df=prices_df, main_map=main_map,
+        )
+        rows = rec.get("rows") or []
+        s = rec.get("settings") or pricing_service.merge_settings(payload)
+        buf, count, total = pricing_service.minpromo_template(rows, s)
+        pricing_service.record_minpromo_export(db, rows, s)
+    fname = f"minpromo_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type=XLSX_MEDIA,
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "X-Count": str(count),
+            "X-Total": str(total),
+            "X-Truncated": str(int(total > count)),
         },
     )

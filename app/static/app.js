@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "116";
+const UI_VERSION = "117";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3547,6 +3547,17 @@ function filenameFromDisposition(d) {
   return m ? decodeURIComponent(m[1]) : "wb_download.xlsx";
 }
 
+async function downloadResponse(resp, fallbackName) {
+  const blob = await resp.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filenameFromDisposition(resp.headers.get("Content-Disposition")) || fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
 async function apiDownload(api, kind, msgSel, jsonMode) {
   const pane = document.querySelector(".pane.active");
   const days = pane.querySelector("input[data-days]");
@@ -6511,6 +6522,7 @@ const PRICING_ACTION = {
   HOLD: { txt: "держать", cls: "p-hold" },
   SKIP: { txt: "пропустить", cls: "p-skip" },
   MIN: { txt: "минимальная цена", cls: "p-min" },
+  MINPRICE: { txt: "шаблон мин. цены автоакций", cls: "p-min" },
 };
 
 function actionCell(v) {
@@ -6658,6 +6670,7 @@ const pricingHeaders = [
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money , tip: "Хранение на единицу по детализации WB, включая оценку безартикульных плат. Тоже входит в формулу минимальной цены."},
   { k: "price", label: "Цена базовая, руб", num: true, render: cellFmts.money , tip: "Базовая цена карточки WB (price из прайса), от неё считается витринная цена со скидкой."},
   { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money , tip: "Минимальная цена безубыточности: себестоимость + логистика + комиссия + хранение + услуги, ₽/шт."},
+  { k: "minpromo_price", label: "Мин. цена автоакций, руб", num: true, render: cellFmts.money , tip: "ГРАНИЦА для автоакций WB: ниже неё маркетплейс не должен опускать цену. Это НЕ фактическая цена и НЕ пол безубыточности автопилота — формулой и запасом управляет отдельный селектор «Мин. цена автоакций ▾». По умолчанию = пол безубыточности + запас, округление вверх. Загружается в WB файлом (шаблон «Минимальные цены и блокировки для автоакций»), потому что метода API у WB нет; действует 30 дней с даты загрузки."},
   { k: "eff", label: "База расчёта, руб", num: true, render: cellFmts.money , tip: "Цена, от которой считается целевая скидка: витринная или ср. цена факт (если воронки нет)."},
   { k: "max_discount_item", label: "Макс. скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки для этого товара, % — ограничение правила, ниже которого цена не опускается."},
   { k: "status", label: "Статус", render: cellFmts.text , tip: "Статус товара в расчёте цен — те же значения, что в служебной колонке решений."},
@@ -6839,6 +6852,10 @@ function syncPricingMpUi() {
   const wbBtn = $("#pricingMpWb"), ozBtn = $("#pricingMpOz");
   if (wbBtn) wbBtn.classList.toggle("active", !oz);
   if (ozBtn) ozBtn.classList.toggle("active", oz);
+  // Т-48: блок «Мин. цена автоакций» показывается только в WB-режиме.
+  // В Ozon смысл другой (нет автоакций как у WB) — скрываем.
+  const minpromo = $("#pricingMinpromoMenu");
+  if (minpromo) minpromo.style.display = oz ? "none" : "";
   const applyBtn = $("#pricingApply");
   if (applyBtn) applyBtn.textContent = oz ? "Применить в Ozon" : "Применить в WB";
   const modeMenu = $("#pricingModeMenu");
@@ -7087,19 +7104,246 @@ function initReplenishWishMenu() {
 }
 
 function collectPricingSettings() {
-  const box = $("#pricingSettings");
   const s = loadPricingSettings();
-  box.querySelectorAll("input[data-key]").forEach((i) => {
-    const key = i.dataset.key;
-    if (i.type === "checkbox") s[key] = i.checked;
-    else {
-      const v = parseFloat(i.value);
-      if (!isNaN(v)) s[key] = v;
-    }
-  });
+  _collectPricingInputs(s, $("#pricingSettings"));
+  // T-48: селектор «Мин. цена автоакций» живёт отдельно от панелей настроек
+  // автопилота (это другая граница и другой сценарий), но хранится в том же
+  // объекте настроек связки — копируется вместе с остальными.
+  _collectPricingInputs(s, $("#pricingMinpromoPanel"));
   if (pricingModeCurrent === "old" || pricingModeCurrent === "new") s.mode = pricingModeCurrent;
   savePricingSettings(s);
   return s;
+}
+
+function _collectPricingInputs(s, root) {
+  if (!root) return;
+  root.querySelectorAll("input[data-key]").forEach((i) => {
+    const key = i.dataset.key;
+    // Radio: в настройки попадает только выбранный (остальные — мусор).
+    if (i.type === "radio") { if (i.checked) s[key] = i.value; return; }
+    if (i.type === "checkbox") { s[key] = i.checked; return; }
+    const v = parseFloat(i.value);
+    if (!isNaN(v)) s[key] = v;
+  });
+  // Select (срок блокировки, шаг округления): значение строка, но
+  // merge_settings приводит числовые по умолчанию к float сам.
+  root.querySelectorAll("select[data-key]").forEach((i) => {
+    s[i.dataset.key] = i.value;
+  });
+}
+
+// ── T-48: минимальная цена автоакций WB ─────────────────────────────────────
+// Граница, ниже которой маркетплейс не должен опускать цену в автоакциях.
+// WB не даёт API — только Excel-шаблон в ЛК («Цены и скидки» → «Обновить через
+// Excel» → «Минимальные цены и блокировки для автоакций»), срок действия
+// загруженного значения — 30 дней.
+const MINPROMO_MODES = [
+  { v: "floor_reserve", t: "Пол безубыточности + запас N%" },
+  { v: "floor", t: "Пол безубыточности как есть" },
+  { v: "current_minus", t: "От текущей цены −N%" },
+  { v: "formula", t: "Своя формула (налог, реклама, маржа)" },
+];
+
+function _minpromoTip(hint) {
+  const tip = document.createElement("span");
+  tip.className = "tip"; tip.tabIndex = 0; tip.setAttribute("role", "tooltip");
+  tip.appendChild(document.createTextNode("?"));
+  const t = document.createElement("span");
+  t.className = "tip-text"; t.textContent = hint;
+  tip.appendChild(t);
+  return tip;
+}
+
+function _minpromoRow(labelText, hint, input) {
+  const lbl = document.createElement("label");
+  lbl.className = "p-st";
+  const head = document.createElement("span");
+  head.className = "p-st-head";
+  head.appendChild(document.createTextNode(labelText));
+  if (hint) head.appendChild(_minpromoTip(hint));
+  lbl.appendChild(head);
+  lbl.appendChild(input);
+  return lbl;
+}
+
+function _minpromoNum(key, labelText, hint, cur, step) {
+  const input = document.createElement("input");
+  input.type = "number"; input.dataset.key = key;
+  input.step = String(step); input.value = cur;
+  return _minpromoRow(labelText, hint, input);
+}
+
+function _minpromoSelect(key, labelText, hint, cur, options) {
+  const input = document.createElement("select");
+  input.dataset.key = key;
+  for (const o of options) {
+    const op = document.createElement("option");
+    op.value = String(o.v); op.textContent = o.t;
+    if (String(o.v) === String(cur)) op.selected = true;
+    input.appendChild(op);
+  }
+  return _minpromoRow(labelText, hint, input);
+}
+
+function minpromoStatusText(st) {
+  if (!st || !st.last_export_at) {
+    return "В WB ещё не выгружалось. Значение действует 30 дней с даты загрузки файла.";
+  }
+  const head = "Последняя выгрузка: " + st.last_export_at.slice(0, 10) +
+    " (" + st.days_ago + " дн. назад). ";
+  if (st.expired) return head + "Срок 30 дней истёк — нужна новая выгрузка.";
+  return head + "Осталось " + (st.validity_days - st.days_ago) + " дн.";
+}
+
+function buildPricingMinpromoPanel() {
+  const panel = $("#pricingMinpromoPanel");
+  if (!panel) return;
+  const s = loadPricingSettings();
+  const g = (k, d) => (s[k] !== undefined ? s[k] : d);
+  panel.innerHTML = "";
+
+  const st = document.createElement("div");
+  st.className = "minpromo-status"; st.id = "minpromoStatus";
+  st.textContent = "…";
+  panel.appendChild(st);
+
+  const mode = String(g("minpromo_mode", "floor_reserve"));
+  const modes = document.createElement("div");
+  modes.className = "minpromo-modes";
+  for (const m of MINPROMO_MODES) {
+    const lbl = document.createElement("label");
+    lbl.className = "chk";
+    const rb = document.createElement("input");
+    rb.type = "radio"; rb.name = "minpromoMode"; rb.value = m.v;
+    rb.dataset.key = "minpromo_mode";
+    rb.checked = (m.v === mode);
+    lbl.appendChild(rb);
+    lbl.appendChild(document.createTextNode(" " + m.t));
+    modes.appendChild(lbl);
+  }
+  panel.appendChild(modes);
+
+  panel.appendChild(_minpromoNum("minpromo_reserve_pct", "Запас над полом, %",
+    "Насколько поднять минимальную цену автоакций над полом безубыточности. Режим «Пол + запас» (по умолчанию).",
+    g("minpromo_reserve_pct", 5), "0.1"));
+  panel.appendChild(_minpromoNum("minpromo_drop_pct", "Скидка от текущей цены, %",
+    "Минимальная цена = текущая витринная цена минус эта доля процентов. Режим «От текущей цены −N%».",
+    g("minpromo_drop_pct", 15), "0.1"));
+  panel.appendChild(_minpromoNum("minpromo_buyout", "Коэффициент выкупа, ×",
+    "Во сколько раз поделить логистику в формуле: 1 — логистика уже учитывает возврат, 2 — половина товара возвращается. Режим «Своя формула».",
+    g("minpromo_buyout", 1), "0.1"));
+  panel.appendChild(_minpromoNum("minpromo_tax_pct", "Налог на прибыль, %",
+    "Режим «Своя формула». Вычитается из знаменателя вместе с комиссией, как в поле безубыточности.",
+    g("minpromo_tax_pct", 0), "0.1"));
+  panel.appendChild(_minpromoNum("minpromo_ads_pct", "Доля рекламы в выручке, %",
+    "Режим «Своя формула». Рекламные расходы, которые маржа должна покрывать.",
+    g("minpromo_ads_pct", 0), "0.1"));
+  panel.appendChild(_minpromoNum("minpromo_margin_pct", "Целевая маржа, %",
+    "Режим «Своя формула». Запас над точкой безубыточности в этой формуле.",
+    g("minpromo_margin_pct", 0), "0.1"));
+  panel.appendChild(_minpromoSelect("minpromo_round", "Округление вверх до, ₽",
+    "WB принимает только целые цены. 1 — до рубля, 50 — до круглых 50/100/150…",
+    g("minpromo_round", 1),
+    [{ v: 1, t: "1 ₽" }, { v: 10, t: "10 ₽" }, { v: 50, t: "50 ₽" }, { v: 100, t: "100 ₽" }]));
+
+  const bl = document.createElement("label");
+  bl.className = "chk minpromo-block";
+  const cb = document.createElement("input");
+  cb.type = "checkbox"; cb.dataset.key = "minpromo_block";
+  cb.checked = !!g("minpromo_block", false);
+  bl.appendChild(cb);
+  bl.appendChild(document.createTextNode(" Блокировать снижение скидки автоакцией (колонка «Новая блокировка…»)"));
+  panel.appendChild(bl);
+  panel.appendChild(_minpromoSelect("minpromo_block_days", "Срок блокировки",
+    "Как долго WB не должна опускать скидку: 7 дней, 30 дней или бессрочно. Галка выше должна быть включена.",
+    g("minpromo_block_days", 30),
+    [{ v: 7, t: "7 дней" }, { v: 30, t: "30 дней" }, { v: 0, t: "бессрочно" }]));
+
+  const act = document.createElement("button");
+  act.type = "button"; act.className = "menu-item"; act.id = "minpromoDownload";
+  act.textContent = "Скачать шаблон WB (.xlsx)";
+  act.title = "Файл «Минимальные цены и блокировки для автоакций» для ручной загрузки:\n«Цены и скидки» → «Обновить через Excel» → «Минимальные цены и блокировки для автоакций».";
+  panel.appendChild(act);
+  const apiBtn = document.createElement("button");
+  apiBtn.type = "button"; apiBtn.className = "menu-item"; apiBtn.disabled = true;
+  apiBtn.id = "minpromoApplyApi";
+  apiBtn.textContent = "Отправить в WB API (метода нет)";
+  apiBtn.title = "Wildberries не публикует метод API для минимальной цены автоакций — проверено 2026-10-17 по справочнику (283 метода) и release-notes.\nКогда метод появится, кнопка включится.";
+  panel.appendChild(apiBtn);
+
+  act.addEventListener("click", (e) => { e.stopPropagation(); exportMinpromoTemplate(); });
+  apiBtn.addEventListener("click", (e) => e.stopPropagation());
+
+  refreshMinpromoStatus();
+}
+
+async function refreshMinpromoStatus() {
+  const el = $("#minpromoStatus");
+  if (!el) return;
+  try {
+    el.textContent = minpromoStatusText(await api("/pricing/minpromo-status"));
+  } catch (e) {
+    el.textContent = "Статус выгрузки недоступен: " + e.message;
+  }
+}
+
+async function exportMinpromoTemplate() {
+  const msg = statusEl();
+  await buildPricingSettings();
+  const s = pricingWithDates(collectPricingSettings());
+  const rows = _pricingRows.filter((r) => r.minpromo_price != null && Number(r.minpromo_price) > 0 && Number(r.nm_id) > 0);
+  if (!rows.length) { msg.textContent = "Нет товаров с рассчитанной минимальной ценой автоакций"; return; }
+  const list = rows.slice(0, 5).map((r) => r.article).join(", ") + (rows.length > 5 ? "…" : "");
+  const ok = confirm("Скачать шаблон автоакций WB для " + rows.length + " видимых товаров?\n(" + list + ")\n\n" +
+    "Файл нужно вручную загрузить: «Цены и скидки» → «Обновить через Excel» → «Минимальные цены и блокировки для автоакций».\n" +
+    "Минимальная цена действует 30 дней с даты загрузки.");
+  if (!ok) return;
+  const btn = $("#btnpricingMinpromo");
+  const prev = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Формирую…"; }
+  msg.textContent = "Формирую шаблон автоакций WB…";
+  try {
+    // ui_rows — чтобы файл совпадал с видимой таблицей (как в apply-min).
+    const resp = await fetch("/api/pricing/minpromo-export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({}, s, { ui_rows: rows })),
+    });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => null);
+      throw new Error((e && e.detail) || resp.status + " " + resp.statusText);
+    }
+    downloadResponse(resp, "minpromo_" + (s.date_from || "") + "_" + (s.date_to || "") + ".xlsx");
+    msg.textContent = "Шаблон автоакций WB скачан: строк " + (resp.headers.get("X-Count") || "?") +
+      (resp.headers.get("X-Truncated") === "1" ? " (лимит WB — остальные в отдельном файле)" : "");
+    refreshMinpromoStatus();
+  } catch (e) {
+    msg.textContent = "Ошибка шаблона автоакций WB: " + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
+let _pricingMinpromoInited = false;
+
+function initPricingMinpromoMenu() {
+  const btn = $("#btnpricingMinpromo");
+  const caret = $("#btnpricingMinpromoCaret");
+  const menu = $("#pricingMinpromoMenu");
+  const panel = $("#pricingMinpromoPanel");
+  if (!btn || !caret || !menu || !panel) return;
+  if (_pricingMinpromoInited) return;
+  _pricingMinpromoInited = true;
+  btn.addEventListener("click", () => exportMinpromoTemplate());
+  caret.addEventListener("click", (e) => {
+    e.stopPropagation();
+    // Панель пересобирается на каждый раскрытие — подтягивает свежие
+    // настройки (после смены связки) и статус последней выгрузки.
+    buildPricingMinpromoPanel();
+    panel.classList.toggle("hidden");
+  });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+  panel.addEventListener("change", () => collectPricingSettings());
 }
 
 let _pricingShowMenuInited = false;
@@ -8405,6 +8649,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   onTabInput("pricingLike", "pricing", () => renderPricing(false), 350);
   initPricingShowMenu();
+  initPricingMinpromoMenu();
   initPricingSettingsMenu();
   const pricingSettingsBox = $("#pricingSettings");
   if (pricingSettingsBox) {

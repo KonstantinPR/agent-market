@@ -1940,3 +1940,132 @@ def test_recommendations_promo_plan_cap(db):
     assert row["action"] == "LOWER"
     assert row["target_discount"] <= 7.0 + 1e-9
     assert row["promo_cap_applied"] is True
+
+
+# --- T-48: минимальная цена автоакций WB ------------------------------------
+
+def test_minpromo_price_floor_reserve_rounds_up():
+    """floor_reserve: пол безубытка × (1 + запас), округление вверх до целого ₽."""
+    row = {"floor_price": 1000.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor_reserve",
+                        "minpromo_reserve_pct": 5.0, "minpromo_round": 1.0})
+    assert pricing_service.minpromo_price(row, s) == 1050.0
+
+
+def test_minpromo_price_floor_no_reserve():
+    """floor: просто пол безубыточности, без запаса (1234.5 → 1235)."""
+    row = {"floor_price": 1234.5, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor"})
+    assert pricing_service.minpromo_price(row, s) == 1235.0
+
+
+def test_minpromo_price_rounds_to_step():
+    """Округление вверх до кратного шагу: 1050 → 1060 (шаг 10)."""
+    row = {"floor_price": 1000.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor_reserve",
+                        "minpromo_reserve_pct": 5.7, "minpromo_round": 10.0})
+    # 1000 × 1.057 = 1057 → ceil до 1060
+    assert pricing_service.minpromo_price(row, s) == 1060.0
+
+
+def test_minpromo_price_none_when_no_basis():
+    """Нет ни пола, ни себестоимости — считать не из чего → None."""
+    row = {"floor_price": 0.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 0.0, "nm_id": "1"}
+    s = merge_settings({})
+    assert pricing_service.minpromo_price(row, s) is None
+
+
+def test_minpromo_price_current_minus():
+    """current_minus: текущая витринная цена − N%."""
+    row = {"floor_price": 500.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "current_minus", "minpromo_drop_pct": 15.0})
+    assert pricing_service.minpromo_price(row, s) == 1700.0  # 2000 × 0.85
+
+
+def test_minpromo_price_formula():
+    """formula: (себестоимость + логистика + хранение + услуги) / (1 − комиссия − налог − реклама − маржа)."""
+    row = {"floor_price": 0.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "logistics_unit": 100.0, "storage_unit": 10.0,
+           "other_unit": 5.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "formula", "minpromo_buyout": 1.0,
+                        "minpromo_tax_pct": 0.0, "minpromo_ads_pct": 0.0,
+                        "minpromo_margin_pct": 10.0})
+    # (300 + 100 + 10 + 5) / (1 − 0.15 − 0 − 0 − 0.10) = 415 / 0.75 = 553.33 → ceil 554
+    assert pricing_service.minpromo_price(row, s) == 554.0
+
+
+def test_minpromo_floor_basis_fallback_to_net_cost():
+    """R14-фолбэк: нет пола → net_cost × (1 + floor_margin_pct)."""
+    row = {"floor_price": 0.0, "net_cost": 400.0, "current_vis": 1000.0}
+    s = merge_settings({"floor_margin_pct": 10.0})
+    assert pricing_service.minpromo_floor_basis(row, s) == pytest.approx(440.0)
+
+
+def test_minpromo_block_label():
+    assert pricing_service.minpromo_block_label({"minpromo_block": True,
+                                                 "minpromo_block_days": 7.0}) == "на 7 дней"
+    assert pricing_service.minpromo_block_label({"minpromo_block": True,
+                                                 "minpromo_block_days": 30.0}) == "на 30 дней"
+    assert pricing_service.minpromo_block_label({"minpromo_block": True,
+                                                 "minpromo_block_days": 0.0}) == "бессрочно"
+    assert pricing_service.minpromo_block_label({"minpromo_block": False,
+                                                 "minpromo_block_days": 7.0}) == ""
+
+
+def test_minpromo_price_present_in_recommendations(db):
+    """Интеграция: колонка minpromo_price заполняется у обычных строк."""
+    _seed(db, "MP", "555111", stock=100, net_cost=300,
+          sales=[*_fallback_sales()], funnel=(100, 2, 1, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("MP", 1000, 10)), today=TODAY)
+    row = _row(rec, "MP")
+    assert row["minpromo_price"] is not None
+    assert row["minpromo_price"] > 0
+
+
+def test_minpromo_template_columns():
+    """Файл WB: три колонки (Артикул WB, Новая минимальная цена, Новая блокировка)."""
+    import openpyxl
+    rows = [{"article": "A1", "nm_id": "111", "minpromo_price": 1234.5, "current_discount": 10},
+            {"article": "A2", "nm_id": "0", "minpromo_price": 999.0, "current_discount": 0}]
+    buf, count, total = pricing_service.minpromo_template(rows, {"minpromo_block": True,
+                                                                "minpromo_block_days": 30.0})
+    wb = openpyxl.load_workbook(buf)
+    ws = wb.active
+    assert ws.cell(1, 1).value == "Артикул WB"
+    assert ws.cell(1, 2).value == "Новая минимальная цена для применения скидки по автоакции"
+    assert ws.cell(1, 3).value == "Новая блокировка применения скидки по автоакции"
+    assert ws.cell(2, 1).value == 111
+    assert ws.cell(2, 2).value == 1235  # ceil(1234.5)
+    assert ws.cell(2, 3).value == "на 30 дней"
+    assert count == 1  # строка с nm_id=0 пропущена
+    assert total == 1
+
+
+def test_minpromo_template_clamps_to_100(db):
+    """Цена ниже 100 ₽ не ставится — WB принимает только целые от 100."""
+    import openpyxl
+    rows = [{"article": "A1", "nm_id": "111", "minpromo_price": 50.0, "current_discount": 0}]
+    buf, count, total = pricing_service.minpromo_template(rows, {"minpromo_block": False})
+    wb = openpyxl.load_workbook(buf)
+    ws = wb.active
+    assert ws.cell(2, 2).value == 100
+    assert ws.cell(2, 3).value in (None, "")
+
+
+def test_record_minpromo_export_and_last_export(db):
+    """Журнал: MINPRICE/exported пишется и minpromo_last_export его находит."""
+    now = datetime.utcnow()
+    db.add(models.PriceChange(article="A1", nm_id="111",
+                              calculated_at=now, applied_at=None,
+                              before_discount=10.0, after_discount=None,
+                              action="MINPRICE", status="exported",
+                              reason="тест"))
+    db.commit()
+    got = pricing_service.minpromo_last_export(db)
+    assert got is not None
+    assert got.date() == now.date()

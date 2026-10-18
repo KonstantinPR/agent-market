@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.providers import factory as provider_factory
+from app.services import excel_io
 from app.services.cabinets import active_credentials, db_active_info, run_per_link
 
 
@@ -149,6 +150,21 @@ PRICING_DEFAULTS = {
     # повышения главной (её снижения игнорируются). follow_main=0 — выключить.
     "follow_main": True,
     "main_influence_pct": 50.0,
+    # T-48: минимальная цена автоакций WB — НЕ фактическая цена, а граница, ниже
+    # которой WB не должен опускать цену в автоакциях («Цены и скидки» → «Обновить
+    # через Excel» → «Минимальные цены и блокировки для автоакций»). Действует
+    # 30 дней с момента обновления; WB API метода для неё нет, поэтому доставка
+    # — экспорт файла в шаблоне кабинета.
+    "minpromo_mode": "floor_reserve",   # floor | floor_reserve | current_minus | formula
+    "minpromo_reserve_pct": 5.0,        # запас над полом безубыточности, %
+    "minpromo_drop_pct": 15.0,          # «от текущей цены −N%», %
+    "minpromo_buyout": 1.0,             # коэф. выкупа: логистика/коэффициент в формуле
+    "minpromo_tax_pct": 0.0,            # налог на прибыль, % (только режим formula)
+    "minpromo_ads_pct": 0.0,            # доля рекламы в выручке, % (только режим formula)
+    "minpromo_margin_pct": 0.0,         # целевая маржа, % (только режим formula)
+    "minpromo_round": 1.0,              # шаг округления вверх: 1 / 10 / 50 / 100 ₽
+    "minpromo_block": False,            # заблокировать снижение скидки автоакцией
+    "minpromo_block_days": 30.0,        # 7 | 30 | 0 (бессрочно)
 }
 
 
@@ -942,6 +958,11 @@ def recommendations(
     # связки (R16) — ничто не должно увести цену ниже, чем просит WB.
     promo_plan_apply(out_rows, _promo_plan_map(db), s)
 
+    # T-48: минимальная цена автоакций WB (граница автоскидок маркетплейса).
+    # Считается от готового floor_price / витрины, поэтому идёт последним.
+    for r in out_rows:
+        r["minpromo_price"] = minpromo_price(r, s)
+
     return {
         "rows": out_rows,
         "settings": s,
@@ -1027,6 +1048,150 @@ def _enriched(f: dict) -> dict:
     }
 
 
+# --- T-48: минимальная цена автоакций WB -------------------------------------
+# Не «наша» цена, а пол, ниже которого WB не должен опускать в автоакции. Считается
+# на каждую строку и живёт в колонке minpromo_price; доставляется в WB файлом
+# (API метода у WB нет), поэтому отдельного «применения» в кулдауне автопилота
+# это значение не участвует.
+MINPROMO_BLOCK_LABELS = {
+    7.0: "на 7 дней",
+    30.0: "на 30 дней",
+    0.0: "бессрочно",
+}
+MINPROMO_ROUND_STEPS = (1.0, 10.0, 50.0, 100.0)
+MINPROMO_ROWS_LIMIT = 100_000  # лимит WB на изменений в одном шаблоне
+MINPROMO_JOURNAL_LIMIT = 1_000  # сколько строк шаблона писать в журнал решений
+
+
+def _ceil_step(value: float, step) -> float:
+    """Округление вверх до кратного шагу (step<=1 — до целого рубля)."""
+    step = _num(step, 1.0)
+    if step <= 1.0:
+        return float(math.ceil(round(value, 6)))
+    return float(math.ceil(round(value / step, 6)) * step)
+
+
+def minpromo_floor_basis(row: dict, s: dict) -> float:
+    """База расчёта «по полам»: пол безубытка, а при его отсутствии себестоимость.
+
+    R14-фолбэк: если unit-экономики нет, полом считается net_cost с той же
+    «Минимальной маржей», что и в автопилоте, — иначе у части строк колонка
+    была бы пустой без всякой причины.
+    """
+    floor = _num(row.get("floor_price"))
+    if floor > 0:
+        return floor
+    net_cost = _num(row.get("net_cost"))
+    if net_cost <= 0:
+        return 0.0
+    return net_cost * (1 + _num(s.get("floor_margin_pct")) / 100)
+
+
+def minpromo_price(row: dict, s: dict) -> Optional[float]:
+    """Минимальная цена автоакций WB для строки (None — считать не из чего)."""
+    mode = str(s.get("minpromo_mode") or "floor_reserve")
+    if mode == "current_minus":
+        base = _num(row.get("current_vis")) * (1 - _num(s.get("minpromo_drop_pct")) / 100)
+    elif mode == "formula":
+        # (себестоимость + логистика/выкуп + хранение + услуги) / (1 − комиссия −
+        # налог − реклама − маржа); знаменатель > 0,05 как в поле безубытка.
+        buyout = max(0.01, _num(s.get("minpromo_buyout")))
+        denom = (1 - _num(row.get("comm_rate"))
+                 - _num(s.get("minpromo_tax_pct")) / 100
+                 - _num(s.get("minpromo_ads_pct")) / 100
+                 - _num(s.get("minpromo_margin_pct")) / 100)
+        base = (((_num(row.get("net_cost"))
+                 + _num(row.get("logistics_unit")) / buyout
+                 + _num(row.get("storage_unit"))
+                 + _num(row.get("other_unit"))) / denom)
+                if denom > 0.05 else 0.0)
+    elif mode == "floor":
+        base = minpromo_floor_basis(row, s)
+    else:  # floor_reserve — режим по умолчанию
+        base = minpromo_floor_basis(row, s) * (1 + _num(s.get("minpromo_reserve_pct")) / 100)
+    if base is None or base <= 0:
+        return None
+    return _ceil_step(base, s.get("minpromo_round"))
+
+
+def minpromo_block_label(s: dict) -> str:
+    """Подпись блокировки для шаблона WB («» — блокировку не ставим)."""
+    if not s.get("minpromo_block"):
+        return ""
+    days = _num(s.get("minpromo_block_days"), 30.0)
+    return MINPROMO_BLOCK_LABELS.get(days, MINPROMO_BLOCK_LABELS[30.0])
+
+
+def minpromo_template(rows: list, s: dict):
+    """Файл «Минимальные цены и блокировки для автоакций» (.xlsx) в формате WB.
+
+    WB не публикует метод API для этой функции — только Excel-шаблон в личном
+    кабинете, поэтому здесь формируется готовый файл для ручной загрузки.
+    Возвращает (BytesIO, число строк в файле, всего кандидатов).
+    """
+    block = minpromo_block_label(s)
+    nm_col, price_col, block_col = [], [], []
+    total = 0
+    for r in rows:
+        price = r.get("minpromo_price")
+        try:
+            nm = int(r.get("nm_id") or 0)
+        except (TypeError, ValueError):
+            nm = 0
+        if nm <= 0 or price is None:
+            continue
+        total += 1
+        if len(nm_col) >= MINPROMO_ROWS_LIMIT:
+            continue
+        nm_col.append(nm)
+        # WB принимает только целые цены; ниже 100 ₽ не ставим (как в apply-min).
+        price_col.append(max(100, int(math.ceil(_num(price) - 1e-9))))
+        block_col.append(block)
+    df = pd.DataFrame({
+        "Артикул WB": nm_col,
+        "Новая минимальная цена для применения скидки по автоакции": price_col,
+        "Новая блокировка применения скидки по автоакции": block_col,
+    })
+    return excel_io.df_to_excel_stream(df, sheet_name="Мин. цены автоакций"), len(df), total
+
+
+def record_minpromo_export(db: Session, rows: list, s: dict) -> int:
+    """Журнал: шаблон автоакций выгружен (applied_at=None — в WB ещё не загружен).
+
+    Журнал — аудит и источник даты «когда выгружали» для 30-дневного напоминания,
+    поэтому пишется не на каждую строку файла, а ограниченно: файл может быть
+    на 100 000 строк (лимит WB), журнала такого размера никто не читает.
+    """
+    now = datetime.now()
+    block = minpromo_block_label(s) or "без блокировки"
+    n = 0
+    for r in rows[:MINPROMO_JOURNAL_LIMIT]:
+        price = r.get("minpromo_price")
+        if price is None:
+            continue
+        db.add(models.PriceChange(
+            article=r["article"], nm_id=str(r.get("nm_id") or ""),
+            calculated_at=now, applied_at=None,
+            before_discount=float(r.get("current_discount") or 0),
+            after_discount=None,
+            action="MINPRICE", status="exported",
+            reason=f"шаблон автоакций: мин. цена {int(price)} ₽, {block}",
+        ))
+        n += 1
+    db.commit()
+    return n
+
+
+def minpromo_last_export(db: Session) -> Optional[datetime]:
+    """Момент последней выгрузки шаблона автоакций (None — ещё не выгружали)."""
+    return db.execute(
+        select(func.max(models.PriceChange.calculated_at)).where(
+            models.PriceChange.action == "MINPRICE",
+            models.PriceChange.status == "exported",
+        )
+    ).scalar_one_or_none()
+
+
 def _base_row(f: dict) -> dict:
     return {
         "article": f["article"], "name": f["name"], "replenishable": f["replenishable"],
@@ -1037,6 +1202,7 @@ def _base_row(f: dict) -> dict:
         "doc": None, "conv_pct": None, "backlog": 0, "net_cost": f["net_cost"],
         "value": _num(f.get("value")), "supplier": (f.get("supplier") or ""),
         "comm_rate": f["comm_rate"], "floor_price": f["floor_price"],
+        "minpromo_price": None,
         "logistics_unit": _num(f.get("logistics_unit")),
         "storage_unit": _num(f.get("storage_unit")),
         "other_unit": _num(f.get("other_unit")),
