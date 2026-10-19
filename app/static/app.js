@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "119";
+const UI_VERSION = "121";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -996,6 +996,7 @@ async function loadTabInner(name, f) {
     else if (name === "automation-foldering") await renderAutomationFoldering();
     else if (name === "automation-names") await renderAutomationNames();
     else if (name === "automation-crop") await renderAutomationCrop();
+    else if (name === "automation-barcodes") await renderAutomationBarcodes();
   } catch (err) {
     console.error("loadTab error:", err);
     showLoadError(err);
@@ -3775,6 +3776,88 @@ async function renderAutomationNames() {
 
 async function renderAutomationCrop() { /* форма статична */ }
 
+async function renderAutomationBarcodes() {
+  const box = document.getElementById("autoBarPreviewBox");
+  if (box) box.innerHTML = "";
+}
+
+function _autoBarFormData() {
+  const fd = new FormData();
+  fd.append("codes", (document.getElementById("autoBarCodes") || {}).value || "");
+  fd.append("kind", (document.getElementById("autoBarType") || {}).value || "code128");
+  const fileEl = document.getElementById("autoBarFile");
+  if (fileEl && fileEl.files[0]) fd.append("file", fileEl.files[0]);
+  return fd;
+}
+
+function _autoBarRenderPreview(j) {
+  const box = document.getElementById("autoBarPreviewBox");
+  if (!box) return;
+  let html = "";
+  for (const it of j.items || []) {
+    if (it.ok && it.data_url) {
+      html += '<div class="auto-bar-item" title="' + escapeHtml(it.code) + '">'
+        + '<img src="' + it.data_url + '" alt="" loading="lazy">'
+        + '<div class="auto-bar-code">' + escapeHtml(it.code) + "</div></div>";
+    } else if (it.ok) {
+      html += '<div class="auto-bar-item auto-bar-ok" title="Проверен, без превью">'
+        + escapeHtml(it.code) + "</div>";
+    } else {
+      html += '<div class="auto-bar-item auto-bar-err" title="' + escapeHtml(it.error || "Ошибка") + '">'
+        + escapeHtml(it.code || "∅")
+        + '<div class="auto-bar-err-msg">' + escapeHtml(it.error || "Ошибка") + "</div></div>";
+    }
+  }
+  box.innerHTML = html || '<div class="empty">Нет кодов</div>';
+}
+
+async function onAutoBarPreview() {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Генерирую штрихкоды…"; msg.classList.remove("error"); }
+  try {
+    const j = await _autoPostJson("/api/automation/barcodes/preview", _autoBarFormData());
+    _autoBarRenderPreview(j);
+    if (msg) {
+      msg.textContent = "Готово: " + fmt(j.ok_count) + " из " + fmt(j.count)
+        + (j.truncated ? " (превью показано частично)" : "");
+    }
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+  }
+}
+
+async function onAutoBarBuild() {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Собираю архив…"; msg.classList.remove("error"); }
+  try {
+    const kind = (document.getElementById("autoBarType") || {}).value || "code128";
+    await _autoPostDownload("/api/automation/barcodes/build", _autoBarFormData(), "barcodes_" + kind + ".zip");
+    if (msg) msg.textContent = "Архив скачан";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+  }
+}
+
+async function onAutoBarFromCatalog() {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Читаю каталог…"; msg.classList.remove("error"); }
+  try {
+    const arts = (document.getElementById("autoBarCatalogArticles") || {}).value || "";
+    const resp = await fetch("/api/automation/barcodes/catalog" + qs({ articles: arts }), { signal: apiSignal() });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(j.detail || String(resp.status));
+    const codes = (j.items || []).map((r) => r.barcode).filter(Boolean);
+    const ta = document.getElementById("autoBarCodes");
+    if (ta) ta.value = codes.join("\n");
+    if (msg) {
+      msg.textContent = "Кодов из каталога: " + fmt(codes.length)
+        + (j.truncated ? " (список обрезан)" : "");
+    }
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+  }
+}
+
 function _autoFoldFormData() {
   const fd = new FormData();
   fd.append("articles", (document.getElementById("autoFoldArticles") || {}).value || "");
@@ -4088,9 +4171,17 @@ function initAutomationTabs() {
   initMenuSelect("autoFoldMarket");
   initMenuSelect("autoFoldOrder");
   initMenuSelect("autoCropType");
+  initMenuSelect("autoBarType");
   initAutoDropzone("autoFoldFile", "autoFoldDrop");
   initAutoDropzone("autoNamesFile", "autoNamesDrop");
   initAutoDropzone("autoCropFiles", "autoCropDrop");
+  initAutoDropzone("autoBarFile", "autoBarDrop");
+  const bPreview = document.getElementById("autoBarPreview");
+  if (bPreview) bPreview.addEventListener("click", onAutoBarPreview);
+  const bBuild = document.getElementById("autoBarBuild");
+  if (bBuild) bBuild.addEventListener("click", onAutoBarBuild);
+  const bCatalog = document.getElementById("autoBarFromCatalog");
+  if (bCatalog) bCatalog.addEventListener("click", onAutoBarFromCatalog);
 }
 
 let pullsCache = null;

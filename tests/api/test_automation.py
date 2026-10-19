@@ -152,3 +152,156 @@ def test_crop_build(client):
 def test_crop_build_no_images(client):
     r = client.post("/api/automation/crop/build", data={"type_clothes": "Одежда по пояс"})
     assert r.status_code == 400
+
+
+# ------------------------------------------------------------------ штрихкоды
+
+
+def test_barcodes_preview_ok(client):
+    r = client.post(
+        "/api/automation/barcodes/preview",
+        data={"codes": "ABC123\n460123456789", "kind": "code128"},
+    )
+    assert r.status_code == 200
+    j = r.json()
+    assert j["count"] == 2 and j["ok_count"] == 2
+    assert j["truncated"] is False
+    for it in j["items"]:
+        assert it["ok"] and it["data_url"].startswith("data:image/png;base64,")
+
+
+def test_barcodes_preview_bad_kind(client):
+    r = client.post("/api/automation/barcodes/preview", data={"codes": "A", "kind": "qr"})
+    assert r.status_code == 400
+
+
+def test_barcodes_preview_empty(client):
+    r = client.post("/api/automation/barcodes/preview", data={"codes": "", "kind": "code128"})
+    assert r.status_code == 400
+
+
+def test_barcodes_preview_ean13_invalid_row_is_item_error(client):
+    r = client.post(
+        "/api/automation/barcodes/preview",
+        data={"codes": "ABC\n460123456789", "kind": "ean13"},
+    )
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok_count"] == 1
+    bad = [it for it in j["items"] if not it["ok"]]
+    assert len(bad) == 1 and "цифры" in bad[0]["error"]
+
+
+def test_barcodes_preview_from_file(client):
+    r = client.post(
+        "/api/automation/barcodes/preview",
+        data={"codes": "", "kind": "code128"},
+        files=[("file", ("codes.txt", b"K1\nK2\n", "text/plain"))],
+    )
+    assert r.status_code == 200
+    assert r.json()["count"] == 2
+
+
+def test_barcodes_preview_gs1_comma_inside_not_split(client):
+    """Регрессия T-49: запятая внутри кода маркировки не делит строку."""
+    line1 = "0104670630636090215LcFWqhXYe:XY91EE1292nJjYsEmycZ+vKSpUiOOz+UOVn9cFEnjk8uO5f4Tx1ho="
+    line2 = "0104670630636090215gE0XLM,YF-Wg91EE1292VuREv8Zh8IFEiWr6bTdtw82pE7i/E+j+8BKvhpehplQ="
+    r = client.post(
+        "/api/automation/barcodes/preview",
+        data={"codes": line1 + "\n" + line2, "kind": "datamatrix"},
+    )
+    assert r.status_code == 200
+    j = r.json()
+    assert j["count"] == 2 and j["ok_count"] == 2
+    assert j["items"][1]["code"] == line2
+
+
+def test_barcodes_preview_crlf_lines(client):
+    r = client.post(
+        "/api/automation/barcodes/preview",
+        data={"codes": "K1\r\nK2\r\n", "kind": "code128"},
+    )
+    assert r.status_code == 200
+    assert r.json()["count"] == 2
+
+
+def test_barcodes_preview_txt_file_keeps_comma(client):
+    payload = "0104670630636090215gE0XLM,YF-Wg91EE1292\nABC\n".encode()
+    r = client.post(
+        "/api/automation/barcodes/preview",
+        data={"codes": "", "kind": "datamatrix"},
+        files=[("file", ("codes.txt", payload, "text/plain"))],
+    )
+    assert r.status_code == 200
+    j = r.json()
+    assert j["count"] == 2
+    assert j["items"][0]["code"] == "0104670630636090215gE0XLM,YF-Wg91EE1292"
+
+
+def test_barcodes_build_zip(client):
+    r = client.post(
+        "/api/automation/barcodes/build",
+        data={"codes": "A1\nA2", "kind": "code128"},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    assert "barcodes_code128.zip" in r.headers["content-disposition"]
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    assert z.namelist() == ["bar_0001.png", "bar_0002.png"]
+    assert z.read("bar_0001.png").startswith(b"\x89PNG")
+
+
+def test_barcodes_build_all_invalid(client):
+    r = client.post(
+        "/api/automation/barcodes/build",
+        data={"codes": "abc", "kind": "ean13"},
+    )
+    assert r.status_code == 400
+
+
+def test_barcodes_build_empty(client):
+    r = client.post("/api/automation/barcodes/build", data={"codes": "", "kind": "code128"})
+    assert r.status_code == 400
+
+
+def test_barcodes_catalog_sizes_and_fallback(client, db):
+    db.add(models.Product(article="A1", name="С размерами", barcode=""))
+    db.add_all([
+        models.ProductSize(article="A1", size="S", barcode="4600000000012"),
+        models.ProductSize(article="A1", size="M", barcode=""),
+    ])
+    db.add(models.Product(article="B1", name="Без размеров", barcode="4600000000029"))
+    db.add(models.Product(article="C1", name="Пусто", barcode=""))
+    db.commit()
+
+    r = client.get("/api/automation/barcodes/catalog")
+    assert r.status_code == 200
+    j = r.json()
+    assert j["count"] == 2 and j["truncated"] is False
+    assert j["items"] == [
+        {"article": "A1", "size": "S", "barcode": "4600000000012"},
+        {"article": "B1", "size": "", "barcode": "4600000000029"},
+    ]
+
+
+def test_barcodes_catalog_filter_articles(client, db):
+    db.add(models.Product(article="A1", name="", barcode="4600000000012"))
+    db.add(models.Product(article="B1", name="", barcode="4600000000029"))
+    db.commit()
+
+    r = client.get("/api/automation/barcodes/catalog", params={"articles": "a1"})
+    j = r.json()
+    assert j["count"] == 1 and j["items"][0]["article"] == "A1"
+
+
+def test_barcodes_catalog_limit(client, db):
+    db.add(models.Product(article="A1", name="Товар", barcode=""))
+    db.add_all([
+        models.ProductSize(article="A1", size=f"{i}", barcode=f"46000000000{i}")
+        for i in range(3)
+    ])
+    db.commit()
+
+    r = client.get("/api/automation/barcodes/catalog", params={"limit": 2})
+    j = r.json()
+    assert j["count"] == 2 and j["truncated"] is True

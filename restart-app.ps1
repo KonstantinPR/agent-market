@@ -7,17 +7,27 @@ $appDir = "C:\python_projects\agent_market"
 $py = "C:\python_projects\agent_market\venv\Scripts\python.exe"
 
 Write-Host "Stopping agent_market server ..."
-# --reload runs a supervisor + worker; stop both.
+# --reload runs a supervisor + worker; stop both. The worker is a
+# multiprocessing spawn_main child (its CommandLine has no app.main:app),
+# so match it by the venv path too — otherwise orphans keep the port.
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
   Where-Object {
     $_.CommandLine -match 'app\.main:app' -or
-    $_.CommandLine -match 'agent_market.+app.+main\.py'
+    $_.CommandLine -match 'agent_market.+app.+main\.py' -or
+    ($_.CommandLine -match 'spawn_main' -and $_.CommandLine -match 'agent_market[\\/]venv')
   } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 # Fallback: free the port if something still listens.
 Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
   ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 800
+# The port must be actually free — a lingering LISTEN means orphans survived.
+for ($i = 0; $i -lt 20; $i++) {
+  $owners = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+  if (-not $owners) { break }
+  $owners | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Milliseconds 500
+}
 
 Write-Host "Starting agent_market server on port $port (auto-reload) ..."
 Start-Process -FilePath $py -WorkingDirectory $appDir -WindowStyle Hidden `

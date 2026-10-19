@@ -23,6 +23,7 @@ NO_COLVIEW_TABS = {
     "dashboard", "wh-cp", "wh-receipt", "wh-shipment",
     "yandex", "tickets",
     "automation-foldering", "automation-names", "automation-crop",
+    "automation-barcodes",
 }
 
 
@@ -126,6 +127,6 @@ def test_api_tabs_have_pull_route():
 
 def test_manifest_counts_are_stable():
     """Страховка от регрессии парсинга: числа зафиксированы осознанно."""
-    assert len(nav_tabs()) == 30, "изменилось число пунктов меню — обновите тест осознанно"
-    assert len(section_tabs()) == 32, "изменилось число секций — обновите тест осознанно"
+    assert len(nav_tabs()) == 31, "изменилось число пунктов меню — обновите тест осознанно"
+    assert len(section_tabs()) == 33, "изменилось число секций — обновите тест осознанно"
     assert len(pull_tabs()) == 16, "изменилось число записей apiPullByTab — обновите тест"

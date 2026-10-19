@@ -1037,6 +1037,27 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 }
 .dropzone .dz-label { pointer-events: none; }
 
+/* --------------------------- T-49: штрихкоды --------------------------- */
+.auto-bar-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.auto-bar-item {
+  width: 160px;
+  border: 1px solid #d5deeb;
+  border-radius: 6px;
+  padding: 8px;
+  text-align: center;
+  background: #fff;
+}
+.auto-bar-item img { max-width: 100%; height: auto; }
+.auto-bar-code { font-size: 11px; word-break: break-all; margin-top: 6px; color: #333; }
+.auto-bar-ok { display: flex; align-items: center; justify-content: center; min-height: 48px; color: #6b7a90; font-size: 12px; word-break: break-all; }
+.auto-bar-err { border-color: #d9a29b; background: #fdf5f4; color: #b3372b; font-size: 12px; word-break: break-all; }
+.auto-bar-err-msg { font-size: 10px; margin-top: 6px; opacity: .85; }
+
 /* ------------------------------- тикеты ------------------------------- */
 .tickets-board {
   display: grid;

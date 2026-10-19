@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Раздел «Автоматизация»: фолдеринг фото, размножение имён, кроп."""
+"""Раздел «Автоматизация»: фолдеринг фото, размножение имён, кроп, штрихкоды."""
 
 from fastapi import Form
 
 from app.api._common import *  # noqa: F401,F403
+from app.services import barcodes as barcode_service
 from app.services import img_cropper as crop_service
 from app.services import img_foldering as foldering_service
 from app.services import names_multiply as names_service
@@ -77,6 +78,43 @@ async def _load_inputs(text: str, upfile) -> tuple[list[str], dict]:
             arts.extend(f_arts)
             nm.update(f_nm)
     return arts, nm
+
+
+def _parse_barcodes_file(name: str, data: bytes) -> list[str]:
+    """Файл с баркодами: txt/tsv — построчно (код целиком), csv/xlsx — первый столбец."""
+    low = (name or "").lower()
+    if low.endswith((".xlsx", ".xlsm")):
+        df = excel_io.read_excel_bytes(data)
+    elif low.endswith((".csv", ".tsv")):
+        df = pd.read_csv(BytesIO(data), sep=None, engine="python", header=None, dtype=str)
+    else:
+        # txt: каждая строка — цельный код; пробелы и запятые внутри кода сохраняются.
+        text = data.decode("utf-8-sig", errors="replace")
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    codes: list[str] = []
+    for v in df.iloc[:, 0].tolist():
+        s = "" if v is None else str(v).strip()
+        if s and s.lower() not in ("nan", "none"):
+            codes.append(s)
+    return codes
+
+
+async def _load_barcodes(text: str, upfile) -> list[str]:
+    """Коды из textarea и/или файла. textarea: строго построчно — код может
+    содержать пробелы, запятые и прочие разделители (GS1/Честный знак)."""
+    codes: list[str] = []
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    for line in text.split("\n"):
+        line = line.strip()
+        if line:
+            codes.append(line)
+
+    if upfile is not None:
+        data = await upfile.read()
+        if data:
+            codes.extend(_parse_barcodes_file(upfile.filename or "", data))
+    return codes
 
 
 def _db_nm_map(db) -> dict:
@@ -239,3 +277,106 @@ async def automation_crop_build(
         raise HTTPException(status_code=400, detail="Нет изображений для обработки")
     buf = crop_service.crop_images(items, type_clothes)
     return _zip_response(buf, "crop.zip")
+
+
+# ------------------------------------------------------------------ штрихкоды
+
+
+@router.post("/automation/barcodes/preview")
+async def automation_barcodes_preview(
+    codes: str = Form(""),
+    kind: str = Form("code128"),
+    file: UploadFile = File(None),
+):
+    """Предпросмотр: первые MAX_PREVIEW кодов рендерятся в data-url PNG."""
+    if kind not in barcode_service.KINDS:
+        raise HTTPException(status_code=400, detail=f"Неизвестный тип штрихкода: {kind}")
+    codes_list = await _load_barcodes(codes, file)
+    if not codes_list:
+        raise HTTPException(status_code=400, detail="Не переданы коды")
+
+    rows = barcode_service.generate_batch(codes_list, kind)
+    items = [
+        {
+            "index": i,
+            "code": r["code"],
+            "ok": r["ok"],
+            "error": r["error"],
+            "kind": r["kind"],
+            "data_url": barcode_service.to_data_url(r["png"]) if r["png"] else None,
+        }
+        for i, r in enumerate(rows, 1)
+    ]
+    return {
+        "count": len(items),
+        "ok_count": sum(1 for r in rows if r["ok"]),
+        "truncated": len(items) > barcode_service.MAX_PREVIEW,
+        "items": items,
+    }
+
+
+@router.post("/automation/barcodes/build")
+async def automation_barcodes_build(
+    codes: str = Form(""),
+    kind: str = Form("code128"),
+    file: UploadFile = File(None),
+):
+    """ZIP с PNG-штрихкодами: bar_0001.png, bar_0002.png…"""
+    if kind not in barcode_service.KINDS:
+        raise HTTPException(status_code=400, detail=f"Неизвестный тип штрихкода: {kind}")
+    codes_list = await _load_barcodes(codes, file)
+    if not codes_list:
+        raise HTTPException(status_code=400, detail="Не переданы коды")
+    try:
+        buf = barcode_service.build_zip(codes_list, kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _zip_response(buf, f"barcodes_{kind}.zip")
+
+
+@router.get("/automation/barcodes/catalog")
+def automation_barcodes_catalog(
+    articles: str = "",
+    limit: int = 5000,
+    db: Session = Depends(get_db),
+):
+    """Штрихкоды из каталога: product_sizes.barcode; у товара без размеров —
+    fallback на products.barcode."""
+    arts = [t.strip().upper() for t in (articles or "").replace(",", " ").split() if t.strip()]
+    q = (
+        select(
+            models.Product.article,
+            models.Product.barcode.label("product_barcode"),
+            models.ProductSize.id.label("size_id"),
+            models.ProductSize.size,
+            models.ProductSize.barcode,
+        )
+        .outerjoin(models.ProductSize, models.ProductSize.article == models.Product.article)
+        .order_by(models.Product.article, models.ProductSize.size)
+    )
+    if arts:
+        q = q.where(models.Product.article.in_(arts))
+
+    by_article: dict[str, dict] = {}
+    for art, bc_product, size_id, size, bc_size in db.execute(q).all():
+        info = by_article.setdefault(art, {"product": bc_product, "sizes": []})
+        if size_id is not None:
+            info["sizes"].append((size, bc_size))
+
+    items: list[dict] = []
+    truncated = False
+    for art, info in by_article.items():
+        rows = (
+            [(size, bc) for size, bc in info["sizes"] if str(bc or "").strip()]
+            if info["sizes"]
+            else [("", info["product"])]
+        )
+        for size, bc in rows:
+            barcode = str(bc or "").strip()
+            if not barcode:
+                continue
+            if len(items) >= max(int(limit or 0), 1):
+                truncated = True
+                break
+            items.append({"article": art, "size": size or "", "barcode": barcode})
+    return {"items": items, "count": len(items), "truncated": truncated}

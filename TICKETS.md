@@ -123,6 +123,20 @@
 - [T-44] (medium) Потребность: свернуть «Пожелание» в меню-селектор (как PDF)
     > где: index.html тулбар + app.js buildReplenishWishMenu/init
 
+- [T-49] (medium) Автоматизация: генерация штрихкодов (Code128 / EAN-13 / Data Matrix)
+    > где: app/services/barcodes.py + app/api/automation.py (barcodes/preview,
+    > barcodes/build, barcodes/catalog) + вкладка «Генерация штрихкодов» (UI v121)
+    > Тело: предпросмотр сеткой PNG (data-url, лимит 300), ZIP bar_NNNN.png,
+    > подстановка кодов из каталога (product_sizes.barcode, у товара без
+    > размеров — fallback products.barcode). Ввод — строго по одному коду в
+    > строке (запятые/двоеточия внутри кода сохраняются; txt/csv/xlsx —
+    > первый столбец). Строки >100 символов — Data Matrix; EAN-13 — своя
+    > проверка контрольной цифры (python-barcode её не валидирует, молча
+    > пересчитывает). Data Matrix: шапка «ЧЕСТНЫЙ ЗНАК» (центровка, ужимание
+    > под ширину матрицы) + подпись кода 3 строки как в finance
+    > ([0:18]/[18:31]/[32:38]). Зависимости: python-barcode, pylibdmtx;
+    > шрифт подписей — системный Arial.
+
 ## Заблокированные
 
 - [T-26] (medium) Ozon: нативная группировка товаров вместо своей по артикулу

@@ -68,6 +68,7 @@
         <a class="nav-link" data-tab="automation-foldering" href="#">Фото для маркетплейса</a>
         <a class="nav-link" data-tab="automation-names" href="#">Размножить имена</a>
         <a class="nav-link" data-tab="automation-crop" href="#">Кроп изображений</a>
+        <a class="nav-link" data-tab="automation-barcodes" href="#">Генерация штрихкодов</a>
       </div>
     </div>
     <a class="nav-link" data-tab="tickets" href="#">Тикеты</a>
@@ -940,6 +941,35 @@
       </div>
     </div>
   </section>
+
+  <section id="tab-automation-barcodes" class="pane">
+    <div class="wb-form">
+      <p class="hint">Генерация штрихкодов: Code128 (универсальный), EAN-13 (GTIN для карточек WB/Ozon, 12 или 13 цифр) и Data Matrix (Честный знак). Строки длиннее 100 символов рисуются как Data Matrix автоматически. Коды — строго по одному в строке; пробелы, запятые и двоеточия внутри кода сохраняются (важно для кодов маркировки). Файл — txt (построчно) или csv/xlsx (первый столбец). На выходе — ZIP с PNG.</p>
+      <div class="toolbar">
+        <select id="autoBarType" title="Тип штрихкода">
+          <option value="code128" selected>Code128</option>
+          <option value="ean13">EAN-13</option>
+          <option value="datamatrix">Data Matrix (Честный знак)</option>
+        </select>
+        <button id="autoBarPreview" class="btn">Предпросмотр</button>
+        <button id="autoBarBuild" class="btn btn-primary">Скачать ZIP</button>
+      </div>
+      <div class="toolbar">
+        <textarea id="autoBarCodes" rows="6" placeholder="Штрихкоды — по одному в строку" style="width:100%"></textarea>
+      </div>
+      <div class="dz-row">
+        <div class="dropzone" id="autoBarDrop">
+          <span class="dz-label">Перетащите сюда файл с кодами (txt/csv/xlsx) — или нажмите для выбора</span>
+        </div>
+        <input type="file" id="autoBarFile" class="hidden" accept=".txt,.csv,.tsv,.xlsx,.xlsm">
+      </div>
+      <div class="toolbar">
+        <input id="autoBarCatalogArticles" type="text" placeholder="Артикулы для каталога (пусто — все)" style="flex:1;min-width:200px">
+        <button id="autoBarFromCatalog" class="btn" title="Подставить в поле выше штрихкоды товаров из каталога (Наш склад → Товары)">Взять из каталога</button>
+      </div>
+      <div id="autoBarPreviewBox" class="auto-bar-grid"></div>
+    </div>
+  </section>
 </main>
 <div id="cabDrawerOverlay" class="drawer-overlay hidden"></div>
 <aside id="cabDrawer" class="drawer hidden" aria-label="Личные кабинеты">
@@ -1032,7 +1062,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=119"></script>
+  <script src="/static/app.js?v=121"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>
