@@ -2024,10 +2024,11 @@ def test_minpromo_price_none_when_no_basis():
 
 
 def test_minpromo_price_current_minus():
-    """current_minus: текущая витринная цена − N%."""
+    """current_minus: текущая витринная цена − N% (границы сняты для чистоты теста)."""
     row = {"floor_price": 500.0, "current_vis": 2000.0, "comm_rate": 0.15,
            "net_cost": 300.0, "nm_id": "1"}
-    s = merge_settings({"minpromo_mode": "current_minus", "minpromo_drop_pct": 15.0})
+    s = merge_settings({"minpromo_mode": "current_minus", "minpromo_drop_pct": 15.0,
+                        "minpromo_min_pct": 0.0, "minpromo_max_pct": 100.0})
     assert pricing_service.minpromo_price(row, s) == 1700.0  # 2000 × 0.85
 
 
@@ -2059,6 +2060,58 @@ def test_minpromo_block_label():
                                                  "minpromo_block_days": 0.0}) == "бессрочно"
     assert pricing_service.minpromo_block_label({"minpromo_block": False,
                                                  "minpromo_block_days": 7.0}) == ""
+
+
+def test_minpromo_price_clamped_by_max_pct():
+    """Граница сверху: floor выше max_pct от текущей цены → зажимается."""
+    row = {"floor_price": 1800.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor", "minpromo_max_pct": 80.0})
+    # floor=1800 > 2000×0.80=1600 → 1600, bound="max"
+    assert pricing_service.minpromo_price(row, s) == 1600.0
+    assert row["minpromo_bound"] == "max"
+
+
+def test_minpromo_price_clamped_by_min_pct():
+    """Граница снизу: floor ниже min_pct от текущей цены → зажимается."""
+    row = {"floor_price": 100.0, "current_vis": 1000.0, "comm_rate": 0.15,
+           "net_cost": 50.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor", "minpromo_min_pct": 20.0})
+    # floor=100 < 1000×0.20=200 → 200, bound="min"
+    assert pricing_service.minpromo_price(row, s) == 200.0
+    assert row["minpromo_bound"] == "min"
+
+
+def test_minpromo_price_no_clamp_inside_bounds():
+    """Внутри границ — значение не меняется, bound=None."""
+    row = {"floor_price": 1000.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor_reserve",
+                        "minpromo_reserve_pct": 5.0,
+                        "minpromo_min_pct": 20.0, "minpromo_max_pct": 80.0})
+    # floor×1.05=1050; lo=400, hi=1600 → внутри, bound=None
+    assert pricing_service.minpromo_price(row, s) == 1050.0
+    assert row["minpromo_bound"] is None
+
+
+def test_minpromo_price_no_clamp_when_no_current_vis():
+    """current_vis=0 → нет точки отсчёта, clamp не применяется."""
+    row = {"floor_price": 1800.0, "current_vis": 0.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor", "minpromo_max_pct": 80.0})
+    assert pricing_service.minpromo_price(row, s) == 1800.0
+    assert row["minpromo_bound"] is None
+
+
+def test_minpromo_price_swapped_bounds():
+    """Перепутанные min>max → меняем местами, не падаем."""
+    row = {"floor_price": 1000.0, "current_vis": 2000.0, "comm_rate": 0.15,
+           "net_cost": 300.0, "nm_id": "1"}
+    s = merge_settings({"minpromo_mode": "floor",
+                        "minpromo_min_pct": 80.0, "minpromo_max_pct": 20.0})
+    # lo=1600, hi=400 → swap → lo=400, hi=1600; floor=1000 внутри
+    assert pricing_service.minpromo_price(row, s) == 1000.0
+    assert row["minpromo_bound"] is None
 
 
 def test_minpromo_price_present_in_recommendations(db):

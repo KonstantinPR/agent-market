@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "118";
+const UI_VERSION = "119";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -6691,7 +6691,11 @@ const pricingHeaders = [
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money , tip: "Хранение на единицу по детализации WB, включая оценку безартикульных плат. Тоже входит в формулу минимальной цены."},
   { k: "price", label: "Цена базовая, руб", num: true, render: cellFmts.money , tip: "Базовая цена карточки WB (price из прайса), от неё считается витринная цена со скидкой."},
   { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money , tip: "Минимальная цена безубыточности: себестоимость + логистика + комиссия + хранение + услуги, ₽/шт."},
-  { k: "minpromo_price", label: "Мин. цена автоакций, руб", num: true, render: cellFmts.money , tip: "ГРАНИЦА для автоакций WB: ниже неё маркетплейс не должен опускать цену. Это НЕ фактическая цена и НЕ пол безубыточности автопилота — формулой и запасом управляет отдельный селектор «Мин. цена автоакций ▾». По умолчанию = пол безубыточности + запас, округление вверх. Загружается в WB файлом (шаблон «Минимальные цены и блокировки для автоакций»), потому что метода API у WB нет; действует 30 дней с даты загрузки."},
+  { k: "minpromo_price", label: "Мин. цена автоакций, руб", num: true, render: (v, r) => {
+    if (v == null) return "—";
+    const mark = r.minpromo_bound ? ' <span class="mp-warn" title="Значение упёрлось в границу ' + (r.minpromo_bound === "min" ? "мин. " : "макс. ") + 'от текущей цены (minpromo_min/max_pct)">⚠</span>' : "";
+    return cellFmts.money(v) + mark;
+  }, tip: "ГРАНИЦА для автоакций WB: ниже неё маркетплейс не должен опускать цену. Это НЕ фактическая цена и НЕ пол безубыточности автопилота — формулой и запасом управляет отдельный селектор «Мин. цена автоакций ▾». По умолчанию = пол безубыточности + запас, округление вверх. Значение зажимается в границы minpromo_min_pct..maxpromo_max_pct от текущей цены; ⚠ = упёрлось в границу. Загружается в WB файлом (шаблон «Минимальные цены и блокировки для автоакций»), потому что метода API у WB нет; действует 30 дней с даты загрузки."},
   { k: "eff", label: "База расчёта, руб", num: true, render: cellFmts.money , tip: "Цена, от которой считается целевая скидка: витринная или ср. цена факт (если воронки нет)."},
   { k: "max_discount_item", label: "Макс. скидка, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки для этого товара, % — ограничение правила, ниже которого цена не опускается."},
   { k: "status", label: "Статус", render: cellFmts.text , tip: "Статус товара в расчёте цен — те же значения, что в служебной колонке решений."},
@@ -7266,6 +7270,12 @@ function buildPricingMinpromoPanel() {
     "WB принимает только целые цены. 1 — до рубля, 50 — до круглых 50/100/150…",
     g("minpromo_round", 1),
     [{ v: 1, t: "1 ₽" }, { v: 10, t: "10 ₽" }, { v: 50, t: "50 ₽" }, { v: 100, t: "100 ₽" }]));
+  panel.appendChild(_minpromoNum("minpromo_min_pct", "Граница снизу, % от текущей цены",
+    "Минимальная цена автоакций не опустится ниже этого % от текущей витринной цены. Защита от слишком низкого пола.",
+    g("minpromo_min_pct", 20), "0.1"));
+  panel.appendChild(_minpromoNum("minpromo_max_pct", "Граница сверху, % от текущей цены",
+    "Минимальная цена автоакций не поднимется выше этого % от текущей витринной цены. Защита от ситуации, когда скидка невозможна.",
+    g("minpromo_max_pct", 80), "0.1"));
 
   const bl = document.createElement("label");
   bl.className = "chk minpromo-block";

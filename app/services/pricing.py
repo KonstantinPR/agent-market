@@ -179,6 +179,8 @@ PRICING_DEFAULTS = {
     "minpromo_round": 1.0,              # шаг округления вверх: 1 / 10 / 50 / 100 ₽
     "minpromo_block": False,            # заблокировать снижение скидки автоакцией
     "minpromo_block_days": 30.0,        # 7 | 30 | 0 (бессрочно)
+    "minpromo_min_pct": 20.0,           # нижняя граница, % от текущей цены
+    "minpromo_max_pct": 80.0,           # верхняя граница, % от текущей цены
 }
 
 
@@ -1102,7 +1104,14 @@ def minpromo_floor_basis(row: dict, s: dict) -> float:
 
 
 def minpromo_price(row: dict, s: dict) -> Optional[float]:
-    """Минимальная цена автоакций WB для строки (None — считать не из чего)."""
+    """Минимальная цена автоакций WB для строки (None — считать не из чего).
+
+    После расчёта по выбранному режиму значение зажимается в границы
+    [current_vis × minpromo_min_pct%, current_vis × maxpromo_max_pct%],
+    чтобы пол не «уходил» слишком близко к себестоимости (нет скидки)
+    или слишком далеко (опасно низкая цена). Если значение упёрлось
+    в границу — в строку пишется minpromo_bound для UI-маркера ⚠.
+    """
     mode = str(s.get("minpromo_mode") or "floor_reserve")
     if mode == "current_minus":
         base = _num(row.get("current_vis")) * (1 - _num(s.get("minpromo_drop_pct")) / 100)
@@ -1125,6 +1134,22 @@ def minpromo_price(row: dict, s: dict) -> Optional[float]:
         base = minpromo_floor_basis(row, s) * (1 + _num(s.get("minpromo_reserve_pct")) / 100)
     if base is None or base <= 0:
         return None
+    # Sanity-границы: не ниже minpromo_min_pct и не выше maxpromo_max_pct от
+    # текущей витринной цены. Обе границы ≥ 0; если текущая цена неизвестна
+    # (0) — не зажимаем (нет точки отсчёта).
+    row["minpromo_bound"] = None
+    cur = _num(row.get("current_vis"))
+    if cur > 0:
+        lo = cur * max(0.0, _num(s.get("minpromo_min_pct"))) / 100.0
+        hi = cur * max(0.0, _num(s.get("minpromo_max_pct"))) / 100.0
+        if hi > 0 and lo > hi:  # защита от перепутанных настроек
+            lo, hi = hi, lo
+        if lo > 0 and base < lo:
+            base = lo
+            row["minpromo_bound"] = "min"
+        elif hi > 0 and base > hi:
+            base = hi
+            row["minpromo_bound"] = "max"
     return _ceil_step(base, s.get("minpromo_round"))
 
 
@@ -1216,7 +1241,7 @@ def _base_row(f: dict) -> dict:
         "doc": None, "conv_pct": None, "backlog": 0, "net_cost": f["net_cost"],
         "value": _num(f.get("value")), "supplier": (f.get("supplier") or ""),
         "comm_rate": f["comm_rate"], "floor_price": f["floor_price"],
-        "minpromo_price": None,
+        "minpromo_price": None, "minpromo_bound": None,
         "logistics_unit": _num(f.get("logistics_unit")),
         "storage_unit": _num(f.get("storage_unit")),
         "other_unit": _num(f.get("other_unit")),
