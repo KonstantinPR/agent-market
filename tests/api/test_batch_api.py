@@ -120,6 +120,13 @@ def test_batch_run_refresh_completes(db_engine, api_client, db, patch_factory):
     assert step["action"] == "refresh"
     assert step["status"] == "ok"
     assert step["cab_id"] == c.id
+    # подробный прогресс: под-этапы вложенного обновления (цены/остатки/…)
+    assert step.get("substeps"), "нет под-этапов обновления"
+    labels = [s["label"] for s in step["substeps"]]
+    assert "Цены" in labels and "Остатки" in labels
+    assert all(s["status"] == "ok" for s in step["substeps"])
+    # разрез по кабинетам тоже несёт под-этапы
+    assert st["cabs"][0]["steps"][0]["substeps"]
 
     # состояние и список заданий доступны через API
     r2 = api_client.get(f"/api/batch/{job_id}")

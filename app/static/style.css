@@ -187,6 +187,18 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 .batch-hint:empty { display: none; }
 .refresh-step .rs-link { margin-left: 8px; font-size: 12px; color: #0a58ca; }
 
+/* «Массовые действия»: группа кабинета и вложенные под-этапы обновления. */
+.batch-cab { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 3px; font-weight: 600; color: #333; }
+.batch-cab:first-child { margin-top: 2px; }
+.batch-cab .bc-mp { font-weight: 400; font-size: 12px; color: #777; }
+.batch-cab .bc-state { font-weight: 400; font-size: 12px; color: #777; }
+.batch-cab .bc-state.running { color: #0a58ca; }
+.batch-cab .bc-state.done { color: #2e7d32; }
+.batch-cab .bc-state.failed { color: #a40e26; }
+.refresh-sub { margin: 2px 0 6px 14px; padding-left: 10px; border-left: 2px solid #e3e3e3; }
+.refresh-step.sub { padding: 1px 8px; font-size: 12px; }
+.refresh-step-note.sub, .refresh-step-error.sub { font-size: 11px; margin-left: 24px; }
+
 .menu-btn { display: none; border: 1px solid #ddd; background: #fff; font-size: 20px; line-height: 1; padding: 4px 10px; border-radius: 5px; cursor: pointer; color: #333; }
 .menu-btn:hover { border-color: #111; }
 

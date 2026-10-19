@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "123";
+const UI_VERSION = "124";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -5791,6 +5791,8 @@ const REFRESH_STATUS = {
 const STEP_STATUS = {
   pending: "—", running: "выполняется…", ok: "ок", failed: "ошибка",
 };
+// Статус связки в «Массовых действиях» (шапка группы кабинетов).
+const CAB_STATUS = { running: "идёт", done: "готово", failed: "ошибка" };
 
 let refreshPoll = null;
 let refreshJobs = [];   // [{api, jobId, rejected, msg, state, done}]
@@ -6368,6 +6370,34 @@ function refreshHeaderText() {
   return { text: parts.join(" · "), error };
 }
 
+// Один шаг задания (действие батча или этап обычного обновления) + под-этапы.
+// Для шага «Обновить данные» в батче под ним рисуются живые под-этапы вложенного
+// обновления (Карточки товара / Остатки / Цены / Воронка …) с их статусом.
+function stepHtml(j, s) {
+  let extra = "";
+  if (j.batch && s.action === "minpromo" && s.status === "ok" && s.cab_id) {
+    extra = ' <a class="rs-link" href="/api/batch/' + j.jobId
+      + "/minpromo/" + s.cab_id + '">скачать</a>';
+  }
+  let h = '<div class="refresh-step ' + s.status + '">' +
+    '<span class="rs-name">' + escapeHtml(s.label) + "</span>" +
+    '<span class="rs-status">' + escapeHtml(stepText(s)) + "</span>" + extra + "</div>";
+  if (s.note) h += '<div class="refresh-step-note">' + escapeHtml(s.note) + "</div>";
+  if (s.error) h += '<div class="refresh-step-error">' + escapeHtml(s.error) + "</div>";
+  if (s.substeps && s.substeps.length) {
+    h += '<div class="refresh-sub">';
+    for (const sub of s.substeps) {
+      h += '<div class="refresh-step sub ' + sub.status + '">' +
+        '<span class="rs-name">' + escapeHtml(sub.label) + "</span>" +
+        '<span class="rs-status">' + escapeHtml(stepText(sub)) + "</span></div>";
+      if (sub.note) h += '<div class="refresh-step-note sub">' + escapeHtml(sub.note) + "</div>";
+      if (sub.error) h += '<div class="refresh-step-error sub">' + escapeHtml(sub.error) + "</div>";
+    }
+    h += "</div>";
+  }
+  return h;
+}
+
 function renderRefresh() {
   let h = "";
   let summary = "";
@@ -6383,17 +6413,19 @@ function renderRefresh() {
       h += '<div class="refresh-step running"><span class="rs-name">—</span><span class="rs-status">ожидание…</span></div>';
       continue;
     }
-    for (const s of j.state.steps) {
-      let extra = "";
-      if (j.batch && s.action === "minpromo" && s.status === "ok" && s.cab_id) {
-        extra = ' <a class="rs-link" href="/api/batch/' + j.jobId
-          + "/minpromo/" + s.cab_id + '">скачать</a>';
+    if (j.batch && j.state.cabs && j.state.cabs.length) {
+      for (const cab of j.state.cabs) {
+        const cs = CAB_STATUS[cab.status] || "";
+        h += '<div class="batch-cab">' +
+          '<span class="bc-name">' + escapeHtml(cab.owner || cab.name || ("#" + cab.id)) + "</span>" +
+          (cab.marketplace ? '<span class="bc-mp">' + escapeHtml(MP_LABELS[cab.marketplace] || cab.marketplace) + "</span>" : "") +
+          (cs ? '<span class="bc-state ' + escapeHtml(cab.status) + '">' + escapeHtml(cs) + "</span>" : "") +
+          "</div>";
+        for (const s of cab.steps) h += stepHtml(j, s);
+        if (cab.error) h += '<div class="refresh-step-error">' + escapeHtml(cab.error) + "</div>";
       }
-      h += '<div class="refresh-step ' + s.status + '">' +
-        '<span class="rs-name">' + escapeHtml(s.label) + "</span>" +
-        '<span class="rs-status">' + escapeHtml(stepText(s)) + "</span>" + extra + "</div>";
-      if (s.note) h += '<div class="refresh-step-note">' + escapeHtml(s.note) + "</div>";
-      if (s.error) h += '<div class="refresh-step-error">' + escapeHtml(s.error) + "</div>";
+    } else {
+      for (const s of j.state.steps) h += stepHtml(j, s);
     }
     const ok = j.state.steps.filter((s) => s.status === "ok").length;
     summary += (summary ? "; " : "") + lbl + ": " + ok + "/" + j.state.steps.length;

@@ -203,6 +203,33 @@ def _flat_label(cab: dict, action_label: str) -> str:
     return f'{cab["owner"]} · {action_label}'
 
 
+#: Поля под-этапа обновления, которые показываем в модалке (без служебных).
+_SUBSTEP_KEYS = ("kind", "label", "status", "rows", "db_rows", "window", "note", "error")
+
+
+def _refresh_substeps(step: dict) -> Optional[list]:
+    """Под-этапы вложенного обновления (карточки/остатки/цены/…) для шага refresh.
+
+    Берутся ЖИВЫЕ из refresh-задания: пока идёт прогон, статус этапа меняется
+    (pending→running→ok/failed). None — если шаг не refresh или задание пропало.
+    """
+    jid = step.get("refresh_job_id")
+    if not jid:
+        return None
+    st = refresh_service.job_state(jid)
+    if not st:
+        return None
+    return [{k: s.get(k) for k in _SUBSTEP_KEYS} for s in st.get("steps", [])]
+
+
+def _step_out(step: dict) -> dict:
+    out = dict(step)
+    subs = _refresh_substeps(step)
+    if subs is not None:
+        out["substeps"] = subs
+    return out
+
+
 def job_state(job_id: int) -> Optional[dict]:
     job = _JOBS.get(job_id)
     if job is None:
@@ -211,10 +238,11 @@ def job_state(job_id: int) -> Optional[dict]:
         "id": job["id"], "status": job["status"], "scope": job["scope"],
         "actions": job["actions"], "started_at": job["started_at"],
         "finished_at": job["finished_at"], "ok": job["ok"], "failed": job["failed"],
-        "steps": job["steps"],
+        "steps": [_step_out(s) for s in job["steps"]],
         "cabs": [{"id": c["id"], "name": c["name"], "owner": c["owner"],
                   "marketplace": c["marketplace"], "status": c["status"],
-                  "steps": c["steps"]} for c in job["cabs"]],
+                  "error": c.get("error", ""),
+                  "steps": [_step_out(s) for s in c["steps"]]} for c in job["cabs"]],
     }
 
 
@@ -280,11 +308,14 @@ def _wait_refresh(job_id: int, timeout_s: int = 1800) -> dict:
     return {"ok": 0, "failed": 1, "note": "обновление не завершилось за 30 мин"}
 
 
-def _do_refresh(info, include_detail: bool) -> tuple:
+def _do_refresh(info, include_detail: bool, step: dict) -> tuple:
     res = refresh_service.start_refresh(
         info.marketplace, include_detail=include_detail, cab_id=info.id)
     if not res.get("job_id"):
         return (res.get("rejected") or "нечего обновлять", 0)
+    # Ссылка на вложенное задание обновления: job_state() вытянет из него
+    # под-этапы (карточки/остатки/цены/…) для подробного прогресса в модалке.
+    step["refresh_job_id"] = res["job_id"]
     r = _wait_refresh(res["job_id"])
     note = f"шагов ок: {r['ok']}, с ошибкой: {r['failed']}"
     if r.get("note"):
@@ -402,7 +433,9 @@ def _worker(job_id: int, acts: list, scope: str, include_detail: bool) -> None:
                 for aid in acts:
                     step = _mk(aid)
                     if aid == "refresh":
-                        _run_step(job, step, lambda: _do_refresh(info, include_detail))
+                        _run_step(
+                            job, step,
+                            lambda: _do_refresh(info, include_detail, step))
                     elif aid == "recalc":
                         _run_step(job, step, lambda: _do_recalc(db, info, settings))
                     elif aid == "apply":
