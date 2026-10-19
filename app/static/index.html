@@ -75,22 +75,22 @@
   </div>
   <div class="navbar-right">
     <div class="dropdown" id="batchDropdown">
-      <button class="dropbtn" id="batchMenuBtn" aria-label="Массовые действия по связкам" title="Массовые действия по связкам">Массовые действия <span class="caret">&#9662;</span></button>
+      <button class="dropbtn" id="batchMenuBtn" aria-label="Массовые действия по связкам" title="Массовые действия по связкам: один прогон выбранных операций сразу по нескольким связкам. Порядок: обновление данных → пересчёт автопилота → отправка коррекции цен → шаблон мин. цены автоакций.">Массовые действия <span class="caret">&#9662;</span></button>
       <div class="dropdown-menu" id="batchMenu">
         <div class="batch-scope">
-          <label for="batchScope">Связки</label>
-          <select id="batchScope">
-            <option value="all">Все (с ключами)</option>
-            <option value="active">Активная</option>
-            <option value="main">Главная</option>
+          <label for="batchScope" title="Какие связки обработать. «Все (с ключами)» — каждая включённая связка, у которой заданы API-ключи (связки без ключей пропускаются). «Активная» — только открытая сейчас связка. «Главная» — связка, отмеченная как главная (её свежая рекомендация служит образцом для остальных, если включено следование за главной)." >Связки</label>
+          <select id="batchScope" title="Какие связки обработать в этом прогоне">
+            <option value="all" title="Все включённые связки с ключами API (без ключей — пропуск)">Все (с ключами)</option>
+            <option value="active" title="Только связка, открытая в шапке сейчас">Активная</option>
+            <option value="main" title="Только связка, помеченная как главная">Главная</option>
           </select>
         </div>
-        <label class="nav-link chk"><input type="checkbox" id="batchRefresh" checked> Обновить данные</label>
-        <label class="nav-link chk"><input type="checkbox" id="batchRecalc" checked> Пересчитать автопилот</label>
-        <label class="nav-link chk batch-write" title="Реальная запись новых цен в кабинет маркетплейса"><input type="checkbox" id="batchApply"> Отправить коррекцию цен</label>
-        <label class="nav-link chk"><input type="checkbox" id="batchMinpromo"> Мин. цены автоакций (шаблон)</label>
-        <label class="nav-link chk"><input type="checkbox" id="batchDetail"> Вкл. детализацию продаж</label>
-        <button class="batch-go" id="batchGo">Запустить</button>
+        <label class="nav-link chk" title="Обновить данные: выгрузка свежих продаж, остатков, цен, воронки и т.п. по каждой связке — как обычная кнопка обновления. Долгая операция (может идти несколько минут)."><input type="checkbox" id="batchRefresh" checked> Обновить данные</label>
+        <label class="nav-link chk" title="Пересчитать автопилот: заново посчитать рекомендации цен по актуальным данным и настройкам связки. В кабинете НИЧЕГО не меняет — только расчёт (результат можно посмотреть в разделе цен)."><input type="checkbox" id="batchRecalc" checked> Пересчитать автопилот</label>
+        <label class="nav-link chk batch-write" title="Отправить коррекцию цен: РЕАЛЬНАЯ запись рекомендованных цен в кабинет маркетплейса. Действие необратимо. Включается отдельно; перед запуском показывается предпросмотр с числом изменений по каждой связке и запрашивается подтверждение. По умолчанию выключено."><input type="checkbox" id="batchApply"> Отправить коррекцию цен</label>
+        <label class="nav-link chk" title="Мин. цены автоакций (шаблон): сформировать Excel-шаблон минимальных цен для автоакций WB по каждой связке, чтобы затем загрузить его в кабинет вручную (в WB нет API для минцен). Только для WB; готовый файл скачивается из окна прогресса. В кабинете ничего не меняет."><input type="checkbox" id="batchMinpromo"> Мин. цены автоакций (шаблон)</label>
+        <label class="nav-link chk" title="Вкл. детализацию продаж: при обновлении данных дополнительно тянуть детализацию (WB: finance, лимит 1 запрос / 12 ч; Ozon: детализация реализаций + выкупы). Даёт больше данных, но заметно удлиняет обновление."><input type="checkbox" id="batchDetail"> Вкл. детализацию продаж</label>
+        <button class="batch-go" id="batchGo" title="Запустить выбранные действия по выбранным связкам в порядке: обновление → пересчёт → коррекция цен → шаблон минцены">Запустить</button>
         <div class="batch-hint" id="batchHint"></div>
       </div>
     </div>
@@ -1079,7 +1079,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=122"></script>
+  <script src="/static/app.js?v=123"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>
