@@ -91,6 +91,13 @@ PRICING_DEFAULTS = {
     "dead_min_discount": 1.0,
     "prefer_raise": True,
     "prefer_raise_bias": 0.15,
+    # «Режим кассы»: срочность продаж. Один коэффициент со знаком:
+    #   > 0 — срочно нужны деньги (кассовый разрыв): снижаем охотнее и глубже,
+    #         зоны DOC сдвигаются в сторону снижения, шаг роста цены гасится;
+    #   < 0 — деньги есть, продажи притормаживаем: поднимаем охотнее, снижение
+    #         мягче (усиливает противовес prefer_raise);
+    #   0 — нейтрально (текущее поведение). Диапазон −2..+2.
+    "cash_flow_bias": 0.0,
     # T-24: какие параметры влияют на решение (панель-чекбоксы в UI);
     # выключенный фактор не меняет цену на основании своего сигнала.
     "use_inventory": True,
@@ -236,6 +243,37 @@ def _num(value, default=0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _cash_flow_bias(s: dict) -> float:
+    """«Режим кассы»: >0 — срочно нужны деньги (снижаем охотнее), <0 — деньги
+    есть (поднимаем/придерживаем), 0 — нейтрально. Диапазон −2..+2."""
+    return _clamp(_num(s.get("cash_flow_bias"), 0.0), -2.0, 2.0)
+
+
+def _bias_shift(s: dict) -> float:
+    """Итоговый сдвиг зон DOC: противовес автоскидкам (prefer_raise) вверх,
+    режим кассы (cash_flow_bias) — в обратную сторону. Ограничен −0.5..+1.0,
+    чтобы зоны не вырождались."""
+    pref = _num(s.get("prefer_raise_bias")) if s.get("prefer_raise") else 0.0
+    return _clamp(pref - 0.6 * _cash_flow_bias(s), -0.5, 1.0)
+
+
+def _damp_raise_settings(s: dict) -> dict:
+    """При срочности (cash_flow_bias>0) гасит величину шага роста цены.
+
+    Возвращает копию настроек с уменьшенными «растущими» процентами (или тот же
+    объект, если срочность не задана). Повышение цены при этом не выключается —
+    только становится осторожнее."""
+    urgency = _cash_flow_bias(s)
+    scale = _clamp(1.0 - 0.4 * max(0.0, urgency), 0.4, 1.0)
+    if scale >= 1.0:
+        return s
+    out = dict(s)
+    for key in ("max_raise_pct", "raise_pct_replenishable",
+                "demand_raise_pct", "demand_raise_pct_max"):
+        out[key] = _num(out.get(key)) * scale
+    return out
 
 
 def _wb_id(db: Session) -> int:
@@ -955,6 +993,14 @@ def recommendations(
             r["delta_discount"] = round(r["target_discount"] - r["current_discount"], 1)
         else:
             r["delta_discount"] = None
+
+    # Режим кассы: при срочности (cash_flow_bias>0) ослабляем «мягкость» снижения
+    # (режем цену ближе к расчётной), при «деньги есть» (<0) — усиливаем мягкость.
+    _urgency = _cash_flow_bias(s)
+    if _urgency > 0:
+        s["lower_soften"] = max(1.0, _num(s.get("lower_soften"), 1.0) / (1 + _urgency))
+    elif _urgency < 0:
+        s["lower_soften"] = min(8.0, _num(s.get("lower_soften"), 1.0) * (1 - 0.5 * _urgency))
 
     # R18: мягкость снижения — LOWER делим на lower_soften, RAISE не трогаем.
     # Идёт ДО акций, чтобы добор участия (promo_push_pct) добавлялся к уже
@@ -1880,11 +1926,14 @@ def _decide(f: dict, s: dict) -> dict:
 
     # Предпочтение «поднимать, а не опускать» (противовес автоскидкам WB):
     # зона дефицита шире (док_ло выше), зона перезапаса уже (док_хай выше),
-    # шаг снижения мягче.
-    bias = _num(s["prefer_raise_bias"]) if s.get("prefer_raise") else 0.0
+    # шаг снижения мягче. «Режим кассы» (cash_flow_bias) сдвигает то же самое в
+    # обратную сторону: >0 — срочно нужны деньги, <0 — придержать и поднять.
+    bias = _bias_shift(s)
     doc_low = _num(s["doc_low"]) * (1 + bias)
     doc_high = _num(s["doc_high"]) * (1 + bias)
     max_drop = _num(s["max_drop_pct"]) * (1 - bias)
+    # Срочность гасит величину шага роста цены (товар «придерживаем»).
+    s = _damp_raise_settings(s)
     # Рейтинг по отзывам (ценный товар): ограничивает скидку при LOWER.
     rating_scale = (_rating_discount_scale(f.get("feedback_rating"), s.get("min_rating_reviews", 4.0))
                     if use_reviews else 1.0)

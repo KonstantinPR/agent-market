@@ -986,6 +986,51 @@ def test_lower_soften_off_keeps_full_drop(db):
     assert row["target_discount"] == pytest.approx((1 - 1530 / 2000) * 100, abs=0.5)
 
 
+# ------------------------------------------------ Режим кассы (cash_flow_bias)
+
+
+def test_merge_settings_cash_flow_bias_default_and_numeric():
+    assert merge_settings()["cash_flow_bias"] == pytest.approx(0.0)
+    assert merge_settings({"cash_flow_bias": "1.5"})["cash_flow_bias"] == pytest.approx(1.5)
+    assert merge_settings({"cash_flow_bias": -1})["cash_flow_bias"] == pytest.approx(-1.0)
+
+
+def test_cash_flow_bias_present_in_ozon_defaults():
+    from app.services.pricing_ozon import OZON_PRICING_DEFAULTS
+    assert OZON_PRICING_DEFAULTS["cash_flow_bias"] == pytest.approx(0.0)
+
+
+def test_cash_flow_bias_positive_sells_harder_negative_holds(db):
+    """>0 — снижение глубже, <0 — мягче (при прочих равных)."""
+    neutral = _overstock_row(db, "CF1", "PCF1",
+                             {"prefer_raise": False, "lower_soften": 1.0})
+    urgent = _overstock_row(db, "CF2", "PCF2",
+                            {"prefer_raise": False, "lower_soften": 1.0,
+                             "cash_flow_bias": 1.0})
+    calm = _overstock_row(db, "CF3", "PCF3",
+                          {"prefer_raise": False, "lower_soften": 1.0,
+                           "cash_flow_bias": -1.0})
+    assert neutral["action"] == urgent["action"] == calm["action"] == "LOWER"
+    assert urgent["target_vis"] < neutral["target_vis"] < calm["target_vis"]
+
+
+def test_cash_flow_bias_positive_dampens_raise(db):
+    """>0 — шаг роста цены меньше (товар придерживаем ради быстрых денег)."""
+    def _raise_row(art, nm, bias):
+        _seed(db, art, nm, stock=8, replenishable=False,
+              sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()],
+              funnel=(100, 1, 1, 0, 900))
+        rec = recommendations(db, prices_df=_prices((nm, 1000, 10)), today=TODAY,
+                              settings={"cash_flow_bias": bias})
+        return _row(rec, art)
+
+    neutral = _raise_row("CFR1", "PCFR1", 0.0)
+    urgent = _raise_row("CFR2", "PCFR2", 1.0)
+    assert neutral["action"] == "RAISE"
+    # рост при срочности не больше нейтрального (обычно — меньше)
+    assert urgent["target_vis"] <= neutral["target_vis"] + 0.01
+
+
 # ------------------------------------------------------ T-24: факторы решения + базис WB-карточек
 
 

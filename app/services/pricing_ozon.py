@@ -34,8 +34,11 @@ from app.services import margin as margin_service
 from app.services.cabinets import active_credentials, db_active_info, resolve_main, run_per_link
 from app.services.pricing import (
     PRICING_DEFAULTS,
+    _bias_shift,
     _canon_article,
+    _cash_flow_bias,
     _clamp,
+    _damp_raise_settings,
     _num,
     _reason_add,
     project_velocity,
@@ -562,7 +565,9 @@ def _decide_ozon(f: dict, s: dict) -> dict:
             base, f, s, "LOWER" if doc >= _num(s["target_doc"]) else "RAISE",
             "продажи не влияют (фактор выключен)")
 
-    bias = _num(s["prefer_raise_bias"]) if s.get("prefer_raise") else 0.0
+    # Режим кассы (cash_flow_bias) + противовес автоскидкам: сдвиг зон DOC.
+    bias = _bias_shift(s)
+    s = _damp_raise_settings(s)
     doc_low = _num(s["doc_low"]) * (1 + bias)
     doc_high = _num(s["doc_high"]) * (1 + bias)
     max_raise = _num(s["max_raise_pct"])
@@ -780,6 +785,13 @@ def recommendations_ozon(
         f["floor_price"] = _floor_price(f, s)
         f["stock_value"] = round((st or 0) * net_cost, 2)
         rows.append(_decide_ozon(f, s))
+
+    # Режим кассы: срочность ослабляет мягкость снижения, «деньги есть» — усиливает.
+    _urgency = _cash_flow_bias(s)
+    if _urgency > 0:
+        s["lower_soften"] = max(1.0, _num(s.get("lower_soften"), 1.0) / (1 + _urgency))
+    elif _urgency < 0:
+        s["lower_soften"] = min(8.0, _num(s.get("lower_soften"), 1.0) * (1 - 0.5 * _urgency))
 
     # R18: мягкость снижения — LOWER делим на lower_soften, RAISE не трогаем.
     soften_lower_ozon(rows, s)
