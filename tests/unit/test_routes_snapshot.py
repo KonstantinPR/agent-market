@@ -24,6 +24,10 @@ DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
 GET /api/automation/template
+GET /api/batch
+GET /api/batch/actions
+GET /api/batch/{job_id}
+GET /api/batch/{job_id}/minpromo/{cab_id}
 GET /api/cabinet/current
 GET /api/cabinet/pricing-settings
 GET /api/cabinet/{cabinet_id}/settings
@@ -97,6 +101,8 @@ POST /api/automation/foldering/build
 POST /api/automation/foldering/preview
 POST /api/automation/names/download
 POST /api/automation/names/multiply
+POST /api/batch/preview
+POST /api/batch/run
 POST /api/cabinet/main
 POST /api/cabinet/pricing-settings/copy
 POST /api/cabinet/select

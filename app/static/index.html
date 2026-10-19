@@ -74,6 +74,26 @@
     <a class="nav-link" data-tab="tickets" href="#">Тикеты</a>
   </div>
   <div class="navbar-right">
+    <div class="dropdown" id="batchDropdown">
+      <button class="dropbtn" id="batchMenuBtn" aria-label="Массовые действия по связкам" title="Массовые действия по связкам">Массовые действия <span class="caret">&#9662;</span></button>
+      <div class="dropdown-menu" id="batchMenu">
+        <div class="batch-scope">
+          <label for="batchScope">Связки</label>
+          <select id="batchScope">
+            <option value="all">Все (с ключами)</option>
+            <option value="active">Активная</option>
+            <option value="main">Главная</option>
+          </select>
+        </div>
+        <label class="nav-link chk"><input type="checkbox" id="batchRefresh" checked> Обновить данные</label>
+        <label class="nav-link chk"><input type="checkbox" id="batchRecalc" checked> Пересчитать автопилот</label>
+        <label class="nav-link chk batch-write" title="Реальная запись новых цен в кабинет маркетплейса"><input type="checkbox" id="batchApply"> Отправить коррекцию цен</label>
+        <label class="nav-link chk"><input type="checkbox" id="batchMinpromo"> Мин. цены автоакций (шаблон)</label>
+        <label class="nav-link chk"><input type="checkbox" id="batchDetail"> Вкл. детализацию продаж</label>
+        <button class="batch-go" id="batchGo">Запустить</button>
+        <div class="batch-hint" id="batchHint"></div>
+      </div>
+    </div>
     <button class="dropbtn cab-btn" id="cabBtn" aria-label="Личные кабинеты" title="Личные кабинеты">
       <span id="cabBtnLabel">…</span>
       <span class="caret">&#9662;</span>
@@ -991,9 +1011,6 @@
         <span id="cabEditorMsg" class="msg"></span>
       </div>
     </div>
-    <div class="cab-actions">
-      <button id="cabRefreshAll" class="btn btn-primary">Обновить всё</button>
-    </div>
     <div class="cab-settings">
       <label class="cab-opt cab-main" title="T-33: связка, за свежей рекомендацией которой следуют остальные: их цена поднимается как минимум на половину роста главной (и никогда не снижается против неё). «Нет» — не следовать ни за кем.">
         <span>Главная связка:</span>
@@ -1062,7 +1079,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=121"></script>
+  <script src="/static/app.js?v=122"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

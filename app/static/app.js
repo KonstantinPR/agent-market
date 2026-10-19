@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "121";
+const UI_VERSION = "122";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -5796,6 +5796,7 @@ let refreshPoll = null;
 let refreshJobs = [];   // [{api, jobId, rejected, msg, state, done}]
 let refreshCabId = null;      // кабинет, который обновляет модалка (иначе активный)
 let refreshAllMode = false;   // «Обновить всё» (все кабинеты, /api/refresh-all)
+let batchMode = false;        // «Массовые действия» — прогон разных действий по связкам
 let cabState = { companies: [], current: null, user: null };
 const CABINET_COOKIE = "agent_cabinet";
 
@@ -6191,6 +6192,107 @@ async function retryFailedRefresh() {
     if (btn) btn.disabled = false;
   }
 }
+
+// ------------------------------------------------ массовые действия по связкам
+// Кнопка «Массовые действия» у связки в шапке: один прогон — обновление,
+// пересчёт автопилота, отправка коррекции цен и шаблон мин. цены автоакций
+// по выбранным связкам. Разрушающее действие (коррекция цен) подтверждается
+// предпросмотром с числом изменений по каждой связке.
+function batchActions() {
+  const ids = ["refresh", "recalc", "apply", "minpromo"];
+  const map = { refresh: "batchRefresh", recalc: "batchRecalc", apply: "batchApply", minpromo: "batchMinpromo" };
+  return ids.filter((id) => { const el = $("#" + map[id]); return el && el.checked; });
+}
+
+function initBatchMenu() {
+  // Чекбоксы не запоминаем: при каждой загрузке apply/minpromo выключены.
+  for (const id of ["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo"]) {
+    const el = $("#" + id);
+    if (el) el.addEventListener("change", updateBatchHint);
+  }
+  const scope = $("#batchScope");
+  if (scope) scope.addEventListener("change", updateBatchHint);
+  const go = $("#batchGo");
+  if (go) go.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); startBatch(); });
+  const menu = $("#batchMenu");
+  if (menu) menu.addEventListener("click", (e) => e.stopPropagation());
+  updateBatchHint();
+}
+
+function updateBatchHint() {
+  const hint = $("#batchHint");
+  if (!hint) return;
+  const acts = batchActions();
+  if (!acts.length) { hint.textContent = "Выберите хотя бы одно действие"; return; }
+  if (acts.includes("apply")) { hint.textContent = "Коррекция цен изменит цены в кабинетах"; return; }
+  hint.textContent = "";
+}
+
+async function startBatch() {
+  const hint = $("#batchHint");
+  const acts = batchActions();
+  if (!acts.length) { if (hint) hint.textContent = "Выберите хотя бы одно действие"; return; }
+  const scope = ($("#batchScope") && $("#batchScope").value) || "all";
+  const includeDetail = !!($("#batchDetail") && $("#batchDetail").checked);
+  const dd = $("#batchDropdown");
+  if (dd) dd.classList.remove("open");
+
+  let confirmed = false;
+  if (acts.includes("apply")) {
+    if (hint) hint.textContent = "Предпросмотр…";
+    let prev;
+    try {
+      prev = await apiPost("/batch/preview", { actions: acts, scope });
+    } catch (err) {
+      if (hint) hint.textContent = "Ошибка предпросмотра: " + apiErrorMessage(err);
+      return;
+    }
+    const lines = (prev.cabs || []).map((c) => {
+      const n = (c.counts && c.counts.apply != null) ? c.counts.apply : "?";
+      const mp = MP_LABELS[c.marketplace] || c.marketplace || "";
+      return "• " + (c.owner || c.name || ("#" + c.id)) + " (" + mp + "): " + n;
+    });
+    const msg = "Отправить коррекцию цен?\nИзменений к отправке (по витринным ценам):\n\n"
+      + lines.join("\n") + "\n\nЭто изменит цены в кабинетах маркетплейса.";
+    if (!window.confirm(msg)) { if (hint) hint.textContent = "Отменено"; return; }
+    confirmed = true;
+  }
+
+  let res;
+  try {
+    res = await apiPost("/batch/run", { actions: acts, scope, include_detail: includeDetail, confirmed });
+  } catch (err) {
+    if (hint) hint.textContent = "Ошибка запуска: " + apiErrorMessage(err);
+    return;
+  }
+  if (!res.job_id) { if (hint) hint.textContent = res.rejected || "не запущено"; return; }
+  if (hint) hint.textContent = "";
+  openBatchModal(res.job_id);
+}
+
+function openBatchModal(jobId) {
+  batchMode = true;
+  refreshCabId = null;
+  refreshAllMode = false;
+  const modal = $("#refreshModal");
+  modal.classList.remove("hidden");
+  if (refreshPoll) { clearInterval(refreshPoll); refreshPoll = null; }
+  refreshApis = [];
+  refreshJobs = [{ api: "", jobId, state: null, done: false, batch: true,
+                   label: "Массовые действия", url: "/batch/" + jobId }];
+  $("#refreshTitle").textContent = "Массовые действия";
+  const actions = $("#refreshStart") && $("#refreshStart").closest(".modal-actions");
+  if (actions) actions.style.display = "none";
+  const detail = $("#refreshDetail");
+  if (detail) detail.parentElement.style.display = "none";
+  $("#refreshSummary").textContent = "Запуск…";
+  $("#refreshList").innerHTML = "";
+  setRefreshBadge(true);
+  renderRefresh();
+  loadRefreshHistory();
+  pollRefresh();
+}
+
 let refreshApis = [];
 
 // Фоновое автообновление при старте: без всплывающей модалки, но с кликабельной
@@ -6237,6 +6339,7 @@ function stepText(s) {
 }
 
 function jobRefreshLabel(j) {
+  if (j.label) return j.label;
   const st = j.state || {};
   const mp = MP_LABELS[st.api || j.api] || (j.api && MP_LABELS[j.api]) || "";
   const cab = st.cab_name || "";
@@ -6281,9 +6384,14 @@ function renderRefresh() {
       continue;
     }
     for (const s of j.state.steps) {
+      let extra = "";
+      if (j.batch && s.action === "minpromo" && s.status === "ok" && s.cab_id) {
+        extra = ' <a class="rs-link" href="/api/batch/' + j.jobId
+          + "/minpromo/" + s.cab_id + '">скачать</a>';
+      }
       h += '<div class="refresh-step ' + s.status + '">' +
         '<span class="rs-name">' + escapeHtml(s.label) + "</span>" +
-        '<span class="rs-status">' + escapeHtml(stepText(s)) + "</span></div>";
+        '<span class="rs-status">' + escapeHtml(stepText(s)) + "</span>" + extra + "</div>";
       if (s.note) h += '<div class="refresh-step-note">' + escapeHtml(s.note) + "</div>";
       if (s.error) h += '<div class="refresh-step-error">' + escapeHtml(s.error) + "</div>";
     }
@@ -6321,8 +6429,11 @@ async function loadRefreshHistory() {
 async function openRefresh(apis) {
   refreshCabId = null;
   refreshAllMode = false;
+  batchMode = false;
   const modal = $("#refreshModal");
   modal.classList.remove("hidden");
+  const actions = $("#refreshStart") && $("#refreshStart").closest(".modal-actions");
+  if (actions) actions.style.display = "";
   if (refreshPoll) { clearInterval(refreshPoll); refreshPoll = null; }
   refreshApis = Array.isArray(apis) ? apis : [apis];
   refreshJobs = [];
@@ -6390,7 +6501,7 @@ function pollRefresh() {
     for (const j of refreshJobs) {
       if (j.rejected || j.done) continue;
       try {
-        j.state = await api("/refresh/" + j.jobId);
+        j.state = await api(j.url || ("/refresh/" + j.jobId));
       } catch (err) {
         j.state = {
           status: "done",
@@ -8400,6 +8511,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initAutomationTabs();
   initTableHover();
   await loadCabinets();
+  initBatchMenu();
   if (localStorage.getItem("cab-auto-refresh") === "1") {
     setTimeout(() => autoRefreshAtStart(), 300);
   }
@@ -8592,8 +8704,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       loadTab(currentTab);
     }
   });
-  const cabRefreshAll = $("#cabRefreshAll");
-  if (cabRefreshAll) cabRefreshAll.addEventListener("click", () => refreshAllCabinets());
   const cabAuto = $("#cabAutoRefresh");
   if (cabAuto) {
     cabAuto.checked = localStorage.getItem("cab-auto-refresh") === "1";
