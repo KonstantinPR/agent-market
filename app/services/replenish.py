@@ -734,6 +734,23 @@ def _our_stock_map(db: Session):
     return out
 
 
+def _nm_by_art(db: Session) -> dict:
+    """«Артикул WB» (nmID): {UPPER(article): nm_id} из nm_articles.
+
+    В БД сейчас один артикул ↔ один nmID, но карта per-cabinet и заполняется
+    из карточек товара — при нескольких nmID одного артикула берём первый
+    (как в margin/products: артикул продавца — основной ключ).
+    """
+    out: dict = {}
+    for nm, art in db.execute(
+            select(models.NmArticle.nm_id, models.NmArticle.article)).all():
+        a = (art or "").strip().upper()
+        nm_s = str(nm or "").strip()
+        if a and nm_s and a not in out:
+            out[a] = nm_s
+    return out
+
+
 def replenish_rows(
     db: Session,
     date_from,
@@ -796,6 +813,7 @@ def replenish_rows(
         by_art, _by_sz = _mp_stocks(db, c, date_to)
         stock_maps[c] = by_art if c in codes else {}
     cards = _cards_maps(db)
+    nm_map = _nm_by_art(db)
 
     keys = set(originals)
     keys |= set(our_map)
@@ -949,6 +967,7 @@ def replenish_rows(
 
         rows.append({
             "article": prod.article if prod and prod.article else raw_k,
+            "nm_id": nm_map.get(key, ""),
             "name": (prod.name if prod and (prod.name or "").strip()
                      else wb_d.get("name") or oz_d.get("name") or ""),
             "barcode": (prod.barcode if prod else "") or "",
@@ -1051,6 +1070,7 @@ def _size_view(
         art_stocks[c], sz_stocks[c] = _mp_stocks(db, c, date_to)
     cards = _cards_maps(db)
     prodsizes = _product_sizes(db)
+    nm_map = _nm_by_art(db)
     wbsizes = _wb_sizes(db, date_from, date_to) if "wb" in codes else {}
     card_sizes = _wb_card_sizes(db) if "wb" in codes else {}
     card_pairs = [(a, s) for a, ss in card_sizes.items() for s in ss]
@@ -1212,6 +1232,7 @@ def _size_view(
                 status = "normal"
             row = {
                 "article": prod.article if prod and prod.article else key,
+                "nm_id": nm_map.get(key, ""),
                 "size": s or "—",
                 "barcode": (prodsizes.get((key, s)) or card_bc.get(s)
                             or wbs.get("barcode") or wb_s[3] or ""),

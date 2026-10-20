@@ -2990,6 +2990,11 @@
        "def": true
       },
       {
+       "k": "nm_id",
+       "label": "Артикул WB",
+       "def": true
+      },
+      {
        "k": "name",
        "label": "Наименование",
        "def": true
@@ -3146,6 +3151,11 @@
       {
        "k": "article",
        "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "nm_id",
+       "label": "Артикул WB",
        "def": true
       },
       {
@@ -5723,6 +5733,10 @@
     "label": "Артикул"
    },
    {
+    "k": "nm_id",
+    "label": "Артикул WB"
+   },
+   {
     "k": "name",
     "label": "Наименование"
    },
@@ -5851,6 +5865,10 @@
    {
     "k": "article",
     "label": "Артикул"
+   },
+   {
+    "k": "nm_id",
+    "label": "Артикул WB"
    },
    {
     "k": "size",

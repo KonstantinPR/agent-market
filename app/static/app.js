@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "129";
+const UI_VERSION = "130";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2630,6 +2630,7 @@ async function renderWhDocs(type, boxId, msgId, detailId) {
 
 const replenishHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text, pinned: true, tip: "Артикул товара из каталога «Наш склад → Товары»." },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text, tip: "nmID карточки Wildberries (из «Карточек товара»). В отчётах WB остатки приходят с nmID — по нему стыкуется товар с WB-складом." },
   { k: "name", label: "Наименование", render: (v) => (v == null || v === "") ? "—" : v, tip: "Название товара из каталога (или из детализации)." },
   { k: "actual_mp", label: "Карточка", render: (v) => (v == null || v === "") ? "—"
     : v.split(",").map((x) => MP_LABELS[x] || x).join(" / "), tip: "На каком маркетплейсе есть карточка товара. Сверка по артикулу и штрихкоду; без карточки товар неактуален." },
@@ -2665,6 +2666,7 @@ const replenishHeaders = [
 
 const replenishSizeHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text, pinned: true, tip: "Артикул товара из каталога." },
+  { k: "nm_id", label: "Артикул WB", render: cellFmts.text, tip: "nmID карточки Wildberries (из «Карточек товара»). Одинаков для всех размеров артикула." },
   { k: "size", label: "Размер", render: (v) => (v == null || v === "") ? "—" : v, tip: "Технологический размер. Разрез по размерам доступен для продаж WB (tech_size) и остатков складов; у Ozon размера в продажах нет — Ozon-спрос только по артикулу." },
   { k: "barcode", label: "Штрихкод", render: cellFmts.text, tip: "Штрихкод размера: из каталога размеров («Наш склад → Товары»), отчёта WB или остатков складов маркетплейсов." },
   { k: "name", label: "Наименование", render: (v) => (v == null || v === "") ? "—" : v, tip: "Название товара из каталога (или из детализации)." },

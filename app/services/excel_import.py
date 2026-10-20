@@ -21,7 +21,7 @@ MAX_ROWS = 5000
 
 #: Колонки, которые обязаны остаться строками: артикул и баркод в выгрузке
 #: часто числовые, pandas превратил бы их в 12345.0.
-STR_KEYS = ("article", "name", "barcode", "status_label", "actual_mp")
+STR_KEYS = ("article", "name", "barcode", "status_label", "actual_mp", "nm_id")
 
 
 class ExcelImportError(ValueError):

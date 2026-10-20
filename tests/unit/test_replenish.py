@@ -167,6 +167,67 @@ def test_replenish_stock_nmid_resolves_to_article(db):
     assert row["wb_qty"] == 4              # quantity
     assert all(x["article"] != "111" for x in r["rows"])   # nmID не отдельной строкой
 
+
+def test_replenish_nm_id_column(db):
+    """Колонка «Артикул WB»: nmID из nm_articles попадает в строку артикула."""
+    db.add(models.Product(article="NM-1", name="Товар", net_cost=100.0))
+    _card(db, "wb", vendor="NM-1")
+    db.add(models.NmArticle(nm_id="214832048", article="NM-1"))
+    db.add(_wb_row("nm1", "NM-1", TODAY, qty=10, income=8500.0, amount=10000.0))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row = {x["article"]: x for x in r["rows"]}["NM-1"]
+    assert row["nm_id"] == "214832048"
+    # артикул без карты nm_articles — пустая строка, а не KeyError
+    db.add(models.Product(article="NM-2", name="Без nm", net_cost=100.0))
+    _card(db, "wb", vendor="NM-2")
+    db.add(_wb_row("nm2", "NM-2", TODAY, qty=5, income=4250.0, amount=5000.0))
+    db.commit()
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)
+    row2 = {x["article"]: x for x in r["rows"]}["NM-2"]
+    assert row2["nm_id"] == ""
+
+
+def test_size_view_nm_id_column(db):
+    """В размерном разрезе nmID одинаков для всех размеров артикула."""
+    db.add(models.Product(article="NMS", name="Размерный", net_cost=100.0))
+    _card(db, "wb", vendor="NMS", size="S")
+    _card(db, "wb", vendor="NMS", size="L")
+    db.add(models.NmArticle(nm_id="777", article="NMS"))
+    db.add(_wb_row_size("ns", "NMS", TODAY, qty=10, tech_size="S",
+                        income=8500.0, amount=10000.0))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30,
+                       view="sizes")
+    assert r["rows"] and all(x["nm_id"] == "777" for x in r["rows"])
+
+
+def test_api_replenish_nm_id_excel_header(db, api_client):
+    """«Артикул WB» — колонка и в API-строках, и в шапке Excel-выгрузки."""
+    db.add(models.Product(article="NMX", name="Товар", net_cost=100.0))
+    _card(db, "wb", vendor="NMX")
+    db.add(models.NmArticle(nm_id="31415926", article="NMX"))
+    db.add(_wb_row("nmx", "NMX", TODAY, qty=10, income=8500.0, amount=10000.0))
+    db.commit()
+
+    resp = api_client.get("/api/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+    })
+    assert resp.status_code == 200
+    assert resp.json()["rows"][0]["nm_id"] == "31415926"
+
+    xp = api_client.get("/api/export/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+    })
+    assert xp.status_code == 200
+    ws = load_workbook(io.BytesIO(xp.content)).active
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    assert "Артикул WB" in headers
+    col = headers.index("Артикул WB") + 1
+    assert str(ws.cell(2, col).value) == "31415926"
+
 def test_replenish_returns_net_demand(db):
     """Возвраты вычтены из sells у обоих МП (нетто); в return_rate — отдельно."""
     db.add(models.Product(article="NET-1", name="Нетто", net_cost=100.0))
@@ -585,7 +646,9 @@ def test_api_replenish_size_view_hide_zero_sizes(db, api_client):
     })
     assert xp.status_code == 200
     ws = load_workbook(io.BytesIO(xp.content)).active
-    sizes_in_excel = [ws.cell(row, 2).value for row in range(2, ws.max_row + 1)]
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    col = headers.index("Размер") + 1          # позиция может меняться
+    sizes_in_excel = [ws.cell(row, col).value for row in range(2, ws.max_row + 1)]
     assert sizes_in_excel == ["S"]       # мёртвый L не добрался до выгрузки
 
 
