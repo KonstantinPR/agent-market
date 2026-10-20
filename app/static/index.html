@@ -180,80 +180,28 @@
     <div class="dash-hero">
       <div class="dash-kpis" id="dashKpis"></div>
     </div>
-    <section class="dash-sec" data-csec="profit">
+    <section class="dash-sec" data-csec="tables">
       <div class="dash-sec-head">
         <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
         <button type="button" class="dash-sec-title" aria-expanded="true">
-          <h3>Топ прибыльных товаров <span class="dash-count" id="dashProfitCount"></span></h3>
+          <h3>Таблицы обзора <span class="dash-count" id="dashTableCount"></span></h3>
           <span class="dash-chev" aria-hidden="true"></span>
         </button>
-        <div class="view-menu" id="dashProfitViewMenu">
-          <button type="button" class="btn" id="btndashProfitView">Вид таблицы &#9662;</button>
-          <div class="view-menu-panel hidden" id="dashProfitViewPanel"></div>
+        <div class="view-menu" id="dashActiveViewMenu">
+          <button type="button" class="btn" id="btndashActiveView">Вид таблицы &#9662;</button>
+          <div class="view-menu-panel hidden" id="dashActiveViewPanel"></div>
         </div>
       </div>
       <div class="dash-sec-body">
-        <div class="table-wrap" id="dashProfit"></div>
-        <span id="dashProfitPager"></span>
-      </div>
-    </section>
-    <section class="dash-sec" data-csec="loss">
-      <div class="dash-sec-head">
-        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
-        <button type="button" class="dash-sec-title" aria-expanded="true">
-          <h3>Топ убыточных товаров <span class="dash-count" id="dashLossCount"></span></h3>
-          <span class="dash-chev" aria-hidden="true"></span>
-        </button>
-        <div class="view-menu" id="dashLossViewMenu">
-          <button type="button" class="btn" id="btndashLossView">Вид таблицы &#9662;</button>
-          <div class="view-menu-panel hidden" id="dashLossViewPanel"></div>
+        <div class="dash-tabs" id="dashTableTabs" role="tablist" aria-label="Таблицы обзора">
+          <button type="button" class="btn dash-tab active" role="tab" aria-selected="true" data-dashtable="profit">Топ прибыльных</button>
+          <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="loss">Топ убыточных</button>
+          <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="price-up">Рост цены</button>
+          <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="price-down">Снижение цены</button>
+          <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="prefix">Прибыльность по группам</button>
         </div>
-      </div>
-      <div class="dash-sec-body">
-        <div class="table-wrap" id="dashLoss"></div>
-        <span id="dashLossPager"></span>
-      </div>
-    </section>
-    <section class="dash-sec" data-csec="price">
-      <div class="dash-sec-head">
-        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
-        <button type="button" class="dash-sec-title" aria-expanded="true">
-          <h3>Изменение цены за период</h3>
-          <span class="dash-chev" aria-hidden="true"></span>
-        </button>
-        <div class="view-menu" id="dashPriceViewMenu">
-          <button type="button" class="btn" id="btndashPriceView">Вид таблицы &#9662;</button>
-          <div class="view-menu-panel hidden" id="dashPriceViewPanel"></div>
-        </div>
-      </div>
-      <div class="dash-sec-body">
-        <div class="dash-sub">
-          <h4>Рост цены <span class="dash-count" id="dashPriceUpCount"></span></h4>
-          <div class="table-wrap" id="dashPriceUp"></div>
-          <span id="dashPriceUpPager"></span>
-        </div>
-        <div class="dash-sub">
-          <h4>Снижение цены <span class="dash-count" id="dashPriceDownCount"></span></h4>
-          <div class="table-wrap" id="dashPriceDown"></div>
-          <span id="dashPriceDownPager"></span>
-        </div>
-      </div>
-    </section>
-    <section class="dash-sec" data-csec="prefix">
-      <div class="dash-sec-head">
-        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
-        <button type="button" class="dash-sec-title" aria-expanded="true">
-          <h3>Прибыльность по группам <span class="dash-count" id="dashPrefixCount"></span></h3>
-          <span class="dash-chev" aria-hidden="true"></span>
-        </button>
-        <div class="view-menu" id="dashPrefixViewMenu">
-          <button type="button" class="btn" id="btndashPrefixView">Вид таблицы &#9662;</button>
-          <div class="view-menu-panel hidden" id="dashPrefixViewPanel"></div>
-        </div>
-      </div>
-      <div class="dash-sec-body">
-        <div class="table-wrap" id="dashPrefix"></div>
-        <span id="dashPrefixPager"></span>
+        <div class="table-wrap" id="dashTable"></div>
+        <span id="dashTablePager"></span>
       </div>
     </section>
     <section class="dash-sec" data-csec="stock">
@@ -1079,7 +1027,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=126"></script>
+  <script src="/static/app.js?v=128"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

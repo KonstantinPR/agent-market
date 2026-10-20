@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "126";
+const UI_VERSION = "128";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1456,18 +1456,103 @@ function paintDashFreshness(rows) {
     </div>`).join("") : '<div class="empty">Загрузок не было</div>';
 }
 
+// ---------------------------------------------------------------- Обзор: одна
+// таблица + кнопки переключения. Каждая «кнопка» — отдельный вид со своими
+// колонками (свой «Вид таблицы»), но рисуется в общем контейнере #dashTable.
+const DASH_TABLES = [
+  { key: "profit", colview: "dash-profit", headers: "tops", totals: true },
+  { key: "loss", colview: "dash-loss", headers: "tops", totals: true },
+  { key: "price-up", colview: "dash-price", headers: "price", totals: false },
+  { key: "price-down", colview: "dash-price", headers: "price", totals: false },
+  { key: "prefix", colview: "dash-prefix", headers: "prefix", totals: true },
+];
+const DASH_TABLE_KEY = "dash-table";
+let dashTable = "profit";
+
+function dashTableCfg(key) {
+  return DASH_TABLES.find((t) => t.key === key) || DASH_TABLES[0];
+}
+
+function dashTableSource(key) {
+  if (!dashData) return null;
+  if (key === "profit") return dashData.tops.profit;
+  if (key === "loss") return dashData.tops.loss;
+  if (key === "price-up") return dashData.price.up;
+  if (key === "price-down") return dashData.price.down;
+  return dashData.prefixes;
+}
+
+function dashMarkOwned(rows) {
+  if (!cabLinksAll()) return rows || [];
+  return (rows || []).map((r) => r.owner
+    ? Object.assign({}, r, { name: (r.name ? r.name + " \u00b7 " : "") + r.owner })
+    : r);
+}
+
+function paintDashTable() {
+  if (!dashData) return;
+  const cfg = dashTableCfg(dashTable);
+  const src = dashTableSource(cfg.key);
+  if (!src) return;
+  paintDashColviewTable("dashTable", dashHeaders[cfg.headers],
+    dashMarkOwned(src.rows), src.count, cfg.colview, cfg.totals);
+  document.querySelectorAll("#dashTableTabs [data-dashtable]").forEach((b) => {
+    const on = b.dataset.dashtable === cfg.key;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+function setDashTable(key) {
+  if (!DASH_TABLES.some((t) => t.key === key)) key = "profit";
+  dashTable = key;
+  try { localStorage.setItem(DASH_TABLE_KEY, key); } catch (e) { /* ignore */ }
+  const c = $("#dashTable");
+  if (c) c._pt = null;              // сброс страницы/сортировки/фильтров чужой таблицы
+  const panel = $("#dashActiveViewPanel");
+  if (panel) panel.classList.add("hidden");
+  paintDashTable();
+}
+
+function initDashTabs() {
+  const box = $("#dashTableTabs");
+  if (!box) return;
+  try {
+    const saved = localStorage.getItem(DASH_TABLE_KEY);
+    if (saved && DASH_TABLES.some((t) => t.key === saved)) dashTable = saved;
+  } catch (e) { /* ignore */ }
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-dashtable]");
+    if (b) setDashTable(b.dataset.dashtable);
+  });
+}
+
+function initDashViewMenu() {
+  const btn = $("#btndashActiveView");
+  const menu = $("#dashActiveViewMenu");
+  if (!btn || !menu) return;
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const panel = $("#dashActiveViewPanel");
+    if (!panel) return;
+    const wasHidden = panel.classList.contains("hidden");
+    for (const t of Object.keys(_COLVIEWS)) {
+      const p = $("#" + viewPanelId(t));
+      if (p) p.classList.add("hidden");
+    }
+    if (wasHidden) {
+      buildColViewMenu(dashTableCfg(dashTable).colview);
+      panel.classList.remove("hidden");
+    }
+  });
+}
+
 async function renderDashboard() {
   dashData = await api("/dashboard" + qs(dashQuery()));
-  const markOwned = (rows) => (cabLinksAll() ? (rows || []).map((r) => r.owner
-    ? Object.assign({}, r, { name: (r.name ? r.name + " \u00b7 " : "") + r.owner })
-    : r) : (rows || []));
   paintDashKpis(dashData.kpis);
   paintDashCharts(dashData);
-  paintDashColviewTable("dashProfit", dashHeaders.tops, markOwned(dashData.tops.profit.rows), dashData.tops.profit.count, "dash-profit");
-  paintDashColviewTable("dashLoss", dashHeaders.tops, markOwned(dashData.tops.loss.rows), dashData.tops.loss.count, "dash-loss");
-  paintDashColviewTable("dashPriceUp", dashHeaders.price, markOwned(dashData.price.up.rows), dashData.price.up.count, "dash-price", false);
-  paintDashColviewTable("dashPriceDown", dashHeaders.price, markOwned(dashData.price.down.rows), dashData.price.down.count, "dash-price", false);
-  paintDashColviewTable("dashPrefix", dashHeaders.prefix, markOwned(dashData.prefixes.rows), dashData.prefixes.count, "dash-prefix");
+  paintDashTable();
   paintDashStocks(dashData.stocks);
   paintDashFreshness(dashData.freshness);
   const exp = $("#exportDashboard");
@@ -1582,9 +1667,24 @@ function ccTab(tab) {
   const [head, ...rest] = tab.split("-");
   return head + rest.map((s) => s[0].toUpperCase() + s.slice(1)).join("");
 }
-function viewBtnId(tab) { return "btn" + ccTab(tab) + "View"; }
-function viewMenuId(tab) { return ccTab(tab) + "ViewMenu"; }
-function viewPanelId(tab) { return ccTab(tab) + "ViewPanel"; }
+// Обзор: все таблицы живут в одном контейнере с переключателем, поэтому у
+// четырёх «видов» дашборда общие кнопка/меню/панель «Вид таблицы».
+const _DASH_VIEW_IDS = {
+  btn: "btndashActiveView", menu: "dashActiveViewMenu", panel: "dashActiveViewPanel",
+};
+const _VIEW_OVERRIDE = {};
+for (const t of ["dash-profit", "dash-loss", "dash-price", "dash-prefix"]) {
+  _VIEW_OVERRIDE[t] = _DASH_VIEW_IDS;
+}
+function viewBtnId(tab) {
+  return _VIEW_OVERRIDE[tab] ? _VIEW_OVERRIDE[tab].btn : "btn" + ccTab(tab) + "View";
+}
+function viewMenuId(tab) {
+  return _VIEW_OVERRIDE[tab] ? _VIEW_OVERRIDE[tab].menu : ccTab(tab) + "ViewMenu";
+}
+function viewPanelId(tab) {
+  return _VIEW_OVERRIDE[tab] ? _VIEW_OVERRIDE[tab].panel : ccTab(tab) + "ViewPanel";
+}
 // Текст фильтра в панели «Вид таблицы» — по вкладке, переживает перерисовку панели.
 const _COLVIEW_FILTER = {};
 function setColViewFilter(tab, q) {
@@ -8716,6 +8816,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   initDashCollapse();
   initDashDrag();
+  initDashTabs();
+  initDashViewMenu();
   const cabBtn = $("#cabBtn");
   if (cabBtn) cabBtn.addEventListener("click", (e) => { e.stopPropagation(); openCabinets(); });
   const cabClose = $("#cabDrawerClose");
@@ -8939,7 +9041,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
   syncHeaderForTab(currentTab);
-  for (const t of Object.keys(_COLVIEWS)) initColViewMenu(t);
+  for (const t of Object.keys(_COLVIEWS)) {
+    if (!_VIEW_OVERRIDE[t]) initColViewMenu(t);
+  }
   initReplenishPdfMenu();
   initReplenishWishMenu();
   const btnExportMarginDetail = $("#exportMarginDetail");

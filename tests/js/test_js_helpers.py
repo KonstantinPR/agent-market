@@ -135,7 +135,14 @@ const ccTab2 = (tab) => {
 };
 const colTabs = [...jsSrc.matchAll(/registerColView\("([^"]+)"/g)].map((m) => m[1]);
 assert.ok(colTabs.length >= 10, "registered col-view tabs: " + colTabs.length);
+// Обзор: одна таблица с переключателем, поэтому у dash-* видов общий
+// «Вид таблицы» (btn/menu/panel) — производные id для них не нужны.
+assert.ok(htmlSrc.includes('id="btndashActiveView"')
+  && htmlSrc.includes('id="dashActiveViewMenu"')
+  && htmlSrc.includes('id="dashActiveViewPanel"'),
+  "в index.html нет общего «Вид таблицы» для таблиц обзора");
 for (const t of colTabs) {
+  if (t.startsWith("dash-")) continue;
   const base = ccTab2(t);
   for (const id of ["btn" + base + "View", base + "ViewMenu", base + "ViewPanel"]) {
     assert.ok(htmlSrc.includes('id="' + id + '"'),

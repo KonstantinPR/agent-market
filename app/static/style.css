@@ -1314,6 +1314,15 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .dash-sec-body { padding: 14px 16px 16px; }
 .dash-sec.collapsed .dash-sec-body { display: none; }
 .dash-sec-body .charts { margin-bottom: 0; }
+/* Переключатель таблиц обзора: одна таблица, кнопки выбора вида. */
+.dash-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.dash-tab { white-space: nowrap; }
+.dash-tab.active { background: #eef4ff; border-color: #0a58ca; color: #0a58ca; }
 .dash-sub { margin-bottom: 18px; }
 .dash-sub:last-child { margin-bottom: 0; }
 .dash-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
