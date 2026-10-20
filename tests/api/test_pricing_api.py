@@ -229,6 +229,10 @@ def test_defaults_include_promo(db, api_client):
     assert d["promo_enabled"] is False
     assert d["promo_push_pct"] == 2.0
     assert d["promo_max_beyond_floor_pp"] == 5.0
+    # пороги отбора разгрузки
+    assert d["promo_max_rows"] == 30
+    assert d["promo_min_stale_days"] == 30
+    assert d["promo_protect_velocity"] == 0.5
 
 
 def test_recommendations_promo_fields(db, api_client):
@@ -237,7 +241,9 @@ def test_recommendations_promo_fields(db, api_client):
     _active_promo_db(db)
     off = api_client.post("/api/pricing/recommendations", json={}).json()
     on = api_client.post("/api/pricing/recommendations",
-                         json={"promo_enabled": True, "promo_push_pct": 2.0}).json()
+                         json={"promo_enabled": True, "promo_push_pct": 2.0,
+                               # товар свежий — порог залежалости снимаем
+                               "promo_min_stale_days": 0}).json()
     r_off = next(r for r in off["rows"] if r["article"] == "TST-1")
     r_on = next(r for r in on["rows"] if r["article"] == "TST-1")
     assert r_off["action"] == "LOWER"
@@ -245,6 +251,7 @@ def test_recommendations_promo_fields(db, api_client):
     assert r_off["promo_tier_pct"] == 50.0
     assert r_off["promo_cap_pct"] == 7.0
     assert r_off["promo_push_applied"] is False
+    assert r_off["promo_score"] is None          # выключено — оценки нет
     assert r_on["promo_push_applied"] is True
     assert r_on["target_discount"] == pytest.approx(r_off["target_discount"] + 2.0, abs=0.1)
     # вклад акции отделён от общей дельты
@@ -252,31 +259,32 @@ def test_recommendations_promo_fields(db, api_client):
     assert r_on["promo_delta_discount"] == pytest.approx(2.0, abs=0.1)
     assert r_on["promo_delta_discount"] == pytest.approx(
         r_on["target_discount"] - r_off["target_discount"], abs=0.1)
-    # разрыв до уровня акции и буст своего уровня — по итоговой скидке
-    assert r_on["promo_gap_pp"] == pytest.approx(
-        50.0 - r_on["target_discount"], abs=0.1)
-    assert r_on["promo_boost_gain"] in (0.0, None)  # уровень 20 не взят
+    # оценка разгрузки и её полнота — вместо прежних gap/boost
+    assert r_on["promo_score"] > 0
+    assert r_on["promo_score_confidence"] in ("full", "partial")
+    assert r_on["last_sale_days_ago"] == 5
     assert "+2.0 п.п." in r_on["reason"]
-    assert "добор участия до" not in r_on["reason"]
+    assert "разгрузка" in r_on["reason"]
+    assert "добор участия" not in r_on["reason"]
+    # удалённые диагностические поля больше не отдаём
+    for gone in ("promo_gap_pp", "promo_boost_gain"):
+        assert gone not in r_on
 
 
-@pytest.mark.xfail(
-    reason="спека R11 (T-34): реализация и тесты лежат в stash@{0}, "
-           "«Вклад разгрузки в скидку» переименуется в «Вклад акции в скидку»",
-    strict=False,
-)
 def test_export_contains_promo_columns(db, api_client):
-    """Спецификация колонок R11; XPASS после применения отложенной работы."""
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
     _active_promo_db(db)
     r = api_client.post("/api/pricing/export", json={"promo_enabled": True})
     assert r.status_code == 200
     df = _read_xlsx(r)
-    for col in ("Акций WB (кол-во)", "Вклад акции в скидку, п.п.",
-                "Разрыв до тира, п.п.", "Буст своего уровня, ×",
-                "Буст след. уровня, ×"):
+    # спека R11 (T-51/T-34): разгрузка склада, а не добор участия
+    for col in ("Вклад разгрузки в скидку, п.п.", "Оценка жертвенности",
+                "Полнота оценки", "Дней без продаж"):
         assert col in df.columns, col
+    # старые диагностики доборучастия (gap/boost) убраны
+    for col in ("Разрыв до тира, п.п.", "Буст своего уровня, ×"):
+        assert col not in df.columns, col
 
 
 def test_promo_refresh_api(db, api_client):

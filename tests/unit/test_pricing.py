@@ -14,6 +14,7 @@ from app.services.pricing import (
     _promo_cap_pct,
     _promo_pass,
     _promo_plan_map,
+    _sacrifice_score,
     _value_discount_scale,
     merge_settings,
     project_velocity,
@@ -1433,28 +1434,35 @@ def test_parse_ranging_sorts_and_filters():
 
 
 def _promo_rows():
-    """Три строки для _promo_pass: LOWER(низкая маржа), LOWER(высокая), RAISE."""
+    """Строки для _promo_pass, различающиеся залежатостью/себестоимостью/сбытом."""
     base = {
         "article": "X", "nm_id": "123", "price": 2000.0, "current_discount": 10.0,
-        "stock": 100, "doc": None, "floor_price": 1000.0,
+        "stock": 100, "stock_wb": 0, "doc": None, "floor_price": 1000.0,
         "comm_rate": 0.15, "logistics_unit": 40.0, "storage_unit": 10.0,
-        "other_unit": 5.0, "net_cost": 300.0,
+        "other_unit": 5.0, "net_cost": 300.0, "margin_per_one": 100.0,
+        "velocity": 0.0, "v_proj": 0.0, "last_sale_days_ago": 200,
     }
-    low = dict(base, article="LOW", margin_per_one=5.0, action="LOWER",
-               target_discount=12.0, target_vis=2000 * 0.88, status="suggested",
-               reason="правила R1-R10")
-    high = dict(base, article="HIGH", margin_per_one=200.0, action="LOWER",
-                target_discount=12.0, target_vis=2000 * 0.88, status="suggested",
-                reason="правила R1-R10")
-    raise_ = dict(base, article="RAISED", margin_per_one=50.0, action="RAISE",
-                  target_discount=8.0, target_vis=2000 * 0.92)
-    return [low, high, raise_]
+    # STALE — продаж нет 200 дн., себестоимость 15% цены, лежит 100 шт → лучший.
+    stale = dict(base, article="STALE", action="LOWER", target_discount=12.0,
+                 target_vis=2000 * 0.88, status="suggested", reason="правила R1-R10")
+    # FRESH — продаётся 0.6 шт/дн (выше защитного порога) → разгрузка не трогает.
+    fresh = dict(base, article="FRESH", action="LOWER", target_discount=12.0,
+                 target_vis=2000 * 0.88, status="suggested", reason="правила R1-R10",
+                 velocity=0.6, v_proj=0.6, last_sale_days_ago=45)
+    # PRICEY — залежалый, но себестоимость 95% цены → резать дорого, score ниже.
+    pricey = dict(base, article="PRICEY", action="LOWER", target_discount=12.0,
+                  target_vis=2000 * 0.88, status="suggested", reason="правила R1-R10",
+                  margin_per_one=1.0, net_cost=1900.0)
+    raise_ = dict(base, article="RAISED", action="RAISE", target_discount=8.0,
+                  target_vis=2000 * 0.92)
+    return [stale, fresh, pricey, raise_]
 
 
 def test_promo_pass_disabled_adds_info_only():
     rows = _promo_rows()
-    promos = [{"id": 777, "name": "ХИТЫ ГОДА", "participation": 30.0,
-               "cap": 7.0, "tiers": [{"rate": 50.0, "boost": 30.0, "condition": ""}]}]
+    promos = [{"id": 777, "name": "ХИТЫ ГОДА", "participation": 30.0, "cap": 7.0,
+               "in_total": 12, "not_total": 48, "adv_type": "auto",
+               "tiers": [{"rate": 50.0, "boost": 30.0, "condition": ""}]}]
     _promo_pass(rows, promos, merge_settings({"promo_enabled": False}), {})
     assert rows[0]["promo_count"] == 1
     assert rows[0]["promo_names"] == "ХИТЫ ГОДА"
@@ -1463,8 +1471,13 @@ def test_promo_pass_disabled_adds_info_only():
     assert rows[0]["promo_tier_boost"] == 30.0
     assert rows[0]["promo_cap_pct"] == 7.0
     assert rows[0]["promo_push_applied"] is False
+    # need_rows — сколько WB не хватает до следующего тира, от ПУЛА WB (12+48=60):
+    # 50% от 60 = 30, минус уже участвующие 12 → 18. НЕ от len(rows).
+    assert rows[0]["promo_need_rows"] == 18
+    assert rows[0]["promo_score"] is None
+    assert rows[0]["promo_score_confidence"] is None
     assert rows[0]["action"] == "LOWER"
-    assert rows[2]["action"] == "RAISE"
+    assert rows[3]["action"] == "RAISE"
 
 
 def test_promo_pass_dedups_names_of_same_action():
@@ -1496,6 +1509,7 @@ def test_promo_pass_names_capped_at_three():
 def _tier_promo(tiers=None, participation=30.0, name="ХИТЫ ГОДА"):
     """Акция с лестницей уровней: 10% → ×25, 50% → ×30, 70% → ×35."""
     return [{"id": 777, "name": name, "participation": participation, "cap": None,
+             "in_total": 12, "not_total": 48, "adv_type": "auto",
              "tiers": tiers if tiers is not None else [
                  {"rate": 10.0, "boost": 25.0, "condition": ""},
                  {"rate": 50.0, "boost": 30.0, "condition": ""},
@@ -1504,135 +1518,172 @@ def _tier_promo(tiers=None, participation=30.0, name="ХИТЫ ГОДА"):
 
 
 def test_promo_pass_delta_is_zero_without_push():
-    """promo_delta_discount = 0.0 у всех строк, кроме реально добранных."""
+    """promo_delta_discount = 0.0 у всех строк, кроме реально разгруженных."""
     rows = _promo_rows()
     _promo_pass(rows, _tier_promo(), merge_settings({"promo_enabled": False}), {})
-    assert [r["promo_delta_discount"] for r in rows] == [0.0, 0.0, 0.0]
+    assert [r["promo_delta_discount"] for r in rows] == [0.0, 0.0, 0.0, 0.0]
 
     rows = _promo_rows()
     _promo_pass(rows, _tier_promo(), merge_settings({
         "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+        "promo_max_rows": 1,
     }), {})
-    low, high, raise_ = rows
-    assert low["promo_delta_discount"] == pytest.approx(2.0)   # 12 → 14
-    assert low["target_discount"] - low["current_discount"] == pytest.approx(4.0)
-    assert low["delta_discount"] == pytest.approx(4.0)        # общая дельта = 10 → 14
-    assert high["promo_delta_discount"] == 0.0                  # не кандидат (K=1)
+    stale, fresh, pricey, raise_ = rows
+    assert stale["promo_delta_discount"] == pytest.approx(2.0)   # 12 → 14
+    assert stale["target_discount"] - stale["current_discount"] == pytest.approx(4.0)
+    assert stale["delta_discount"] == pytest.approx(4.0)        # общая дельта = 10 → 14
+    assert fresh["promo_delta_discount"] == 0.0
+    assert pricey["promo_delta_discount"] == 0.0
     assert raise_["promo_delta_discount"] == 0.0
 
 
-def test_promo_pass_gap_pp_sign_and_basis():
-    """Разрыв до тира: минус = уровень взят, считается по итоговой скидке."""
-    rows = [dict(_promo_rows()[0], current_discount=8.0, target_discount=20.0),
-            dict(_promo_rows()[1], current_discount=60.0, target_discount=60.0),
-            dict(_promo_rows()[2], current_discount=8.0, target_discount=None)]
-    _promo_pass(rows, _tier_promo(), merge_settings({"promo_enabled": False}), {})
-    # уровень выбран = ближайший выше participation 30 → 50% (×30)
-    assert rows[0]["promo_tier_pct"] == 50.0
-    assert rows[0]["promo_gap_pp"] == pytest.approx(30.0)    # 20 → не дотянул
-    assert rows[1]["promo_gap_pp"] == pytest.approx(-10.0)   # 60 → выше уровня
-    assert rows[2]["promo_gap_pp"] == pytest.approx(42.0)    # без цели → по текущей 8
+def test_promo_pass_ranks_by_sacrifice_not_by_margin():
+    """Отбор по _sacrifice_score (залежалость/себестоимость/остаток), НЕ по марже.
 
-
-def test_promo_pass_boost_gain_is_row_level():
-    """Буст своего уровня — по скидке строки, а не уровень самой акции."""
-    rows = [
-        dict(_promo_rows()[0], current_discount=8.0, target_discount=8.0),    # ниже всех
-        dict(_promo_rows()[1], current_discount=45.0, target_discount=45.0),  # уровень 10
-        dict(_promo_rows()[2], current_discount=65.0, target_discount=65.0),  # уровень 50
-    ]
-    _promo_pass(rows, _tier_promo(), merge_settings({"promo_enabled": False}), {})
-    assert rows[0]["promo_boost_gain"] is None       # скидка ниже первого уровня
-    assert rows[1]["promo_boost_gain"] == 25.0
-    assert rows[2]["promo_boost_gain"] == 30.0       # не 35: уровень 70 не взят
-    assert rows[2]["promo_tier_boost"] == 30.0       # а это — буст след. уровня акции
-
-
-def test_promo_pass_push_recomputes_gap_and_boost():
-    """После добора разрыв и буст пересчитываются по итоговой скидке."""
-    rows = [dict(_promo_rows()[0], current_discount=9.0, target_discount=10.0)]
+    Старая сортировка по margin_per_one ранжировала нули: детализация заполнена
+    лишь у ~50 товаров из тысяч, то есть первым шёл не тот товар.
+    """
+    rows = _promo_rows()      # PRICEY имеет маржу 1.0 (ниже STALE=100), но дорогой.
     _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+        "promo_max_rows": 1,
+    }), {})
+    assert rows[0]["promo_push_applied"] is True      # STALE выигрывает по score.
+    assert rows[2]["promo_push_applied"] is False     # PRICEY проиграл.
+
+
+def test_promo_pass_protects_fast_movers():
+    """Живой товар (сбыт > promo_protect_velocity) разгрузкой не трогается."""
+    rows = _promo_rows()
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 5.0, "min_delta_pp": 1.0,
+        "promo_protect_velocity": 0.5,
+    }), {})
+    fresh = rows[1]
+    assert fresh["promo_push_applied"] is False
+    assert fresh["promo_delta_discount"] == 0.0
+    assert fresh["action"] == "LOWER"
+
+    # Защиту можно отключить (0 = выкл.) — тогда товар разгружается.
+    rows = _promo_rows()
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 5.0, "min_delta_pp": 1.0,
+        "promo_protect_velocity": 0.0,
+    }), {})
+    assert rows[1]["promo_push_applied"] is True
+
+
+def test_promo_pass_respects_min_stale_days():
+    """Товар с недавними продажами не берётся, даже если формально залежал."""
+    rows = _promo_rows()
+    rows[0]["last_sale_days_ago"] = 10      # продавался 10 дн. назад → свежий.
+    rows[2]["last_sale_days_ago"] = 200     # а этот давно не продавался.
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+        "promo_min_stale_days": 30,
+    }), {})
+    assert rows[0]["promo_push_applied"] is False
+    assert rows[2]["promo_push_applied"] is True
+
+
+def test_promo_pass_respects_max_rows():
+    """Больше promo_max_rows товаров за проход не разгружается."""
+    rows = _promo_rows()
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+        "promo_max_rows": 2,
+    }), {})
+    assert sum(1 for r in rows if r["promo_push_applied"]) == 2
+
+
+def test_promo_pass_total_drop_capped_by_max_drop_pct():
+    """Суммарное падение скидки не превышает общий лимит max_drop_pct.
+
+    Шаг R4 + шаг разгрузки складываются и НЕ должны выходить за max_drop_pct.
+    """
+    rows = [dict(_promo_rows()[0], current_discount=10.0, target_discount=22.0)]
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 5.0, "min_delta_pp": 1.0,
+        "max_drop_pct": 15.0,
+    }), {})
+    r = rows[0]
+    # current 10 + max_drop 15 = 25 → цель 22 добивается до 25, а не до 22+5=27:
+    # сумма (цель R4 + шаг разгрузки) ограничивается общим лимитом падения.
+    assert r["target_discount"] == pytest.approx(25.0)
+    assert r["promo_push_applied"] is True
+
+
+def test_promo_pass_score_confidence_marks_fallbacks():
+    """Неполные данные (фолбэк остатка / нет продаж вовсе) дают confidence=partial."""
+    rows = [dict(_promo_rows()[0], stock=None, stock_wb=50, last_sale_days_ago=9999)]
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+        "promo_max_rows": 1,
+    }), {})
+    assert rows[0]["promo_score_confidence"] == "partial"
+
+    # Все сигналы на месте (остаток есть, продажи были) → полная оценка.
+    rows = _promo_rows()
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+        "promo_max_rows": 1,
+    }), {})
+    assert rows[0]["promo_score_confidence"] == "full"
+
+
+def test_sacrifice_score_prefers_stale_cheap_big():
+    """_sacrifice_score: дольше без продаж + дешевле резать + больше остаток."""
+    rows = _promo_rows()
+    _promo_pass(rows, _tier_promo(), merge_settings({
+        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
+        "promo_max_rows": 3,
+    }), {})
+    stale, fresh, pricey, raise_ = rows
+    assert stale["promo_score"] > pricey["promo_score"]   # дешевле резать (15% цены).
+    assert stale["promo_score"] > 0
+    # Насыщение 365 дн.: «никогда не продавался» (9999) не перевешивает год.
+    a = _sacrifice_score(dict(stale, last_sale_days_ago=365))[0]
+    b = _sacrifice_score(dict(stale, last_sale_days_ago=9999))[0]
+    assert b == pytest.approx(a)
+
+
+def test_promo_pass_pushes_even_when_tier_already_reached():
+    """Разгрузка — не про участие: если ступень уже взята, товар всё равно режется."""
+    # Тир 50 уже взят (участие 50 при скидке 30 ≥ 50) — но разгрузке это не
+    # мешает: шаг идёт от текущей скидки, а не от достижения тира.
+    # floor_price=200 → порог безубытка 90%, выше cap_disc=32: пол не мешает.
+    rows = [dict(_promo_rows()[0], current_discount=30.0, target_discount=30.0,
+                 floor_price=200.0)]
+    _promo_pass(rows, _tier_promo(participation=50.0), merge_settings({
         "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
     }), {})
     r = rows[0]
     assert r["promo_push_applied"] is True
-    assert r["target_discount"] == pytest.approx(12.0)   # 10 + push 2
-    assert r["promo_delta_discount"] == pytest.approx(2.0)
-    # уровень акции 50% не взят ни до, ни после → разрыв положительный
-    assert r["promo_gap_pp"] == pytest.approx(38.0)      # 50 − 12
-    assert r["promo_boost_gain"] == 25.0                 # 12% → уровень 10
+    assert r["promo_delta_discount"] == pytest.approx(2.0)   # 30 → 32, не «не тот тир».
 
 
-def test_promo_pass_reason_reports_factual_push_not_tier():
-    """Причина говорит, сколько ДОБАВИЛИ, а не «до тира» (строка может быть выше)."""
-    rows = [dict(_promo_rows()[0], current_discount=40.0, target_discount=41.0)]
+def test_promo_pass_keeps_r4_reason_and_appends_note():
+    """Причина от R1-R10 не затирается, факты не дублируются."""
+    rows = [dict(_promo_rows()[0], reason="мёртвый запас: продаж нет 200 дн., остаток 100 шт")]
     _promo_pass(rows, _tier_promo(), merge_settings({
         "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
     }), {})
     reason = rows[0]["reason"]
-    assert "+2.0 п.п." in reason
-    assert "уровень 50%" in reason
-    assert "добор участия до" not in reason   # старое, путающее «до N%» убрано
+    assert reason.startswith("мёртвый запас")      # старое начало сохранено.
+    assert "разгрузка" in reason
+    assert reason.count("продаж нет 200 дн.") == 1  # факт не дублируется.
+    assert reason.count("остаток 100 шт") == 1
+    assert "себестоимость" in reason                # новый факт дописан.
 
 
-def test_promo_pass_enabled_pushes_low_margin_candidate():
-    rows = _promo_rows()
-    promos = [{"id": 777, "name": "ХИТЫ ГОДА", "participation": 30.0,
-               "cap": 7.0, "tiers": [{"rate": 50.0, "boost": 30.0, "condition": ""}]}]
-    _promo_pass(rows, promos, merge_settings({
+def test_promo_pass_no_stock_is_not_candidate():
+    """Без остатка (ни своего, ни WB) разгружать нечего."""
+    rows = [dict(_promo_rows()[0], stock=None, stock_wb=None)]
+    _promo_pass(rows, _tier_promo(), merge_settings({
         "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
     }), {})
-    low, high, raise_ = rows
-    # K покрывает разрыв тира; сортировка: наименее рентабельный первым.
-    assert low["promo_push_applied"] is True
-    assert low["action"] == "LOWER"
-    assert low["target_discount"] == pytest.approx(14.0)  # 12 + push 2
-    assert low["delta_discount"] == pytest.approx(4.0)    # 14 − 10
-    assert "акция WB" in low["reason"]
-    assert high["promo_push_applied"] is False
-    assert raise_["promo_push_applied"] is False
-    assert raise_["action"] == "RAISE"
-
-
-def test_promo_pass_enabled_turns_hold_into_lower():
-    rows = _promo_rows()
-    rows[0] = dict(rows[0], action="HOLD", target_discount=None)
-    rows.pop()
-    promos = [{"id": 777, "name": "ХИТЫ ГОДА", "participation": 30.0,
-               "cap": None, "tiers": [{"rate": 50.0, "boost": 30.0, "condition": ""}]}]
-    _promo_pass(rows, promos, merge_settings({
-        "promo_enabled": True, "promo_push_pct": 2.0, "min_delta_pp": 1.0,
-    }), {})
-    hold, high = rows
-    assert hold["action"] == "LOWER"               # HOLD → LOWER с добором
-    assert hold["promo_push_applied"] is True
-    assert hold["target_discount"] == pytest.approx(12.0)  # 10 + push 2
-    assert hold["delta_discount"] == pytest.approx(2.0)
-    assert high["promo_push_applied"] is False
-
-
-def test_promo_pass_limits_below_floor_to_beyond_pp():
-    # Пол по unit-экономике: цена 2000, floor 1400 → floor_disc=30%. Добор может
-    # уйти ниже пола только до promo_max_beyond_floor_pp (5 п.п.) → 35%.
-    rows = _promo_rows()
-    rows = [dict(rows[0], floor_price=1400.0, target_discount=33.0)]
-    promos = [{"id": 777, "name": "ХИТЫ ГОДА", "participation": 30.0,
-               "cap": None, "tiers": [{"rate": 50.0, "boost": 30.0, "condition": ""}]}]
-    _promo_pass(rows, promos, merge_settings({
-        "promo_enabled": True, "promo_push_pct": 100.0, "min_delta_pp": 1.0,
-    }), {})
-    low = rows[0]
-    assert low["target_discount"] == pytest.approx(35.0)   # 30 (пол) + 5 (beyond)
-    assert low["promo_push_applied"] is True
-
-
-def test_promo_pass_no_next_tier_does_not_push():
-    rows = _promo_rows()
-    promos = [{"id": 777, "name": "ХИТЫ ГОДА", "participation": 90.0,
-               "cap": None, "tiers": [{"rate": 50.0, "boost": 30.0, "condition": ""}]}]
-    _promo_pass(rows, promos, merge_settings({"promo_enabled": True}), {})
-    assert all(r["promo_push_applied"] is False for r in rows)
-    assert rows[0]["promo_tier_pct"] is None
+    assert rows[0]["promo_push_applied"] is False
+    assert rows[0]["promo_delta_discount"] == 0.0
 
 
 def test_recommendations_apply_promo_push(db):
@@ -1643,7 +1694,10 @@ def test_recommendations_apply_promo_push(db):
     db.commit()
     base = recommendations(db, prices_df=_prices(("881234", 2000, 10)), today=TODAY)
     promo = recommendations(db, prices_df=_prices(("881234", 2000, 10)), today=TODAY,
-                            settings={"promo_enabled": True, "promo_push_pct": 2.0})
+                            settings={"promo_enabled": True, "promo_push_pct": 2.0,
+                                      # товар свежий (продажи 5 и 14 дней назад),
+                                      # поэтому порог залежалости снимаем
+                                      "promo_min_stale_days": 0})
     row_base = _row(base, "R8")
     row_promo = _row(promo, "R8")
     assert row_base["action"] == "LOWER"
@@ -2023,7 +2077,12 @@ def test_recommendations_promo_plan_cap(db):
         db.add(nom)
     db.commit()
     rec = recommendations(db, prices_df=_prices((nm, 2000, 3)), today=TODAY,
-                          settings={"promo_enabled": True})
+                          settings={"promo_enabled": True,
+                                    # R11 толкает свежий товар глубже плана WB, и уже
+                                    # R19 обрезает скидку до 7 % — ради этого теста
+                                    # снимаем порог залежалости и защиту живых
+                                    "promo_min_stale_days": 0,
+                                    "promo_protect_velocity": 0})
     row = _row(rec, "R19")
     assert row["promo_plan_pct"] == 7.0
     assert row["action"] == "LOWER"

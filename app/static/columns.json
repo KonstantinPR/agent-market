@@ -4812,14 +4812,14 @@
     "k": "promo_push_applied",
     "label": "Разгружен"
    },
-   {
-    "k": "promo_delta_discount",
-    "label": "Вклад разгрузки, п.п."
-   },
-   {
-    "k": "promo_score",
-    "label": "Оценка"
-   },
+    {
+     "k": "promo_delta_discount",
+     "label": "Вклад разгрузки в скидку, п.п."
+    },
+    {
+     "k": "promo_score",
+     "label": "Оценка жертвенности"
+    },
     {
      "k": "promo_score_confidence",
      "label": "Полнота оценки"

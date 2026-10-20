@@ -113,16 +113,36 @@ PRICING_DEFAULTS = {
     # старой эвристики из finance/price_module (НЕ рекомендуется, только для
     # сравнения результатов; общие стражи безопасности действуют в обеих).
     "mode": "new",
-    # T-31: акции WB (Календарь акций). promo_enabled = «учитывать акции» в
-    # автопилоте: (1) при недоходе до следующего ranging-тира лучшей акции
-    # «добираем» K товаров (наименее рентабельные → больший остаток → медленнее
-    # оборот → объёмные), поднимая целевую скидку на promo_push_pct; вниз хуже
-    # безубытка разрешено до promo_max_beyond_floor_pp п.п. (акция важнее пола
-    # цены). (2) T-41 (R19): не уходить ниже скидки, рекомендованной акцией WB
-    # (planDiscount из nomenclatures; только regular-акции) — финальный потолок.
+    # T-31: акции WB (Календарь акций). promo_enabled = «разгружать акцией».
+    #
+    # ВАЖНО, что делает это правило. WB отбирает товары в автоакции САМ (для
+    # «хитов» — товары с ≥1 заказом за месяц, для «Новинок» — добавленные за
+    # 10 дней), а /promotions/nomenclatures на автоакциях отдаёт 422 — список
+    # кандидатов нам недоступен. Поэтому «выполнить план участия» выбором
+    # товаров НЕВОЗМОЖЕН, и ranging-лестница не является нашей целью:
+    # participationRate — это доля НАШИХ товаров в акции (её считает WB от
+    # своего пула in_promo_total + not_in_promo_total), а не порог скидки.
+    #
+    # Что правило делает на самом деле: помогает продать залежалое дёшево,
+    # освобождая капитал. Отбор — score «жертвенности»: чем дольше нет
+    # продаж, чем дешевле резать (себестоимость/цена) и чем больше лежит —
+    # тем лучше кандидат. Шаг вниз — promo_push_pct, ограничен суммарно
+    # max_drop_pct (общий лимит падения скидки за проход) и promo_max_beyond_floor_pp
+    # относительно порога безубытка. (2) T-41 (R19): не уходить ниже скидки,
+    # рекомендованной акцией WB (planDiscount из nomenclatures; только
+    # regular-акции) — финальный потолок.
     "promo_enabled": False,
     "promo_push_pct": 2.0,
     "promo_max_beyond_floor_pp": 5.0,
+    # Сколько товаров максимум разгружать за один проход (вместо старой
+    # арифметики «сколько нужно для participation» — она считалась от
+    # len(rows), т.е. от всех наших товаров, а WB считает от своего пула).
+    "promo_max_rows": 30,
+    # Порог «залежалось»: нет продаж N дней. Товары свежее этого порога
+    # разгрузкой не трогаем, даже если формально набрали score.
+    "promo_min_stale_days": 30,
+    # Защита живых товаров: сбыт быстрее N шт/дн разгрузка не трогает.
+    "promo_protect_velocity": 0.5,
     # T-32 (R12): подтверждённый спрос поднимает цену вопреки зоне DOC.
     # Сигналы спроса (выкупы/корзина/рейтинг/конверсия) при наборе
     # demand_min_signals из 4 перекрывают «обычный» шаг по остатку и дают
@@ -1285,6 +1305,14 @@ def _base_row(f: dict) -> dict:
         "stock": f["stock"], "velocity": f["velocity"], "v_proj": f["v_proj"],
         "stock_value": round(_num(f.get("stock")) * _num(f.get("net_cost")), 2),
         "doc": None, "conv_pct": None, "backlog": 0, "net_cost": f["net_cost"],
+        # Дней с последней продажи — основной сигнал «жертвенности» для R11
+        # (разгрузки). 9999 = продаж не было вовсе. Покрытие 100 % (в отличие
+        # от margin_per_one — детализация есть только у ~50 товаров).
+        # (не `or 9999`: продажа сегодня = 0 дней, и `or` превращал бы её
+        #  в «никогда не продавался» — товар считался бы мёртвым в R4
+        #  и максимально залежавшим в R11)
+        "last_sale_days_ago": (9999 if f.get("last_sale_days_ago") is None
+                               else int(_num(f.get("last_sale_days_ago")))),
         "value": _num(f.get("value")), "supplier": (f.get("supplier") or ""),
         "comm_rate": f["comm_rate"], "floor_price": f["floor_price"],
         "minpromo_price": None, "minpromo_bound": None,
@@ -1463,34 +1491,92 @@ def _active_promotions(db: Session) -> list:
             "participation": _num(p.participation_percent),
             "cap": round(cap, 1) if cap is not None else None,
             "tiers": _parse_ranging(p.ranging_json),
+            # WB считает участие от СВОЕГО пула: сколько наших товаров уже
+            # впустил (in) и сколько откинул (not). Проверено: participation
+            # ≈ in / (in + not). Раньше мы делили на число всех своих товаров
+            # и получали завышенное «сколько нужно».
+            "in_total": int(p.in_promo_total or 0),
+            "not_total": int(p.not_in_promo_total or 0),
+            "adv_type": p.adv_type or "",
         })
     return out
 
 
+def _sacrifice_score(r) -> tuple:
+    """(score, confidence) — насколько товар годен для разгрузки. Больше = лучше.
+
+    Три сигнала, подобранных под доступность данных, а не под идеал:
+
+    1. Дней с последней продажи — основной вес. Покрытие 100 % (в отличие от
+       margin_per_one, который заполнен лишь у ~50 товаров, и от doc — у 12 %
+       кандидатов). Насыщаем на 365 днях, иначе «никогда не продавался» (9999)
+       перевешивает всё остальное и товар вроде бы всегда побеждает.
+    2. Себестоимость / цена — ниже значит дешевле резать. Покрытие 100 %.
+    3. Остаток — больше значит больше капитала лежит. Свой склад; если его нет,
+       берём остаток WB и понижаем уверенность.
+
+    confidence = "partial", если хотя бы один сигнал взят фолбэком или
+    «никогда не продавался»: такую строку отбирать можно, но в UI это видно.
+    """
+    score = 0.0
+    partial = False
+
+    stale = _num(r.get("last_sale_days_ago"), 9999.0)
+    score += min(stale, 365.0) / 365.0
+    if stale >= 9999:
+        # Продаж нет вовсе — но это же и описание новинки, у которой просто
+        # ещё не было данных. Помечаем: оценка по неполным данным.
+        partial = True
+
+    price, net = _num(r.get("price")), r.get("net_cost")
+    if price > 0 and net is not None:
+        score += max(0.0, 0.6 - max(0.0, _num(net) / price))
+    else:
+        partial = True
+
+    stock = r.get("stock")
+    if stock is None:
+        stock = r.get("stock_wb")
+        if stock is not None:
+            partial = True
+    if stock is None:
+        partial = True
+    else:
+        score += min(max(0.0, _num(stock)), 200.0) / 200.0
+
+    return score, ("partial" if partial else "full")
+
+
 def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> None:
-    """R11: акции WB в рекомендациях.
+    """R11: разгрузка склада через акции WB.
 
-    Всегда добавляет инфо-поля строк (кол-во/названия акций, максимум участия,
-    ближайший ranging-тир + его буст, потолок промо-скидки, добавленные п.п.,
-    разрыв до тира, буст уже достигнутого уровня). При promo_enabled — «добор
-    участия»: поднимает целевую скидку на promo_push_pct у первых K кандидатов
-    (наименее рентабельные → больший остаток → медленнее оборот → объёмные),
-    чтобы добирать участие лучшей акции до её следующего тира. Технически
-    скидка может уйти ниже безубытка — до promo_max_beyond_floor_pp п.п.
+    ЧТО ПРАВИЛО ДЕЛАЕТ. Помогает продать залежалое дёшево, освобождая капитал.
 
-    Модель тиров: WB отдаёт у каждой акции лестницу ranging
-    (participationRate → boost) и агрегатный participationPercentage по своим
-    товарам, но НЕ отдаёт требования по конкретному артикулу. Поэтому уровень
-    участия конкретной строки здесь выводится из ЕЁ скидки: буст своего уровня
-    — буст наивысшего тира, rate ≤ текущая скидка; разрыв до тира — насколько
-    скидка ниже уровня следующего тира. Это наша интерпретация, не данные WB.
+    ЧЕГО ОНО НЕ ДЕЛАЕТ (и раньше делало неверно). «Дотянуть participation до
+    следующего тира» выбором товаров невозможно: WB отбирает товары в
+    автоакции сам (для «хитов» — с ≥1 заказом за последний месяц, для
+    «Новинок» — добавленные за 10 дней), а /promotions/nomenclatures на
+    автоакциях отдаёт 422, то есть список кандидатов нам недоступен.
+    participationRate в ranging — это ДОЛЯ НАШИХ товаров в акции (WB считает
+    её от своего пула in_promo_total + not_in_promo_total), а не порог скидки.
+    Поэтому поля participation/tier/need — справочные и НЕ являются целью.
+
+    Отбор кандидатов — score «жертвенности» (см. _sacrifice_score): дольше
+    без продаж + дешевле резать (себестоимость/цена) + больше лежит на складе.
+    Шаг вниз — promo_push_pct. Потолки, все обязательные:
+      * суммарно не глубже max_drop_pct относительно текущей скидки (общий
+        лимит падения; раньше НЕ проверялся, из-за чего разгрузка могла
+        сложиться с шагом R4 и выйти за него);
+      * не глубже promo_max_beyond_floor_pp ниже порога безубытка;
+      * не глубже max_discount_pct / 99.
     """
     empty_info = {
         "promo_count": 0, "promo_names": "", "promo_part_pct": 0,
         "promo_tier_pct": None, "promo_tier_boost": None,
+        "promo_need_rows": None,
         "promo_cap_pct": None, "promo_push_applied": False,
-        "promo_delta_discount": 0.0, "promo_gap_pp": None,
-        "promo_boost_gain": None,
+        "promo_delta_discount": 0.0,
+        "promo_score": None, "promo_score_confidence": None,
         "promo_plan_pct": None, "promo_cap_applied": False,
     }
     if not promos:
@@ -1513,7 +1599,8 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
     max_part = max((p["participation"] for p in promos), default=0.0)
     cap = max((p["cap"] for p in promos if p["cap"] is not None), default=None)
 
-    # Лучшая акция для добора: ближайший достижимый ranging-тир.
+    # Акция с наибольшим НЕдобором участия — самый понятный кандидат на роль
+    # «места, где буст ещё не взят». Справочно, не цель правила.
     best, best_next = None, None
     for p in promos:
         nxt = next((t for t in p["tiers"] if t["rate"] > p["participation"]), None)
@@ -1523,112 +1610,104 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
             best, best_next = p, nxt
 
     tier_rate = best_next["rate"] if best_next else None
-    best_tiers = best["tiers"] if best else []
 
-    def tier_metrics(r) -> tuple:
-        """(разрыв до тира, буст достигнутого уровня) для строки.
-
-        Считается от скидки, в которую автопилот целится (target_discount), а при
-        его отсутствии — от текущей. Поэтому после добора (см. ниже) метрики
-        пересчитываются и показывают остаток именно по итоговому решению.
-        """
-        disc = r.get("target_discount")
-        if disc is None:
-            disc = r.get("current_discount")
-        if disc is None:
-            return None, None
-        d = _num(disc)
-        gap = round(tier_rate - d, 1) if tier_rate is not None else None
-        reached = [t for t in best_tiers if t["rate"] <= d + 1e-9]
-        return gap, (reached[-1]["boost"] if reached else None)
+    # Сколько товаров WB ждёт до следующего буста — от ЕГО пула, не от
+    # len(rows). Справочная цифра: повлиять на неё выбором товаров нельзя.
+    need_rows = None
+    if best is not None and tier_rate is not None:
+        pool = _num(best.get("in_total")) + _num(best.get("not_total"))
+        if pool > 0:
+            need_rows = max(0, int(math.ceil(tier_rate / 100 * pool))
+                            - int(_num(best.get("in_total"))))
 
     for r in rows:
-        gap_pp, boost_gain = tier_metrics(r)
         r.update({
             "promo_count": len(promos), "promo_names": names,
             "promo_part_pct": round(max_part, 1), "promo_cap_pct": cap,
             "promo_tier_pct": tier_rate,
             "promo_tier_boost": best_next["boost"] if best_next else None,
+            "promo_need_rows": need_rows,
             "promo_push_applied": False,
             "promo_delta_discount": 0.0,
-            "promo_gap_pp": gap_pp,
-            "promo_boost_gain": boost_gain,
-            "promo_plan_pct": None,
-            "promo_cap_applied": False,
+            "promo_score": None,
+            "promo_score_confidence": None,
         })
 
-    if not s.get("promo_enabled") or best_next is None or best is None or not rows:
+    if not s.get("promo_enabled") or not rows:
         return
 
     push = _num(s.get("promo_push_pct"))
     beyond = _num(s.get("promo_max_beyond_floor_pp"))
     max_disc = _num(s.get("max_discount_pct"), 100.0)
+    max_drop = _num(s.get("max_drop_pct"), 100.0)
     min_delta = _num(s.get("min_delta_pp"))
+    max_rows = int(_num(s.get("promo_max_rows"), 30))
+    min_stale = _num(s.get("promo_min_stale_days"), 0)
+    protect_vel = _num(s.get("promo_protect_velocity"), 0.0)
 
     candidates = []
     for r in rows:
         if r.get("action") not in ("HOLD", "LOWER") or not r.get("nm_id"):
             continue
-        if _num(r.get("stock")) == 0:
-            continue
         price = _num(r.get("price"))
         cur = _num(r.get("current_discount"))
         if price <= 0 or cur < 0:
             continue
+        stock = r.get("stock")
+        if stock is None:
+            stock = r.get("stock_wb")
+        if _num(stock) <= 0:
+            continue
+        # Защита живых товаров: если товар хоть как-то продаётся, разгрузка
+        # его не трогает — иначе срезаем маржу у того, что и так работает.
+        if protect_vel > 0 and max(_num(r.get("velocity")), _num(r.get("v_proj"))) > protect_vel:
+            continue
+        # «Залежалось»: продажи были недавно — кандидат не залежавшийся.
+        if _num(r.get("last_sale_days_ago"), 9999) < min_stale:
+            continue
         lo = _num(r.get("floor_price"))
         floor_disc = (1 - lo / price) * 100 if lo > 0 else None
-        cap_disc = min(max_disc, 99.0)
+        # Суммарный потолок: относительно ТЕКУЩЕЙ скидки, а не относительно
+        # target. Иначе шаг R4 + шаг разгрузки складывались и выходили за
+        # общий лимит падения max_drop_pct.
+        cap_disc = min(max_disc, 99.0, cur + max_drop)
         if floor_disc is not None:
             cap_disc = min(cap_disc, floor_disc + beyond)
         base_t = _num(r.get("target_discount"), cur)
         if not (cur <= base_t and base_t < cap_disc - 1e-9):
             continue
-        candidates.append((r, cur, base_t, cap_disc))
+        score, confidence = _sacrifice_score(r)
+        candidates.append((r, cur, base_t, cap_disc, score, confidence))
+
     if not candidates:
         return
+    # Оценка одинакова — порядок стабильный и воспроизводимый по артикулу,
+    # чтобы при равных score выбор не «прыгал» между прогонами.
+    candidates.sort(key=lambda c: (-c[4], str(c[0].get("article") or "")))
 
-    # Сколько товаров нужно, чтобы покрыть разрыв до тира лучшей акции.
-    gap = best_next["rate"] - best["participation"]
-    needed = int(math.ceil(max(0.0, gap) / 100 * max(1, len(rows))))
-    needed = min(max(needed, 1), len(candidates))
-
-    def margin_key(r):
-        m = r.get("margin_per_one")
-        return 1e9 if m is None else _num(m)
-
-    def stock_key(r):
-        st = r.get("stock")
-        return 0.0 if st is None else _num(st)
-
-    def value_key(r):
-        # R15: при включённом весе себестоимости приоритет отдаём остатку по
-        # деньгам (100 шт × 1000 ₽ важнее 100 шт × 100 ₽), а не по штукам.
-        if bool(s.get("stock_value_weight", True)):
-            sv = r.get("stock_value")
-            if sv is not None:
-                return _num(sv)
-        return stock_key(r)
-
-    def doc_key(r):
-        d = r.get("doc")
-        return float("inf") if d is None else _num(d)
-
-    def vol_key(r):
-        return _num(volume_by_article.get(r.get("article")))
-
-    candidates.sort(key=lambda c: (margin_key(c[0]), -value_key(c[0]),
-                                   -doc_key(c[0]), -vol_key(c[0])))
-
-    for r, cur, base_t, cap_disc in candidates[:needed]:
+    promo_name = best["name"] if best else ""
+    for r, cur, base_t, cap_disc, score, confidence in candidates[:max_rows]:
         new_t = min(cap_disc, base_t + push)
         added = new_t - base_t
         if new_t - cur < min_delta - 1e-9 or added <= 1e-9:
             continue
-        # Текст причины описывает ФАКТИЧЕСКИЙ добор, а не «до тира»: строка может
-        # уже быть выше уровня тира, и раньше это читалось как ошибка. Итог участия
-        # (достигнут ли уровень) показывает promo_gap_pp.
-        note = (f"акция WB «{best['name']}»: +{added:.1f} п.п. к скидке"
-                f" (уровень {tier_rate:.0f}%, буст ×{best_next['boost']:.0f})")
+        stale = int(min(_num(r.get("last_sale_days_ago"), 9999), 99999))
+        stock_val = _num(r.get("stock") if r.get("stock") is not None else r.get("stock_wb"))
+        # R4 часто уже написал те же факты («мёртвый запас: продаж нет N дн.,
+        # остаток K шт»), поэтому не повторяем их — в колонке причин это
+        # выглядело бы как «продаж нет 986 дн.» дважды подряд.
+        prev = (r.get("reason") or "").lower()
+        facts = []
+        if "продаж нет" not in prev and "продаж не было" not in prev:
+            facts.append(f"нет продаж {stale} дн.")
+        if "остаток" not in prev:
+            facts.append(f"остаток {stock_val:.0f} шт")
+        price = _num(r.get("price"))
+        if price > 0 and r.get("net_cost") is not None:
+            facts.append(f"себестоимость {_num(r['net_cost']) / price * 100:.0f}% цены")
+        note = ("разгрузка" + (": " + ", ".join(facts) if facts else "")
+                + f" → +{added:.1f} п.п."
+                + (f" (акция WB «{promo_name}»)" if promo_name else ""))
         if r["action"] == "HOLD":
             r["action"] = "LOWER"
             r["status"] = "suggested"
@@ -1638,12 +1717,11 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
             reason = (r.get("reason") or "").rstrip(".")
             r["reason"] = ((reason + ". ") if reason else "") + note
         r["promo_delta_discount"] = round(added, 2)
+        r["promo_score"] = round(score, 3)
+        r["promo_score_confidence"] = confidence
         r["target_discount"] = round(new_t, 1)
         r["target_vis"] = round(_num(r["price"]) * (1 - new_t / 100), 2)
         r["delta_discount"] = round(new_t - cur, 1)
-        # Метрики участия — по итоговой скидке: разрыв мог сократиться, а уровень
-        # мог подняться (буст) именно благодаря добору.
-        r["promo_gap_pp"], r["promo_boost_gain"] = tier_metrics(r)
         if all(k in r for k in ("comm_rate", "logistics_unit", "storage_unit",
                                 "other_unit", "net_cost")):
             r["margin_pct_at_target"] = _margin_pct(r["target_vis"], r)
