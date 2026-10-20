@@ -446,7 +446,7 @@ body.busy .btn { pointer-events: none; opacity: .6; }
 .kpi .title { font-weight: 700; margin-bottom: 4px; }
 .kpi .lines { display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
 .kpi .line { display: flex; gap: 10px; }
-.kpi .line span:first-child { color: #8a929c; display: inline-flex; align-items: center; }
+.kpi .line > span:first-child { color: #8a929c; display: inline-flex; align-items: center; }
 .kpi .line span:first-child .tip { margin-left: 6px; }
 .kpi .line span:last-child { font-weight: 600; }
 
