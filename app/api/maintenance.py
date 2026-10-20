@@ -52,7 +52,7 @@ def api_pulls(db: Session = Depends(get_db)):
 # Обзор (dashboard), в т.ч. сравнение между связками (параметр links=id,id,…)
 # ---------------------------------------------------------------------------
 def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
-                       link_mp=""):
+                       link_mp="", group_by="prefix"):
     """Полный ответ /dashboard для одной связки (search_path уже выставлен).
 
     link_mp — маркетплейс связки: если задан, дашборд считается только по нему.
@@ -141,9 +141,9 @@ def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
                 db, from_, to_, mp_param, limit=top, kind="loss"),
         },
         "price": dashboard_service.price_delta(db, from_, to_, prev, mp_param, limit=top),
-        "prefixes": dashboard_service.prefix_margin(
-            db, from_, to_, mp_param, limit=top),
-        "stocks": dashboard_service.stocks_summary(db, to_, mp_param),
+        "prefixes": dashboard_service.grouped_margin(
+            db, from_, to_, mp_param, limit=top, group_by=group_by),
+        "stocks": dashboard_service.stocks_summary(db, to_, mp_param, from_),
         "freshness": dashboard_service.freshness(db),
         "date_from": str(from_),
         "date_to": str(to_),
@@ -259,7 +259,10 @@ def _merge_dashboards(payloads, from_, to_, top, freshness):
             "up": {"rows": _slice(price_up, top), "count": len(price_up)},
             "down": {"rows": _slice(price_down, top), "count": len(price_down)},
         },
-        "prefixes": {"rows": _slice(prefixes, top), "count": len(prefixes)},
+        "prefixes": {"rows": _slice(prefixes, top), "count": len(prefixes),
+                     "group_by": next(
+                         (p["prefixes"].get("group_by") for p in payloads
+                          if p.get("prefixes")), "prefix")},
         "stocks": stocks,
         "freshness": freshness,
         "date_from": str(from_),
@@ -275,6 +278,7 @@ def api_dashboard(
     compare: int = 0,
     top: Optional[int] = None,
     links: Optional[str] = None,
+    group_by: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Обзор: KPI из детализаций + топы + дельты цены + склад + свежесть.
@@ -290,6 +294,7 @@ def api_dashboard(
     """
     from_, to_ = _parse_window400(date_from, date_to)
     mp_param = marketplace or "all"
+    group_by = group_by or "prefix"
 
     prev = None
     if compare and from_ and to_:
@@ -309,13 +314,14 @@ def api_dashboard(
             lambda db, info: _dashboard_payload(
                 db, from_, to_, mp_param, prev, top,
                 owner=cabinet_service.link_owner(db, info),
-                link_mp=info.marketplace),
+                link_mp=info.marketplace, group_by=group_by),
         )
         results = [p for _, p in payloads]
         freshness = next((p["freshness"] for p in results if p.get("freshness")), [])
         return _merge_dashboards(results, from_, to_, top, freshness)
 
-    return _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="")
+    return _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
+                              group_by=group_by)
 
 
 @router.post("/sync/{code}")

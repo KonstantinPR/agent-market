@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app import models
 from app.services.dashboard import (
     dashboard_kpis, top_products, prefix_margin, price_delta,
-    stocks_summary, freshness, prefix_group,
+    stocks_summary, freshness, prefix_group, grouped_margin,
 )
 
 TODAY = date(2026, 9, 20)
@@ -184,6 +184,59 @@ def test_prefix_margin_groups(db):
     assert [r["prefix"] for r in g["rows"]] == ["J", "TIE", "остальные"]
 
 
+def _group_fixture(db):
+    db.add(models.Product(article="TIE-1", name="Галстук", net_cost=1.0,
+                          supplier="Иванов"))
+    db.add(models.Product(article="JBG-1", name="Джинсы", net_cost=1.0,
+                          supplier="Петров"))
+    db.add(models.Product(article="ABC-1", name="Прочее", net_cost=1.0))
+    db.add(_wb_row("w1", "TIE-1", TODAY, qty=1, amount=1000.0, income=900.0))
+    db.add(_wb_row("w2", "JBG-1", TODAY, qty=2, amount=4000.0, income=100.0))
+    db.add(_wb_row("w3", "ABC-1", TODAY, qty=1, amount=500.0, income=-100.0))
+    db.commit()
+
+
+def test_grouped_margin_supplier_and_marketplace(db):
+    _group_fixture(db)
+    sup = {r["prefix"]: r for r in grouped_margin(
+        db, TODAY, TODAY, "wb", group_by="supplier")["rows"]}
+    assert set(sup) == {"Иванов", "Петров", "Без поставщика"}
+    assert sup["Петров"]["articles"] == 1
+    assert "JBG-1" in sup["Петров"]["sample"]
+
+    mp = grouped_margin(db, TODAY, TODAY, "wb", group_by="marketplace")
+    assert [r["prefix"] for r in mp["rows"]] == ["WB"]
+    assert mp["rows"][0]["margin"] == 896.0    # 900 + 100 − 100 − 4 × 1
+
+
+def test_grouped_margin_price_margin_abc(db):
+    _group_fixture(db)
+    price = {r["prefix"]: r for r in grouped_margin(
+        db, TODAY, TODAY, "wb", group_by="price")["rows"]}
+    assert set(price) == {"1 000–2 000 ₽", "2 000–5 000 ₽", "до 1 000 ₽"}
+    assert price["2 000–5 000 ₽"]["articles"] == 1
+
+    marg = {r["prefix"]: r for r in grouped_margin(
+        db, TODAY, TODAY, "wb", group_by="margin")["rows"]}
+    assert "убыточные" in marg
+    assert "0–10 %" in marg
+    assert "25 % и выше" in marg
+
+    abc = {r["prefix"]: r for r in grouped_margin(
+        db, TODAY, TODAY, "wb", group_by="abc")["rows"]}
+    assert abc["A (до 80 % выручки)"]["articles"] == 1
+    assert abc["B (80–95 %)"]["articles"] == 1
+    assert abc["C (остальное)"]["articles"] == 1
+    assert abc["A (до 80 % выручки)"]["sample"] == "JBG-1"
+
+
+def test_grouped_margin_unknown_group_falls_back_to_prefix(db):
+    _group_fixture(db)
+    res = grouped_margin(db, TODAY, TODAY, "wb", group_by="nonsense")
+    assert res["group_by"] == "prefix"
+    assert {r["prefix"] for r in res["rows"]} == {"TIE", "J", "остальные"}
+
+
 # ------------------------------------------------------------------ дельты цены
 def test_price_delta_up_and_down(db):
     cur_from = TODAY
@@ -302,6 +355,30 @@ def test_stocks_summary_uses_last_snapshot(db):
     s = stocks_summary(db, TODAY, "wb")
     assert s["wb"]["quantity_full"] == 2        # срез ровно на date_to
     assert s["wb"]["value"] == 20.0
+
+
+def test_stocks_summary_extras(db):
+    wb = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "wb")
+    ).scalar_one()
+    db.add(models.Product(article="WB-1", name="ВБ", net_cost=100.0))
+    db.add(models.Stock(marketplace_id=wb, date=TODAY, article="WB-1",
+                        warehouse="склад", chrt_id="", quantity=5,
+                        quantity_full=5, in_way=2))
+    for i in range(5):
+        db.add(models.Sale(marketplace_id=wb, date=TODAY - timedelta(days=i),
+                           article="WB-1", source="v5", quantity=2,
+                           revenue=1000.0, income=900.0))
+    db.commit()
+
+    s = stocks_summary(db, TODAY, "wb", TODAY - timedelta(days=4))["wb"]
+    assert s["avg_cost"] == 100.0
+    assert s["in_way_value"] == 200.0
+    assert s["sold"] == 10
+    assert s["coverage_days"] == 2.5          # 5 шт / (10 шт за 5 дней)
+    assert s["snapshot_age_days"] == 0
+    assert s["empty_articles"] == 0
+    assert s["articles"] == 1
 
 
 def test_freshness_lists_pulls(db):

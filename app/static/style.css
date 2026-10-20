@@ -1323,6 +1323,16 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 }
 .dash-tab { white-space: nowrap; }
 .dash-tab.active { background: #eef4ff; border-color: #0a58ca; color: #0a58ca; }
+.dash-groupby {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  color: #555;
+  white-space: nowrap;
+}
+.dash-groupby select { max-width: 190px; }
 .dash-sub { margin-bottom: 18px; }
 .dash-sub:last-child { margin-bottom: 0; }
 .dash-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
@@ -1357,6 +1367,8 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 }
 .fresh-kind { color: #333; flex: 1; }
 .fresh-time { color: #666; font-variant-numeric: tabular-nums; }
+.fresh-meta { color: #888; font-size: 12px; }
+.fresh-row { cursor: help; }
 
 .detail-gaps { margin: 8px 0; }
 .detail-gaps-bar {

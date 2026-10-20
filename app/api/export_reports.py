@@ -21,6 +21,7 @@ def export_dashboard(
     date_to: Optional[str] = None,
     marketplace: Optional[str] = None,
     compare: int = 0,
+    group_by: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Дашборд одним Excel-файлом: KPI, топы, изменения цен, группы."""
@@ -36,7 +37,8 @@ def export_dashboard(
     profit = dashboard_service.top_products(db, from_, to_, mp_param, kind="profit")
     loss = dashboard_service.top_products(db, from_, to_, mp_param, kind="loss")
     price = dashboard_service.price_delta(db, from_, to_, prev, mp_param)
-    prefixes = dashboard_service.prefix_margin(db, from_, to_, mp_param)
+    prefixes = dashboard_service.grouped_margin(
+        db, from_, to_, mp_param, group_by=group_by or "prefix")
 
     def _kpi_frame(row):
         return {
@@ -72,10 +74,11 @@ def export_dashboard(
         "avg_prev": "Цена прошлого пер., руб", "delta_ru": "Δ, руб",
         "delta_pct": "Δ, %", "margin": "Прибыль, руб",
     }
-    prefix_cols = ["prefix", "articles", "sells", "revenue", "income", "margin",
-                   "margin_per_one", "margin_pct"]
+    prefix_cols = ["prefix", "sample", "articles", "sells", "revenue", "income",
+                   "margin", "margin_per_one", "margin_pct"]
     prefix_ru = {
-        "prefix": "Группа", "articles": "Товаров", "sells": "Продано, шт",
+        "prefix": "Группа", "sample": "Артикулы (примеры)",
+        "articles": "Товаров", "sells": "Продано, шт",
         "revenue": "Выручка, руб", "income": "Доход, руб", "margin": "Прибыль, руб",
         "margin_per_one": "Прибыль/шт, руб", "margin_pct": "Рентабельность, %",
     }

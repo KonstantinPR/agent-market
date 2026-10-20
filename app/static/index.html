@@ -198,7 +198,17 @@
           <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="loss">Топ убыточных</button>
           <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="price-up">Рост цены</button>
           <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="price-down">Снижение цены</button>
-          <button type="button" class="btn dash-tab" role="tab" aria-selected="false" data-dashtable="prefix">Прибыльность по группам</button>
+          <label class="dash-groupby" title="Прибыльность по группам товаров: выберите признак группировки. Этот же разрез используется графиком «Показатели» в режиме «По группам товаров».">
+            <span>Прибыльность по группам:</span>
+            <select id="dashGroupBy">
+              <option value="prefix">Группы артикулов</option>
+              <option value="supplier">Поставщик</option>
+              <option value="price">Ценовой сегмент</option>
+              <option value="margin">Рентабельность</option>
+              <option value="abc">ABC по выручке</option>
+              <option value="marketplace">Маркетплейс</option>
+            </select>
+          </label>
         </div>
         <div class="table-wrap" id="dashTable"></div>
         <span id="dashTablePager"></span>
@@ -1027,7 +1037,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=128"></script>
+  <script src="/static/app.js?v=129"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "128";
+const UI_VERSION = "129";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1015,7 +1015,7 @@ function dashQuery() {
     ? $("#dashFrom").value : $("#fFrom").value;
   const to = $("#dashTo") && $("#dashTo").value
     ? $("#dashTo").value : $("#fTo").value;
-  const q = { date_from: from, date_to: to };
+  const q = { date_from: from, date_to: to, group_by: dashGroupBy };
   const mp = $("#dashMarketplace").value;
   if (mp) q.marketplace = mp;
   if ($("#dashCompare").checked) q.compare = 1;
@@ -1160,7 +1160,8 @@ const dashHeaders = {
     { k: "margin", label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Прибыль артикула за текущий период из детализации: показывает, что даёт новая цена. Пусто, если артикула нет в сводке."},
   ],
   prefix: [
-    { k: "prefix", label: "Группа", render: cellFmts.text , tip: "Группа товара по карте префиксов артикулов (SHK→SH, SOHO-FRNT отдельно от SOHO и т.п.). Без совпадения — «остальные»."},
+    { k: "prefix", label: "Группа", render: cellFmts.text , tip: "Группа товаров по выбранному признаку: префиксы артикулов (SHK→SH, SOHO-FRNT отдельно от SOHO), поставщик, ценовой сегмент, рентабельность, ABC по выручке или маркетплейс. Признак меняется селектором «Прибыльность по группам»."},
+    { k: "sample", label: "Артикулы (примеры)", render: cellFmts.text , tip: "До пяти артикулов группы с наибольшей выручкой — чтобы понять, какие именно товары в неё попали."},
     { k: "articles", label: "Товаров", num: true, render: cellFmts.int , tip: "Сколько артикулов попало в группу. Товары без продаж в периоде в подсчёт не идут."},
     { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Сумма проданных единиц (нетто, минус возвраты) по всем артикулам группы за период."},
     { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Сумма реализации по артикулам группы за период."},
@@ -1228,6 +1229,27 @@ const KPI_HELP = {
   returns_qty: "Возвраты, шт — вернувшиеся единицы за период. В скобках доля возвратов = "
     + "возвраты ÷ (продано + возвраты) × 100.",
   articles: "Товаров — число уникальных артикулов (nmId) с продажами в периоде.",
+  quantity_full: "Остаток, шт — товар на складах маркетплейса по последнему срезу "
+    + "стоков на конец периода (quantityFull).",
+  in_way: "В пути, шт — количество в поставке, ещё не принятое на склад, "
+    + "по последнему срезу.",
+  value: "Оценка остатка, ₽ — себестоимость × количество на складе. Товары без "
+    + "себестоимости в сумму не входят.",
+  date: "Срез — дата последнего среза стоков, по которому взяты цифры.",
+  avg_cost: "Средняя себестоимость, ₽/шт = оценка остатка ÷ остаток на складе. "
+    + "Считается только по товарам с известной себестоимостью.",
+  in_way_value: "Оценка в пути, ₽ = средняя себестоимость × количество в поставке. "
+    + "Сколько денег «заморожено» в ещё не принятом товаре.",
+  value_unknown: "Без себестоимости, арт. — артикулы в срезе, для которых в "
+    + "каталоге не заполнена себестоимость: их стоимость в оценке не учтена.",
+  empty_articles: "Нулевой остаток, арт. — артикулы, у которых на складе 0 шт "
+    + "(товар закончился или ещё не принят).",
+  sold: "Продано за период, шт — нетто-продажи по маркетплейсу за выбранное окно. "
+    + "База для расчёта запаса в днях.",
+  coverage_days: "Запас, дней = остаток ÷ средние продажи в день за окно. "
+    + "Сколько дней хватит текущего склада при том же темпе продаж.",
+  snapshot_age_days: "Возраст среза, дней — сколько дней прошло от даты среза "
+    + "стоков до конца выбранного периода. Больше 1–2 дней — данные устарели.",
 };
 
 function kpiHelpTip(key, lbl) {
@@ -1297,18 +1319,33 @@ const DASH_PREFIX_COLORS = [
   "#8a5a2b", "#7f7f7f", "#b59a3e", "#e05252", "#2e7d32", "#1565c0",
 ];
 
+// Признаки группировки товаров: общий выбор для таблицы «Прибыльность по
+// группам» и графика «Показатели → По группам товаров».
+const DASH_GROUPINGS = {
+  prefix: "Группы артикулов",
+  supplier: "Поставщик",
+  price: "Ценовой сегмент",
+  margin: "Рентабельность",
+  abc: "ABC по выручке",
+  marketplace: "Маркетплейс",
+};
+const DASH_GROUP_KEY = "dash-group-by";
+let dashGroupBy = "prefix";
+
 function dashChartA() {
   const dim = $("#chartADim") ? $("#chartADim").value : "mp";
   const metric = $("#chartAMetric") ? $("#chartAMetric").value : "income";
   const m = DASH_A_METRICS[metric] || DASH_A_METRICS.income;
   if (dim === "prefix") {
     const rows = (dashData && dashData.prefixes
-      ? dashData.prefixes.rows : []).slice();
-    const labels = rows.map((r) => r.prefix);
+      ? dashData.prefixes.rows : []).slice()
+      .sort((a, b) => (Number(b[metric]) || 0) - (Number(a[metric]) || 0));
+    const labels = rows.map((r) => (r.articles
+      ? `${r.prefix} · ${r.articles} тов.` : r.prefix));
     const values = rows.map((r) => r[metric] || 0);
     const colors = rows.map((_, i) =>
       DASH_PREFIX_COLORS[i % DASH_PREFIX_COLORS.length]);
-    return { labels, values, colors, m };
+    return { labels, values, colors, m, groups: rows, horizontal: true };
   }
   const rows = dashData && dashData.kpis ? dashData.kpis.per_mp : [];
   const labels = rows.map((x) => x.owner || MP_LABELS[x.marketplace] || x.marketplace);
@@ -1319,6 +1356,7 @@ function dashChartA() {
 
 function paintDashChartA() {
   const a = dashChartA();
+  const horizontal = a.horizontal || a.labels.length > 6;
   setChart("chartMpIncome", {
     type: "bar",
     data: {
@@ -1330,21 +1368,51 @@ function paintDashChartA() {
         maxBarThickness: 56,
       }],
     },
-    options: chartOpts(a, a.labels.length > 6),
+    options: chartOpts(a, horizontal),
   });
   const cap = $("#dashChartACap");
   if (cap) cap.textContent =
     a.m.label + ($("#chartADim") && $("#chartADim").value === "prefix"
-      ? " по группам товаров" : " по маркетплейсам");
+      ? " по группам · " + (DASH_GROUPINGS[dashGroupBy] || "")
+      : " по маркетплейсам");
 }
 
 function chartOpts(a, horizontal) {
+  const groupAt = (items) => {
+    const g = a.groups && items && items[0]
+      ? a.groups[items[0].dataIndex] : null;
+    return g || null;
+  };
   const opts = {
     responsive: true,
     maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          title: (items) => {
+            const g = groupAt(items);
+            return g ? "Группа: " + g.prefix : (items[0] ? items[0].label : "");
+          },
+          label: (ctx) => {
+            const v = horizontal ? ctx.parsed.x : ctx.parsed.y;
+            return `${a.m.label}: ${fmtMoney(v || 0)}`;
+          },
+          afterLabel: (ctx) => {
+            const g = a.groups && a.groups[ctx.dataIndex];
+            if (!g) return "";
+            const parts = [];
+            if (g.articles != null) parts.push("Товаров: " + g.articles);
+            if (g.revenue != null) parts.push("Выручка: " + fmtMoney(g.revenue));
+            parts.push("Прибыль: " + fmtMoney(g.margin || 0));
+            if (g.sample) parts.push("Например: " + g.sample);
+            return parts;
+          },
+        },
+      },
+    },
     scales: {
-      x: { ticks: { autoSkip: false, maxRotation: horizontal ? 30 : 45 } },
+      x: { ticks: { autoSkip: false, maxRotation: horizontal ? 0 : 45 } },
       y: { ticks: { callback: (v) => fmtMoney(v) } },
     },
   };
@@ -1421,14 +1489,9 @@ function repaintDashCharts() {
 }
 
 function paintDashStocks(s) {
-  const STOCK_HELP = {
-    quantity_full: "Товар на складах маркетплейса по последнему срезу стоков на конец периода.",
-    in_way: "Количество в поставке, ещё не принятое на склад, по последнему срезу.",
-    value: "Оценка остатка: себестоимость × количество на складе.",
-    date: "Дата последнего среза стоков, по которому взяты эти цифры.",
-  };
   const cell = (lbl, val, key) => `<div class="line"><span>${lbl}`
     + `${kpiHelpTip(key, lbl)}</span><span class="kvalue">${val}</span></div>`;
+  const days = (v) => (v == null ? "—" : fmt(v));
   const codes = Object.keys(s);
   $("#dashStocks").innerHTML = codes.map((code) => {
     const st = s[code];
@@ -1441,19 +1504,41 @@ function paintDashStocks(s) {
           ${cell("Остаток, шт", fmt(st.quantity_full), "quantity_full")}
           ${cell("В пути, шт", fmt(st.in_way), "in_way")}
           ${cell("Оценка, ₽", fmtMoney(st.value), "value")}
+          ${cell("Оценка в пути, ₽", fmtMoney(st.in_way_value), "in_way_value")}
+          ${cell("Средняя себест., ₽/шт", fmtMoney(st.avg_cost), "avg_cost")}
+          ${cell("Товаров", fmt(st.articles), "articles")}
+          ${cell("С нулевым остатком, арт.", fmt(st.empty_articles), "empty_articles")}
+          ${cell("Без себестоимости, арт.", fmt(st.value_unknown), "value_unknown")}
+          ${cell("Продано за период, шт", fmt(st.sold), "sold")}
+          ${cell("Запас, дней", days(st.coverage_days), "coverage_days")}
+          ${cell("Возраст среза, дней", days(st.snapshot_age_days), "snapshot_age_days")}
           ${cell("Срез", st.date || "—", "date")}
         </div>
       </div>`;
   }).join("") || '<div class="empty">Остатков нет за период</div>';
 }
 
+const FRESH_HELP = "Свежесть загрузок: когда последний раз успешно обновлялся "
+  + "источник. «Загружено» — строк получено от API/из файла, «в БД» — сколько "
+  + "строк сохранено после обработки. «Окно» — период, за который тянулись данные.";
+
 function paintDashFreshness(rows) {
-  $("#dashFresh").innerHTML = rows.length ? rows.map((r) => `
-    <div class="fresh-row">
-      <span class="tag ${r.api}">${MP_LABELS[r.api] || r.api}</span>
-      <span class="fresh-kind">${r.kind}</span>
-      <span class="fresh-time">${r.last_success_at ? r.last_success_at.slice(0, 16) : "—"}</span>
-    </div>`).join("") : '<div class="empty">Загрузок не было</div>';
+  const esc = (v) => escapeHtml(v == null ? "" : String(v));
+  $("#dashFresh").innerHTML = rows.length ? rows.map((r) => {
+    const meta = [];
+    if (r.rows != null) meta.push("загружено " + fmt(r.rows));
+    if (r.db_rows != null) meta.push("в БД " + fmt(r.db_rows));
+    if (r.window) meta.push("окно: " + r.window);
+    const tip = FRESH_HELP + (r.last_success_at
+      ? " Последний успех: " + r.last_success_at + "." : "");
+    return `
+    <div class="fresh-row" title="${esc(tip)}">
+      <span class="tag ${esc(r.api)}">${esc(MP_LABELS[r.api] || r.api)}</span>
+      <span class="fresh-kind">${esc(r.kind)}</span>
+      <span class="fresh-time">${r.last_success_at ? esc(r.last_success_at.slice(0, 16)) : "—"}</span>
+      <span class="fresh-meta">${esc(meta.join(" · "))}</span>
+    </div>`;
+  }).join("") : '<div class="empty">Загрузок не было</div>';
 }
 
 // ---------------------------------------------------------------- Обзор: одна
@@ -1464,7 +1549,7 @@ const DASH_TABLES = [
   { key: "loss", colview: "dash-loss", headers: "tops", totals: true },
   { key: "price-up", colview: "dash-price", headers: "price", totals: false },
   { key: "price-down", colview: "dash-price", headers: "price", totals: false },
-  { key: "prefix", colview: "dash-prefix", headers: "prefix", totals: true },
+  { key: "groups", colview: "dash-prefix", headers: "prefix", totals: true },
 ];
 const DASH_TABLE_KEY = "dash-table";
 let dashTable = "profit";
@@ -1524,6 +1609,25 @@ function initDashTabs() {
   box.addEventListener("click", (e) => {
     const b = e.target.closest("[data-dashtable]");
     if (b) setDashTable(b.dataset.dashtable);
+  });
+}
+
+function initDashGroupBy() {
+  const sel = $("#dashGroupBy");
+  try {
+    const saved = localStorage.getItem(DASH_GROUP_KEY);
+    if (saved && DASH_GROUPINGS[saved]) dashGroupBy = saved;
+  } catch (e) { /* ignore */ }
+  if (!sel) return;
+  sel.value = dashGroupBy;
+  sel.addEventListener("change", () => {
+    dashGroupBy = DASH_GROUPINGS[sel.value] ? sel.value : "prefix";
+    try { localStorage.setItem(DASH_GROUP_KEY, dashGroupBy); } catch (e) { /* ignore */ }
+    dashTable = "groups";
+    try { localStorage.setItem(DASH_TABLE_KEY, dashTable); } catch (e) { /* ignore */ }
+    const c = $("#dashTable");
+    if (c) c._pt = null;
+    loadTab("dashboard");
   });
 }
 
@@ -8817,6 +8921,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initDashCollapse();
   initDashDrag();
   initDashTabs();
+  initDashGroupBy();
   initDashViewMenu();
   const cabBtn = $("#cabBtn");
   if (cabBtn) cabBtn.addEventListener("click", (e) => { e.stopPropagation(); openCabinets(); });

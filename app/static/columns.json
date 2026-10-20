@@ -1951,6 +1951,11 @@
        "def": true
       },
       {
+       "k": "sample",
+       "label": "Артикулы (примеры)",
+       "def": true
+      },
+      {
        "k": "articles",
        "label": "Товаров",
        "def": true

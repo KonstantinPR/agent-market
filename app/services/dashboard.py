@@ -63,6 +63,83 @@ _PREFIX_KEYS = tuple(sorted(PREFIXES_ART_DICT, key=len, reverse=True))
 
 OTHER = "остальные"
 
+# Способы группировки товаров для таблицы «Прибыльность по группам» и
+# графика «Показатели». Ключ уходит в API параметром group_by.
+GROUPINGS = {
+    "prefix": "Группы артикулов",
+    "marketplace": "Маркетплейс",
+    "supplier": "Поставщик",
+    "price": "Ценовой сегмент",
+    "margin": "Рентабельность",
+    "abc": "ABC по выручке",
+}
+
+MP_GROUP_LABELS = {"wb": "WB", "ozon": "Ozon"}
+
+
+def _price_segment(price: float) -> str:
+    if price <= 0:
+        return "нет данных"
+    if price < 1000:
+        return "до 1 000 ₽"
+    if price < 2000:
+        return "1 000–2 000 ₽"
+    if price < 5000:
+        return "2 000–5 000 ₽"
+    return "5 000 ₽ и выше"
+
+
+def _margin_segment(pct: float) -> str:
+    if pct < 0:
+        return "убыточные"
+    if pct < 10:
+        return "0–10 %"
+    if pct < 25:
+        return "10–25 %"
+    return "25 % и выше"
+
+
+def _abc_labels(df: pd.DataFrame) -> pd.Series:
+    """ABC по выручке: A — первые 80 % выручки, B — до 95 %, C — остальное."""
+    labels = pd.Series("C", index=df.index, dtype=object)
+    if df.empty or float(df["revenue"].sum() or 0) <= 0:
+        return pd.Series("C (нет выручки)", index=df.index, dtype=object)
+    order = df.sort_values("revenue", ascending=False).index
+    total = float(df["revenue"].sum())
+    cum = df.loc[order, "revenue"].cumsum() / total
+    labels.loc[order[cum <= 0.8]] = "A (до 80 % выручки)"
+    labels.loc[order[(cum > 0.8) & (cum <= 0.95)]] = "B (80–95 %)"
+    labels.loc[order[cum > 0.95]] = "C (остальное)"
+    return labels
+
+
+def _supplier_map(db) -> dict:
+    """Артикул (UPPER) -> поставщик из каталога; пусто — «Без поставщика»."""
+    rows = db.execute(select(models.Product.article, models.Product.supplier))
+    return {
+        (a or "").strip().upper(): (s or "").strip() or "Без поставщика"
+        for a, s in rows
+    }
+
+
+def _article_groups(cur: pd.DataFrame, db, group_by: str) -> pd.Series:
+    """Подпись группы для каждой строки артикула (cur из _by_article)."""
+    if group_by == "supplier":
+        smap = _supplier_map(db)
+        return cur["article"].map(
+            lambda a: smap.get(str(a).strip().upper(), "Без поставщика"))
+    if group_by == "price":
+        return cur.apply(
+            lambda r: _price_segment(
+                float(r["revenue"] or 0) / r["sells"] if r["sells"] else 0.0),
+            axis=1)
+    if group_by == "margin":
+        return cur["margin_pct"].map(
+            lambda v: _margin_segment(float(v or 0)))
+    if group_by == "abc":
+        return _abc_labels(cur)
+    return cur["article"].map(prefix_group)
+
 # Единый набор колонок сводных строк дашборда (есть в обеих детализациях).
 # margin_gross («Маржа до себестоимости») нужен графику «Показатели» дашборда.
 _KPI_COLS = [
@@ -255,36 +332,75 @@ def top_products(db, date_from, date_to, marketplace=None, limit=None, offset=0,
     }
 
 
-def prefix_margin(db, date_from, date_to, marketplace=None, limit=None, offset=0) -> dict:
-    """Рентабельность по группам-префиксам артикулов (limit=None — весь список)."""
-    cur = _by_article(combined_detail(db, date_from, date_to, marketplace))
-    if cur.empty:
-        return {"rows": [], "count": 0}
-    cur = cur.copy()
-    cur["prefix"] = cur["article"].map(prefix_group)
-    g = cur.groupby("prefix", as_index=False).agg(
-        articles=("article", "count"),
-        sells=("sells", "sum"),
-        returns_qty=("returns_qty", "sum"),
-        revenue=("revenue", "sum"),
-        income=("income", "sum"),
-        margin_gross=("margin_gross", "sum"),
-        margin=("margin", "sum"),
-    )
-    g["margin_per_one"] = g.apply(
-        lambda r: round(r["margin"] / r["sells"], 2) if r["sells"] else 0.0, axis=1)
-    g["margin_pct"] = g.apply(
-        lambda r: round(r["margin"] / r["revenue"] * 100, 2) if r["revenue"] else 0.0,
-        axis=1)
-    g["margin_roi_pct"] = g.apply(
-        lambda r: round(r["margin"] / (r["revenue"] - r["margin"]) * 100, 2)
-        if (r["revenue"] - r["margin"]) > 0 else 0.0, axis=1)
-    g = g.sort_values("margin", ascending=False).reset_index(drop=True)
+def grouped_margin(db, date_from, date_to, marketplace=None, limit=None, offset=0,
+                   group_by="prefix") -> dict:
+    """Рентабельность по группам товаров (limit=None — весь список).
+
+    group_by: prefix | marketplace | supplier | price | margin | abc.
+    Строка группы всегда отдаётся в ключе `prefix` (совместимость с таблицей
+    и Excel-выгрузкой), рядом лежит `sample` — примеры артикулов группы.
+    """
+    if group_by not in GROUPINGS:
+        group_by = "prefix"
+    detail = combined_detail(db, date_from, date_to, marketplace)
+    if detail.empty:
+        return {"rows": [], "count": 0, "group_by": group_by}
+
+    if group_by == "marketplace":
+        rows = []
+        for code, sub in detail.groupby("marketplace"):
+            row = _kpi_row(sub, str(code))
+            row["prefix"] = MP_GROUP_LABELS.get(str(code), str(code).upper())
+            row["sample"] = ", ".join(
+                sub.sort_values("revenue", ascending=False)["article"]
+                .head(5).astype(str))
+            rows.append(row)
+        g = pd.DataFrame(rows)
+        if not g.empty:
+            g = g.sort_values("margin", ascending=False).reset_index(drop=True)
+        cols = ["prefix", "sample", "articles", "sells", "returns_qty",
+                "revenue", "income", "margin_gross", "margin",
+                "margin_per_one", "margin_pct", "margin_roi_pct"]
+        g = g.loc[:, [c for c in cols if c in g.columns]]
+    else:
+        cur = _by_article(detail).copy()
+        cur["prefix"] = _article_groups(cur, db, group_by)
+        samples = (cur.sort_values("revenue", ascending=False)
+                   .groupby("prefix")["article"]
+                   .apply(lambda s: ", ".join(s.head(5).astype(str))))
+        g = cur.groupby("prefix", as_index=False).agg(
+            articles=("article", "count"),
+            sells=("sells", "sum"),
+            returns_qty=("returns_qty", "sum"),
+            revenue=("revenue", "sum"),
+            income=("income", "sum"),
+            margin_gross=("margin_gross", "sum"),
+            margin=("margin", "sum"),
+        )
+        g["sample"] = g["prefix"].map(samples)
+        g["margin_per_one"] = g.apply(
+            lambda r: round(r["margin"] / r["sells"], 2) if r["sells"] else 0.0,
+            axis=1)
+        g["margin_pct"] = g.apply(
+            lambda r: round(r["margin"] / r["revenue"] * 100, 2)
+            if r["revenue"] else 0.0, axis=1)
+        g["margin_roi_pct"] = g.apply(
+            lambda r: round(r["margin"] / (r["revenue"] - r["margin"]) * 100, 2)
+            if (r["revenue"] - r["margin"]) > 0 else 0.0, axis=1)
+        g = g.sort_values("margin", ascending=False).reset_index(drop=True)
+
     rows = g.iloc[offset:(None if limit is None else offset + limit)]
     return {
         "rows": rows.to_dict("records"),
         "count": int(len(g)),
+        "group_by": group_by,
     }
+
+
+def prefix_margin(db, date_from, date_to, marketplace=None, limit=None, offset=0) -> dict:
+    """Рентабельность по группам-префиксам артикулов (совместимая обёртка)."""
+    return grouped_margin(db, date_from, date_to, marketplace, limit, offset,
+                          group_by="prefix")
 
 
 # ------------------------------------------------------------------ дельты цены
@@ -450,10 +566,28 @@ def _stock_snapshot(db, mp_code, date_to) -> pd.DataFrame:
     return df
 
 
-def stocks_summary(db, date_to, marketplace=None) -> dict:
+def _sold_by_mp(db, date_from, date_to) -> dict:
+    """Проданное количество (нетто) по маркетплейсам за окно — для запаса в днях."""
+    if date_from is None or date_to is None:
+        return {}
+    q = (
+        select(models.Marketplace.code, func.sum(models.Sale.quantity))
+        .select_from(models.Sale)
+        .join(models.Marketplace,
+              models.Sale.marketplace_id == models.Marketplace.id)
+        .where(models.Sale.date >= date_from, models.Sale.date <= date_to,
+               models.Sale.source != "detail")
+        .group_by(models.Marketplace.code)
+    )
+    return {code: int(qty or 0) for code, qty in db.execute(q)}
+
+
+def stocks_summary(db, date_to, marketplace=None, date_from=None) -> dict:
     """Остатки на конец окна: шт/в пути/оценка в деньгах по себестоимости."""
     if date_to is None:
         date_to = date.today()
+    sold = _sold_by_mp(db, date_from, date_to)
+    days = ((date_to - date_from).days + 1) if date_from else 0
     out = {}
     for code in _wanted(marketplace):
         snap = _stock_snapshot(db, code, date_to)
@@ -461,7 +595,9 @@ def stocks_summary(db, date_to, marketplace=None) -> dict:
             out[code] = {
                 "quantity": 0, "quantity_full": 0, "in_way": 0,
                 "value": 0.0, "value_unknown": 0, "articles": 0,
-                "date": None,
+                "empty_articles": 0, "avg_cost": 0.0, "in_way_value": 0.0,
+                "sold": int(sold.get(code, 0)), "coverage_days": None,
+                "snapshot_age_days": None, "date": None,
             }
             continue
         articles = list(snap["article"])
@@ -486,14 +622,27 @@ def stocks_summary(db, date_to, marketplace=None) -> dict:
                 value += c * int(r["quantity_full"])
             else:
                 est += 1
+        quantity_full = int(snap["quantity_full"].sum())
+        in_way = int(snap["in_way"].sum())
+        avg_cost = round(value / quantity_full, 2) if quantity_full else 0.0
+        snap_date = snap["stock_date"].iloc[0] if not snap.empty else None
+        sold_qty = int(sold.get(code, 0))
         out[code] = {
             "quantity": int(snap["quantity"].sum()),
-            "quantity_full": int(snap["quantity_full"].sum()),
-            "in_way": int(snap["in_way"].sum()),
+            "quantity_full": quantity_full,
+            "in_way": in_way,
             "value": round(value, 2),
             "value_unknown": est,
             "articles": int(len(snap)),
-            "date": str(snap["stock_date"].iloc[0]) if not snap.empty else None,
+            "empty_articles": int((snap["quantity_full"] <= 0).sum()),
+            "avg_cost": avg_cost,
+            "in_way_value": round(avg_cost * in_way, 2),
+            "sold": sold_qty,
+            "coverage_days": (round(quantity_full / (sold_qty / days), 1)
+                              if sold_qty > 0 and days > 0 else None),
+            "snapshot_age_days": ((date_to - snap_date).days
+                                  if snap_date is not None else None),
+            "date": str(snap_date) if snap_date is not None else None,
         }
     return out
 
