@@ -197,6 +197,7 @@ def export_replenish_pdf(
     vel_days: int = replenish_service.WB_SORT_VELOCITY_DAYS,
     profit: int = 1,
     supplier: int = 0,
+    mobile: int = 0,
     limit: int = PDF_DEFAULT_LIMIT,
     wish: int = 0,
     wish_step: str = "",
@@ -217,6 +218,9 @@ def export_replenish_pdf(
 
     ``supplier`` — упрощённый режим «для поставщика»: только фото, артикул,
     название и размеры с количеством (> 0), без аналитики и остатков.
+
+    ``mobile`` — раскладка под смартфон: по два крупных фото в ряд и крупнее
+    шрифты. Обычно идёт вместе с ``supplier`` (пресет «Для поставщика мобайл»).
 
     ``wish``/``wish_step`` — «Пожелание»: ручной объём N шт на WB и шаг размера;
     при заданном пожелании PDF-план строится из него (кроме режима файла).
@@ -250,7 +254,7 @@ def export_replenish_pdf(
         target_days=target_days, vel_days=vel_days, profit=profit,
         cols=cols, with_photos=with_photos, photo_count=photo_count,
         article_like=article_like, wish=wish, wish_step=wish_step,
-        supplier=bool(supplier),
+        supplier=bool(supplier), mobile=bool(mobile),
     )
 
 
@@ -267,6 +271,7 @@ def export_replenish_pdf_from_excel(
     vel_days: int = replenish_service.WB_SORT_VELOCITY_DAYS,
     profit: int = 1,
     supplier: int = 0,
+    mobile: int = 0,
     limit: int = PDF_DEFAULT_LIMIT,
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
@@ -328,7 +333,7 @@ def export_replenish_pdf_from_excel(
         from_=from_, to_=to_, span=span, truncated=truncated,
         target_days=target_days, vel_days=vel_days, profit=profit,
         cols=cols, with_photos=with_photos, photo_count=photo_count,
-        budgets=budgets, supplier=bool(supplier),
+        budgets=budgets, supplier=bool(supplier), mobile=bool(mobile),
         subtitle_extra=(" · из Excel: " + source) if source else " · из Excel",
     )
 
@@ -352,6 +357,7 @@ def _replenish_pdf_build(
     wish: int = 0,
     wish_step: str = "",
     supplier: bool = False,
+    mobile: bool = False,
 ) -> Response:
     """Общая сборка PDF-потребности: план подсортировки, фото, карточки.
 
@@ -364,6 +370,8 @@ def _replenish_pdf_build(
     ``replenish.apply_wish`` (маржа из ``rows[].margin_per_one``).
     ``supplier`` — упрощённый режим «для поставщика»: карточка без аналитики
     и остатков, пустые (ничего не отгружать) товары из выгрузки убираются.
+    ``mobile`` — раскладка под смартфон: по два крупных фото в ряд, крупнее
+    шрифты (обычно вместе с ``supplier``).
     ``subtitle_extra`` — приписка в шапке (имя Excel-файла).
     """
     vel_days = int(vel_days or 0)
@@ -488,6 +496,7 @@ def _replenish_pdf_build(
         with_photos=want_photos,
         photo_count=n_photos or PDF_MAX_PHOTOS,
         supplier=supplier,
+        mobile=mobile,
         subtitle=(
             f"{from_:%d.%m.%Y} — {to_:%d.%m.%Y}"
             f" · {'покрытие ' + _fmt_days(coverage) + ' дн (период/4)' if use_profit else 'запас ' + str(int(target_days or 0)) + ' дн'}"

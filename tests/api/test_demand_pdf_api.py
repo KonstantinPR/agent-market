@@ -739,3 +739,50 @@ def test_pdf_from_excel_supplier_hides_analytics(pdf_api):
     assert "777" not in txt, "значения аналитических колонок скрыты"
 
 
+# ------------------------------- режим «для поставщика мобайл» (mobile=1) ---
+def test_mobile_supplier_pdf_is_valid_and_has_size_qty(pdf_api):
+    r = pdf_api.get("/api/export/replenish/pdf",
+                    params={"with_photos": 0, "supplier": 1, "mobile": 1})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == PDF_MEDIA
+    assert r.content.startswith(b"%PDF")
+    txt = _footer_all(r.content)
+    assert "Кол-во, шт" in txt
+    assert "Наличие" not in txt
+
+
+def test_mobile_pdf_caps_photos_to_two(pdf_api, tmp_path, monkeypatch):
+    """Мобильный режим печатает не больше двух фото на карточку, даже если
+    запросили больше (photo_count=9)."""
+    from app.services import thumbs as thumbs_service
+
+    root = tmp_path / "photos_mob"
+    for n in range(1, 8):
+        p = root / "set" / f"PDF-ART-1-{n}.JPG"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(_jpeg(n))
+    idx = photos_service.PhotoIndex(root=root)
+    monkeypatch.setattr(photos_service, "get_index", lambda: idx)
+    monkeypatch.setattr(
+        thumbs_service, "thumb_bytes",
+        lambda path, max_px=None, quality=None: _jpeg(abs(hash(str(path))) % 90 + 1),
+    )
+
+    many = pdf_api.get("/api/export/replenish/pdf",
+                       params={"with_photos": 1, "photo_count": 9})
+    mob = pdf_api.get("/api/export/replenish/pdf",
+                      params={"with_photos": 1, "photo_count": 9, "mobile": 1})
+    assert many.status_code == 200 and mob.status_code == 200
+    assert many.headers["X-Photo-Hits"] == "1"
+    assert mob.headers["X-Photo-Hits"] == "1"
+    assert len(mob.content) < len(many.content), "мобайл печатает меньше фото"
+
+
+def test_mobile_pdf_from_excel_is_valid(pdf_api):
+    rows = [{"article": "PDF-ART-1", "name": "Платье из файла"}]
+    r = _post_pdf(pdf_api, rows, supplier=1, mobile=1, cols="name")
+    assert r.status_code == 200
+    txt = _footer_all(r.content)
+    assert "Платье из файла" in txt
+
+

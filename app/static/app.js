@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "130";
+const UI_VERSION = "132";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2966,6 +2966,9 @@ function pdfParams() {
     // упрощённый PDF «для поставщика»: только фото, артикул, название и
     // размеры с количеством — без аналитики. По умолчанию выключен.
     supplier: s.supplier === true,
+    // мобильная раскладка «для поставщика»: 2 крупных фото в ряд, крупнее
+    // шрифты. Подразумевает supplier (ставится вместе с ним в меню).
+    mobile: s.mobile === true,
   };
 }
 
@@ -3070,12 +3073,33 @@ function buildReplenishPdfMenu() {
     + "«что и сколько нам нужно». Товары, где отгружать нечего, не печатаются";
   supCb.addEventListener("change", (e) => {
     p.supplier = e.target.checked;
+    if (!p.supplier) p.mobile = false;
     savePdfParams(p);
     buildReplenishPdfMenu();
   });
   supRow.appendChild(supCb);
   supRow.appendChild(document.createTextNode(" Для поставщика (без аналитики)"));
   panel.appendChild(supRow);
+
+  const mobRow = document.createElement("label");
+  mobRow.className = "chk";
+  const mobCb = document.createElement("input");
+  mobCb.type = "checkbox";
+  mobCb.checked = p.supplier && p.mobile;
+  mobCb.disabled = !p.supplier;
+  mobCb.title = "Мобильная раскладка «для поставщика»: по два крупных фото в ряд, "
+    + "крупнее шрифты — удобно листать PDF со смартфона. Работает только вместе "
+    + "с галкой «Для поставщика»";
+  mobCb.addEventListener("change", (e) => {
+    p.mobile = e.target.checked;
+    if (p.mobile) p.supplier = true;
+    savePdfParams(p);
+    buildReplenishPdfMenu();
+  });
+  mobRow.appendChild(mobCb);
+  mobRow.appendChild(document.createTextNode(" Мобайл (2 фото в ряд)"));
+  mobRow.classList.toggle("off", !p.supplier);
+  panel.appendChild(mobRow);
 
   const head = document.createElement("label");
   head.className = "chk";
@@ -3177,7 +3201,12 @@ function buildReplenishPdfMenu() {
   panel.appendChild(sep);
 
   const hint = document.createElement("div");
-  if (p.supplier) {
+  if (p.supplier && p.mobile) {
+    hint.textContent = "Для поставщика Мобайл: 2 фото в ряд, крупнее шрифт.";
+    hint.title = "Мобильная раскладка: по два крупных фото в ряд и крупнее шрифты, "
+      + "чтобы листать PDF со смартфона. Аналитика и остатки не печатаются, "
+      + "товары без количества к отгрузке в PDF не попадают.";
+  } else if (p.supplier) {
     hint.textContent = "Для поставщика: фото, артикул, название, размеры с количеством.";
     hint.title = "Упрощённый режим: аналитика и остатки не печатаются, а товары "
       + "без количества к отгрузке в PDF не попадают.";
@@ -3255,7 +3284,7 @@ function buildReplenishPdfMenu() {
   go.type = "button";
   go.className = "btn";
   go.textContent = replenishExcel ? "Скачать PDF из Excel" : "Скачать PDF";
-  if (p.supplier) go.textContent += " — для поставщика";
+  if (p.supplier) go.textContent += p.mobile ? " — для поставщика (мобайл)" : " — для поставщика";
   go.addEventListener("click", () => {
     panel.classList.add("hidden");
     downloadReplenishPdf();
@@ -3301,6 +3330,7 @@ function replenishPdfUrl() {
   params.set("vel_days", p.velDays);
   params.set("profit", p.profit ? 1 : 0);
   params.set("supplier", p.supplier ? 1 : 0);
+  params.set("mobile", p.mobile ? 1 : 0);
   const cols = replenishPdfCols().join(",");
   if (cols) params.set("cols", cols);
   return "/api/export/replenish/pdf?" + params.toString();

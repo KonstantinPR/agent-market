@@ -43,6 +43,15 @@ ROW_H_MAX = 84 * mm                # высота строки из 4 фото
 ROW_H_MIN = 40 * mm                # пол для одной строки из 1 фото
 PER_ROW = 4                        # сколько фото в строке
 
+# -- мобильный режим («Для поставщика мобайл») ------------------------------
+# Под смартфон: две фотографии в ряд во всю ширину страницы, крупнее шрифты,
+# крупнее фотоблок. Формат страницы остаётся A4 — листать удобно, а пайплайн
+# (футер, колонки размеров) не меняется.
+MOBILE_PER_ROW = 2                 # сколько фото в строке
+MOBILE_ROW_H_MAX = 120 * mm        # высота строки из 2 фото — фото почти в пол-страницы
+MOBILE_ROW_H_MIN = 70 * mm         # пол для одной строки из 1 фото
+MOBILE_PHOTO_CAP = 2               # максимум фото на карточку = одна мобильная строка
+
 #: сколько троек «размер / наличие / дослать» в строке. Один: подписи размеров
 #: WB бывают до 13 символов («small size», «58/182»), в узкой колонке они
 #: переносятся и товар на складе становится нечитаемым.
@@ -120,54 +129,68 @@ def ensure_fonts() -> tuple[str, str]:
     return _FONTS
 
 
-def _styles() -> dict:
+def _styles(mobile: bool = False) -> dict:
+    """Стили текста. ``mobile=True`` — крупнее шрифты под чтение с телефона."""
     reg, bold = ensure_fonts()
+    if mobile:
+        # Единственная колонка нормальной ширины: можно позволить крупный кегль.
+        fs = {
+            "article": (17, 21), "name": (11, 14), "attr": (10, 13),
+            "size": (13, 16), "sizeth": (10, 13), "total": (14.5, 18),
+            "foot": (9, 11), "grand": (19, 24), "grandsub": (12, 15),
+        }
+    else:
+        fs = {
+            "article": (12.5, 15), "name": (8, 10), "attr": (7.2, 9),
+            "size": (9.5, 12), "sizeth": (7, 9), "total": (10.5, 13),
+            "foot": (7.5, 9), "grand": (15, 19), "grandsub": (9, 12),
+        }
     return {
         "reg": reg,
         "bold": bold,
         "article": ParagraphStyle(
-            "article", fontName=bold, fontSize=12.5, leading=15,
-            textColor=C_TEXT, alignment=TA_LEFT,
+            "article", fontName=bold, fontSize=fs["article"][0],
+            leading=fs["article"][1], textColor=C_TEXT, alignment=TA_LEFT,
         ),
         "name": ParagraphStyle(
-            "name", fontName=reg, fontSize=8, leading=10,
-            textColor=C_MUTED, alignment=TA_LEFT,
+            "name", fontName=reg, fontSize=fs["name"][0],
+            leading=fs["name"][1], textColor=C_MUTED, alignment=TA_LEFT,
         ),
         "attr": ParagraphStyle(
-            "attr", fontName=reg, fontSize=7.2, leading=9,
-            textColor=C_TEXT, alignment=TA_LEFT,
+            "attr", fontName=reg, fontSize=fs["attr"][0],
+            leading=fs["attr"][1], textColor=C_TEXT, alignment=TA_LEFT,
         ),
         "size": ParagraphStyle(
-            "size", fontName=reg, fontSize=9.5, leading=12,
-            textColor=C_TEXT, alignment=TA_LEFT,
+            "size", fontName=reg, fontSize=fs["size"][0],
+            leading=fs["size"][1], textColor=C_TEXT, alignment=TA_LEFT,
         ),
         "sizeth": ParagraphStyle(
-            "sizeth", fontName=bold, fontSize=7, leading=9,
-            textColor=C_MUTED, alignment=TA_LEFT,
+            "sizeth", fontName=bold, fontSize=fs["sizeth"][0],
+            leading=fs["sizeth"][1], textColor=C_MUTED, alignment=TA_LEFT,
         ),
         "sizel": ParagraphStyle(
-            "sizel", fontName=reg, fontSize=9.5, leading=12,
-            textColor=C_MUTED, alignment=TA_RIGHT,
+            "sizel", fontName=reg, fontSize=fs["size"][0],
+            leading=fs["size"][1], textColor=C_MUTED, alignment=TA_RIGHT,
         ),
         "sizeb": ParagraphStyle(
-            "sizeb", fontName=bold, fontSize=9.5, leading=12,
-            textColor=C_TEXT, alignment=TA_RIGHT,
+            "sizeb", fontName=bold, fontSize=fs["size"][0],
+            leading=fs["size"][1], textColor=C_TEXT, alignment=TA_RIGHT,
         ),
         "total": ParagraphStyle(
-            "total", fontName=bold, fontSize=10.5, leading=13,
-            textColor=C_TOTAL, alignment=TA_RIGHT,
+            "total", fontName=bold, fontSize=fs["total"][0],
+            leading=fs["total"][1], textColor=C_TOTAL, alignment=TA_RIGHT,
         ),
         "foot": ParagraphStyle(
-            "foot", fontName=reg, fontSize=7.5, leading=9,
-            textColor=C_MUTED, alignment=TA_LEFT,
+            "foot", fontName=reg, fontSize=fs["foot"][0],
+            leading=fs["foot"][1], textColor=C_MUTED, alignment=TA_LEFT,
         ),
         "grand": ParagraphStyle(
-            "grand", fontName=bold, fontSize=15, leading=19,
-            textColor=C_TEXT, alignment=TA_LEFT,
+            "grand", fontName=bold, fontSize=fs["grand"][0],
+            leading=fs["grand"][1], textColor=C_TEXT, alignment=TA_LEFT,
         ),
         "grandsub": ParagraphStyle(
-            "grandsub", fontName=reg, fontSize=9, leading=12,
-            textColor=C_MUTED, alignment=TA_LEFT,
+            "grandsub", fontName=reg, fontSize=fs["grandsub"][0],
+            leading=fs["grandsub"][1], textColor=C_MUTED, alignment=TA_LEFT,
         ),
     }
 
@@ -201,23 +224,33 @@ def _esc(v) -> str:
     return escape("" if v is None else str(v))
 
 
-def row_height(n_in_row: int) -> float:
+def row_height(
+    n_in_row: int,
+    per_row: int = PER_ROW,
+    h_max: float = ROW_H_MAX,
+    h_min: float = ROW_H_MIN,
+) -> float:
     if n_in_row <= 0:
         return 0.0
-    if n_in_row >= PER_ROW:
-        return ROW_H_MAX
-    return max(ROW_H_MIN, ROW_H_MAX * n_in_row / PER_ROW)
+    if n_in_row >= per_row:
+        return h_max
+    return max(h_min, h_max * n_in_row / per_row)
 
 
-def photo_rows(n: int) -> list[list[int]]:
-    """Разбить ``n`` фото на строки: ``5 -> [[0,1,2,3],[4]]``."""
+def photo_rows(n: int, per_row: int = PER_ROW) -> list[list[int]]:
+    """Разбить ``n`` фото на строки: ``5 -> [[0,1,2,3],[4]]``.
+
+    ``per_row=2`` (мобильный режим) даёт ``5 -> [[0,1],[2,3],[4]]``.
+    """
     if n <= 0:
         return []
+    if per_row <= 0:
+        per_row = PER_ROW
     out = []
     i = 0
     while i < n:
-        out.append(list(range(i, min(i + PER_ROW, n))))
-        i += PER_ROW
+        out.append(list(range(i, min(i + per_row, n))))
+        i += per_row
     return out
 
 
@@ -235,13 +268,29 @@ class DemandPdf:
         photo_count: int = 4,
         subtitle: str = "",
         supplier: bool = False,
+        mobile: bool = False,
     ) -> None:
         self.c = canvas
-        self.st = _styles()
+        self.mobile = bool(mobile)
+        self.st = _styles(mobile=self.mobile)
+        # Геометрия фото — на экземпляр: мобильный режим печатает по два фото
+        # в ряд крупнее и ограничивает карточку одной строкой.
+        if self.mobile:
+            self.per_row = MOBILE_PER_ROW
+            self.row_h_max = MOBILE_ROW_H_MAX
+            self.row_h_min = MOBILE_ROW_H_MIN
+        else:
+            self.per_row = PER_ROW
+            self.row_h_max = ROW_H_MAX
+            self.row_h_min = ROW_H_MIN
         self.cols = [c for c in (cols or []) if c]
         self.labels = labels or {}
         self.with_photos = with_photos and photo_count > 0
         self.photo_count = max(0, int(photo_count))
+        if self.mobile:
+            # «2 фото в ряд»: не больше одной строки на карточку.
+            self.photo_count = min(self.photo_count, MOBILE_PHOTO_CAP) \
+                if self.photo_count else 0
         self.subtitle = subtitle
         self.supplier = bool(supplier)
         self.y = TOP
@@ -278,6 +327,7 @@ class DemandPdf:
             parts.append(self.subtitle)
         parts.append(f"стр. {self.page_no + 1}")
         txt = " · ".join(parts)
+        foot_size = 9.0 if self.mobile else 7.5
 
         # Одна линия не влезает в ширину (приписка «из Excel: имя» длинная),
         # а drawString не переносит текст — он молча уезжает за край страницы.
@@ -300,17 +350,17 @@ class DemandPdf:
 
         self.c.saveState()
         self.c.setFillColor(C_MUTED)
-        if pdfmetrics.stringWidth(txt, self.st["reg"], 7.5) <= CONTENT_W:
-            lines = [(txt, 7.5)]
+        if pdfmetrics.stringWidth(txt, self.st["reg"], foot_size) <= CONTENT_W:
+            lines = [(txt, foot_size)]
         elif self.subtitle and pdfmetrics.stringWidth(
-            FOOTER_TEXT + f" · стр. {self.page_no + 1}", self.st["reg"], 7.5
+            FOOTER_TEXT + f" · стр. {self.page_no + 1}", self.st["reg"], foot_size
         ) <= CONTENT_W:
             lines = [
-                _fit(FOOTER_TEXT + f" · стр. {self.page_no + 1}", 7.5),
-                _fit(self.subtitle, 7.5),
+                _fit(FOOTER_TEXT + f" · стр. {self.page_no + 1}", foot_size),
+                _fit(self.subtitle, foot_size),
             ]
         else:
-            lines = [_fit(txt, 7.5)]
+            lines = [_fit(txt, foot_size)]
         y = MARGIN + 3 * mm
         for line, size in lines:
             self.c.setFont(self.st["reg"], size)
@@ -323,8 +373,11 @@ class DemandPdf:
     def _photo_grid_height(self, count: int) -> float:
         if not self.with_photos or count <= 0:
             return 0.0
-        rows = photo_rows(min(count, self.photo_count))
-        return sum(row_height(len(r)) for r in rows) + PHOTO_GAP * (len(rows) - 1)
+        rows = photo_rows(min(count, self.photo_count), self.per_row)
+        return sum(
+            row_height(len(r), self.per_row, self.row_h_max, self.row_h_min)
+            for r in rows
+        ) + PHOTO_GAP * (len(rows) - 1)
 
     def _draw_photos(self, x: float, y_top: float, count: int, thumbs) -> float:
         """Отрисовать сетку фото. Возвращает фактическую высоту блока."""
@@ -337,8 +390,8 @@ class DemandPdf:
         y = y_top
         idx = 0
         while idx < len(data):
-            take = min(PER_ROW, len(data) - idx)
-            h = row_height(take)
+            take = min(self.per_row, len(data) - idx)
+            h = row_height(take, self.per_row, self.row_h_max, self.row_h_min)
             self._photo_row(x, y, h, data[idx:idx + take])
             idx += take
             y -= h
@@ -351,8 +404,18 @@ class DemandPdf:
 
         Ширины считаем от типичной вертикальной пропорции, чтобы полоса фото
         не растягивалась на всю страницу пустотой справа. Возвращает ширину полосы.
+
+        Мобильный режим: ``n`` равных колонок во всю ширину страницы — фото
+        крупные, сетка «2 в ряд» читается с телефона.
         """
         n = len(blobs)
+        if self.mobile:
+            cell_w = (CONTENT_W - PHOTO_GAP * (n - 1)) / n
+            for i, blob in enumerate(blobs):
+                self._place_photo(
+                    blob, x + i * (cell_w + PHOTO_GAP), y_top - h, cell_w, h
+                )
+            return CONTENT_W
         big_w = PORTRAIT * h
         if n == 1:
             self._place_photo(blobs[0], x, y_top - h, big_w, h)
@@ -645,11 +708,15 @@ def build_demand_pdf(
     photo_count: int = 4,
     subtitle: str = "",
     supplier: bool = False,
+    mobile: bool = False,
 ) -> bytes:
     """Собрать PDF. ``cards`` = [(строка потребности, размеры, миниатюры), ...].
 
     ``supplier=True`` — упрощённый режим «для поставщика»: только фото,
     артикул, название и размеры с количеством (> 0), без аналитики.
+
+    ``mobile=True`` — раскладка под смартфон: по два крупных фото в ряд,
+    крупнее шрифты. Обычно включается вместе с ``supplier``.
     """
     from reportlab.pdfgen import canvas as rl_canvas
 
@@ -662,6 +729,7 @@ def build_demand_pdf(
     doc = DemandPdf(
         c, cols=cols, labels=labels, with_photos=with_photos,
         photo_count=photo_count, subtitle=subtitle, supplier=supplier,
+        mobile=mobile,
     )
     grand = 0
     hits = 0

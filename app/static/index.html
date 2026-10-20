@@ -187,10 +187,6 @@
           <h3>Таблицы обзора <span class="dash-count" id="dashTableCount"></span></h3>
           <span class="dash-chev" aria-hidden="true"></span>
         </button>
-        <div class="view-menu" id="dashActiveViewMenu">
-          <button type="button" class="btn" id="btndashActiveView">Вид таблицы &#9662;</button>
-          <div class="view-menu-panel hidden" id="dashActiveViewPanel"></div>
-        </div>
       </div>
       <div class="dash-sec-body">
         <div class="dash-tabs" id="dashTableTabs" role="tablist" aria-label="Таблицы обзора">
@@ -209,6 +205,10 @@
               <option value="marketplace">Маркетплейс</option>
             </select>
           </label>
+          <div class="view-menu" id="dashActiveViewMenu">
+            <button type="button" class="btn" id="btndashActiveView">Вид таблицы &#9662;</button>
+            <div class="view-menu-panel hidden" id="dashActiveViewPanel"></div>
+          </div>
         </div>
         <div class="table-wrap" id="dashTable"></div>
         <span id="dashTablePager"></span>
@@ -1037,7 +1037,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=130"></script>
+  <script src="/static/app.js?v=132"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

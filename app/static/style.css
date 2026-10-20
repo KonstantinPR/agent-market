@@ -446,7 +446,8 @@ body.busy .btn { pointer-events: none; opacity: .6; }
 .kpi .title { font-weight: 700; margin-bottom: 4px; }
 .kpi .lines { display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
 .kpi .line { display: flex; gap: 10px; }
-.kpi .line span:first-child { color: #666; }
+.kpi .line span:first-child { color: #8a929c; display: inline-flex; align-items: center; }
+.kpi .line span:first-child .tip { margin-left: 6px; }
 .kpi .line span:last-child { font-weight: 600; }
 
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-bottom: 24px; }
@@ -942,8 +943,8 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   transform: translateX(-50%);
   width: 230px;
   padding: 9px 11px;
-  background: #2d3748;
-  color: #f4f6fa;
+  background: #3b4757;
+  color: #ffffff;
   font-size: 12px;
   font-weight: 400;
   line-height: 1.45;
@@ -960,7 +961,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   left: 50%;
   transform: translateX(-50%);
   border: 5px solid transparent;
-  border-top-color: #2d3748;
+  border-top-color: #3b4757;
 }
 .tip:hover .tip-text, .tip:focus .tip-text { display: block; }
 .tip .tip-note { display: block; margin-top: 6px; color: #ffd88a; }
@@ -1216,7 +1217,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   height: 12px;
   line-height: 11px;
   font-size: 9px;
-  margin-left: 4px;
+  margin-left: 5px;
   vertical-align: middle;
 }
 .kpi-cell .kpi-val { font-size: 15px; font-weight: 600; color: #111; }
@@ -1318,6 +1319,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .dash-tabs {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   margin-bottom: 12px;
 }
@@ -1327,12 +1329,12 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
   font-size: 12px;
-  color: #555;
+  color: #777;
   white-space: nowrap;
 }
 .dash-groupby select { max-width: 190px; }
+#dashActiveViewMenu { margin-left: auto; }
 .dash-sub { margin-bottom: 18px; }
 .dash-sub:last-child { margin-bottom: 0; }
 .dash-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }

@@ -14,6 +14,8 @@ from reportlab.pdfgen import canvas as rl_canvas
 
 from app.services.pdf_demand import (
     MARGIN,
+    MOBILE_PER_ROW,
+    MOBILE_PHOTO_CAP,
     PER_ROW,
     DemandPdf,
     build_demand_pdf,
@@ -319,5 +321,45 @@ def test_supplier_mode_skips_profit_factor_line():
 def test_build_demand_pdf_supplier_mode_is_valid():
     cards = [({"article": "ART-1", "name": "Dress"}, sizes(("42", 2), ("44", 0)), [])]
     data = build_demand_pdf(cards, cols=["need_buy"], with_photos=False, supplier=True)
+    assert data.startswith(b"%PDF")
+    assert data.rstrip().endswith(b"%%EOF")
+
+
+# ------------------------------------------------------- мобильный режим
+
+def test_photo_rows_two_per_row_in_mobile():
+    assert photo_rows(5, per_row=2) == [[0, 1], [2, 3], [4]]
+    assert photo_rows(2, per_row=2) == [[0, 1]]
+    assert photo_rows(3, per_row=2) == [[0, 1], [2]]
+
+
+def test_mobile_doc_uses_two_per_row_and_bigger_fonts():
+    doc = DemandPdf(rl_canvas.Canvas(io.BytesIO(), pagesize=A4), mobile=True)
+    assert doc.per_row == MOBILE_PER_ROW == 2
+    normal = DemandPdf(rl_canvas.Canvas(io.BytesIO(), pagesize=A4))
+    assert doc.st["article"].fontSize > normal.st["article"].fontSize
+    assert doc.st["size"].fontSize > normal.st["size"].fontSize
+
+
+def test_mobile_caps_photos_to_single_row():
+    """Карточка мобайл — не больше одной строки фото (2)."""
+    doc = DemandPdf(
+        rl_canvas.Canvas(io.BytesIO(), pagesize=A4),
+        photo_count=9, mobile=True,
+    )
+    assert doc.photo_count == MOBILE_PHOTO_CAP == 2
+
+
+def test_mobile_card_prints_at_most_two_photos():
+    cards = [({"article": "A-1"}, sizes(("42", 5)), [jpeg(i) for i in range(6)])]
+    data = render(cards, cols=[], with_photos=True, photo_count=9, mobile=True)
+    assert len(JPEG_MARK.findall(data)) == 2
+
+
+def test_mobile_supplier_pdf_is_valid():
+    cards = [({"article": "ART-1", "name": "Dress"}, sizes(("42", 2), ("44", 0)), [])]
+    data = build_demand_pdf(
+        cards, cols=["need_buy"], with_photos=False, supplier=True, mobile=True,
+    )
     assert data.startswith(b"%PDF")
     assert data.rstrip().endswith(b"%%EOF")
