@@ -171,6 +171,12 @@ def seed_users_and_cabinets(db: Session) -> list[models.Cabinet]:
         user_id=user.id, name="ООО «Джоинс & Компани»", enabled=True, position=1)
     ip = by_name.get("ИП Прудников Константин Григорьевич") or models.Company(
         user_id=user.id, name="ИП Прудников Константин Григорьевич", enabled=True, position=2)
+    # Папки Dropbox для аналитики (компания → подпапка внутри analytics_root).
+    # Пустое значение — фирма не выгружается кнопкой «Обновить аналитику».
+    if not (oo.analytics_dir or "").strip():
+        oo.analytics_dir = r"ООО ДЖОИНС\AGENT MARKET\АНАЛИТИКА"
+    if not (ip.analytics_dir or "").strip():
+        ip.analytics_dir = r"ИП ПРУДНИКОВ\AGENT MARKET\АНАЛИТИКА"
     if oo.id is None:
         db.add(oo)
     if ip.id is None:

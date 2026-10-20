@@ -529,29 +529,37 @@ def export_margin_detail(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     missing_only: int = 0,
     compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    from app.api.margin import _resolve_compare_window
+
     from_, to_ = _parse_window400(date_from, date_to)
+    tokens = article_tokens_service.split_tokens(articles)
+    arts, _ = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
 
     df = margin_service.margin_detail_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like,
-        default_net_cost=settings.default_net_cost,
+        default_net_cost=settings.default_net_cost, articles=arts,
     )
     if compare and date_from and date_to:
-        try:
-            f = date.fromisoformat(date_from)
-            t = date.fromisoformat(date_to)
-            delta = (t - f).days
+        cw = _resolve_compare_window(date_from, date_to, compare_mode,
+                                     compare_from, compare_to, ozon_small=False)
+        if cw:
+            prev_from, prev_to = cw
             prev_df = margin_service.margin_detail_dataframe(
-                db, date_from=f - timedelta(days=delta), date_to=f - timedelta(days=1),
+                db, date_from=prev_from, date_to=prev_to,
                 article_like=article_like, default_net_cost=settings.default_net_cost,
+                articles=arts,
             )
             df = margin_service.compare_margin_periods(df, prev_df)
-        except (ValueError, TypeError):
-            pass
     if missing_only:
         df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
     df, ru = excel_io.project_export(df, export_cols("export_margin_detail"), cols)
@@ -573,10 +581,15 @@ def export_margin_ozon_detail(
     article_like: Optional[str] = None,
     missing_only: int = 0,
     compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     by_size: int = 0,
     cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    from app.api.margin import _resolve_compare_window
+
     from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.ozon_margin_detail_dataframe(
@@ -584,18 +597,16 @@ def export_margin_ozon_detail(
         default_net_cost=settings.default_net_cost, by_size=bool(by_size),
     )
     if compare and date_from and date_to:
-        try:
-            f = date.fromisoformat(date_from)
-            t = date.fromisoformat(date_to)
-            delta = (t - f).days
+        cw = _resolve_compare_window(date_from, date_to, compare_mode,
+                                     compare_from, compare_to, ozon_small=False)
+        if cw:
+            prev_from, prev_to = cw
             prev_df = margin_service.ozon_margin_detail_dataframe(
-                db, date_from=f - timedelta(days=delta), date_to=f - timedelta(days=1),
+                db, date_from=prev_from, date_to=prev_to,
                 article_like=article_like, default_net_cost=settings.default_net_cost,
                 by_size=bool(by_size),
             )
             df = margin_service.compare_margin_periods(df, prev_df)
-        except (ValueError, TypeError):
-            pass
     if missing_only:
         df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
     df, ru = excel_io.project_export(df, export_cols("export_margin_ozon_detail"), cols)

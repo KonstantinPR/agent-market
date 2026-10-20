@@ -361,6 +361,11 @@ def api_ozon_detail_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
+    compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     by_size: int = 0,
     db: Session = Depends(get_db),
 ):
@@ -368,12 +373,39 @@ def api_ozon_detail_summary(
 
     by_size=0 (по умолчанию) — строка это товар (артикулы размеров свёрнуты),
     by_size=1 — строка это артикул конкретного размера.
+    articles=ART1,ART2,… — фильтр по списку (как на «Детализация Продаж WB»):
+    артикулы/баркоды/nmID WB/артикулы Ozon резолвятся в UPPER-артикулы.
+    compare=1 — добавить показатели периода сравнения
+    (``<m>_pp``, ``delta_ru``, ``delta_pct`` по «К перечислению»).
+    compare_mode: prev (по умолчанию) / custom / last_year.
     """
+    from app.api.margin import _resolve_compare_window
+
     from_, to_ = _parse_window400(date_from, date_to)
+    tokens = article_tokens_service.split_tokens(articles)
+    arts, matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
     df = sync_service.oz_detail_summary_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like,
-        by_size=bool(by_size),
+        by_size=bool(by_size), articles=arts,
     )
+    prev_window = None
+    if compare:
+        cw = _resolve_compare_window(date_from, date_to, compare_mode,
+                                     compare_from, compare_to, ozon_small=True)
+        if cw:
+            prev_from, prev_to = cw
+            prev_df = sync_service.oz_detail_summary_dataframe(
+                db, date_from=prev_from, date_to=prev_to,
+                article_like=article_like, by_size=bool(by_size), articles=arts,
+            )
+            df = margin_service.compare_detail_periods(
+                df, prev_df,
+                ["sells", "seller_total", "amount", "commission", "services", "income"],
+                "income",
+            )
+            prev_window = {"date_from": prev_from.isoformat(),
+                           "date_to": prev_to.isoformat()}
     resp = {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
@@ -386,6 +418,15 @@ def api_ozon_detail_summary(
     resp["cashflow_periods"] = periods
     resp["window"] = {"date_from": date_from or "", "date_to": date_to or ""}
     resp["detail_range"] = ozon_detail_range(db)
+    if prev_window:
+        resp["prev_window"] = prev_window
+    if tokens:
+        up_all = {t.upper() for t in tokens}
+        resp["articles"] = {
+            "tokens": len(tokens),
+            "matched": len(up_all & {m.upper() for m in matched}),
+            "unmatched": sorted(up_all - {m.upper() for m in matched})[:50],
+        }
     return resp
 
 

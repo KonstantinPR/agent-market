@@ -70,7 +70,8 @@ def test_batch_actions_endpoint(api_client):
     r = api_client.get("/api/batch/actions")
     assert r.status_code == 200
     body = r.json()
-    assert [a["id"] for a in body["actions"]] == ["refresh", "recalc", "apply", "minpromo"]
+    assert [a["id"] for a in body["actions"]] == [
+        "refresh", "recalc", "apply", "minpromo", "analytics"]
     assert set(body["scopes"]) == {"all", "active", "main"}
 
 

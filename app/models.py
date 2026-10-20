@@ -707,6 +707,9 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     position: Mapped[int] = mapped_column(Integer, default=0)
+    #: Папка Dropbox для выгрузки аналитики (Прибыльность → Excel на диск):
+    #: внутри неё создаются подпапки WB/OZON. Пусто — фирма не выгружается.
+    analytics_dir: Mapped[str] = mapped_column(String(500), default="", nullable=False)
 
 
 class User(Base):

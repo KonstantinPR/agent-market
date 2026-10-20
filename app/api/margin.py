@@ -25,20 +25,49 @@ def _compare_window(date_from, date_to, ozon_small=True):
         return None
 
 
+def _resolve_compare_window(date_from, date_to, mode="", compare_from=None,
+                            compare_to=None, ozon_small=True):
+    """Окно сравнения по режиму селектора «Сравнить ▾».
+
+    mode:
+      ""/"prev" — предыдущий аналогичный период (как ``_compare_window``);
+      "custom"  — явные даты ``compare_from``/``compare_to`` (обе обязательны);
+      "last_year" — то же окно, сдвинутое на год назад (год = 365 дней).
+    Возвращает (prev_from, prev_to) либо None, если окно построить нельзя.
+    """
+    mode = (mode or "").strip().lower()
+    if mode == "custom":
+        try:
+            return date.fromisoformat(compare_from), date.fromisoformat(compare_to)
+        except (ValueError, TypeError):
+            return None
+    if mode == "last_year":
+        try:
+            f = date.fromisoformat(date_from)
+            t = date.fromisoformat(date_to)
+            return f - timedelta(days=365), t - timedelta(days=365)
+        except (ValueError, TypeError):
+            return None
+    return _compare_window(date_from, date_to, ozon_small=ozon_small)
+
+
 # ---------------------------------------------------------------------------
 # Детализация продаж WB
 # ---------------------------------------------------------------------------
-def _wb_detail_payload(db, from_, to_, article_like, compare, compare_window, owner=""):
+def _wb_detail_payload(db, from_, to_, article_like, compare, compare_window, owner="",
+                       tokens=None):
+    arts, matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
     df = margin_service.margin_detail_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like,
-        default_net_cost=settings.default_net_cost,
+        default_net_cost=settings.default_net_cost, articles=arts,
     )
     prev_window = None
     if compare and compare_window:
         prev_from, prev_to = compare_window
         prev_df = margin_service.margin_detail_dataframe(
             db, date_from=prev_from, date_to=prev_to, article_like=article_like,
-            default_net_cost=settings.default_net_cost,
+            default_net_cost=settings.default_net_cost, articles=arts,
         )
         df = margin_service.compare_margin_periods(df, prev_df)
         prev_window = {"date_from": prev_from.isoformat(), "date_to": prev_to.isoformat()}
@@ -56,7 +85,7 @@ def _wb_detail_payload(db, from_, to_, article_like, compare, compare_window, ow
     if owner and not df.empty:
         df = df.copy()
         df["owner"] = owner
-    return df, detail_articles, prev_window
+    return df, detail_articles, prev_window, matched
 
 
 @router.get("/margin/detail")
@@ -64,7 +93,11 @@ def api_margin_detail(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     links: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -73,36 +106,49 @@ def api_margin_detail(
     Себестоимость из каталога; без неё — оценка (settings.default_net_cost),
     помечается net_cost_est=True.
 
-    compare=1 добавляет показатели предыдущего аналогичного периода
-    (та же длительность окна, сдвинутая назад): sells_pp, margin_pp,
-    delta_ru (руб), delta_pct (%). Требует даты date_from/date_to.
+    compare=1 добавляет показатели периода сравнения: sells_pp, margin_pp,
+    delta_ru (руб), delta_pct (%). Сравниваемое окно задаёт ``compare_mode``:
+    пусто/prev — предыдущий аналогичный период (по умолчанию), custom —
+    явные compare_from/compare_to, last_year — то же окно год назад.
+    Требует даты date_from/date_to.
 
     links=id,id,… — сравнение между WB-связками: строки из всех связок сводятся
-    вместе с колонкой «owner» (владелец связки), итоги считаются по сводке.
+    вместе с колонкой «owner» (владельца связки), итоги считаются по сводке.
+
+    articles=ART1,ART2,… — фильтр по списку (поле «Артикулы» на вкладке):
+    артикулы, баркоды, nmID WB и артикулы Ozon резолвятся в наши артикулы
+    (см. ``article_tokens``); действует вместе с article_like (И). В ответе
+    ``articles`` — сколько значений распознано и какие не найдены.
     """
     from_, to_ = _parse_window400(date_from, date_to)
-    compare_window = _compare_window(date_from, date_to, ozon_small=False) \
-        if compare else None
+    compare_window = _resolve_compare_window(
+        date_from, date_to, compare_mode, compare_from, compare_to,
+        ozon_small=False) if compare else None
+    tokens = article_tokens_service.split_tokens(articles)
 
     link_infos = _resolve_links_param(db, links, "wb")
+    matched: set = set()
     if len(link_infos) > 1:
         results = cabinet_service.run_per_link(
             db, link_infos,
             lambda db, info: _wb_detail_payload(
                 db, from_, to_, article_like, bool(compare), compare_window,
-                owner=cabinet_service.link_owner(db, info)),
+                owner=cabinet_service.link_owner(db, info), tokens=tokens),
         )
-        frames = [df for _, (df, _, _) in results if df is not None and not df.empty]
+        frames = [df for _, (df, _, _, _) in results if df is not None and not df.empty]
         df = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
-        detail_articles = sum(da for _, (_, da, _) in results)
-        prev_window = next((pw for _, (_, _, pw) in results if pw), None)
+        detail_articles = sum(da for _, (_, da, _, _) in results)
+        prev_window = next((pw for _, (_, _, pw, _) in results if pw), None)
+        for _, (_, _, _, m) in results:
+            matched |= m
     else:
-        df, detail_articles, prev_window = _wb_detail_payload(
-            db, from_, to_, article_like, bool(compare), compare_window, owner="")
+        df, detail_articles, prev_window, matched = _wb_detail_payload(
+            db, from_, to_, article_like, bool(compare), compare_window, owner="",
+            tokens=tokens)
 
     estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
     totals = _margin_detail_totals(df)
-    return {
+    payload = {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
         "detail_articles": detail_articles,
@@ -111,16 +157,52 @@ def api_margin_detail(
         "prev_window": prev_window,
         "totals": totals,
     }
+    if tokens:
+        unmatched = [t for t in tokens if t.upper() not in matched]
+        payload["articles"] = {
+            "tokens": len(tokens),
+            "matched": len(tokens) - len(unmatched),
+            "unmatched": unmatched[:50],
+        }
+    return payload
+
+
+@router.post("/margin/articles-import")
+async def api_margin_articles_import(file: UploadFile = File(...)):
+    """Excel со списком артикулов → токены для фильтра «Артикулы».
+
+    Первый столбец берём всегда; если есть шапка, дополнительно читаем
+    колонки «Артикул/Баркод/Штрихкод/nmID/SKU/Ozon/vendor».
+    """
+    name = (file.filename or "").strip().lower()
+    if not name.endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "Нужен файл .xlsx")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Файл пустой")
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(400, "Файл больше 20 МБ — похоже, это не список артикулов")
+    try:
+        tokens, meta = article_tokens_service.tokens_from_xlsx(data)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, "Не удалось прочитать Excel: " + str(e))
+    if not tokens:
+        raise HTTPException(400, "В файле не нашлось артикулов")
+    meta["file"] = file.filename or ""
+    return {"tokens": tokens, "meta": meta}
 
 
 # ---------------------------------------------------------------------------
 # Детализация продаж Ozon
 # ---------------------------------------------------------------------------
 def _oz_detail_payload(db, from_, to_, article_like, compare, compare_window,
-                       by_size, owner=""):
+                       by_size, owner="", tokens=None):
+    arts, matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
     df = margin_service.ozon_margin_detail_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like,
         default_net_cost=settings.default_net_cost, by_size=bool(by_size),
+        articles=arts,
     )
     prev_window = None
     if compare and compare_window:
@@ -128,6 +210,7 @@ def _oz_detail_payload(db, from_, to_, article_like, compare, compare_window,
         prev_df = margin_service.ozon_margin_detail_dataframe(
             db, date_from=prev_from, date_to=prev_to, article_like=article_like,
             default_net_cost=settings.default_net_cost, by_size=bool(by_size),
+            articles=arts,
         )
         df = margin_service.compare_margin_periods(df, prev_df)
         prev_window = {"date_from": prev_from.isoformat(), "date_to": prev_to.isoformat()}
@@ -204,6 +287,7 @@ def _oz_detail_payload(db, from_, to_, article_like, compare, compare_window,
         "accrued_other": accrued_other,
         "accrued_unmapped": accrued_unmapped,
         "detail_range": ozon_detail_range(db),
+        "matched": matched,
     }
 
 
@@ -212,7 +296,11 @@ def api_margin_ozon_detail(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     by_size: int = 0,
     links: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -227,6 +315,10 @@ def api_margin_ozon_detail(
     базовый артикул, себестоимость берётся у базового артикула, размеры и
     артикулы показаны количеством. by_size=1 — строка это артикул размера.
 
+    articles=ART1,ART2,… — фильтр по списку (как на «Детализация Продаж WB»):
+    артикулы/баркоды/nmID WB/артикулы Ozon резолвятся в UPPER-артикулы и
+    складываются с article_like через «И».
+
     compare=1 добавляет показатели предыдущего аналогичного периода
     (та же длительность окна, сдвинутая назад): sells_pp, margin_pp,
     delta_ru (руб), delta_pct (%). Требует даты date_from/date_to.
@@ -234,8 +326,10 @@ def api_margin_ozon_detail(
     links=id,id,… — сравнение между Ozon-связками (аналог margin/detail).
     """
     from_, to_ = _parse_window400(date_from, date_to)
-    compare_window = _compare_window(date_from, date_to, ozon_small=True) \
-        if compare else None
+    compare_window = _resolve_compare_window(
+        date_from, date_to, compare_mode, compare_from, compare_to,
+        ozon_small=True) if compare else None
+    tokens = article_tokens_service.split_tokens(articles)
 
     link_infos = _resolve_links_param(db, links, "ozon")
     if len(link_infos) > 1:
@@ -243,7 +337,8 @@ def api_margin_ozon_detail(
             db, link_infos,
             lambda db, info: _oz_detail_payload(
                 db, from_, to_, article_like, bool(compare), compare_window,
-                bool(by_size), owner=cabinet_service.link_owner(db, info)),
+                bool(by_size), owner=cabinet_service.link_owner(db, info),
+                tokens=tokens),
         )
         pls = [p for _, p in results]
         frames = [p["df"] for p in pls if p["df"] is not None and not p["df"].empty]
@@ -269,7 +364,7 @@ def api_margin_ozon_detail(
     else:
         one = _oz_detail_payload(
             db, from_, to_, article_like, bool(compare), compare_window,
-            bool(by_size), owner="")
+            bool(by_size), owner="", tokens=tokens)
         df = one["df"]
         detail_articles = one["detail_articles"]
         prev_window = one["prev_window"]
@@ -284,7 +379,7 @@ def api_margin_ozon_detail(
 
     estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
     totals = _margin_detail_totals(df)
-    return {
+    payload = {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
         "detail_articles": detail_articles,
@@ -302,6 +397,15 @@ def api_margin_ozon_detail(
         "window": {"date_from": date_from or "", "date_to": date_to or ""},
         "detail_range": detail_range,
     }
+    if tokens:
+        matched, _ = article_tokens_service.resolve_articles(db, tokens)
+        up_all = {t.upper() for t in tokens}
+        payload["articles"] = {
+            "tokens": len(tokens),
+            "matched": len(up_all & {m.upper() for m in matched}),
+            "unmatched": sorted(up_all - {m.upper() for m in matched})[:50],
+        }
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +416,7 @@ def api_margin_funnel(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     links: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -322,15 +427,23 @@ def api_margin_funnel(
     в базе. date_from/date_to — запрошенный период, snapshot_from/snapshot_to —
     фактически показанный срез, matched — совпали ли они.
 
+    articles=ART1,ART2,… — фильтр по списку (как на «Детализация Продаж WB»):
+    артикулы/баркоды/nmID WB/артикулы Ozon резолвятся в UPPER-артикулы и
+    складываются с article_like через «И».
+
     links=id,id,… — сравнение между WB-связками: срезы всех связок сводятся
     вместе с колонкой «owner».
     """
     from_, to_ = _parse_window400(date_from, date_to)
+    tokens = article_tokens_service.split_tokens(articles)
+    arts, matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
 
     def _funnel(db, info=None):
         owner = cabinet_service.link_owner(db, info) if info is not None else ""
         df = margin_service.funnel_dataframe(
-            db, date_from=from_, date_to=to_, article_like=article_like
+            db, date_from=from_, date_to=to_, article_like=article_like,
+            articles=arts,
         )
         if owner and not df.empty:
             df = df.copy()
@@ -348,7 +461,7 @@ def api_margin_funnel(
         df = _funnel(db)
         snap = df
 
-    return {
+    payload = {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
         "date_from": str(from_),
@@ -357,3 +470,11 @@ def api_margin_funnel(
         "snapshot_to": snap.attrs.get("date_to", ""),
         "matched": bool(snap.attrs.get("matched", False)),
     }
+    if tokens:
+        up_all = {t.upper() for t in tokens}
+        payload["articles"] = {
+            "tokens": len(tokens),
+            "matched": len(up_all & {m.upper() for m in matched}),
+            "unmatched": sorted(up_all - {m.upper() for m in matched})[:50],
+        }
+    return payload

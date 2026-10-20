@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Юнит-тесты сервиса массовых действий (без БД и сети)."""
+from app.services import analytics_disk as analytics_disk_service
 from app.services import batch as batch_service
 from app.services import refresh as refresh_service
 
@@ -14,15 +15,21 @@ def _mk_job(job_id, steps):
 
 def test_actions_public_order_and_write_flag():
     acts = batch_service.actions_public()
-    assert [a["id"] for a in acts] == ["refresh", "recalc", "apply", "minpromo"]
+    assert [a["id"] for a in acts] == [
+        "refresh", "recalc", "apply", "minpromo", "analytics"]
     by = {a["id"]: a for a in acts}
     assert by["apply"]["write"] is True
     assert by["refresh"]["write"] is False
+    assert by["analytics"]["write"] is False
     assert all(a["label"] for a in acts)
 
 
 def test_minpromo_is_wb_only():
     assert batch_service._ACTION_BY_ID["minpromo"].get("mp") == ("wb",)
+
+
+def test_analytics_action_is_available_for_all_mps():
+    assert batch_service._ACTION_BY_ID["analytics"].get("mp") is None
 
 
 def test_normalize_actions_dedup_unknown_and_order():
@@ -34,6 +41,8 @@ def test_normalize_actions_dedup_unknown_and_order():
     assert batch_service._normalize_actions(
         ["minpromo", "apply", "refresh", "recalc"]) == [
         "refresh", "recalc", "apply", "minpromo"]
+    assert batch_service._normalize_actions(
+        ["analytics", "refresh"]) == ["refresh", "analytics"]
 
 
 def test_normalize_actions_trims_and_stringifies():
@@ -57,6 +66,19 @@ def test_run_apply_requires_confirmation():
     res = batch_service.run(["apply"])
     assert res["job_id"] is None
     assert res.get("needs_confirm") is True
+
+
+def test_do_analytics_reports_folder_and_files(monkeypatch):
+    monkeypatch.setattr(
+        analytics_disk_service, "write_reports",
+        lambda db, info, f, t: {"folder": "E:/Мой диск/X/WB",
+                                "files": ["margin_funnel.xlsx", "margin_detail.xlsx"],
+                                "rows": 12})
+    note, rows = batch_service._do_analytics(
+        db=None, info=None, date_from="2026-09-01", date_to="2026-09-10")
+    assert rows == 12
+    assert "файлов: 2" in note
+    assert "margin_funnel.xlsx" in note and "margin_detail.xlsx" in note
 
 
 def test_job_state_attaches_live_refresh_substeps(monkeypatch):

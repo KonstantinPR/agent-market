@@ -509,6 +509,85 @@ def test_wb_detail_fills_margin_detail_view(api_client):
     assert {row["article"] for row in view["rows"]} == {"TST-1", "TST-2"}
 
 
+def test_margin_detail_articles_filter(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+
+    view = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "articles": "1001",
+    }).json()
+    assert view["count"] == 1
+    assert [row["article"] for row in view["rows"]] == ["TST-1"]
+    assert view["articles"] == {"tokens": 1, "matched": 1, "unmatched": []}
+
+    view = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "articles": "tst-2, 2001, 1001",  # артикул продавца, баркод, nmID
+    }).json()
+    assert {row["article"] for row in view["rows"]} == {"TST-1", "TST-2"}
+    assert view["articles"]["matched"] == 3
+
+    view = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "articles": "TST-1,TST-2", "article_like": "1",
+    }).json()
+    assert [row["article"] for row in view["rows"]] == ["TST-1"]
+
+    view = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "articles": "TST-1,NOPE",
+    }).json()
+    assert view["count"] == 1
+    assert view["articles"] == {"tokens": 2, "matched": 1, "unmatched": ["NOPE"]}
+
+
+def test_margin_detail_articles_unknown_only(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    view = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "articles": "NOPE",
+    }).json()
+    assert view["count"] == 0
+    assert view["articles"]["unmatched"] == ["NOPE"]
+
+
+def test_margin_articles_import_xlsx(api_client):
+    buf = io.BytesIO()
+    pd.DataFrame([
+        ["Артикул", "Баркод", "Комментарий"],
+        ["TST-1", "2001", "x"],
+        ["TST-2", "2002", ""],
+    ]).to_excel(buf, index=False, header=False, engine="openpyxl")
+    r = api_client.post(
+        "/api/margin/articles-import",
+        files={"file": ("arts.xlsx", buf.getvalue(), XLSX)},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["tokens"] == ["TST-1", "2001", "TST-2", "2002"]
+    assert data["meta"]["header"] is True
+    assert data["meta"]["count"] == 4
+
+    bad = api_client.post("/api/margin/articles-import",
+                          files={"file": ("arts.csv", b"a,b", "text/csv")})
+    assert bad.status_code == 400
+
+
+def test_export_margin_detail_articles_filter(api_client):
+    api_client.post("/api/wb/cards")
+    api_client.post("/api/wb/detail",
+                    params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    r = api_client.get("/api/export/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "articles": "1002",
+    })
+    assert r.status_code == 200
+    df = _read_xlsx(r)
+    assert len(df) == 1
+    assert df.iloc[:, 0].tolist() == ["TST-2"]
+
+
 def test_margin_detail_includes_stock_columns(api_client, db):
     """Детализация WB отдаёт остатки со среза стоков на конец окна."""
     from datetime import date
@@ -1201,6 +1280,96 @@ def test_margin_ozon_detail_compare(api_client, db):
     assert row["margin_pp"] == pytest.approx(1140.0 - 500.0)
     assert row["delta_ru"] == pytest.approx((2280.0 - 1000.0) - (1140.0 - 500.0))
     assert body["prev_window"] == {"date_from": "2026-07-15", "date_to": "2026-08-14"}
+
+
+def test_margin_ozon_detail_compare_custom(api_client, db):
+    """compare_mode=custom берёт произвольное окно сравнения из дат."""
+    from datetime import date
+    from sqlalchemy import select
+    from app import models
+    mp_oz = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "ozon")).scalar_one()
+    db.add(models.MarketplaceCard(marketplace_id=mp_oz, chrt_id="c1",
+                                  vendor_code="CMP2-OZ", nm_id="9"))
+    db.add_all([
+        models.OzonDetailRow(op_key="cur", source="api", date=date(2026, 8, 15),
+                             posting_number="q-cur", offer_id="CMP2-OZ", name="Сравн. 2",
+                             sku="", barcode="", quantity=2, seller_price=1300.0,
+                             amount=2560.0, commission_ratio=0.11, commission=-281.6,
+                             standard_fee=-38.4, income=2280.0, return_qty=0, return_total=0.0),
+        # данные ровно в произвольном окне 2026-06-01..2026-06-10
+        models.OzonDetailRow(op_key="cmp", source="api", date=date(2026, 6, 5),
+                             posting_number="q-cmp", offer_id="CMP2-OZ", name="Сравн. 2",
+                             sku="", barcode="", quantity=3, seller_price=1300.0,
+                             amount=3840.0, commission_ratio=0.11, commission=-422.4,
+                             standard_fee=-57.6, income=3420.0, return_qty=0, return_total=0.0),
+    ])
+    db.commit()
+    body = api_client.get("/api/margin/ozon-detail", params={
+        "date_from": "2026-08-15", "date_to": "2026-09-14", "compare": 1,
+        "compare_mode": "custom",
+        "compare_from": "2026-06-01", "compare_to": "2026-06-10",
+    }).json()
+    row = next(x for x in body["rows"] if x["article"] == "CMP2-OZ")
+    assert row["sells"] == 2
+    assert row["sells_pp"] == 3
+    assert row["margin_pp"] == pytest.approx(3420.0 - 3 * 500.0)
+    assert body["prev_window"] == {"date_from": "2026-06-01", "date_to": "2026-06-10"}
+
+
+def test_margin_ozon_detail_compare_last_year(api_client, db):
+    """compare_mode=last_year сдвигает окно на год назад."""
+    from datetime import date
+    from sqlalchemy import select
+    from app import models
+    mp_oz = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "ozon")).scalar_one()
+    db.add(models.MarketplaceCard(marketplace_id=mp_oz, chrt_id="c1",
+                                  vendor_code="CMP3-OZ", nm_id="9"))
+    db.add_all([
+        models.OzonDetailRow(op_key="cur", source="api", date=date(2026, 8, 15),
+                             posting_number="r-cur", offer_id="CMP3-OZ", name="Сравн. 3",
+                             sku="", barcode="", quantity=2, seller_price=1300.0,
+                             amount=2560.0, commission_ratio=0.11, commission=-281.6,
+                             standard_fee=-38.4, income=2280.0, return_qty=0, return_total=0.0),
+        # тот же период год назад: 2025-08-15..2025-09-14
+        models.OzonDetailRow(op_key="ly", source="api", date=date(2025, 8, 20),
+                             posting_number="r-ly", offer_id="CMP3-OZ", name="Сравн. 3",
+                             sku="", barcode="", quantity=4, seller_price=1300.0,
+                             amount=5120.0, commission_ratio=0.11, commission=-563.2,
+                             standard_fee=-76.8, income=4560.0, return_qty=0, return_total=0.0),
+    ])
+    db.commit()
+    body = api_client.get("/api/margin/ozon-detail", params={
+        "date_from": "2026-08-15", "date_to": "2026-09-14", "compare": 1,
+        "compare_mode": "last_year",
+    }).json()
+    row = next(x for x in body["rows"] if x["article"] == "CMP3-OZ")
+    assert row["sells_pp"] == 4
+    assert body["prev_window"] == {"date_from": "2025-08-15", "date_to": "2025-09-14"}
+
+
+def test_resolve_compare_window_modes():
+    """_resolve_compare_window: prev / custom / last_year / отказы."""
+    from datetime import date
+    from app.api.margin import _resolve_compare_window
+    # prev (по умолчанию): окно [08-15..09-14] → [07-15..08-14] (ozon_small=True)
+    assert _resolve_compare_window("2026-08-15", "2026-09-14") == \
+        (date(2026, 7, 15), date(2026, 8, 14))
+    # custom: явные даты
+    assert _resolve_compare_window("2026-08-15", "2026-09-14", "custom",
+                                   "2026-06-01", "2026-06-10") == \
+        (date(2026, 6, 1), date(2026, 6, 10))
+    # last_year: сдвиг на 365 дней
+    assert _resolve_compare_window("2026-08-15", "2026-09-14", "last_year") == \
+        (date(2025, 8, 15), date(2025, 9, 14))
+    # custom без дат или битые даты → None
+    assert _resolve_compare_window("2026-08-15", "2026-09-14", "custom") is None
+    assert _resolve_compare_window("2026-08-15", "2026-09-14", "custom",
+                                   "нет", "2026-06-10") is None
+    # prev без дат → None
+    assert _resolve_compare_window(None, None) is None
+
 
 
 def test_export_margin_ozon_detail(api_client):

@@ -31,6 +31,11 @@ class Settings(BaseSettings):
 
     default_net_cost: float = 500.0
 
+    #: Корень Dropbox-хранилища, куда «Массовые действия → Обновить аналитику
+    #: на диск» перезаписывает Excel-отчёты Прибыльности. Внутри — папка
+    #: компании (companies.analytics_dir) и подпапка WB/OZON.
+    analytics_root: str = r"E:\Мой диск"
+
     photos_root: str = r"C:\YandexDisk\ФОТОГРАФИИ"
     thumbs_dir: str = "data/thumbs"
     thumb_max_px: int = 800

@@ -760,6 +760,7 @@ def replenish_rows(
     marketplace: Optional[str] = None,
     sort: str = "urgency",
     article_like: Optional[str] = None,
+    articles: Optional[set] = None,
     show_inactive: bool = False,
     hide_zero_sizes: bool = False,
     view: str = "article",
@@ -792,7 +793,7 @@ def replenish_rows(
     if str(view).strip().lower() == "sizes":
         return _size_view(
             db, date_from, date_to, target_days=target_days, span=span,
-            codes=codes, sort=sort, article_like=article_like,
+            codes=codes, sort=sort, article_like=article_like, articles=articles,
             show_inactive=show_inactive, hide_zero_sizes=hide_zero_sizes,
             wish=wish, wish_step=wish_step,
         )
@@ -823,6 +824,8 @@ def replenish_rows(
         keys |= set(m)
     if article_like:
         keys = {k for k in keys if like_match(k, article_like)}
+    if articles is not None:
+        keys = {k for k in keys if str(k).strip().upper() in articles}
 
     if not keys:
         return {"rows": [], "meta": _meta(0)}
@@ -1030,6 +1033,7 @@ def replenish_rows(
 def _size_view(
     db: Session, date_from, date_to, target_days: int = 30, span: int = 1,
     codes=None, sort: str = "urgency", article_like: Optional[str] = None,
+    articles: Optional[set] = None,
     show_inactive: bool = False, hide_zero_sizes: bool = False,
     wish: int = 0, wish_step: str = "",
 ) -> dict:
@@ -1086,6 +1090,8 @@ def _size_view(
         keys.update(art_stocks[c])
     if article_like:
         keys = {k for k in keys if like_match(k, article_like)}
+    if articles is not None:
+        keys = {k for k in keys if str(k).strip().upper() in articles}
     if not keys:
         return {"rows": [], "meta": _meta(0)}
 

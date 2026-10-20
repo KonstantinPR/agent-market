@@ -20,6 +20,7 @@ def api_replenish(
     marketplace: Optional[str] = None,
     sort: str = "urgency",
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     show_inactive: int = 0,
     hide_zero_sizes: int = 0,
     view: str = "article",
@@ -35,6 +36,8 @@ def api_replenish(
     даты окна. sort: urgency | margin | name. view: article | sizes —
     размерный разрез (WB) по той же логике. hide_zero_sizes — в разрезе
     «по размерам» скрыть размеры без продаж и остатков (везде 0).
+    articles=ART1,ART2,… — фильтр по списку (как на «Детализация Продаж WB»):
+    артикулы/баркоды/nmID WB/артикулы Ozon резолвятся в UPPER-артикулы.
     wish/wish_step — «Пожелание»: ручной объём N шт на WB и шаг размера
     («2»/«2-4»); кривой шаг — 400. cabinet — локальный выбор связки в разделе
     (None — активная из куки).
@@ -55,9 +58,14 @@ def api_replenish(
     except (TypeError, ValueError):
         span = max(1, int(window_days or settings.sync_days_default))
 
+    tokens = article_tokens_service.split_tokens(articles)
+    arts, matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
+
     result = replenish_service.replenish_rows(
         db, from_, to_, target_days=target_days, span_days=span,
         marketplace=marketplace, sort=sort, article_like=article_like,
+        articles=arts,
         show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
         view=view, wish=wish, wish_step=wish_step,
     )
@@ -65,6 +73,13 @@ def api_replenish(
     result["date_to"] = to_.isoformat()
     if inf is not None:
         result["cabinet"] = {"id": inf.id, "owner": inf.owner(), "schema": inf.schema}
+    if tokens:
+        up_all = {t.upper() for t in tokens}
+        result["articles"] = {
+            "tokens": len(tokens),
+            "matched": len(up_all & {m.upper() for m in matched}),
+            "unmatched": sorted(up_all - {m.upper() for m in matched})[:50],
+        }
     return result
 
 

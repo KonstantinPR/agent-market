@@ -991,6 +991,7 @@ def detail_summary_dataframe(
     date_from=None,
     date_to=None,
     article_like: Optional[str] = None,
+    articles: Optional[set] = None,
 ) -> pd.DataFrame:
     """Свод «Детализации продаж» WB по артикулам — сырые деньги операций.
 
@@ -1078,6 +1079,8 @@ def detail_summary_dataframe(
     recs = []
     for art, c in cells.items():
         if art_check is not None and art_check.search(art) is None:
+            continue
+        if articles is not None and str(art).strip().upper() not in articles:
             continue
         (sells, returns_qty, revenue, commission, for_pay, logistics,
          delivery_count, return_delivery_count, storage, pvz_compensation,
@@ -2423,6 +2426,7 @@ def oz_detail_summary_dataframe(
     date_to=None,
     article_like: Optional[str] = None,
     by_size: bool = False,
+    articles: Optional[set] = None,
 ) -> pd.DataFrame:
     """Свод «Детализации реализаций Ozon» по артикулам (постинги + выкупы).
 
@@ -2524,6 +2528,10 @@ def oz_detail_summary_dataframe(
         (sells, returns_qty, seller_total, amount, commission, services,
          income, ops) = c
         offers = sorted(group_offers.get(key) or ([key] if by_size else []))
+        if articles is not None:
+            up_offers = {str(a).strip().upper() for a in offers}
+            if str(key).strip().upper() not in articles and not (up_offers & articles):
+                continue
         bsum = sum(buyot.get(a.upper(), 0.0) for a in offers) or None
         b_sum = round(bsum, 2) if bsum else 0.0
         b_pct = round(bsum / seller_total * 100, 2) \

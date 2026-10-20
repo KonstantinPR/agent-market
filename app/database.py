@@ -127,6 +127,24 @@ def ensure_schema(seed: bool = True) -> None:
         conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS main_cabinet_id integer"
         ))
+        # Папка Dropbox для выгрузки аналитики по фирме (кнопка «Обновить
+        # аналитику на диск» в «Массовых действиях»). create_all колонку к уже
+        # существующей таблице companies не добавляет.
+        conn.execute(text(
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS analytics_dir "
+            "varchar(500) NOT NULL DEFAULT ''"
+        ))
+        # Бэкфилл папок аналитики для уже существующих фирм (пустое значение).
+        conn.execute(text(
+            "UPDATE companies SET analytics_dir = 'ООО ДЖОИНС\\AGENT MARKET\\АНАЛИТИКА' "
+            "WHERE (analytics_dir IS NULL OR analytics_dir = '') "
+            "AND name = 'ООО «Джоинс & Компани»'"
+        ))
+        conn.execute(text(
+            "UPDATE companies SET analytics_dir = 'ИП ПРУДНИКОВ\\AGENT MARKET\\АНАЛИТИКА' "
+            "WHERE (analytics_dir IS NULL OR analytics_dir = '') "
+            "AND name = 'ИП Прудников Константин Григорьевич'"
+        ))
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE TABLE IF NOT EXISTS app_schema_state (key text PRIMARY KEY, value text)"

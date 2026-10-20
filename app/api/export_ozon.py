@@ -162,15 +162,39 @@ def export_ozon_detail_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
+    compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     by_size: int = 0,
     cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    from app.api.margin import _resolve_compare_window
+
     from_, to_ = _parse_window400(date_from, date_to)
+    tokens = article_tokens_service.split_tokens(articles)
+    arts, _matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
     df = sync_service.oz_detail_summary_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like,
-        by_size=bool(by_size),
+        by_size=bool(by_size), articles=arts,
     )
+    if compare:
+        cw = _resolve_compare_window(date_from, date_to, compare_mode,
+                                     compare_from, compare_to, ozon_small=True)
+        if cw:
+            prev_from, prev_to = cw
+            prev_df = sync_service.oz_detail_summary_dataframe(
+                db, date_from=prev_from, date_to=prev_to,
+                article_like=article_like, by_size=bool(by_size), articles=arts,
+            )
+            df = margin_service.compare_detail_periods(
+                df, prev_df,
+                ["sells", "seller_total", "amount", "commission", "services", "income"],
+                "income",
+            )
     df, ru = excel_io.project_export(df, OZON_DETAIL_SUMMARY_RU_COLUMNS, cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Детализация по артикулам")

@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.config import BASE_DIR
 from app.database import SessionLocal
 from app.providers import factory as provider_factory
+from app.services import analytics_disk as analytics_disk_service
 from app.services import cabinets as cabinet_service
 from app.services import pricing as pricing_service
 from app.services import pricing_ozon as pricing_ozon_service
@@ -43,6 +44,7 @@ ACTIONS = [
     {"id": "recalc", "label": "Пересчитать автопилот", "write": False},
     {"id": "apply", "label": "Отправить коррекцию цен", "write": True},
     {"id": "minpromo", "label": "Мин. цены автоакций", "write": False, "mp": ("wb",)},
+    {"id": "analytics", "label": "Обновить аналитику на диск", "write": False},
 ]
 
 _ACTION_BY_ID = {a["id"]: a for a in ACTIONS}
@@ -258,7 +260,7 @@ def active_jobs() -> list:
 # --------------------------------------------------------------------- запуск
 
 def run(actions, scope: str = "all", include_detail: bool = False,
-        confirmed: bool = False) -> dict:
+        confirmed: bool = False, date_from=None, date_to=None) -> dict:
     """Ставит массовый прогон в фоновую нить. Возвращает {job_id, needs_confirm}."""
     acts = _normalize_actions(actions)
     if not acts:
@@ -271,12 +273,15 @@ def run(actions, scope: str = "all", include_detail: bool = False,
         job = {
             "id": job_id, "status": "running", "scope": scope, "actions": acts,
             "include_detail": bool(include_detail),
+            "date_from": date_from, "date_to": date_to,
             "started_at": _now(), "finished_at": None, "ok": 0, "failed": 0,
             "steps": [], "cabs": [],
         }
         _JOBS[job_id] = job
-    threading.Thread(target=_worker, args=(job_id, acts, scope, bool(include_detail)),
-                     daemon=True).start()
+    threading.Thread(
+        target=_worker,
+        args=(job_id, acts, scope, bool(include_detail), date_from, date_to),
+        daemon=True).start()
     return {"job_id": job_id}
 
 
@@ -363,6 +368,13 @@ def _do_minpromo(db: Session, info, settings: dict, job_id: int) -> tuple:
     return (f"строк в шаблоне: {count} из {total}", count)
 
 
+def _do_analytics(db: Session, info, date_from, date_to) -> tuple:
+    """Перезапись Excel-отчётов Прибыльности связки в её папку Dropbox."""
+    res = analytics_disk_service.write_reports(db, info, date_from, date_to)
+    files = ", ".join(res["files"])
+    return (f"{res['folder']} · файлов: {len(res['files'])} ({files})", res["rows"])
+
+
 def minpromo_path(job_id: int, cab_id: int) -> Optional[Path]:
     job = _JOBS.get(job_id)
     if job is None:
@@ -395,7 +407,8 @@ def _reset_search_path(db: Session) -> None:
             pass
 
 
-def _worker(job_id: int, acts: list, scope: str, include_detail: bool) -> None:
+def _worker(job_id: int, acts: list, scope: str, include_detail: bool,
+            date_from=None, date_to=None) -> None:
     job = _JOBS[job_id]
     db = SessionLocal()
     try:
@@ -447,6 +460,10 @@ def _worker(job_id: int, acts: list, scope: str, include_detail: bool) -> None:
                         if step["status"] == "ok":
                             cab["minpromo_path"] = str(
                                 _MINPROMO_DIR / f"job{job_id}" / f"minpromo_{info.id}.xlsx")
+                    elif aid == "analytics":
+                        _run_step(
+                            job, step,
+                            lambda: _do_analytics(db, info, date_from, date_to))
             except Exception as e:  # noqa: BLE001
                 cab["status"] = "failed"
                 cab.setdefault("error", str(e)[:300])

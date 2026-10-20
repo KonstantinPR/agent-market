@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=56">
+<link rel="stylesheet" href="/static/style.css?v=58">
 </head>
 <body>
 <nav class="navbar">
@@ -15,11 +15,11 @@
     <div class="dropdown" id="oursDropdown">
       <button class="dropbtn" id="oursMenuBtn">Наш Склад &#9662;</button>
       <div class="dropdown-menu" id="oursMenu">
+        <a class="nav-link" data-tab="replenish" href="#">Потребность в товаре</a>
         <a class="nav-link" data-tab="products" href="#">Товары</a>
         <a class="nav-link" data-tab="wh-cp" href="#">Контрагенты</a>
         <a class="nav-link" data-tab="wh-receipt" href="#">Приходы</a>
         <a class="nav-link" data-tab="wh-shipment" href="#">Отправки</a>
-        <a class="nav-link" data-tab="replenish" href="#">Потребность в товаре</a>
       </div>
     </div>
     <div class="dropdown" id="profitDropdown">
@@ -75,7 +75,7 @@
   </div>
   <div class="navbar-right">
     <div class="dropdown" id="batchDropdown">
-      <button class="dropbtn" id="batchMenuBtn" aria-label="Массовые действия по связкам" title="Массовые действия по связкам: один прогон выбранных операций сразу по нескольким связкам. Порядок: обновление данных → пересчёт автопилота → отправка коррекции цен → шаблон мин. цены автоакций.">Массовые действия <span class="caret">&#9662;</span></button>
+      <button class="dropbtn" id="batchMenuBtn" aria-label="Массовые действия по связкам" title="Массовые действия по связкам: один прогон выбранных операций сразу по нескольким связкам. Порядок: обновление данных → пересчёт автопилота → отправка коррекции цен → шаблон мин. цены автоакций → аналитика на диск.">Массовые действия <span class="caret">&#9662;</span></button>
       <div class="dropdown-menu" id="batchMenu">
         <div class="batch-scope">
           <label for="batchScope" title="Какие связки обработать. «Все (с ключами)» — каждая включённая связка, у которой заданы API-ключи (связки без ключей пропускаются). «Активная» — только открытая сейчас связка. «Главная» — связка, отмеченная как главная (её свежая рекомендация служит образцом для остальных, если включено следование за главной)." >Связки</label>
@@ -89,6 +89,7 @@
         <label class="nav-link chk" title="Пересчитать автопилот: заново посчитать рекомендации цен по актуальным данным и настройкам связки. В кабинете НИЧЕГО не меняет — только расчёт (результат можно посмотреть в разделе цен)."><input type="checkbox" id="batchRecalc" checked> Пересчитать автопилот</label>
         <label class="nav-link chk batch-write" title="Отправить коррекцию цен: РЕАЛЬНАЯ запись рекомендованных цен в кабинет маркетплейса. Действие необратимо. Включается отдельно; перед запуском показывается предпросмотр с числом изменений по каждой связке и запрашивается подтверждение. По умолчанию выключено."><input type="checkbox" id="batchApply"> Отправить коррекцию цен</label>
         <label class="nav-link chk" title="Мин. цены автоакций (шаблон): сформировать Excel-шаблон минимальных цен для автоакций WB по каждой связке, чтобы затем загрузить его в кабинет вручную (в WB нет API для минцен). Только для WB; готовый файл скачивается из окна прогресса. В кабинете ничего не меняет."><input type="checkbox" id="batchMinpromo"> Мин. цены автоакций (шаблон)</label>
+        <label class="nav-link chk" title="Обновить аналитику на диск: сформировать Excel-отчёты раздела Прибыльность (WB: Воронка Продаж и Детализация Продаж; Ozon: Анализ Продаж) и ПЕРЕЗАПИСАТЬ их в папку фирмы в Dropbox (для каждой фирмы своя папка, внутри — WB/OZON). Имена файлов постоянны, поэтому прежние отчёты заменяются. Период берётся из шапки (С/По). В кабинет маркетплейса ничего не пишется."><input type="checkbox" id="batchAnalytics"> Обновить аналитику на диск</label>
         <label class="nav-link chk" title="Вкл. детализацию продаж: при обновлении данных дополнительно тянуть детализацию (WB: finance, лимит 1 запрос / 12 ч; Ozon: детализация реализаций + выкупы). Даёт больше данных, но заметно удлиняет обновление."><input type="checkbox" id="batchDetail"> Вкл. детализацию продаж</label>
         <button class="batch-go" id="batchGo" title="Запустить выбранные действия по выбранным связкам в порядке: обновление → пересчёт → коррекция цен → шаблон минцены">Запустить</button>
         <div class="batch-hint" id="batchHint"></div>
@@ -241,6 +242,10 @@
     <div class="toolbar">
       <span class="tip" id="marginFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Оценка прибыльности по срезу воронки за период (до комиссий WB). Обновите: WB API ▸ Воронка продаж.</span></span>
       <input id="marginFunnelLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть">
+      <div class="view-menu" id="marginFunnelArtsMenu">
+        <button type="button" class="btn" id="btnMarginFunnelArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
+        <div class="view-menu-panel hidden" id="marginFunnelArtsPanel"></div>
+      </div>
       <span class="toolbar-right">
         <span id="marginFunnelTablePager"></span>
         <div class="view-menu" id="marginFunnelViewMenu">
@@ -259,7 +264,14 @@
     <div class="toolbar">
       <span class="tip" id="marginOzonDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из детализации реализаций OZON. Прибыль = "К перечислению" − себестоимость×продано. Фактические комиссия/услуги OZON уже вычтены из "К перечислению" (они показаны справочными колонками). <b>Точные начисления</b> («Начисл.: продажа/комиссия/логистика/услуги», «На р/с (нач.)») загружаются из OZON API (OZON API ▸ Начисления) и дают реальную сумму к зачислению по каждому артикулу — это и есть ответ на вопрос «сколько Ozon перечислит за товар». «Прибыль (нач.)» = «На р/с (нач.)» − себестоимость×продано; пусто, если начислений по артикулу нет. «Δ нач. vs дет.» — расхождение начислений с детализацией: бывает при неполной детализации или возвратах. «На р/с (оценка)» — оценка по движению средств пропорционально доходу; точнее начисления, но начисления зачисляются с задержкой, поэтому за один и тот же месяц суммы отличаются. «Нераспределено» в статусе — начисления без артикула (страховка/размещение и товары без продаж в детализации). Рассчитано на ~2 недели ретроспективы, пока детализация не натянута за больший период.</span></span>
       <input id="marginOzonDetailLike" placeholder="Артикул содержит… (напр. BAND) * = любая часть">
-      <label class="chk"><input type="checkbox" id="marginOzonDetailCompare"> Сравнить с пред. периодом</label>
+      <div class="view-menu" id="marginOzonArtsMenu">
+        <button type="button" class="btn" id="btnMarginOzonArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
+        <div class="view-menu-panel hidden" id="marginOzonArtsPanel"></div>
+      </div>
+      <div class="view-menu" id="marginOzonDetailCompareMenu">
+        <button type="button" class="btn" id="btnMarginOzonDetailCompare" title="Показывать рядом с текущим периодом предыдущий аналогичный период, тот же период год назад или произвольный диапазон дат">Сравнить &#9662;</button>
+        <div class="view-menu-panel hidden" id="marginOzonDetailComparePanel"></div>
+      </div>
       <label class="chk" data-oz-size-for="margin-ozon-detail" title="По умолчанию отчёт OZON показывает товар целиком: артикулы разных размеров свёрнуты в одну строку. Включите, чтобы видеть каждую карточку (артикул + размер) отдельной строкой."><input type="checkbox" id="marginOzBySize"> в разрезе размеров</label>
       <span class="toolbar-right">
         <span id="marginOzonDetailTablePager"></span>
@@ -278,7 +290,14 @@
     <div class="toolbar">
       <span class="tip" id="marginDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из финансового отчёта WB (детализация продаж). Маржа = "К перечислению" − себестоимость. "Прочее" — разница (возвраты/корректировки).</span></span>
       <input id="marginDetailLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть">
-      <label class="chk"><input type="checkbox" id="marginDetailCompare"> Сравнить с пред. периодом</label>
+      <div class="view-menu" id="marginDetailArtsMenu">
+        <button type="button" class="btn" id="btnMarginDetailArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
+        <div class="view-menu-panel hidden" id="marginDetailArtsPanel"></div>
+      </div>
+      <div class="view-menu" id="marginDetailCompareMenu">
+        <button type="button" class="btn" id="btnMarginDetailCompare" title="Показывать рядом с текущим периодом предыдущий аналогичный период, тот же период год назад или произвольный диапазон дат">Сравнить &#9662;</button>
+        <div class="view-menu-panel hidden" id="marginDetailComparePanel"></div>
+      </div>
       <span class="toolbar-right">
         <span id="marginDetailTablePager"></span>
         <div class="view-menu" id="marginDetailViewMenu">
@@ -302,6 +321,10 @@
       <button id="pricingApply" class="btn" disabled title="Применение изменений через API — доступно, когда есть рекомендации на изменение в видимой таблице">Применить</button>
       <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">WB: меняет скидку через API. Ozon: меняет цену витрины напрямую (/v1/product/import/prices). Расчёт Ozon — price-based, по базовым артикулам, пол безубыточности из margin-детализации Ozon.</span></span>
       <input id="pricingLike" placeholder="Артикул или название содержит… * = любая часть">
+      <div class="view-menu" id="pricingArtsMenu">
+        <button type="button" class="btn" id="btnPricingArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
+        <div class="view-menu-panel hidden" id="pricingArtsPanel"></div>
+      </div>
       <div class="view-menu" id="pricingShowMenu">
         <button type="button" class="btn" id="btnpricingShow" title="Показ строк таблицы: с нулевыми товарами, скрыть «держать» и «пропустить»">Показ ▾</button>
         <div class="view-menu-panel hidden" id="pricingShowPanel"></div>
@@ -404,9 +427,11 @@
   <section id="tab-replenish" class="pane">
     <div class="toolbar">
       <input id="replenishLike" placeholder="Артикул содержит… * = любая часть">
+      <div class="view-menu" id="replenishArtsMenu">
+        <button type="button" class="btn" id="btnReplenishArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
+        <div class="view-menu-panel hidden" id="replenishArtsPanel"></div>
+      </div>
       <select id="replenishCabinet" title="Связка: чьи продажи/остатки маркетплейсов показывать. Наш склад общий для всех связок."></select>
-      <label title="Окно спроса (дней), за которое считается скорость продаж">Спрос <input type="number" class="tool-input num" id="replenishWindow" min="1" max="365" value="30"> дн.</label>
-      <label title="Целевой запас в днях продаж, до которого пополняем наш склад и маркетплейсы">Запас <input type="number" class="tool-input num" id="replenishTarget" min="1" max="366" value="30"> дн.</label>
       <select id="replenishView" title="Режим таблицы: по артикулам (сводно, включая Ozon) или по размерам (WB)">
         <option value="article">Вид: артикулы</option>
         <option value="sizes">Вид: размеры</option>
@@ -416,8 +441,6 @@
         <option value="margin">По марже/шт</option>
         <option value="name">По артикулу</option>
       </select>
-      <label class="chk"><input type="checkbox" id="replenishShowInactive" title="Показать товары без карточек на WB/Ozon (не участвуют в поставке)"> Неактуальные</label>
-      <label class="chk"><input type="checkbox" id="replenishHideZeroSizes" title="В виде «Размеры» скрыть размеры без продаж и остатков (везде 0). Снято (по умолчанию) — показывать все размеры: продававшиеся, лежащие на складах МП и только числящиеся в карточке WB"> без нулевых размеров</label>
       <span class="toolbar-right">
         <span id="replenishTablePager"></span>
         <div class="view-menu" id="replenishViewMenu">
@@ -437,6 +460,20 @@
               </select>
             </label>
             <div class="wish-hint">Пожелание задаёт ручной итог отгрузки на WB: N шт раскидываются по размерам по выгоде, шаг отбирает размеры лесенки. Пусто — обычный план.</div>
+          </div>
+        </div>
+        <div class="view-menu" id="replenishExtraMenu">
+          <button type="button" class="btn" id="btnReplenishExtra" title="Неактуальные товары, нулевые размеры и окна спроса/запаса в днях">Доп. настройки &#9662;</button>
+          <div class="view-menu-panel hidden" id="replenishExtraPanel">
+            <label class="chk"><input type="checkbox" id="replenishShowInactive" title="Показать товары без карточек на WB/Ozon (не участвуют в поставке)"> Неактуальные</label>
+            <label class="chk"><input type="checkbox" id="replenishHideZeroSizes" title="В виде «Размеры» скрыть размеры без продаж и остатков (везде 0). Снято (по умолчанию) — показывать все размеры: продававшиеся, лежащие на складах МП и только числящиеся в карточке WB"> без нулевых размеров</label>
+            <label class="chk" title="Окно спроса (дней), за которое считается скорость продаж">Спрос
+              <input type="number" class="tool-input num" id="replenishWindow" min="1" max="365" value="30"> дн.
+            </label>
+            <label class="chk" title="Целевой запас в днях продаж, до которого пополняем наш склад и маркетплейсы">Запас
+              <input type="number" class="tool-input num" id="replenishTarget" min="1" max="366" value="30"> дн.
+            </label>
+            <div class="wish-hint">Неактуальные — товары без карточек WB/Ozon. «Без нулевых размеров» — скрыть размеры, где нет ни продаж, ни остатков. Спрос и запас — окна в днях.</div>
           </div>
         </div>
         <div class="view-menu" id="replenishPdfMenu">
@@ -605,7 +642,15 @@
     </div>
     <div class="toolbar">
       <input id="wbDetailLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <div class="view-menu" id="wbDetailArtsMenu">
+        <button type="button" class="btn" id="btnWbDetailArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
+        <div class="view-menu-panel hidden" id="wbDetailArtsPanel"></div>
+      </div>
       <label class="chk"><input type="checkbox" id="wbDetailRaw"> Строками</label>
+      <div class="view-menu" id="wbDetailCompareMenu">
+        <button type="button" class="btn" id="btnWbDetailCompare" title="Показывать рядом с текущим периодом предыдущий аналогичный период, тот же период год назад или произвольный диапазон дат">Сравнить &#9662;</button>
+        <div class="view-menu-panel hidden" id="wbDetailComparePanel"></div>
+      </div>
       <span class="tip hidden" id="wbDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Сырые деньги операций без себестоимости и маржи. Анализ прибыльности — в разделе «Прибыльность ▸ Детализация Продаж WB».</span></span>
       <span class="toolbar-right">
         <span id="wbDetailTablePager"></span>
@@ -749,7 +794,15 @@
     </div>
     <div class="toolbar">
       <input id="ozDetailLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <div class="view-menu" id="ozDetailArtsMenu">
+        <button type="button" class="btn" id="btnOzDetailArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
+        <div class="view-menu-panel hidden" id="ozDetailArtsPanel"></div>
+      </div>
       <label class="chk"><input type="checkbox" id="ozDetailRaw"> Строками</label>
+      <div class="view-menu" id="ozDetailCompareMenu">
+        <button type="button" class="btn" id="btnOzDetailCompare" title="Показывать рядом с текущим периодом предыдущий аналогичный период, тот же период год назад или произвольный диапазон дат">Сравнить &#9662;</button>
+        <div class="view-menu-panel hidden" id="ozDetailComparePanel"></div>
+      </div>
       <label class="chk" data-oz-size-for="oz-detail" title="По умолчанию свод OZON показывает товар целиком: артикулы разных размеров свёрнуты в одну строку. Включите, чтобы видеть каждую карточку (артикул + размер) отдельной строкой. В режиме «Строками» переключатель не действует."><input type="checkbox" id="ozDetailBySize"> в разрезе размеров</label>
       <span class="tip hidden" id="ozDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Сырые деньги операций по постингам Ozon: комиссия и услуги отрицательные, «К перечислению» — итог по строке (с учётом возврата). Свод по артикулам добавляет сумму и % выкупа.</span></span>
       <span class="toolbar-right">
@@ -1037,7 +1090,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=132"></script>
+  <script src="/static/app.js?v=140"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

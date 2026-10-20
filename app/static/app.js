@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "132";
+const UI_VERSION = "140";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -172,11 +172,15 @@ function initWriteDb() {
 // вырезан код.
 // Значение: точный ключ либо префикс с «*» (ключи вида base + суффикс).
 const LS_KEYS = {
+  "marginDetailArticles": "Список «Артикулы» на «Детализация Продаж WB» (JSON)",
+  "dash-group-by": "Обзор: группировка строк таблицы (prefix/article)",
+  "dash-table": "Обзор: вид таблицы (profit/revenue/…)",
   "write_db_*": "«в БД» у кнопок скачивания: write_db_<api>_<kind>",
   "ozBySize:*": "режим «в разрезе размеров» Ozon-вкладок: ozBySize:<tab>",
   "dash-collapsed": "свёрнутые секции дашборда",
   "dash-order": "порядок секций дашборда",
   "replenishPdf": "параметры PDF вкладки «Потребность в товаре»",
+  "cmpPeriodState": "режим и даты селектора «Сравнить ▾» детализаций (JSON по вкладкам)",
   "products_price_settings": "настройки цен в прайсе товаров",
   "pricing_settings": "настройки автопилота цен (JSON)",
   "pricing_hide_skip": "скрыть «держать»/«пропустить» в автопилоте",
@@ -588,6 +592,9 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     }
     return s;
   };
+  // Подпись кнопки «Загрузить все»: сколько строк ещё не показано и сколько всего.
+  const pagerAllLabel = (list) =>
+    "Загрузить все (" + fmt(Math.max(0, list.length - st.limit)) + " из " + fmt(list.length) + ")";
   // Sticky-смещения шапки: заголовок на 0, полоса фильтров под ним, «Итого» — ниже.
   const applyStickyRows = (wrap) => {
     const hdr = wrap.querySelector("thead tr:not(.totals-row):not(.filter-row)");
@@ -608,43 +615,29 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     const pagerHost = pagerHostOf();
     if (pagerHost) pagerHost.innerHTML = "";
     if (!st.rows || !st.rows.length) {
+      setPagerInfo("");
       container.innerHTML = '<div class="empty">Нет данных за выбранный период</div>';
       return;
     }
     const list = computeList();
+    const visible = st.showAll ? list : list.slice(0, st.limit);
     const bar = document.createElement("div");
     bar.className = "pager";
-    const span = document.createElement("span");
-    span.className = "pager-lbl";
-    bar.appendChild(span);
     if (!st.showAll) {
-      const lbl = document.createElement("label");
-      lbl.className = "pager-n";
-      lbl.appendChild(document.createTextNode("Показывать "));
-      const input = document.createElement("input");
-      input.type = "number";
-      input.min = "1";
-      input.value = String(st.limit);
-      lbl.appendChild(input);
-      bar.appendChild(lbl);
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "btn pager-all";
-      btn.textContent = "Загрузить все (" + fmt(Math.max(0, list.length - st.limit)) + ")";
+      // Кнопка сама сообщает, сколько строк ещё не показано и сколько всего:
+      // отдельная подпись «Показано …» и поле «Показывать N» в тулбаре не нужны.
+      btn.textContent = pagerAllLabel(list);
       bar.appendChild(btn);
-      input.addEventListener("change", () => {
-        let v = parseInt(input.value, 10);
-        if (!v || v < 1) v = 1;
-        st.limit = Math.min(v, Math.max(1, st.rows.length));
-        paint();
-      });
       btn.addEventListener("click", () => {
         st.showAll = true;
+        setPagerInfo("");
         paint();
       });
     }
-    const visible = st.showAll ? list : list.slice(0, st.limit);
-    span.textContent = labelText(list, visible);
+    setPagerInfo(labelText(list, visible));
     (pagerHost || container).appendChild(bar);
     container.classList.add("paged");
     const tscroll = document.createElement("div");
@@ -663,6 +656,7 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     container._pt._sc = { left: tsc ? tsc.scrollLeft : 0, top: container.scrollTop };
     mountXBar(container, tscroll);
     if (st.onFilter) st.onFilter(list, st.rows);
+    normalizeStatus();
   };
   // Перерисовка только тела и «Итого» при вводе в фильтр — шапку (и фокус в
   // полосе фильтров) не трогаем, поэтому курсор не слетает.
@@ -677,13 +671,13 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     const oldTr = wrap.querySelector("thead tr.totals-row");
     if (oldTr && f) oldTr.outerHTML = totalsRowHtml(st.headers, f);
     const host = pagerHostOf() || container;
-    const span = host.querySelector(".pager-lbl");
-    if (span) span.textContent = labelText(list, visible);
+    setPagerInfo(labelText(list, visible));
     const btn = host.querySelector(".pager-all");
-    if (btn) btn.textContent = "Загрузить все (" + fmt(Math.max(0, list.length - st.limit)) + ")";
+    if (btn) btn.textContent = pagerAllLabel(list);
     applyStickyRows(wrap);
     applyStickyCols(wrap, st.headers, st.pinned);
     if (st.onFilter) st.onFilter(list, st.rows);
+    normalizeStatus();
   };
   if (!container._bound) {
     container._bound = true;
@@ -829,36 +823,66 @@ const HEADER_MSG_MAX = 150;
 function statusEl() {
   return document.getElementById("headerMsg");
 }
+// Информация пагинации («Показано X из Y») дописывается в ту же строку статуса,
+// что и текст раздела: отдельная подпись в тулбаре больше не нужна. Хранится
+// отдельно от базового текста, поэтому рендер раздела может свободно
+// переписывать msg.textContent, а суффикс пересобирается здесь.
+let _pagerInfo = "";
+let _statusBase = null; // сырой (необрезанный) базовый текст статуса без суффикса
+function setPagerInfo(text) {
+  _pagerInfo = String(text || "");
+  normalizeStatus();
+}
 function normalizeStatus() {
   const el = statusEl();
   if (!el) return null;
-  const s = el.textContent || "";
-  if (s.length > HEADER_MSG_MAX) {
-    const cut = s.slice(0, HEADER_MSG_MAX) + "…";
-    // Обрезанный текст длиной HEADER_MSG_MAX + 1 сам не проходит проверку
-    // выше, поэтому писать надо только при реальном изменении. Без этой
-    // проверки замена textNode снова будит наблюдатель, и normalizeStatus
-    // зацикливается сам на себе — вкладка «Потребность» с длинным статусом
-    // висела в «не отвечает» (статус длиннее 150 символов).
-    if (el.textContent !== cut) {
-      el.dataset.tip = s;
-      el.textContent = cut;
-    }
-  } else if (el.dataset.tip) {
-    delete el.dataset.tip;
+  const cur = el.textContent || "";
+  // Если в элементе сейчас наш прошлый вывод — база берётся из сохранённой
+  // (полной) версии; иначе писатель заменил текст, и он и есть новая база.
+  const prevFull = _statusBase == null ? null
+    : (_pagerInfo ? (_statusBase ? _statusBase + " · " + _pagerInfo : _pagerInfo) : _statusBase);
+  const base = (prevFull !== null && _isTruncatedMatch(cur, prevFull)) ? _statusBase : cur;
+  _statusBase = base;
+  const suffix = _pagerInfo
+    ? (_pagerInfo.length > HEADER_MSG_MAX - 3 ? _pagerInfo.slice(0, HEADER_MSG_MAX - 3) + "…" : _pagerInfo)
+    : "";
+  let full;
+  let truncated = false;
+  if (suffix) {
+    const room = HEADER_MSG_MAX - suffix.length - 3;
+    if (base.length > room) { truncated = true; full = base.slice(0, Math.max(0, room)) + "… · " + suffix; }
+    else { full = base ? base + " · " + suffix : suffix; }
+  } else if (base.length > HEADER_MSG_MAX) {
+    truncated = true;
+    full = base.slice(0, HEADER_MSG_MAX) + "…";
+  } else {
+    full = base;
   }
+  // Пишем только при реальном изменении — иначе наблюдатель зациклится сам на себе.
+  if (cur !== full) el.textContent = full;
+  if (truncated && base) el.dataset.tip = base;
+  else if (el.dataset.tip) delete el.dataset.tip;
   return el;
+}
+// Совпадает ли показанный текст с нашим выводом (полным или уже обрезанным).
+function _isTruncatedMatch(cur, prevFull) {
+  if (cur === prevFull) return true;
+  const cut = prevFull.slice(0, HEADER_MSG_MAX);
+  return cur === cut + "…" || cur.startsWith(cut);
 }
 function setStatus(text, opts) {
   const el = statusEl();
   if (!el) return null;
-  el.textContent = String(text == null ? "" : text);
+  _statusBase = String(text == null ? "" : text);
+  el.textContent = _statusBase;
   el.classList.toggle("error", !!(opts && opts.error));
   return normalizeStatus();
 }
 function clearStatus() {
   const el = statusEl();
   if (!el) return;
+  _pagerInfo = "";
+  _statusBase = null;
   el.textContent = "";
   delete el.dataset.tip;
   el.classList.remove("error");
@@ -899,12 +923,67 @@ function paneDates() {
   return { date_from: f.date_from || "", date_to: f.date_to || "" };
 }
 
-let _hdrTipEl = null, _hdrTipTimer = null, _hdrTipNode = null;
+let _hdrTipEl = null, _hdrTipTimer = null, _hdrTipNode = null, _hdrTipHideTimer = null;
+// Подсказки не должны мешать: показываем только если курсор задержался на
+// элементе (дольше этой паузы), а клик по элементу подсказку сразу закрывает.
+const HDR_TIP_SHOW_DELAY_MS = 1000;
+// Подсказка должна давать себя прочитать и скопировать: не прячем её сразу,
+// как только курсор сошёл с заголовка, — даём время доехать до самой подсказки
+// (она ниже заголовка) и выделить текст внутри неё.
+function _hdrTipInside(el) {
+  return !!(_hdrTipEl && el && (el === _hdrTipEl || _hdrTipEl.contains(el)));
+}
+function _hdrTipHasSelection() {
+  try {
+    const sel = window.getSelection && window.getSelection();
+    return !!(sel && !sel.isCollapsed && _hdrTipEl &&
+      (sel.anchorNode === _hdrTipEl || _hdrTipEl.contains(sel.anchorNode)));
+  } catch (e) {
+    return false;
+  }
+}
+function _cancelHdrTipHide() {
+  clearTimeout(_hdrTipHideTimer);
+  _hdrTipHideTimer = null;
+}
+function _scheduleHdrTipHide() {
+  if (_hdrTipHasSelection()) return; // выделяют текст — не мешаем
+  _cancelHdrTipHide();
+  _hdrTipHideTimer = setTimeout(hideHeaderTip, 250);
+}
+// Единый вид подсказок: у кнопок/селекторов текст живёт в атрибуте title.
+// При наведении временно переносим его в data-tip (иначе браузер показал бы
+// ещё и свою «жёлтую» подсказку), а при скрытии возвращаем title обратно.
+function _tipNodeFor(el) {
+  if (!el || !el.closest) return null;
+  const n = el.closest("[data-tip]");
+  if (n) return n;
+  const t = el.closest("[title]");
+  if (!t) return null;
+  const txt = t.getAttribute("title") || "";
+  if (!txt.trim()) return null;
+  t.dataset.tip = txt;
+  t.dataset.tipFromTitle = "1";
+  t.removeAttribute("title");
+  return t;
+}
+function _restoreTipTitle(n) {
+  if (!n || !n.dataset || n.dataset.tipFromTitle !== "1") return;
+  if (!n.hasAttribute("title")) n.setAttribute("title", n.dataset.tip || "");
+  delete n.dataset.tip;
+  delete n.dataset.tipFromTitle;
+}
 function initHeaderTip() {
   document.addEventListener("mouseover", (ev) => {
-    const n = ev.target.closest && ev.target.closest("[data-tip]");
-    if (!n) { hideHeaderTip(); return; }
+    if (_hdrTipInside(ev.target)) { _cancelHdrTipHide(); return; }
+    const n = _tipNodeFor(ev.target);
+    if (!n) {
+      if (_hdrTipNode) _scheduleHdrTipHide();
+      return;
+    }
+    _cancelHdrTipHide();
     if (_hdrTipNode === n) return;
+    _restoreTipTitle(_hdrTipNode);
     _hdrTipNode = n;
     clearTimeout(_hdrTipTimer);
     const txt = n.dataset.tip || "";
@@ -914,6 +993,11 @@ function initHeaderTip() {
         _hdrTipEl = document.createElement("div");
         _hdrTipEl.id = "hdrTip";
         document.body.appendChild(_hdrTipEl);
+        // Курсор внутри подсказки: держим её, пока текст не скопируют.
+        _hdrTipEl.addEventListener("mouseover", _cancelHdrTipHide);
+        _hdrTipEl.addEventListener("mouseout", (e) => {
+          if (!_hdrTipInside(e.relatedTarget)) _scheduleHdrTipHide();
+        });
       }
       _hdrTipEl.textContent = txt;
       _hdrTipEl.style.display = "block";
@@ -922,21 +1006,35 @@ function initHeaderTip() {
       const ih = _hdrTipEl.offsetHeight || 40;
       let x = r.left + r.width / 2 - iw / 2;
       x = Math.max(8, Math.min(x, window.innerWidth - iw - 8));
-      let y = r.bottom + 6;
+      let y = r.bottom + 4;
       if (y + ih > window.innerHeight - 8) y = r.top - ih - 6;
       _hdrTipEl.style.left = x + "px";
       _hdrTipEl.style.top = Math.max(8, y) + "px";
-    }, 260);
+    }, HDR_TIP_SHOW_DELAY_MS);
   });
   document.addEventListener("mouseout", (ev) => {
-    const n = ev.target.closest && ev.target.closest("[data-tip]");
-    if (n && n === _hdrTipNode) hideHeaderTip();
+    const n = _tipNodeFor(ev.target);
+    if (n && n === _hdrTipNode && !_hdrTipInside(ev.relatedTarget)) {
+      _scheduleHdrTipHide();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && _hdrTipEl &&
+        _hdrTipEl.style.display === "block") hideHeaderTip();
+  });
+  // Клик мимо подсказки (в т.ч. по самому элементу-владельцу и после выделения
+  // текста) закрывает её — подсказка не должна висеть поверх интерфейса.
+  document.addEventListener("mousedown", (ev) => {
+    if (!_hdrTipNode || _hdrTipInside(ev.target)) return;
+    hideHeaderTip();
   });
   document.addEventListener("scroll", () => hideHeaderTip(), true);
   window.addEventListener("resize", () => hideHeaderTip());
 }
 function hideHeaderTip() {
   clearTimeout(_hdrTipTimer);
+  _cancelHdrTipHide();
+  _restoreTipTitle(_hdrTipNode);
   _hdrTipNode = null;
   if (_hdrTipEl) _hdrTipEl.style.display = "none";
 }
@@ -962,13 +1060,11 @@ async function loadTabInner(name, f) {
   try {
     if (name === "dashboard") await renderDashboard(qs(f));
     else if (name === "margin-funnel") {
-      await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined, links: cabLinksFor("wb") }));
+      await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined, articles: funnelArtsMenu.param() || undefined, links: cabLinksFor("wb") }));
     } else if (name === "margin-detail") {
-      const cmpEl = $("#marginDetailCompare");
-      await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined, links: cabLinksFor("wb") }));
+      await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined, articles: marginArtsParam() || undefined, ...cmpQuery("margin-detail"), links: cabLinksFor("wb") }));
     } else if (name === "margin-ozon-detail") {
-      const cmpEl = $("#marginOzonDetailCompare");
-      await renderMarginOzonDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginOzonDetailLike") || undefined, compare: cmpEl && cmpEl.checked ? 1 : undefined, links: cabLinksFor("ozon") }));
+      await renderMarginOzonDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginOzonDetailLike") || undefined, articles: ozMarginArtsMenu.param() || undefined, ...cmpQuery("margin-ozon-detail"), links: cabLinksFor("ozon") }));
     } else if (name === "sales") await renderSales(qs(f));
     else if (name === "stocks") await renderStocks(f.marketplace);
     else if (name === "products") await renderProducts();
@@ -1565,6 +1661,10 @@ function dashTableSource(key) {
   if (key === "price-up") return dashData.price.up;
   if (key === "price-down") return dashData.price.down;
   return dashData.prefixes;
+}
+
+function dashGroupByLabel() {
+  return DASH_GROUPINGS[dashGroupBy] || DASH_GROUPINGS.prefix;
 }
 
 function dashMarkOwned(rows) {
@@ -2310,6 +2410,28 @@ const ozDetailSummaryHeaders = [
   { k: "buyout_percent", label: "Выкуп, %", num: true, render: cellFmts.pct , tip: "Выкуп, %: сумма выкупов ÷ «цена × количество» (колонка «Продажи (цена×кол-во)») × 100."},
 ];
 
+const wbDetailCompareHeaders = [
+  { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int, tip: "Продано, шт за предыдущий период той же длительности." },
+  { k: "revenue_pp", label: "Пред. период: Реализовано", num: true, render: cellFmts.money, tip: "«Реализовано» за предыдущий период той же длительности." },
+  { k: "commission_pp", label: "Пред. период: Комиссия", num: true, render: cellFmts.money, tip: "Комиссия WB за предыдущий период." },
+  { k: "for_pay_pp", label: "Пред. период: К перечислению", num: true, render: cellFmts.money, tip: "«К перечислению» за предыдущий период — база для Δ." },
+  { k: "logistics_pp", label: "Пред. период: Доставка", num: true, render: cellFmts.money, tip: "Платы за доставку за предыдущий период." },
+  { k: "storage_pp", label: "Пред. период: Хранение (оц)", num: true, render: cellFmts.money, tip: "Оценка хранения за предыдущий период." },
+  { k: "delta_ru", label: "Δ К перечислению, руб", num: true, render: cellFmts.moneyCls, tip: "Изменение «К перечислению», ₽: текущий период минус предыдущий." },
+  { k: "delta_pct", label: "Δ К перечислению, %", num: true, render: cellFmts.signedPct, tip: "Изменение «К перечислению» в % к предыдущему периоду. Пусто, если в прошлом периоде значения не было." },
+];
+
+const ozDetailCompareHeaders = [
+  { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int, tip: "Продано, шт за предыдущий период той же длительности." },
+  { k: "seller_total_pp", label: "Пред. период: Продажи (цена×кол-во)", num: true, render: cellFmts.money, tip: "«Продажи (цена×кол-во)» за предыдущий период." },
+  { k: "amount_pp", label: "Пред. период: Реализовано", num: true, render: cellFmts.money, tip: "«Реализовано» за предыдущий период." },
+  { k: "commission_pp", label: "Пред. период: Комиссия", num: true, render: cellFmts.moneyCls, tip: "Комиссия Ozon за предыдущий период." },
+  { k: "services_pp", label: "Пред. период: Услуги", num: true, render: cellFmts.moneyCls, tip: "Услуги Ozon за предыдущий период." },
+  { k: "income_pp", label: "Пред. период: К перечислению", num: true, render: cellFmts.money, tip: "«К перечислению» за предыдущий период — база для Δ." },
+  { k: "delta_ru", label: "Δ К перечислению, руб", num: true, render: cellFmts.moneyCls, tip: "Изменение «К перечислению», ₽: текущий период минус предыдущий." },
+  { k: "delta_pct", label: "Δ К перечислению, %", num: true, render: cellFmts.signedPct, tip: "Изменение «К перечислению» в % к предыдущему периоду. Пусто, если в прошлом периоде значения не было." },
+];
+
 const ozPlacementRowHeaders = [
   { k: "date", label: "Дата", num: true, render: cellFmts.text , tip: "Дата начисления из отчёта «Стоимость размещения» (/v1/report/placement/by-products). Одна строка = один SKU на одном складе в этот день."},
   { k: "offer_id", label: "Артикул", render: cellFmts.text , tip: "Ваш артикул (offer_id) из отчёта Ozon, обычно с размером. В сводной таблице такие артикулы сворачиваются в базовый."},
@@ -2416,19 +2538,58 @@ function ownerCol() {
   return { k: "owner", label: "Владелец", render: cellFmts.text, tip: "Фирма · маркетплейс. Видна при сравнении продаж между кабинетами (links)." };
 }
 
+const FUNNEL_FOOT_SUM = [
+  "views", "opens", "adds", "orders", "cancelled", "buyouts", "revenue",
+  "storage_est", "margin", "add_to_wishlist", "cancel_sum", "buyout_sum",
+  "stock_wb", "stock_mp", "stock_balance_sum",
+  "wb_club_order_count", "wb_club_order_sum", "wb_club_buyout_count",
+  "wb_club_buyout_sum", "wb_club_cancel_count", "wb_club_cancel_sum",
+  "past_views", "past_adds", "past_orders", "past_cancelled", "past_buyouts",
+  "past_revenue", "past_buyout_sum", "past_cancel_sum",
+];
+const FUNNEL_FOOT_AVG = {
+  net_cost: 2, avg_price: null, margin_pct: "pct",
+  cart_pct: "pct", order_pct: "pct", avg_orders_per_day: 2,
+  share_order_percent: "pct", conv_to_cart_percent: "pct",
+  conv_cart_to_order_percent: "pct", conv_buyout_percent: "pct",
+  localization_percent: "pct", product_rating: 1, feedback_rating: 2,
+  time_to_ready_min: 0, wb_club_avg_price: null, wb_club_buyout_percent: "pct",
+  wb_club_avg_orders_per_day: 2, past_avg_price: null,
+  dy_views: "pct", dy_adds: "pct", dy_orders: "pct", dy_cancelled: "pct",
+  dy_buyouts: "pct", dy_revenue: "pct", dy_avg_price: "pct",
+};
+
+function marginFunnelFooters(rows) {
+  if (!rows || !rows.length) return null;
+  const t = {};
+  for (const k of FUNNEL_FOOT_SUM) t[k] = _footSum(rows, k);
+  for (const k of Object.keys(FUNNEL_FOOT_AVG)) {
+    const v = _footAvg(rows, k, FUNNEL_FOOT_AVG[k]);
+    if (v) t[k] = v;
+  }
+  return t;
+}
+
 async function renderMarginFunnel(p) {
   const linked = /links=/.test(p || "");
   const data = await api("/margin/funnel" + p);
   let headers = colViewHeaders("margin-funnel", funnelHeaders);
   if (linked) headers = [ownerCol()].concat(headers);
-  pagedTable($("#marginFunnelTable"), headers, data.rows || [], null, null, colViewPinKeys("margin-funnel"));
+  pagedTable($("#marginFunnelTable"), headers, data.rows || [], marginFunnelFooters(data.rows || []), null, colViewPinKeys("margin-funnel"));
   const cp = colViewParam("margin-funnel");
   $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p + (cp ? (p ? "&" : "?") + cp : "");
   const msg = statusEl();
   const warn = document.getElementById("marginFunnelPeriodWarn");
+  if (data.articles) {
+    funnelArtsMenu.setInfo(data.articles);
+    funnelArtsMenu.updateButton();
+    funnelArtsMenu.syncNote();
+  }
+  const artsMsg = (data.articles && data.articles.tokens)
+    ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
   if (data.snapshot_from && data.snapshot_to) {
     msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to +
-      (data.matched ? "" : " (запрошено " + data.date_from + " — " + data.date_to + ")");
+      (data.matched ? "" : " (запрошено " + data.date_from + " — " + data.date_to + ")") + artsMsg;
     if (warn) {
       if (!data.matched && data.rows && data.rows.length) {
         warn.style.display = "block";
@@ -2441,9 +2602,293 @@ async function renderMarginFunnel(p) {
       }
     }
   } else {
-    msg.textContent = "Нет данных. Сначала скачайте WB API ▸ Воронка продаж.";
+    msg.textContent = "Нет данных. Сначала скачайте WB API ▸ Воронка продаж." + artsMsg;
     if (warn) { warn.style.display = "none"; warn.textContent = ""; }
   }
+}
+
+// ---- «Артикулы ▾» — список-фильтр, общий для нескольких таблиц ----------
+// Меню как «PDF ▾» в «Потребности»: список (по одному в строке) + Excel.
+// Список уходит на сервер параметром articles: артикулы/баркоды/nmID WB/
+// артикулы Ozon резолвятся там; с фильтром поиска складывается через «И».
+// makeArtsMenu() создаёт независимый фильтр на таблицу (свой LS-ключ).
+const ARTS_EXCEL_URL = "/api/margin/articles-import";
+const ARTS_PLACEHOLDER = "Артикулы — по одному в строке\n(можно баркоды, nmID WB и артикулы Ozon)";
+const ARTS_TITLE = "Фильтр по списку артикулов (по одному в строке), баркодов, nmID WB и артикулов Ozon — из текста или Excel";
+
+function makeArtsMenu(cfg) {
+  // cfg = { key, btnId, menuId, panelId, viewPanelId, tab, emptyNote }
+  const emptyNote = cfg.emptyNote || "Список пуст — таблица без фильтра по списку.";
+  let info = null;
+
+  function list() {
+    try {
+      const a = JSON.parse(localStorage.getItem(cfg.key) || "[]");
+      return Array.isArray(a) ? a.filter((x) => typeof x === "string" && x.trim()) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function set(values) {
+    const out = [];
+    const seen = new Set();
+    for (const raw of values || []) {
+      const v = String(raw == null ? "" : raw).trim();
+      const key = v.toUpperCase();
+      if (!v || seen.has(key)) continue;
+      seen.add(key);
+      out.push(v);
+      if (out.length >= 3000) break;
+    }
+    try { localStorage.setItem(cfg.key, JSON.stringify(out)); } catch (e) { /* ignore */ }
+    return out;
+  }
+
+  function param() {
+    const a = list();
+    return a.length ? a.join(",") : "";
+  }
+
+  function updateButton() {
+    const btn = $("#" + cfg.btnId);
+    if (!btn) return;
+    const n = list().length;
+    btn.textContent = n ? "Артикулы · " + fmt(n) + " \u25BE" : "Артикулы \u25BE";
+    btn.title = n
+      ? "Фильтр по списку: " + fmt(n) + " знач. — артикулы, баркоды, nmID WB или артикулы Ozon"
+      : ARTS_TITLE;
+    btn.classList.toggle("active", n > 0);
+  }
+
+  function statusText() {
+    const n = list().length;
+    if (!n) return emptyNote;
+    if (!info || info.tokens !== n) return "В списке: " + fmt(n) + " — нажмите «Применить».";
+    const parts = ["Распознано: " + fmt(info.matched) + " из " + fmt(info.tokens)];
+    if (info.unmatched && info.unmatched.length) {
+      parts.push("не найдены: " + info.unmatched.join(", ")
+        + (info.matched + info.unmatched.length < info.tokens ? " …" : ""));
+    }
+    return parts.join(" · ");
+  }
+
+  function note() {
+    return document.querySelector("#" + cfg.panelId + " .margin-arts-note");
+  }
+
+  function syncNote() {
+    const el = note();
+    if (el) el.textContent = statusText();
+  }
+
+  function apply(text) {
+    info = null;
+    set(String(text || "").split(/[\r\n,;]+/));
+    updateButton();
+    build();
+    loadTab(cfg.tab);
+  }
+
+  async function importExcel(file) {
+    const el = note();
+    const say = (t) => { if (el) el.textContent = t; };
+    if (!/\.(xlsx|xlsm)$/i.test(String(file.name || ""))) {
+      say("Нужен файл .xlsx со списком артикулов");
+      return;
+    }
+    say("Читаю Excel: " + file.name + "…");
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const resp = await fetch(ARTS_EXCEL_URL, { method: "POST", body: fd });
+      if (!resp.ok) {
+        let detail = "HTTP " + resp.status;
+        try {
+          const j = await resp.json();
+          if (j && j.detail) detail = j.detail;
+        } catch (e) { /* не JSON — оставляем статус */ }
+        throw new Error(detail);
+      }
+      const data = await resp.json();
+      const panel = $("#" + cfg.panelId);
+      const ta = panel && panel.querySelector("textarea.margin-arts-text");
+      const cur = ta ? ta.value.split(/[\r\n,;]+/) : list();
+      const merged = set(cur.concat(data.tokens || []));
+      if (ta) ta.value = merged.join("\n");
+      info = null;
+      updateButton();
+      say("Из файла добавлено: " + fmt((data.meta && data.meta.count) || (data.tokens || []).length)
+        + " — применяю…");
+      loadTab(cfg.tab);
+    } catch (err) {
+      say("Excel не загрузился: " + err.message);
+    }
+  }
+
+  function build() {
+    const panel = $("#" + cfg.panelId);
+    if (!panel) return;
+    panel.innerHTML = "";
+
+    const ta = document.createElement("textarea");
+    ta.className = "margin-arts-text";
+    ta.rows = 6;
+    ta.placeholder = ARTS_PLACEHOLDER;
+    ta.value = list().join("\n");
+    panel.appendChild(ta);
+
+    const dz = document.createElement("div");
+    dz.className = "pdf-drop";
+    dz.textContent = "Excel со списком: перетащите файл сюда или нажмите";
+    dz.title = "Файл .xlsx: берутся первый столбец и колонки "
+      + "«Артикул / Баркод / Штрихкод / nmID / SKU / Ozon»";
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".xlsx,.xlsm";
+    inp.className = "hidden";
+    dz.addEventListener("click", () => inp.click());
+    dz.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dz.classList.add("over");
+    });
+    dz.addEventListener("dragleave", () => dz.classList.remove("over"));
+    dz.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dz.classList.remove("over");
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) importExcel(f);
+    });
+    inp.addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) importExcel(f);
+      e.target.value = ""; // тот же файл можно выбрать повторно
+    });
+    panel.appendChild(dz);
+    panel.appendChild(inp);
+
+    const noteEl = document.createElement("div");
+    noteEl.className = "margin-arts-note";
+    noteEl.textContent = statusText();
+    panel.appendChild(noteEl);
+
+    const row = document.createElement("div");
+    row.className = "margin-arts-actions";
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "btn btn-primary";
+    go.textContent = "Применить";
+    go.addEventListener("click", () => apply(ta.value));
+    const clr = document.createElement("button");
+    clr.type = "button";
+    clr.className = "btn";
+    clr.textContent = "Очистить";
+    clr.disabled = !list().length;
+    clr.addEventListener("click", () => {
+      ta.value = "";
+      apply("");
+    });
+    row.appendChild(go);
+    row.appendChild(clr);
+    panel.appendChild(row);
+  }
+
+  function init() {
+    const btn = $("#" + cfg.btnId);
+    const menu = $("#" + cfg.menuId);
+    const panel = $("#" + cfg.panelId);
+    if (!btn || !menu || !panel) return;
+    menu.addEventListener("click", (e) => e.stopPropagation());
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wasHidden = panel.classList.contains("hidden");
+      const vp = cfg.viewPanelId ? $("#" + cfg.viewPanelId) : null;
+      if (vp) vp.classList.add("hidden");
+      if (wasHidden) {
+        build();
+        panel.classList.remove("hidden");
+      } else {
+        panel.classList.add("hidden");
+      }
+    });
+    document.addEventListener("click", () => panel.classList.add("hidden"));
+    updateButton();
+  }
+
+  return {
+    list, set, param, updateButton, statusText, note, syncNote,
+    apply, importExcel, build, init,
+    setInfo(v) { info = v; },
+  };
+}
+
+// «Детализация Продаж WB» — исторический ключ marginDetailArticles.
+const marginArtsMenu = makeArtsMenu({
+  key: "marginDetailArticles",
+  btnId: "btnMarginDetailArts", menuId: "marginDetailArtsMenu",
+  panelId: "marginDetailArtsPanel", viewPanelId: "marginDetailViewPanel",
+  tab: "margin-detail",
+});
+
+function marginArtsParam() { return marginArtsMenu.param(); }
+function updateMarginArtsButton() { marginArtsMenu.updateButton(); }
+function syncMarginArtsNote() { marginArtsMenu.syncNote(); }
+function buildMarginArtsMenu() { marginArtsMenu.build(); }
+function initMarginArtsMenu() { marginArtsMenu.init(); }
+
+// «Анализ Продаж OZON» — список «Артикулы ▾».
+const ozMarginArtsMenu = makeArtsMenu({
+  key: "marginOzonDetailArticles",
+  btnId: "btnMarginOzonArts", menuId: "marginOzonArtsMenu",
+  panelId: "marginOzonArtsPanel", viewPanelId: "marginOzonDetailViewPanel",
+  tab: "margin-ozon-detail",
+});
+
+// «Воронка Продаж WB» — список «Артикулы ▾».
+const funnelArtsMenu = makeArtsMenu({
+  key: "marginFunnelArticles",
+  btnId: "btnMarginFunnelArts", menuId: "marginFunnelArtsMenu",
+  panelId: "marginFunnelArtsPanel", viewPanelId: "marginFunnelViewPanel",
+  tab: "margin-funnel",
+});
+
+// «Детализация продаж WB» (API) — список «Артикулы ▾».
+const wbDetailArtsMenu = makeArtsMenu({
+  key: "wbDetailArticles",
+  btnId: "btnWbDetailArts", menuId: "wbDetailArtsMenu",
+  panelId: "wbDetailArtsPanel", viewPanelId: "wbDetailViewPanel",
+  tab: "wb-detail",
+});
+
+// «Детализация реализаций Ozon» (API) — список «Артикулы ▾».
+const ozDetailArtsMenu = makeArtsMenu({
+  key: "ozDetailArticles",
+  btnId: "btnOzDetailArts", menuId: "ozDetailArtsMenu",
+  panelId: "ozDetailArtsPanel", viewPanelId: "ozDetailViewPanel",
+  tab: "oz-detail",
+});
+
+// «Автопилот цен» — список «Артикулы ▾» (клиентский фильтр, WB и Ozon).
+const pricingArtsMenu = makeArtsMenu({
+  key: "pricingArticles",
+  btnId: "btnPricingArts", menuId: "pricingArtsMenu",
+  panelId: "pricingArtsPanel", viewPanelId: "pricingViewPanel",
+  tab: "pricing",
+});
+
+// «Потребность в товаре» — список «Артикулы ▾» (серверный фильтр articles).
+const replenishArtsMenu = makeArtsMenu({
+  key: "replenishArticles",
+  btnId: "btnReplenishArts", menuId: "replenishArtsMenu",
+  panelId: "replenishArtsPanel", viewPanelId: "replenishViewPanel",
+  tab: "replenish",
+});
+
+// Клиентский фильтр автопилота цен: список «Артикулы» → множество UPPER-артикулов.
+function pricingArtsSet() {
+  const out = new Set();
+  for (const v of pricingArtsMenu.list()) out.add(String(v).trim().toUpperCase());
+  return out;
 }
 
 async function renderMarginDetail(p) {
@@ -2472,12 +2917,20 @@ async function renderMarginDetail(p) {
     "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
     (compare ? "для сравнения нужны даты «С» и «По»" : "");
   const tail = cmpMsg ? " · " + cmpMsg : (linked ? " · сравнение связок" : "");
+  // Список «Артикулы»: сервер вернул, сколько значений распознано и какие нет.
+  if (data.articles) {
+    marginArtsMenu.setInfo(data.articles);
+    updateMarginArtsButton();
+    syncMarginArtsNote();
+  }
+  const artsMsg = (data.articles && data.articles.tokens)
+    ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
   if ((data.rows || []).length === 0) {
     setStatus("Нет данных. Финансовый отчёт WB скачивается отдельным ключом (finance): WB API ▸ Детализация продаж. " +
-      "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день." + tail);
+      "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день." + tail + artsMsg);
     return;
   }
-  setStatus("Строк: " + fmt((data.rows || []).length) + tail);
+  setStatus("Строк: " + fmt((data.rows || []).length) + tail + artsMsg);
 }
 
 async function renderMarginOzonDetail(p) {
@@ -2506,11 +2959,18 @@ async function renderMarginOzonDetail(p) {
     "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
     (compare ? "для сравнения нужны даты «С» и «По»" : "");
   const tail = cmpMsg ? " · " + cmpMsg : (linked ? " · сравнение связок" : "");
+  if (data.articles) {
+    ozMarginArtsMenu.setInfo(data.articles);
+    ozMarginArtsMenu.updateButton();
+    ozMarginArtsMenu.syncNote();
+  }
+  const artsMsg = (data.articles && data.articles.tokens)
+    ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
   if ((data.rows || []).length === 0) {
     // Раньше здесь был зашитый текст с периодом 2026-02-21 … 2026-08-30:
     // он не зависел ни от выбранного окна, ни от базы и сбивал с толку.
     setStatus(emptyPeriodReason(data, "детализации продаж Ozon",
-      "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж.") + tail);
+      "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж.") + tail + artsMsg);
     return;
   }
   let m = "Строк: " + fmt((data.rows || []).length) +
@@ -2533,7 +2993,16 @@ async function renderMarginOzonDetail(p) {
         ", без артикула: " + fmtMoney(data.accrued_unmapped || 0) + ")";
     }
   }
-  setStatus(m + tail);
+  setStatus(m + tail + artsMsg);
+}
+
+function salesFooters(rows) {
+  if (!rows || !rows.length) return null;
+  return {
+    quantity: _footSum(rows, "quantity"),
+    revenue: _footSum(rows, "revenue"),
+    income: _footSum(rows, "income"),
+  };
 }
 
 async function renderSales(p) {
@@ -2547,7 +3016,7 @@ async function renderSales(p) {
     { k: "revenue", label: "Выручка", num: true, render: cellFmts.money },
     { k: "income", label: "К перечислению", num: true, render: cellFmts.money },
   ];
-  const draw = (rows) => { pagedTable($("#salesTable"), headers, rows); };
+  const draw = (rows) => { pagedTable($("#salesTable"), headers, rows, salesFooters(rows)); };
   draw(data.rows);
   $("#salesSearch").oninput = (e) => {
     const q = e.target.value;
@@ -2566,7 +3035,8 @@ async function renderStocks(marketplace) {
     { k: "warehouse", label: "Склад", render: cellFmts.text },
     { k: "quantity", label: "Кол-во", num: true, render: cellFmts.int },
   ];
-  pagedTable($("#stocksTable"), headers, aggregateStocks(data.rows || []));
+  const rows = aggregateStocks(data.rows || []);
+  pagedTable($("#stocksTable"), headers, rows, stockFooters(rows), null, null);
 }
 
 // ─────────────────────────────── «Наш склад» ───────────────────────────────
@@ -2612,6 +3082,23 @@ const whDocItemHeaders = [
   { k: "amount", label: "Сумма", num: true, render: cellFmts.money2 , tip: "Количество × цена, ₽. Суммы строк дают итог документа в колонке «Сумма»."},
 ];
 
+function whDocFooters(rows) {
+  if (!rows || !rows.length) return null;
+  return {
+    total: _footSum(rows, "total"),
+    items_count: _footSum(rows, "items_count"),
+  };
+}
+
+function whDocItemFooters(rows) {
+  if (!rows || !rows.length) return null;
+  return {
+    quantity: _footSum(rows, "quantity"),
+    price: _footAvg(rows, "price"),
+    amount: _footSum(rows, "amount"),
+  };
+}
+
 async function renderWhDocs(type, boxId, msgId, detailId) {
   const box = $("#" + boxId);
   const detail = $("#" + detailId);
@@ -2625,7 +3112,7 @@ async function renderWhDocs(type, boxId, msgId, detailId) {
   const msg = $("#" + msgId);
   if (msg) msg.textContent = "Документов: " + fmt(data.count);
   detail.innerHTML = "";
-  pagedTable(box, whDocHeaders, data.rows || []);
+  pagedTable(box, whDocHeaders, data.rows || [], whDocFooters(data.rows || []));
 }
 
 const replenishHeaders = [
@@ -2843,6 +3330,8 @@ function replenishQs(f) {
   if (cab && cab.value) q.cabinet = cab.value;
   const like = tabLike("replenishLike");
   if (like) q.article_like = like;
+  const arts = replenishArtsMenu.param();
+  if (arts) q.articles = arts;
   const wish = replenishWishValue();
   if (wish > 0) {
     let step = ($("#replenishWishStep") || {}).value || "2";
@@ -2935,6 +3424,11 @@ async function renderReplenish() {
   const headers = colViewHeaders("replenish", isSize ? replenishSizeHeaders : replenishHeaders);
   const footers = isSize ? replenishSizeFooters(data.rows || []) : replenishFooters(data.rows || []);
   pagedTable(box, headers, data.rows || [], footers, null, colViewPinKeys("replenish"));
+  if (data.articles) {
+    replenishArtsMenu.setInfo(data.articles);
+    replenishArtsMenu.updateButton();
+    replenishArtsMenu.syncNote();
+  }
 }
 
 // ---- Выгрузка потребности в PDF с фотографиями --------------------------
@@ -3061,7 +3555,9 @@ function buildReplenishPdfMenu() {
   const p = pdfParams();
 
   // Режим «для поставщика»: карточка без аналитики и остатков. Стоит первым —
-  // он меняет содержимое всего документа, а не отдельную колонку.
+  // он меняет содержимое всего документа, а не отдельную колонку. Под ним —
+  // галочка «мобайл»: та же карточка, но по два крупных фото в ряд и крупнее
+  // шрифты, чтобы листать PDF со смартфона.
   const supRow = document.createElement("label");
   supRow.className = "chk";
   const supCb = document.createElement("input");
@@ -3316,6 +3812,151 @@ function initReplenishPdfMenu() {
     }
   });
   document.addEventListener("click", () => panel.classList.add("hidden"));
+}
+
+// «Доп. настройки ▾» — неактуальные/нулевые размеры и окна спроса/запаса.
+// Тот же вид, что у «PDF ▾»: кнопка + панель; галки и числа действуют сразу.
+function initReplenishExtraMenu() {
+  const btn = $("#btnReplenishExtra");
+  const menu = $("#replenishExtraMenu");
+  const panel = $("#replenishExtraPanel");
+  if (!btn || !menu || !panel) return;
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasHidden = panel.classList.contains("hidden");
+    document.querySelectorAll(".view-menu-panel").forEach((p) => p.classList.add("hidden"));
+    if (wasHidden) panel.classList.remove("hidden");
+  });
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+}
+
+// «Сравнить ▾» — выбор периода сравнения для детализаций (WB, Ozon,
+// Прибыльность WB, Прибыльность Ozon). Заменяет одиночную галку «Сравнить с
+// пред. периодом»: режимы «предыдущий период» / «тот же период год назад» /
+// «произвольный период» (две даты). Состояние помним на каждую вкладку.
+const CMP_PERIOD_KEY = "cmpPeriodState";
+const CMP_TABS = {
+  "wb-detail": { btn: "btnWbDetailCompare", panel: "wbDetailComparePanel" },
+  "oz-detail": { btn: "btnOzDetailCompare", panel: "ozDetailComparePanel" },
+  "margin-detail": { btn: "btnMarginDetailCompare", panel: "marginDetailComparePanel" },
+  "margin-ozon-detail": { btn: "btnMarginOzonDetailCompare", panel: "marginOzonDetailComparePanel" },
+};
+const CMP_MODE_LABELS = {
+  prev: "Предыдущий период",
+  last_year: "Тот же период год назад",
+  custom: "Произвольный период",
+};
+function cmpAll() {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(CMP_PERIOD_KEY) || "{}") || {}; } catch (e) { all = {}; }
+  return all;
+}
+// Состояние селектора вкладки: mode "" (не сравнивать) | prev | last_year | custom.
+function cmpState(tab) {
+  const s = cmpAll()[tab] || {};
+  const mode = ["", "prev", "last_year", "custom"].includes(s.mode) ? s.mode : "";
+  return { mode: mode, from: s.from || "", to: s.to || "" };
+}
+function saveCmpState(tab, st) {
+  const all = cmpAll();
+  all[tab] = st;
+  try { localStorage.setItem(CMP_PERIOD_KEY, JSON.stringify(all)); } catch (e) { /* ignore */ }
+}
+// Параметры запроса сравнения для вкладки (пусто, если режим выключен).
+function cmpQuery(tab) {
+  const st = cmpState(tab);
+  if (!st.mode) return {};
+  const q = { compare: 1, compare_mode: st.mode };
+  if (st.mode === "custom") {
+    if (!st.from || !st.to) return {};
+    q.compare_from = st.from;
+    q.compare_to = st.to;
+  }
+  return q;
+}
+function cmpButtonLabel(tab) {
+  const st = cmpState(tab);
+  if (!st.mode) return "Сравнить ▾";
+  if (st.mode === "custom") {
+    return (st.from && st.to) ? "Сравнить: " + st.from + "…" + st.to + " ▾" : "Сравнить ▾";
+  }
+  return "Сравнить: " + CMP_MODE_LABELS[st.mode].toLowerCase() + " ▾";
+}
+function initCompareMenus() {
+  Object.keys(CMP_TABS).forEach((tab) => {
+    const btn = document.getElementById(CMP_TABS[tab].btn);
+    const panel = document.getElementById(CMP_TABS[tab].panel);
+    if (!btn || !panel) return;
+    btn.textContent = cmpButtonLabel(tab);
+    panel.innerHTML = "";
+
+    const modeRow = document.createElement("label");
+    modeRow.className = "chk";
+    const sel = document.createElement("select");
+    sel.title = "Что показывать рядом с текущим периодом: предыдущий аналогичный "
+      + "период, тот же период год назад или произвольный диапазон дат";
+    const modes = [["", "Не сравнивать"], ["prev", "Предыдущий период"],
+                   ["last_year", "Тот же период год назад"], ["custom", "Произвольный период"]];
+    const st = cmpState(tab);
+    for (const [v, label] of modes) {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = label;
+      if (v === st.mode) o.selected = true;
+      sel.appendChild(o);
+    }
+    modeRow.appendChild(document.createTextNode("Период сравнения: "));
+    modeRow.appendChild(sel);
+    panel.appendChild(modeRow);
+
+    let fromEl = null;
+    let toEl = null;
+    const dateRow = document.createElement("label");
+    dateRow.className = "chk";
+    dateRow.appendChild(document.createTextNode("С "));
+    fromEl = document.createElement("input");
+    fromEl.type = "date";
+    fromEl.value = st.from || "";
+    dateRow.appendChild(fromEl);
+    dateRow.appendChild(document.createTextNode(" по "));
+    toEl = document.createElement("input");
+    toEl.type = "date";
+    toEl.value = st.to || "";
+    dateRow.appendChild(toEl);
+    panel.appendChild(dateRow);
+    const dateBox = document.createElement("div");
+    dateBox.className = "hint";
+    dateBox.textContent = "Для произвольного периода укажите обе даты.";
+    panel.appendChild(dateBox);
+
+    const syncVisibility = () => {
+      const custom = sel.value === "custom";
+      dateRow.classList.toggle("off", !custom);
+      fromEl.disabled = !custom;
+      toEl.disabled = !custom;
+    };
+    syncVisibility();
+
+    const commit = () => {
+      saveCmpState(tab, { mode: sel.value, from: fromEl.value, to: toEl.value });
+      btn.textContent = cmpButtonLabel(tab);
+      if (currentTab === tab) loadTab(tab);
+    };
+    sel.addEventListener("change", () => { syncVisibility(); commit(); });
+    fromEl.addEventListener("change", commit);
+    toEl.addEventListener("change", commit);
+
+    const menu = btn.closest(".view-menu");
+    if (menu) menu.addEventListener("click", (e) => e.stopPropagation());
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wasHidden = panel.classList.contains("hidden");
+      document.querySelectorAll(".view-menu-panel").forEach((p) => p.classList.add("hidden"));
+      if (wasHidden) panel.classList.remove("hidden");
+    });
+    document.addEventListener("click", () => panel.classList.add("hidden"));
+  });
 }
 
 function replenishPdfUrl() {
@@ -4673,17 +5314,15 @@ async function renderCards(name) {
     const prevTop = box._sc ? box._sc.top : 0;
     box.innerHTML = "";
     if (!st.total && !st.loading) {
+      setPagerInfo("");
       box.innerHTML = '<div class="empty">Нет загруженных карточек</div>';
       return;
     }
-    const bar = document.createElement("div");
-    bar.className = "pager";
-    const span = document.createElement("span");
-    span.className = "pager-lbl";
     const from = st.rows.length ? 1 : 0;
-    span.textContent = "Показано " + fmt(from) + "…" + fmt(st.rows.length) + " из " + fmt(st.total);
-    bar.appendChild(span);
+    setPagerInfo("Показано " + fmt(from) + "…" + fmt(st.rows.length) + " из " + fmt(st.total));
     if (st.rows.length < st.total) {
+      const bar = document.createElement("div");
+      bar.className = "pager";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "btn pager-all";
@@ -4691,8 +5330,8 @@ async function renderCards(name) {
       btn.disabled = st.loading;
       btn.addEventListener("click", () => st.fetching());
       bar.appendChild(btn);
+      box.appendChild(bar);
     }
-    box.appendChild(bar);
     box.classList.add("paged");
     const headers = colViewHeaders(name, cardsHeaders);
     const tscroll = document.createElement("div");
@@ -4892,6 +5531,15 @@ function aggregateStocks(rows) {
   return Array.from(map.values());
 }
 
+function stockFooters(rows) {
+  if (!rows || !rows.length) return null;
+  return {
+    quantity: _footSum(rows, "quantity"),
+    quantity_full: _footSum(rows, "quantity_full"),
+    in_way: _footSum(rows, "in_way"),
+  };
+}
+
 function stockSummary(rows, date, label) {
   if (!date || !rows.length) return "Нет данных";
   let q = 0, qf = 0, iw = 0;
@@ -4954,7 +5602,7 @@ async function renderWbStocks() {
   const head = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = statusEl();
   if (msg) msg.textContent = stockSummary(rows, data.date, "Остатки");
-  pagedTable(box, head, rows, null, null, colViewPinKeys("wb-stock"));
+  pagedTable(box, head, rows, stockFooters(rows), null, colViewPinKeys("wb-stock"));
 }
 
 function aggregatePrices(rows) {
@@ -5007,6 +5655,15 @@ const wbPricesAggHeaders = [
   { k: "disc_min_p", label: "Скидка, %", num: true, render: (v, r) => rangeLabel(r.disc_min_p, r.disc_max_p, (x) => fmt(x, 1) + "%") , tip: "Минимальная скидка в % по размерам артикула. Если значения разные, ячейка показывает диапазон min–max."},
 ];
 
+function priceFooters(rows) {
+  if (!rows || !rows.length) return null;
+  return {
+    discounted_price: _footAvg(rows, "discounted_price"),
+    price: _footAvg(rows, "price"),
+    discount: _footAvg(rows, "discount", "pct"),
+  };
+}
+
 async function renderWbPrices() {
   const box = document.getElementById("wbPricesTable");
   const likeEl = document.getElementById("wbPricesLike");
@@ -5027,7 +5684,7 @@ async function renderWbPrices() {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, colViewHeaders("wb-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows, null, null, colViewPinKeys("wb-prices"));
+  pagedTable(box, colViewHeaders("wb-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows, agg ? null : priceFooters(rows), null, colViewPinKeys("wb-prices"));
 }
 
 async function renderOzStocks() {
@@ -5052,7 +5709,7 @@ async function renderOzStocks() {
 const head = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = statusEl();
   if (msg) msg.textContent = stockSummary(rows, data.date, "Снимок") + " · «С»/«По» не применяются: раздел снимка на дату";
-  pagedTable(box, head, rows, null, null, colViewPinKeys("oz-stock"));
+  pagedTable(box, head, rows, stockFooters(rows), null, colViewPinKeys("oz-stock"));
 }
 
 async function renderOzPrices() {
@@ -5076,7 +5733,7 @@ const msg = statusEl();
     const note = " · «С»/«По» не применяются: раздел текущих цен";
     msg.textContent = data.count ? "Карточек: " + fmt(data.count) + when + note : "Нет данных" + note;
   }
-  pagedTable(box, colViewHeaders("oz-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows, null, null, colViewPinKeys("oz-prices"));
+  pagedTable(box, colViewHeaders("oz-prices", agg ? wbPricesAggHeaders : wbPricesHeaders), rows, agg ? null : priceFooters(rows), null, colViewPinKeys("oz-prices"));
 }
 
 async function renderOzSales() {
@@ -5105,7 +5762,7 @@ async function renderOzSales() {
   } else {
     setStatus((win ? win + " · " : "") + "Строк: " + fmt(data.count));
   }
-  pagedTable(box, colViewHeaders("oz-realization", salesHeaders), rows, null, null, colViewPinKeys("oz-realization"));
+  pagedTable(box, colViewHeaders("oz-realization", salesHeaders), rows, salesFooters(rows), null, colViewPinKeys("oz-realization"));
 }
 
 const wbStorageHeaders = [
@@ -5117,6 +5774,16 @@ const wbStorageHeaders = [
   { k: "warehouse_price", label: "Сумма хранения", num: true, render: cellFmts.money4 , tip: "Сумма хранения warehousePrice, ₽ за отчётный период (7 дней), усреднённая по складам и сохранённая по nm_id."},
   { k: "nm_id", label: "Артикул WB", render: cellFmts.text , tip: "Код номенклатуры WB (nmId), по которому хранение сохраняется в базе."},
 ];
+
+function storageFooters(rows) {
+  if (!rows || !rows.length) return null;
+  return {
+    barcodes_count: _footSum(rows, "barcodes_count"),
+    volume: _footSum(rows, "volume"),
+    storage_price: _footAvg(rows, "storage_price"),
+    warehouse_price: _footSum(rows, "warehouse_price"),
+  };
+}
 
 async function renderWbStorage() {
   const box = document.getElementById("wbStorageTable");
@@ -5134,7 +5801,7 @@ async function renderWbStorage() {
     const when = data.updated_at ? " · срез: " + data.updated_at : "";
     msg.textContent = data.count ? "Позиций: " + fmt(data.count) + when : "Нет данных в базе";
   }
-  pagedTable(box, colViewHeaders("wb-storage", wbStorageHeaders), data.rows || [], null, null, colViewPinKeys("wb-storage"));
+  pagedTable(box, colViewHeaders("wb-storage", wbStorageHeaders), data.rows || [], storageFooters(data.rows || []), null, colViewPinKeys("wb-storage"));
 }
 
 const salesHeaders = [
@@ -5169,7 +5836,7 @@ async function renderWbSales() {
   }
   const msg = statusEl();
   if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
-  pagedTable(box, colViewHeaders("wb-sales", salesHeaders), rows, null, null, colViewPinKeys("wb-sales"));
+  pagedTable(box, colViewHeaders("wb-sales", salesHeaders), rows, salesFooters(rows), null, colViewPinKeys("wb-sales"));
 }
 
 async function renderWbDetail() {
@@ -5196,15 +5863,30 @@ async function renderWbDetail() {
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
       pagedTable(box, colViewHeaders("wb-detail", wbDetailRowHeaders), rows, null, "#wbDetailTablePager", colViewPinKeys("wb-detail"));
     } else {
+      const cmpOn = !!cmpQuery("wb-detail").compare;
       const data = await api("/wb/detail-summary" + qs({
         date_from: p.date_from || undefined,
         date_to: p.date_to || undefined,
         article_like: q || undefined,
+        articles: wbDetailArtsMenu.param() || undefined,
+        ...cmpQuery("wb-detail"),
       }));
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
-      if (msg) msg.textContent = "По артикулам: " + fmt(data.count || 0);
-      pagedTable(box, colViewHeaders("wb-detail", wbDetailSummaryHeaders), rows, data.totals, "#wbDetailTablePager", colViewPinKeys("wb-detail"));
+      if (msg) {
+        let m = "По артикулам: " + fmt(data.count || 0);
+        if (data.articles) m += " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens);
+        if (data.prev_window) m += " · сравнение с " + data.prev_window.date_from + ".." + data.prev_window.date_to;
+        msg.textContent = m;
+      }
+      wbDetailArtsMenu.setInfo(data.articles);
+      wbDetailArtsMenu.updateButton();
+      wbDetailArtsMenu.syncNote();
+      let headers = colViewHeaders("wb-detail", wbDetailSummaryHeaders);
+      if (cmpOn) {
+        headers = headers.concat(wbDetailCompareHeaders.filter((h) => !headers.some((x) => x.k === h.k)));
+      }
+      pagedTable(box, headers, rows, data.totals, "#wbDetailTablePager", colViewPinKeys("wb-detail"));
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию: ' + escapeHtml(err.message) + "</div>";
@@ -5310,12 +5992,16 @@ function wbDetailExportUrl() {
   const raw = rawEl ? rawEl.checked : false;
   const q = likeEl ? likeEl.value.trim() : "";
   const path = raw ? "/api/export/wb/detail-rows" : "/api/export/wb/detail-summary";
+  const cmpOn = !raw && !!cmpQuery("wb-detail").compare;
   const p = qs({
     date_from: f.date_from || undefined,
     date_to: f.date_to || undefined,
     article_like: q || undefined,
+    articles: raw ? undefined : (wbDetailArtsMenu.param() || undefined),
+    ...(raw ? {} : cmpQuery("wb-detail")),
   });
-  const cp = colViewParam("wb-detail");
+  const cp = colViewParam("wb-detail",
+    cmpOn ? wbDetailCompareHeaders.map((h) => h.k) : null);
   return path + p + (cp ? (p ? "&" : "?") + cp : "");
 }
 
@@ -5407,10 +6093,13 @@ async function renderOzDetail() {
         (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
       pagedTable(box, colViewHeaders("oz-detail", ozDetailRowHeaders), rows, null, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     } else {
+      const cmpOn = !!cmpQuery("oz-detail").compare;
       const data = await api("/ozon/detail-summary" + ozBySizeParam("oz-detail", qs({
         date_from: f.date_from || undefined,
         date_to: f.date_to || undefined,
         article_like: q || undefined,
+        articles: ozDetailArtsMenu.param() || undefined,
+        ...cmpQuery("oz-detail"),
       })));
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
@@ -5420,6 +6109,8 @@ async function renderOzDetail() {
             "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж."));
         } else {
           let m = (ozBySize("oz-detail") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
+          if (data.articles) m += " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens);
+          if (data.prev_window) m += " · сравнение с " + data.prev_window.date_from + ".." + data.prev_window.date_to;
           if (data.cashflow_received != null) {
             m += " · на р/с фактически получено: " + fmtMoney(data.cashflow_received) +
               " (движение средств, " + fmt(data.cashflow_periods || 0) + " пер.)";
@@ -5427,7 +6118,14 @@ async function renderOzDetail() {
           msg.textContent = m;
         }
       }
-      pagedTable(box, colViewHeaders("oz-detail", ozDetailSummaryHeaders), rows, data.totals, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
+      ozDetailArtsMenu.setInfo(data.articles);
+      ozDetailArtsMenu.updateButton();
+      ozDetailArtsMenu.syncNote();
+      let headers = colViewHeaders("oz-detail", ozDetailSummaryHeaders);
+      if (cmpOn) {
+        headers = headers.concat(ozDetailCompareHeaders.filter((h) => !headers.some((x) => x.k === h.k)));
+      }
+      pagedTable(box, headers, rows, data.totals, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     }
   } catch (err) {
     box.innerHTML = '<div class="empty">Не удалось загрузить детализацию Ozon: ' + escapeHtml(err.message) + "</div>";
@@ -5443,13 +6141,17 @@ function ozDetailExportUrl() {
   const q = likeEl ? likeEl.value.trim() : "";
   const path = raw ? "/api/export/ozon/detail-rows" : "/api/export/ozon/detail-summary";
   // режим группировки касается только свода; построчные данные всегда по карточкам
+  const cmpOn = !raw && !!cmpQuery("oz-detail").compare;
   const base = qs({
     date_from: f.date_from || undefined,
     date_to: f.date_to || undefined,
     article_like: q || undefined,
+    articles: raw ? undefined : (ozDetailArtsMenu.param() || undefined),
+    ...(raw ? {} : cmpQuery("oz-detail")),
   });
   const p = raw ? base : ozBySizeParam("oz-detail", base);
-  const cp = colViewParam("oz-detail");
+  const cp = colViewParam("oz-detail",
+    cmpOn ? ozDetailCompareHeaders.map((h) => h.k) : null);
   return path + p + (cp ? (p ? "&" : "?") + cp : "");
 }
 
@@ -6227,6 +6929,7 @@ function openCabinets() {
 }
 
 function closeCabinets() {
+  closeCabEditor();
   $("#cabDrawer").classList.add("hidden");
   $("#cabDrawerOverlay").classList.add("hidden");
 }
@@ -6437,14 +7140,15 @@ async function retryFailedRefresh() {
 // по выбранным связкам. Разрушающее действие (коррекция цен) подтверждается
 // предпросмотром с числом изменений по каждой связке.
 function batchActions() {
-  const ids = ["refresh", "recalc", "apply", "minpromo"];
-  const map = { refresh: "batchRefresh", recalc: "batchRecalc", apply: "batchApply", minpromo: "batchMinpromo" };
+  const ids = ["refresh", "recalc", "apply", "minpromo", "analytics"];
+  const map = { refresh: "batchRefresh", recalc: "batchRecalc", apply: "batchApply",
+                minpromo: "batchMinpromo", analytics: "batchAnalytics" };
   return ids.filter((id) => { const el = $("#" + map[id]); return el && el.checked; });
 }
 
 function initBatchMenu() {
   // Чекбоксы не запоминаем: при каждой загрузке apply/minpromo выключены.
-  for (const id of ["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo"]) {
+  for (const id of ["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics"]) {
     const el = $("#" + id);
     if (el) el.addEventListener("change", updateBatchHint);
   }
@@ -6463,6 +7167,10 @@ function updateBatchHint() {
   const acts = batchActions();
   if (!acts.length) { hint.textContent = "Выберите хотя бы одно действие"; return; }
   if (acts.includes("apply")) { hint.textContent = "Коррекция цен изменит цены в кабинетах"; return; }
+  if (acts.includes("analytics")) {
+    hint.textContent = "Файлы аналитики будут перезаписаны в папки Dropbox (период — из шапки)";
+    return;
+  }
   hint.textContent = "";
 }
 
@@ -6498,7 +7206,11 @@ async function startBatch() {
 
   let res;
   try {
-    res = await apiPost("/batch/run", { actions: acts, scope, include_detail: includeDetail, confirmed });
+    const f = filters();
+    res = await apiPost("/batch/run", {
+      actions: acts, scope, include_detail: includeDetail, confirmed,
+      date_from: f.date_from, date_to: f.date_to,
+    });
   } catch (err) {
     if (hint) hint.textContent = "Ошибка запуска: " + apiErrorMessage(err);
     return;
@@ -8337,6 +9049,8 @@ async function renderPricing(apply) {
     // renderPricingPricesAge(data); // перенесено в строку состояния
     const allRows = data.rows || [];
     let pre = allRows;
+    const arts = pricingArtsSet();
+    if (arts.size) pre = pre.filter((r) => arts.has(String(r.article || "").trim().toUpperCase()));
     if (q) {
       pre = pre.filter((r) =>
         likeMatch(String(r.article || "") + " " + (r.name || ""), q)
@@ -8412,6 +9126,8 @@ async function renderPricingOzon(apply) {
     // renderPricingPricesAge(data); // перенесено в строку состояния
     const allRows = data.rows || [];
     let pre = allRows;
+    const arts = pricingArtsSet();
+    if (arts.size) pre = pre.filter((r) => arts.has(String(r.article || "").trim().toUpperCase()));
     if (q) {
       pre = pre.filter((r) =>
         likeMatch(String(r.article || "") + " " + (r.name || ""), q)
@@ -8961,12 +9677,40 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (cabClose) cabClose.addEventListener("click", closeCabinets);
   const cabOverlay = $("#cabDrawerOverlay");
   if (cabOverlay) cabOverlay.addEventListener("click", closeCabinets);
+  const cabEdClose = $("#cabEditorClose");
+  if (cabEdClose) cabEdClose.addEventListener("click", closeCabEditor);
+  const cabEdSave = $("#cabEditorSave");
+  if (cabEdSave) cabEdSave.addEventListener("click", saveCabEditor);
+  const cabEdFields = $("#cabEditorFields");
+  if (cabEdFields) cabEdFields.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-clear]");
+    if (!b) return;
+    e.preventDefault();
+    const key = b.dataset.clear;
+    const inp = Array.from(cabEdFields.querySelectorAll("input[data-cred]"))
+      .find((x) => x.dataset.cred === key);
+    if (inp) {
+      inp.value = "";
+      inp.dataset.cleared = "1";
+      inp.placeholder = "будет удалено после «Сохранить»";
+    }
+    b.disabled = true;
+  });
   const cabList = $("#cabList");
   if (cabList) cabList.addEventListener("click", (e) => {
     // Клик по плашке/чекбоксу сравнения не должен выбирать кабинет (target
     // бывает LABEL — раньше он проваливался в ветку [data-cab] и переключал
     // связку, закрывая дровер). Само сравнение ловим на change ниже.
     if (e.target.closest(".cab-compare")) return;
+    // Шестерёнка «Ключи и настройки связки» сидит внутри .cab-item[data-cab]:
+    // без отдельной ветки клик проваливался в выбор связки и закрывал дровер.
+    const eb = e.target.closest("[data-cab-edit]");
+    if (eb) {
+      e.stopPropagation();
+      e.preventDefault();
+      openCabEditor(parseInt(eb.dataset.cabEdit, 10));
+      return;
+    }
     const rb = e.target.closest("[data-refresh]");
     if (rb) { e.stopPropagation(); refreshCabinetById(parseInt(rb.dataset.refresh, 10)); return; }
     const item = e.target.closest("[data-cab]");
@@ -9043,10 +9787,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (refreshBadge) refreshBadge.addEventListener("click", showRefreshModal);
   [["marginFunnelLike", "margin-funnel"], ["marginDetailLike", "margin-detail"], ["marginOzonDetailLike", "margin-ozon-detail"]]
     .forEach(([id, tab]) => onTabInput(id, tab));
-  onTabChange("marginDetailCompare", "margin-detail");
-  onTabChange("marginOzonDetailCompare", "margin-ozon-detail");
+  initCompareMenus();
   ["replenishWindow", "replenishTarget", "replenishSort", "replenishShowInactive", "replenishView",
-   "replenishWish", "replenishWishStep"]
+   "replenishHideZeroSizes", "replenishWish", "replenishWishStep"]
     .forEach((id) => onTabChange(id, "replenish"));
   onTabChange("replenishCabinet", "replenish", () => {
     syncReplenishView();
@@ -9125,7 +9868,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       detail.innerHTML = '<div class="empty">Загружаю…</div>';
       try {
         const data = await api("/warehouse/docs/" + btn.dataset.docId + "/items");
-        pagedTable(detail, whDocItemHeaders, data.rows || []);
+        pagedTable(detail, whDocItemHeaders, data.rows || [], whDocItemFooters(data.rows || []));
       } catch (err) {
         detail.innerHTML = '<div class="empty">Ошибка: ' + escapeHtml(err.message) + "</div>";
       }
@@ -9182,6 +9925,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!_VIEW_OVERRIDE[t]) initColViewMenu(t);
   }
   initReplenishPdfMenu();
+  initReplenishExtraMenu();
+  initMarginArtsMenu();
+  ozMarginArtsMenu.init();
+  funnelArtsMenu.init();
+  wbDetailArtsMenu.init();
+  ozDetailArtsMenu.init();
+  pricingArtsMenu.init();
+  replenishArtsMenu.init();
   initReplenishWishMenu();
   const btnExportMarginDetail = $("#exportMarginDetail");
   if (btnExportMarginDetail) {

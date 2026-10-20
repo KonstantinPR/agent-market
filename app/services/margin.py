@@ -18,6 +18,7 @@ def funnel_dataframe(
     date_from=None,
     date_to=None,
     article_like: Optional[str] = None,
+    articles: Optional[set] = None,
 ) -> pd.DataFrame:
     """Прибыльность по Воронке Продаж WB (funnel_metric + себестоимость).
 
@@ -180,6 +181,8 @@ def funnel_dataframe(
 
     if art_check is not None:
         recs = [r for r in recs if art_check.search(r["article"])]
+    if articles is not None:
+        recs = [r for r in recs if r["article"].strip().upper() in articles]
     for r in recs:
         for c in all_cols:
             if c not in r:
@@ -250,6 +253,7 @@ def margin_detail_dataframe(
     date_to=None,
     article_like: Optional[str] = None,
     default_net_cost: float = 0.0,
+    articles: Optional[set] = None,
 ) -> pd.DataFrame:
     """Прибыльность по «Детализации продаж» WB напрямую из wb_detail_rows.
 
@@ -275,6 +279,9 @@ def margin_detail_dataframe(
     article_like фильтрует только вывод: доли безартикульных плат (хранение,
     логистика, услуги) всегда считаются по всему окну периода и не меняются
     от фильтра в строке поиска.
+
+    articles — готовый набор UPPER-артикулов (список из поля/Excel, см.
+    ``article_tokens.resolve_articles``). Действует вместе с article_like (И).
     """
     cols = ["article", "nm_id", "name", "sells", "returns_qty",
             "stock_qty", "stock_total", "stock_in_way",
@@ -419,6 +426,8 @@ def margin_detail_dataframe(
     for art, c in cells.items():
         if art_check is not None and art_check.search(art) is None:
             continue
+        if articles is not None and art.strip().upper() not in articles:
+            continue
         (sells, revenue, commission, logistics, storage, services, income,
          logistics_out, logistics_in, returns_qty) = c
         prod = _find_product(art)
@@ -513,6 +522,7 @@ def ozon_margin_detail_dataframe(
     article_like: Optional[str] = None,
     default_net_cost: float = 0.0,
     by_size: bool = False,
+    articles: Optional[set] = None,
 ) -> pd.DataFrame:
     """Прибыльность по «Детализации продаж» Ozon из ozon_detail_rows.
 
@@ -698,6 +708,12 @@ def ozon_margin_detail_dataframe(
 
     recs = []
     for key, c in cells.items():
+        if articles is not None:
+            cand = {(key or "").strip().upper()}
+            for o in group_offers.get(key) or ():
+                cand.add((o or "").strip().upper())
+            if not (cand & articles):
+                continue
         (sells_gross, returns_qty, revenue_gross, commission, services,
          income, amount, return_total) = c
         # Нетто-продажи и нетто-выручка (возвраты вычитаются) — как у WB,
@@ -810,6 +826,50 @@ def compare_margin_periods(current: pd.DataFrame, prev: pd.DataFrame) -> pd.Data
     # NaN → None для JSON-безопасности. Сначала object-dtype: присвоение None
     # в числовые колонки pandas-ом обратно превращается в NaN.
     for c in ("sells_pp", "margin_pp", "delta_ru", "delta_pct"):
+        col = cur[c]
+        cur[c] = col.astype(object).where(col.notna(), None)
+    return cur
+
+
+def compare_detail_periods(
+    current: pd.DataFrame,
+    prev: pd.DataFrame,
+    metrics,
+    primary: str,
+) -> pd.DataFrame:
+    """Навешивает на сводку детализации показатели пред. периода (аналог маржи).
+
+    metrics — колонки-показатели, для которых добавляется ``<m>_pp``.
+    primary — колонка, по которой считаются ``delta_ru`` (руб) и ``delta_pct``
+    (к значению пред. периода). Артикулы без данных в пред. периоде получают
+    пустые показатели. Ничего не меняется, если prev пуст/None.
+    """
+    cur = current.copy()
+    if prev is None or prev.empty:
+        for m in metrics:
+            cur["%s_pp" % m] = pd.Series([None] * len(cur), index=cur.index, dtype=object)
+        for c in ("delta_ru", "delta_pct"):
+            cur[c] = pd.Series([None] * len(cur), index=cur.index, dtype=object)
+        return cur
+
+    prev_idx = prev.set_index("article")
+    for m in metrics:
+        prev_map = prev_idx[m].to_dict() if m in prev_idx.columns else {}
+        cur["%s_pp" % m] = cur["article"].map(prev_map)
+    pmap = prev_idx[primary].to_dict() if primary in prev_idx.columns else {}
+    cur[primary + "_pp"] = cur["article"].map(pmap)
+    cur["delta_ru"] = cur.apply(
+        lambda r: round(float(r[primary]) - float(r[primary + "_pp"]), 2)
+        if pd.notna(r[primary + "_pp"]) and pd.notna(r[primary]) else None, axis=1)
+    cur["delta_pct"] = cur.apply(
+        lambda r: round((float(r[primary]) - float(r[primary + "_pp"]))
+                        / abs(float(r[primary + "_pp"])) * 100, 2)
+        if pd.notna(r[primary + "_pp"]) and r[primary + "_pp"] != 0
+        and pd.notna(r[primary]) else None, axis=1)
+    pp_cols = ["%s_pp" % m for m in metrics]
+    if (primary + "_pp") not in pp_cols:
+        pp_cols.append(primary + "_pp")
+    for c in pp_cols + ["delta_ru", "delta_pct"]:
         col = cur[c]
         cur[c] = col.astype(object).where(col.notna(), None)
     return cur

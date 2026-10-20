@@ -123,6 +123,10 @@
 - [T-44] (medium) Потребность: свернуть «Пожелание» в меню-селектор (как PDF)
     > где: index.html тулбар + app.js buildReplenishWishMenu/init
 
+- [T-52] (medium) Сравнение в детализациях: селектор периода (пред. / год назад / произвольный)
+    > > где: app/static/index.html (кнопки Сравнить, 4 панели), app/static/app.js (cmpQuery/initCompareMenus), app/api/margin.py:_resolve_compare_window + 4 UI и 6 export-эндпоинтов
+    > > состояние: в работе
+
 ## Заблокированные
 
 - [T-26] (medium) Ozon: нативная группировка товаров вместо своей по артикулу

@@ -334,6 +334,23 @@ assert.ok(cabFn.includes('cabMp === "ozon"') && cabFn.includes('setPricingMp("oz
 assert.ok(cabFn.includes("syncPricingMpUi()"),
   "loadCabinets должен синхронизировать кнопки маркетплейса автопилота цен");
 
+// «Ключи и настройки связки»: шестерёнка внутри .cab-item[data-cab] не должна
+// проваливаться в выбор связки (тот закрывает дровер и настройки не видны).
+const cabClick = jsSrc.slice(jsSrc.indexOf('cabList.addEventListener("click"'),
+                            jsSrc.indexOf("selectCabinet(parseInt(item.dataset.cab"));
+assert.ok(cabClick.includes("data-cab-edit") &&
+          cabClick.indexOf("data-cab-edit") < cabClick.indexOf('closest("[data-cab]")'),
+  "клик по шестерёнке «Ключи и настройки связки» обрабатывается после выбора связки");
+assert.ok(cabClick.includes("openCabEditor("),
+  "шестерёнка не открывает редактор ключей связки");
+assert.ok(jsSrc.includes('$("#cabEditorClose")') &&
+          jsSrc.includes('cabEdClose.addEventListener("click", closeCabEditor)'),
+  "кнопка «×» редактора ключей не подключена");
+assert.ok(jsSrc.includes('cabEdSave.addEventListener("click", saveCabEditor)'),
+  "кнопка «Сохранить» редактора ключей не подключена");
+assert.ok(jsSrc.includes('inp.dataset.cleared = "1"'),
+  "удаление ключа не помечает поле очищенным (сохранится старое значение)");
+
 // T-46: поля воронки продаж в таблице автопилота (WB) + ярлык решения MIN.
 assert.ok(jsSrc.includes('{ k: "orders", label: "Заказы"'),
   "в pricingHeaders нет колонки «Заказы»");
@@ -390,6 +407,34 @@ assert.ok(jsSrc.includes('hide_zero_sizes: $("#replenishHideZeroSizes")'),
   "app.js передаёт hide_zero_sizes в запрос Потребности");
 assert.ok(apiSrc.includes("hide_zero_sizes: int = 0"),
   "в /api/replenish есть параметр hide_zero_sizes");
+
+// «Доп. настройки ▾»: «Неактуальные», «без нулевых размеров» и окна
+// спроса/запаса свёрнуты в одно меню в стиле «PDF ▾».
+assert.ok(htmlSrc.includes('id="btnReplenishExtra"') &&
+  htmlSrc.includes('id="replenishExtraPanel"'),
+  "настройки Потребности свёрнуты в меню «Доп. настройки»");
+const extraStart = htmlSrc.indexOf('id="replenishExtraPanel"');
+const extraHtml = htmlSrc.slice(extraStart, htmlSrc.indexOf('id="replenishPdfMenu"'));
+for (const id of ["replenishShowInactive", "replenishHideZeroSizes",
+  "replenishWindow", "replenishTarget"]) {
+  assert.ok(extraHtml.includes('id="' + id + '"'),
+    id + " должен быть внутри «Доп. настроек»");
+}
+assert.ok(!htmlSrc.slice(0, extraStart).includes('id="replenishShowInactive"'),
+  "галка «Неактуальные» убрана из видимого тулбара");
+assert.ok(jsSrc.includes("function initReplenishExtraMenu") &&
+  jsSrc.includes("initReplenishExtraMenu();"),
+  "меню «Доп. настройки» инициализируется");
+assert.ok(jsSrc.includes('"replenishHideZeroSizes", "replenishWish"'),
+  "галка нулевых размеров перезагружает таблицу при переключении");
+
+// «Потребность в товаре» — первый пункт меню «Наш Склад».
+const oursMenu = htmlSrc.slice(htmlSrc.indexOf('id="oursMenu"'),
+  htmlSrc.indexOf('id="profitDropdown"'));
+const replenishPos = oursMenu.indexOf('data-tab="replenish"');
+const productsPos = oursMenu.indexOf('data-tab="products"');
+assert.ok(replenishPos >= 0 && replenishPos < productsPos,
+  "«Потребность в товаре» первая в меню «Наш Склад»");
 
 // «Пожелание» (T-43): ручной объём отгрузки на WB + шаг размера. Клиентский
 // parseWishStep обязан совпадать с серверным parse_wish_step.
@@ -463,6 +508,84 @@ assert.strictEqual(fsz.wb_net, 4, "итог «Продажи WB нетто» —
 assert.strictEqual(fsz.wb_ret, 1, "итог «Возвраты WB» — сумма");
 assert.strictEqual(fsz.wb_qty, 11, "итог «WB склад» (размеры) — сумма");
 assert.ok(!("margin" in fsz), "в размерном виде нет мёртвого итога «Маржа руб»");
+
+// Итоги «WB API ▸ Остатки»: доступно/всего на складах/в пути — сумма.
+const sf = sandbox.stockFooters([
+  { quantity: 5, quantity_full: 9, in_way: 3 },
+  { quantity: 2, quantity_full: 11, in_way: 3 },
+]);
+assert.strictEqual(sf.quantity, 7, "итог «Кол-во/Доступно» — сумма");
+assert.strictEqual(sf.quantity_full, 20, "итог «Всего на складах» — сумма");
+assert.strictEqual(sf.in_way, 6, "итог «В пути» — сумма");
+assert.strictEqual(sandbox.stockFooters([]), null,
+  "пустой срез остатков — без строки «Итого»");
+assert.ok(jsSrc.includes("stockFooters(rows), null, colViewPinKeys(\"wb-stock\")"),
+  "в «WB API ▸ Остатки» итоги не передаются в pagedTable");
+assert.strictEqual((jsSrc.match(/stockFooters\(rows\)/g) || []).length, 4,
+  "итоги остатков должны быть во всех трёх таблицах (Остатки, WB, Ozon)");
+
+// Итоги продаж: количество/выручка/к перечислению — суммы.
+const slf = sandbox.salesFooters([
+  { quantity: 2, revenue: 1000, income: 500 },
+  { quantity: 3, revenue: 1500, income: 700 },
+]);
+assert.strictEqual(slf.quantity, 5, "итог «Продано, шт» — сумма");
+assert.strictEqual(slf.revenue, 2500, "итог «Выручка» — сумма");
+assert.strictEqual(slf.income, 1200, "итог «К перечислению» — сумма");
+assert.strictEqual((jsSrc.match(/salesFooters\(rows\)/g) || []).length, 4,
+  "итоги продаж должны быть во всех таблицах продаж (общая, WB, Ozon)");
+
+// Итоги цен: цена за единицу и скидка — среднее (≈).
+const pf = sandbox.priceFooters([
+  { price: 1000, discounted_price: 900, discount: 10 },
+  { price: 2000, discounted_price: 1500, discount: 25 },
+]);
+assert.strictEqual(pf.price.avg, 1500, "итог «Цена без скидки» — среднее");
+assert.strictEqual(pf.discounted_price.avg, 1200, "итог «Цена со скидкой» — среднее");
+assert.strictEqual(pf.discount.avg, 17.5, "итог «Скидка, %» — среднее");
+assert.ok(pf.discount.pct, "среднее скидки рендерится как процент");
+assert.strictEqual((jsSrc.match(/priceFooters\(rows\)/g) || []).length, 3,
+  "итоги цен должны быть в WB и Ozon, но не в свёрнутом виде");
+
+// Хранение WB: баркоды/объём/сумма хранения — сумма, цена за баркод — среднее.
+const stf = sandbox.storageFooters([
+  { barcodes_count: 2, volume: 1.5, storage_price: 3, warehouse_price: 6 },
+  { barcodes_count: 1, volume: 2.5, storage_price: 5, warehouse_price: 5 },
+]);
+assert.strictEqual(stf.barcodes_count, 3, "итог «Баркодов» — сумма");
+assert.strictEqual(stf.volume, 4, "итог «Объём, л» — сумма");
+assert.strictEqual(stf.warehouse_price, 11, "итог «Сумма хранения» — сумма");
+assert.strictEqual(stf.storage_price.avg, 4, "итог «Хранение за баркод» — среднее");
+
+// Наш склад: документы и их строки.
+const wdf = sandbox.whDocFooters([
+  { total: 100, items_count: 2 }, { total: 50, items_count: 1 },
+]);
+assert.strictEqual(wdf.total, 150, "итог «Сумма» документа — сумма");
+assert.strictEqual(wdf.items_count, 3, "итог «Строк» — сумма");
+const wif = sandbox.whDocItemFooters([
+  { quantity: 2, price: 100, amount: 200 },
+  { quantity: 3, price: 200, amount: 600 },
+]);
+assert.strictEqual(wif.quantity, 5, "итог «Кол-во» строк — сумма");
+assert.strictEqual(wif.amount, 800, "итог «Сумма» строк — сумма");
+assert.strictEqual(wif.price.avg, 150, "итог «Цена» строк — среднее");
+
+// Воронка прибыльности: количества/деньги — сумма, проценты/цены — среднее.
+const mff = sandbox.marginFunnelFooters([
+  { views: 100, orders: 10, revenue: 5000, margin: 1000, margin_pct: 20,
+    avg_price: 500, net_cost: 100, nm_id: 111 },
+  { views: 200, orders: 20, revenue: 9000, margin: 2000, margin_pct: 22,
+    avg_price: 450, net_cost: 200, nm_id: 222 },
+]);
+assert.strictEqual(mff.views, 300, "итог «Просмотры» — сумма");
+assert.strictEqual(mff.revenue, 14000, "итог «Выручка» — сумма");
+assert.strictEqual(mff.margin, 3000, "итог «Маржа» — сумма");
+assert.strictEqual(mff.margin_pct.avg, 21, "итог «Маржа, %» — среднее");
+assert.strictEqual(mff.avg_price.avg, 475, "итог «Ср. цена» — среднее");
+assert.strictEqual(mff.net_cost.avg, 150, "итог «Себестоимость» — среднее");
+assert.ok(!("nm_id" in mff), "nm_id не суммируется в итогах воронки");
+
 const toSortLabels = ["_REPLENISH_EXPORT", "_REPLENISH_EXPORT_SIZES"].map(
   (n) => (colsJson.dicts[n] || []).find((c) => c.k === "to_sort")?.label);
 assert.deepStrictEqual(toSortLabels, ["Дослать", "Дослать"],
@@ -550,6 +673,67 @@ const uiVer = (jsSrc.match(/const UI_VERSION = "(\d+)"/) || [])[1];
 assert.ok(uiVer, "app.js объявляет UI_VERSION");
 assert.ok(htmlSrc.includes("app.js?v=" + uiVer),
   "index.html подключает app.js v" + uiVer + " (бамп UI_VERSION забыл в index.html?)");
+
+// «Массовые действия → Обновить аналитику на диск»: чекбокс + прокидка дат.
+assert.ok(htmlSrc.includes('id="batchAnalytics"'),
+  "в меню массовых действий есть чекбокс batchAnalytics");
+assert.ok(jsSrc.includes('"analytics"') && jsSrc.includes('"batchAnalytics"'),
+  "batchActions() знает про действие analytics");
+assert.ok(/for \(const id of \["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics"\]\)/.test(jsSrc),
+  "initBatchMenu подписывает batchAnalytics на updateBatchHint");
+assert.ok(jsSrc.includes("date_from: f.date_from, date_to: f.date_to"),
+  "startBatch передаёт период из шапки (date_from/date_to)");
+assert.ok(apiSrc.includes("date_from=payload.get(\"date_from\")"),
+  "api /batch/run прокидывает date_from в сервис");
+assert.ok(jsSrc.includes("Файлы аналитики будут перезаписаны"),
+  "подсказка про перезапись файлов аналитики");
+
+// Список «Артикулы» на «Детализация Продаж WB»: текст + Excel, как меню PDF.
+const { marginArtsList, setMarginArts, marginArtsParam } = sandbox;
+setMarginArts([" tst-1 ", "TST-1", "", "2001"]);
+assert.strictEqual(marginArtsParam(), "tst-1,2001",
+  "список артикулов: trim + dedup без учёта регистра");
+setMarginArts(["a", "b", "c"]);
+assert.strictEqual(marginArtsList().length, 3, "список читается из localStorage");
+setMarginArts([]);
+assert.strictEqual(marginArtsParam(), "", "пустой список не добавляет параметр articles");
+setMarginArts(Array.from({ length: 3100 }, (_, i) => "A" + i));
+assert.strictEqual(marginArtsList().length, 3000, "список ограничен 3000 значениями");
+setMarginArts([]);
+assert.ok(jsSrc.includes("articles: marginArtsParam() || undefined"),
+  "renderMarginDetail получает параметр articles из списка");
+assert.ok(jsSrc.includes('"/api/margin/articles-import"'),
+  "Excel со списком грузится на /api/margin/articles-import");
+assert.ok(apiSrc.includes('@router.post("/margin/articles-import")'),
+  "в app/api/ есть POST /margin/articles-import");
+assert.ok(htmlSrc.includes('id="btnMarginDetailArts"') &&
+  htmlSrc.includes('id="marginDetailArtsPanel"'),
+  "в панели «Детализация Продаж WB» есть меню «Артикулы»");
+assert.ok(jsSrc.includes("initMarginArtsMenu();"), "меню «Артикулы» инициализируется");
+assert.ok(excelCss.includes(".margin-arts-text"), "есть CSS для поля списка артикулов");
+
+// Всплывающие комментарии: текст можно выделить и скопировать — подсказка
+// не исчезает, как только курсор сошёл с заголовка/иконки «?».
+assert.ok(jsSrc.includes("function _hdrTipInside(el)"),
+  "подсказка заголовка понимает, что курсор внутри неё");
+assert.ok(jsSrc.includes("function _hdrTipHasSelection()"),
+  "подсказка не прячется, пока её текст выделен");
+assert.ok(jsSrc.includes("setTimeout(hideHeaderTip, 250)"),
+  "у подсказки заголовка есть задержка скрытия");
+assert.ok(jsSrc.includes('_hdrTipEl.addEventListener("mouseover", _cancelHdrTipHide)'),
+  "курсор внутри подсказки отменяет скрытие");
+assert.ok(jsSrc.includes("function _tipNodeFor(el)") &&
+  jsSrc.includes('t.dataset.tipFromTitle = "1"'),
+  "подсказки кнопок/селекторов берутся из title и показываются как у заголовков");
+assert.ok(jsSrc.includes("function _restoreTipTitle(n)") &&
+  jsSrc.includes("_restoreTipTitle(_hdrTipNode)"),
+  "title возвращается на место после скрытия подсказки");
+assert.ok(/#hdrTip\s*\{[^}]*pointer-events:\s*auto/.test(excelCss),
+  "#hdrTip принимает курсор (pointer-events: auto)");
+assert.ok(/\.tip \.tip-text\s*\{[^}]*user-select:\s*text/.test(excelCss),
+  "текст подсказок «?» можно выделить");
+assert.ok(excelCss.includes("transition: opacity .12s ease, visibility 0s linear .3s"),
+  "подсказки «?» прячутся с задержкой, а не мгновенно");
 
 // Расширенный поиск «*»: клиентский likeMatch должен совпадать с серверным.
 const LIKE_CASES = [

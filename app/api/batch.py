@@ -44,6 +44,8 @@ def api_batch_run(payload: dict = Body(default={})):
         scope=payload.get("scope") or "all",
         include_detail=bool(payload.get("include_detail")),
         confirmed=bool(payload.get("confirmed")),
+        date_from=payload.get("date_from"),
+        date_to=payload.get("date_to"),
     )
     if res.get("needs_confirm"):
         raise HTTPException(

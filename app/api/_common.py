@@ -23,6 +23,7 @@ from app.providers.errors import WbApiError
 from app.providers.ozon import OZON_RU_COLUMNS
 from app.providers.wb import DETAIL_RU_COLUMNS, DETAIL_UPLOAD_RENAME, SALES_RU_COLUMNS, V5_RU_COLUMNS
 from app.services import (
+    article_tokens as article_tokens_service,
     base_price as base_price_service,
     cabinets as cabinet_service,
     common as common_service,
