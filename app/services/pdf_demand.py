@@ -498,8 +498,9 @@ class DemandPdf:
         else:
             fh = 0.0
 
+        total_label = "Итого:" if self.mobile else "Итого дослать на WB:"
         total_p = Paragraph(
-            f"Итого дослать на WB: <b>{fmt_num(total)}</b> шт", self.st["total"]
+            f"{total_label} <b>{fmt_num(total)}</b> шт", self.st["total"]
         )
         tw, th = total_p.wrap(CONTENT_W, 1e6)
 
@@ -685,7 +686,9 @@ class DemandPdf:
     def add_grand_total(self, total: int, cards: int, with_photos: bool, hits: int) -> None:
         self.need(46 * mm)
         self.y -= 8 * mm
-        p = Paragraph("ИТОГО ДОСЛАТЬ НА WB", self.st["grand"])
+        p = Paragraph(
+            "ИТОГО:" if self.mobile else "ИТОГО ДОСЛАТЬ НА WB", self.st["grand"]
+        )
         self._para(p)
         p2 = Paragraph(
             f'<b>{fmt_num(total)}</b> шт &nbsp;&nbsp;·&nbsp;&nbsp; товаров: {fmt_num(cards)}',

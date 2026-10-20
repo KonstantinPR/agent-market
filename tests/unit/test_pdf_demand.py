@@ -363,3 +363,13 @@ def test_mobile_supplier_pdf_is_valid():
     )
     assert data.startswith(b"%PDF")
     assert data.rstrip().endswith(b"%%EOF")
+
+
+def test_mobile_total_label_is_just_total():
+    """В мобильном режиме подпись итога — «Итого», без «дослать на WB»."""
+    row = {"article": "A-1"}
+    sz = sizes(("42", 5))
+    assert "дослать на WB" in _pdf_text(render([(row, sz, [])], cols=[]))
+    mob = _pdf_text(render([(row, sz, [])], cols=[], supplier=True, mobile=True))
+    assert "дослать на WB" not in mob
+    assert "Итого:" in mob
