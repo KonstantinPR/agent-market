@@ -97,8 +97,9 @@ def ticket_branches(cwd=None) -> Optional[set]:
     if r.returncode != 0:
         return None
     out = set()
+    mark = re.compile(r"^[*+-]\s*")   # `+` — ветка, приклеенная к worktree
     for ln in r.stdout.splitlines():
-        tid = branch_ticket_id(ln.strip().lstrip("* ").strip())
+        tid = branch_ticket_id(mark.sub("", ln).strip())
         if tid:
             out.add(tid)
     return out

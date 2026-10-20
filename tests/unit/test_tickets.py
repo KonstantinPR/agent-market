@@ -312,6 +312,20 @@ def test_validate_branch_check_skippable(tfile):
     assert t.validate(tfile, check_branches=False) == []
 
 
+def test_validate_branch_check_sees_worktree_branch(tmp_path, monkeypatch):
+    """Ветка, приклеенная к worktree, помечена `+` — тоже должна находиться."""
+    repo = _git_repo(tmp_path, "repo3")
+    monkeypatch.chdir(repo)
+    p = repo / "TICKETS.md"
+    p.write_text(t.BOOTSTRAP, encoding="utf-8")
+    t.create("A", path=p)
+    t.start("T-1", path=p)
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q",
+                    "-b", "t-1-wt", str(wt)], check=True)
+    assert t.validate(p, check_branches=True) == []
+
+
 def test_report_summarizes_sections_with_commits(tfile):
     t.create("A", "тело", path=tfile)
     t.start("T-1", path=tfile)
