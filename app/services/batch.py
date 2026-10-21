@@ -193,9 +193,12 @@ def preview(db: Session, user, actions, scope: str) -> dict:
 
 # ----------------------------------------------------------------- состояние
 
-def _add_step(job: dict, cab: dict, action: str, label: str) -> dict:
+def _add_step(job: dict, cab: dict, action: str, label: str,
+              substeps_plan: Optional[list] = None) -> dict:
     step = {"action": action, "label": label, "cab_id": cab["id"], "status": "pending",
             "rows": 0, "note": "", "error": ""}
+    if substeps_plan:
+        step["substeps_plan"] = substeps_plan
     cab["steps"].append(step)
     job["steps"].append(step)
     return step
@@ -213,19 +216,25 @@ def _refresh_substeps(step: dict) -> Optional[list]:
     """Под-этапы вложенного обновления (карточки/остатки/цены/…) для шага refresh.
 
     Берутся ЖИВЫЕ из refresh-задания: пока идёт прогон, статус этапа меняется
-    (pending→running→ok/failed). None — если шаг не refresh или задание пропало.
+    (pending→running→ok/failed). Если задания ещё нет (шаг не начался), отдаём
+    заранее известный план — весь список этапов серыми «ожидание». None — если
+    шаг не refresh и плана нет.
     """
     jid = step.get("refresh_job_id")
-    if not jid:
-        return None
-    st = refresh_service.job_state(jid)
-    if not st:
-        return None
-    return [{k: s.get(k) for k in _SUBSTEP_KEYS} for s in st.get("steps", [])]
+    if jid:
+        st = refresh_service.job_state(jid)
+        if st:
+            return [{k: s.get(k) for k in _SUBSTEP_KEYS} for s in st.get("steps", [])]
+    plan = step.get("substeps_plan")
+    if plan:
+        return [dict(s) for s in plan]
+    return None
 
 
 def _step_out(step: dict) -> dict:
     out = dict(step)
+    out.pop("substeps_plan", None)  # служебное — наружу не отдаём
+    out.pop("refresh_job_id", None)
     subs = _refresh_substeps(step)
     if subs is not None:
         out["substeps"] = subs
@@ -407,6 +416,37 @@ def _reset_search_path(db: Session) -> None:
             pass
 
 
+def _refresh_plan(info, include_detail: bool, date_from, date_to) -> list:
+    """План под-этапов обновления для связки — чтобы показать их заранее."""
+    try:
+        return refresh_service.plan_substeps(
+            info.marketplace, include_detail, date_from, date_to)
+    except Exception:  # noqa: BLE001 — план не критичен для прогона
+        return []
+
+
+def _prefill_plan(job: dict, links: list, acts: list, include_detail: bool,
+                  date_from=None, date_to=None) -> None:
+    """Предсоздаёт все связки и все выбранные действия со статусом «ожидание».
+
+    Модалка сразу показывает весь план: что будет происходить по каждой связке,
+    а также под-этапы обновления (карточки/остатки/цены/…) серыми. Живой прогон
+    потом меняет статусы этих же шагов.
+    """
+    for info in links:
+        cab = _cab_dict(info)
+        cab["status"] = "pending"
+        cab["steps"] = []
+        cab["minpromo_path"] = None
+        job["cabs"].append(cab)
+        for aid in acts:
+            label = _ACTION_BY_ID[aid]["label"]
+            plan = (_refresh_plan(info, include_detail, date_from, date_to)
+                    if aid == "refresh" else None)
+            _add_step(job, cab, aid, _flat_label(cab, label),
+                      substeps_plan=plan)
+
+
 def _worker(job_id: int, acts: list, scope: str, include_detail: bool,
             date_from=None, date_to=None) -> None:
     job = _JOBS[job_id]
@@ -414,16 +454,19 @@ def _worker(job_id: int, acts: list, scope: str, include_detail: bool,
     try:
         user = cabinet_service.seed_user(db)
         links = _resolve_cabinets(db, user, scope)
-        for info in links:
-            cab = _cab_dict(info)
-            cab["status"] = "running"
-            cab["steps"] = []
-            cab["minpromo_path"] = None
-            job["cabs"].append(cab)
 
-            def _mk(action_id: str) -> dict:
-                label = _ACTION_BY_ID[action_id]["label"]
-                return _add_step(job, cab, action_id, _flat_label(cab, label))
+        # Предсоздаём весь план: все связки и все выбранные действия со статусом
+        # «ожидание». Модалка сразу показывает, что будет происходить; живой
+        # прогресс потом меняет статусы этих же шагов.
+        _prefill_plan(job, links, acts, include_detail, date_from, date_to)
+
+        for info in links:
+            cab = next(c for c in job["cabs"] if c["id"] == info.id)
+            cab["status"] = "running"
+
+            def _step_of(action_id: str) -> dict:
+                return next(
+                    s for s in cab["steps"] if s["action"] == action_id)
 
             pinned = False
             try:
@@ -432,7 +475,7 @@ def _worker(job_id: int, acts: list, scope: str, include_detail: bool,
                 pinned = True
             except Exception as e:  # noqa: BLE001
                 for aid in acts:
-                    st = _mk(aid)
+                    st = _step_of(aid)
                     st["status"] = "failed"
                     st["error"] = f"не удалось переключить схему: {e}"[:300]
                     job["failed"] += 1
@@ -444,7 +487,7 @@ def _worker(job_id: int, acts: list, scope: str, include_detail: bool,
             try:
                 settings = _settings(db, info)
                 for aid in acts:
-                    step = _mk(aid)
+                    step = _step_of(aid)
                     if aid == "refresh":
                         _run_step(
                             job, step,

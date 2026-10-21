@@ -688,6 +688,19 @@ assert.ok(apiSrc.includes("date_from=payload.get(\"date_from\")"),
 assert.ok(jsSrc.includes("Файлы аналитики будут перезаписаны"),
   "подсказка про перезапись файлов аналитики");
 
+// Массовые действия: полный план виден сразу + прогресс-полоса.
+assert.ok(/CAB_STATUS = \{ pending:/.test(jsSrc),
+  "CAB_STATUS знает статус pending («ожидание»)");
+assert.ok(jsSrc.includes("refreshBar") && jsSrc.includes("refreshBarFill"),
+  "renderRefreshBar обновляет полосу прогресса");
+assert.ok(jsSrc.includes("renderRefreshBar(done, total)"),
+  "renderRefresh считает общий прогресс и рисует полосу");
+assert.ok(/refresh-step\s*' \+ s\.status/.test(jsSrc) ||
+  jsSrc.includes("refresh-step ' + s.status"),
+  "шаги рисуются с классом своего статуса (pending/running/ok/failed)");
+assert.ok(htmlSrc.includes('id="refreshBar"'),
+  "в модалке есть полоса прогресса refreshBar");
+
 // Список «Артикулы» на «Детализация Продаж WB»: текст + Excel, как меню PDF.
 const { marginArtsList, setMarginArts, marginArtsParam } = sandbox;
 setMarginArts([" tst-1 ", "TST-1", "", "2001"]);

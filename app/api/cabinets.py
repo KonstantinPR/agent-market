@@ -7,10 +7,16 @@
      "current": <связка>|null,
      "user": {"username", "display_name"}}
 """
+import os
+import time
+from datetime import datetime
+
 from fastapi import Body, Depends, HTTPException, Request, Response
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api._common import *  # noqa: F401,F403
+from app.config import BASE_DIR, settings
 from app.services import cabinets as cabinet_service
 from app.services import refresh as refresh_service
 
@@ -64,6 +70,65 @@ def api_cabinets(request: Request, db: Session = Depends(get_db)):
         "user": {"username": user.username, "display_name": user.display_name,
                  "main_cabinet_id": getattr(user, "main_cabinet_id", None)},
     }
+
+
+# ── Размер проекта и базы (инфо-строка в шторке «Личные кабинеты») ───────────
+# os.walk по корню проекта небыстрый, поэтому результат кэшируем на 60 с;
+# кнопка ⟳ на фронте шлёт refresh=1 и обходит кэш.
+_SIZE_CACHE = {"at": 0.0, "data": None}
+_SIZE_TTL = 60.0
+# Мусор, который не считаем «размером проекта»: виртуалка, гит, кэши, логи.
+_EXCLUDE_DIRS = {"venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache",
+                 "node_modules", ".mypy_cache", ".idea", ".vscode"}
+_EXCLUDE_EXT = {".log"}
+
+
+def _dir_size_mb(root) -> float:
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_DIRS]
+        for f in filenames:
+            if os.path.splitext(f)[1] in _EXCLUDE_EXT:
+                continue
+            try:
+                total += os.path.getsize(os.path.join(dirpath, f))
+            except OSError:
+                pass
+    return round(total / (1024 * 1024), 1)
+
+
+@router.get("/system/size")
+def api_system_size(refresh: bool = False, db: Session = Depends(get_db)):
+    """Размер файлов проекта (без venv/.git/кэшей/логов) и базы PostgreSQL.
+
+    Возвращает {"project_mb", "db_mb", "db_schemas": [{"schema","mb"}],
+    "project_path", "checked_at"}. Кэш 60 с, refresh=1 — принудительный пересчёт.
+    """
+    now = time.time()
+    if not refresh and _SIZE_CACHE["data"] and now - _SIZE_CACHE["at"] < _SIZE_TTL:
+        return _SIZE_CACHE["data"]
+    schemas = db.execute(text(
+        "SELECT n.nspname AS s, sum(pg_total_relation_size(c.oid)) AS b "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname IN ('public','cab_oo','cab_ip','cab_ip_wb') "
+        "GROUP BY n.nspname ORDER BY b DESC"
+    )).all()
+    db_bytes = db.execute(
+        text("SELECT pg_database_size(:n)"), {"n": settings.pg_database}
+    ).scalar() or 0
+    data = {
+        "project_mb": _dir_size_mb(BASE_DIR),
+        "db_mb": round(db_bytes / (1024 * 1024), 1),
+        "db_schemas": [
+            {"schema": s, "mb": round((b or 0) / (1024 * 1024), 1)}
+            for s, b in schemas
+        ],
+        "project_path": str(BASE_DIR),
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _SIZE_CACHE["at"] = now
+    _SIZE_CACHE["data"] = data
+    return data
 
 
 @router.get("/cabinet/current")

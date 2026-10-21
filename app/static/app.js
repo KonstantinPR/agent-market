@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "142";
+const UI_VERSION = "144";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -829,7 +829,21 @@ function statusEl() {
 // переписывать msg.textContent, а суффикс пересобирается здесь.
 let _pagerInfo = "";
 let _statusBase = null; // сырой (необрезанный) базовый текст статуса без суффикса
+let _statusRendered = null; // последний текст, который мы сами записали в элемент
+function pagerSuffixText() {
+  return _pagerInfo
+    ? (_pagerInfo.length > HEADER_MSG_MAX - 3 ? _pagerInfo.slice(0, HEADER_MSG_MAX - 3) + "…" : _pagerInfo)
+    : "";
+}
 function setPagerInfo(text) {
+  const el = statusEl();
+  // Прежний суффикс пагинации — не часть базового текста: если в элементе ещё
+  // лежит наш прошлый вывод, базу берём из _statusBase, а не из показанной строки.
+  if (el && _statusRendered !== null && (el.textContent || "") === _statusRendered) {
+    // ничего не делаем — база уже корректна
+  } else if (el) {
+    _statusBase = el.textContent || "";
+  }
   _pagerInfo = String(text || "");
   normalizeStatus();
 }
@@ -837,15 +851,14 @@ function normalizeStatus() {
   const el = statusEl();
   if (!el) return null;
   const cur = el.textContent || "";
-  // Если в элементе сейчас наш прошлый вывод — база берётся из сохранённой
-  // (полной) версии; иначе писатель заменил текст, и он и есть новая база.
-  const prevFull = _statusBase == null ? null
-    : (_pagerInfo ? (_statusBase ? _statusBase + " · " + _pagerInfo : _pagerInfo) : _statusBase);
-  const base = (prevFull !== null && _isTruncatedMatch(cur, prevFull)) ? _statusBase : cur;
-  _statusBase = base;
-  const suffix = _pagerInfo
-    ? (_pagerInfo.length > HEADER_MSG_MAX - 3 ? _pagerInfo.slice(0, HEADER_MSG_MAX - 3) + "…" : _pagerInfo)
-    : "";
+  // Писатель мог заменить текст напрямую (msg.textContent = …) — тогда текущее
+  // содержимое и есть новая база. Если же в элементе наш прошлый вывод, базу
+  // (полную, необрезанную) берём из _statusBase.
+  if (_statusRendered === null || cur !== _statusRendered) {
+    _statusBase = cur;
+  }
+  const base = _statusBase == null ? "" : _statusBase;
+  const suffix = pagerSuffixText();
   let full;
   let truncated = false;
   if (suffix) {
@@ -860,15 +873,10 @@ function normalizeStatus() {
   }
   // Пишем только при реальном изменении — иначе наблюдатель зациклится сам на себе.
   if (cur !== full) el.textContent = full;
+  _statusRendered = full;
   if (truncated && base) el.dataset.tip = base;
   else if (el.dataset.tip) delete el.dataset.tip;
   return el;
-}
-// Совпадает ли показанный текст с нашим выводом (полным или уже обрезанным).
-function _isTruncatedMatch(cur, prevFull) {
-  if (cur === prevFull) return true;
-  const cut = prevFull.slice(0, HEADER_MSG_MAX);
-  return cur === cut + "…" || cur.startsWith(cut);
 }
 function setStatus(text, opts) {
   const el = statusEl();
@@ -883,6 +891,7 @@ function clearStatus() {
   if (!el) return;
   _pagerInfo = "";
   _statusBase = null;
+  _statusRendered = null;
   el.textContent = "";
   delete el.dataset.tip;
   el.classList.remove("error");
@@ -6730,7 +6739,7 @@ const STEP_STATUS = {
   pending: "—", running: "выполняется…", ok: "ок", failed: "ошибка",
 };
 // Статус связки в «Массовых действиях» (шапка группы кабинетов).
-const CAB_STATUS = { running: "идёт", done: "готово", failed: "ошибка" };
+const CAB_STATUS = { pending: "ожидание", running: "идёт", done: "готово", failed: "ошибка" };
 
 let refreshPoll = null;
 let refreshJobs = [];   // [{api, jobId, rejected, msg, state, done}]
@@ -6926,12 +6935,52 @@ function openCabinets() {
   $("#cabDrawer").classList.remove("hidden");
   $("#cabDrawerOverlay").classList.remove("hidden");
   loadCabinets();
+  loadSystemSize(false);
 }
 
 function closeCabinets() {
   closeCabEditor();
   $("#cabDrawer").classList.add("hidden");
   $("#cabDrawerOverlay").classList.add("hidden");
+}
+
+// Человекочитаемый размер: МБ, а от гигабайта — ГБ.
+function fmtMb(mb) {
+  const v = Number(mb) || 0;
+  return v >= 1024 ? (v / 1024).toFixed(2) + " ГБ" : v.toFixed(1) + " МБ";
+}
+
+// Строки «Размер проекта / Размер базы» в шторке «Личные кабинеты».
+// refresh=true (кнопка ⟳) обходит серверный кэш.
+let _sysSizeBusy = false;
+async function loadSystemSize(refresh) {
+  const proj = $("#cabSizeProject");
+  const dbb = $("#cabSizeDb");
+  if (!proj || _sysSizeBusy) return;
+  _sysSizeBusy = true;
+  try {
+    const d = await api("/system/size" + (refresh ? "?refresh=1" : ""));
+    proj.textContent = fmtMb(d.project_mb);
+    proj.title = d.project_path || "";
+    dbb.textContent = fmtMb(d.db_mb);
+    const block = $("#cabSizeBlock");
+    if (block) block.title = "Проверено: " + (d.checked_at || "—");
+    const btn = $("#cabSizeRefresh");
+    if (btn) btn.classList.remove("hidden");
+    const box = $("#cabSizeSchemas");
+    const det = $("#cabSizeDetails");
+    if (box && det && d.db_schemas && d.db_schemas.length) {
+      box.innerHTML = d.db_schemas.map((s) =>
+        '<div class="cab-size-sch"><span>' + escapeHtml(s.schema) + "</span><b>"
+        + fmtMb(s.mb) + "</b></div>").join("");
+      det.classList.remove("hidden");
+    }
+  } catch (err) {
+    proj.textContent = "недоступно";
+    dbb.textContent = "недоступно";
+  } finally {
+    _sysSizeBusy = false;
+  }
 }
 
 async function selectCabinet(id) {
@@ -7349,6 +7398,8 @@ function stepHtml(j, s) {
 function renderRefresh() {
   let h = "";
   let summary = "";
+  let total = 0;
+  let done = 0;
   for (const j of refreshJobs) {
     const lbl = jobRefreshLabel(j);
     h += '<div class="refresh-api">' + escapeHtml(lbl) + "</div>";
@@ -7358,7 +7409,7 @@ function renderRefresh() {
       continue;
     }
     if (!j.state) {
-      h += '<div class="refresh-step running"><span class="rs-name">—</span><span class="rs-status">ожидание…</span></div>';
+      h += '<div class="refresh-step pending"><span class="rs-name">—</span><span class="rs-status">ожидание…</span></div>';
       continue;
     }
     if (j.batch && j.state.cabs && j.state.cabs.length) {
@@ -7369,19 +7420,43 @@ function renderRefresh() {
           (cab.marketplace ? '<span class="bc-mp">' + escapeHtml(MP_LABELS[cab.marketplace] || cab.marketplace) + "</span>" : "") +
           (cs ? '<span class="bc-state ' + escapeHtml(cab.status) + '">' + escapeHtml(cs) + "</span>" : "") +
           "</div>";
-        for (const s of cab.steps) h += stepHtml(j, s);
+        for (const s of cab.steps) {
+          h += stepHtml(j, s);
+          total += 1;
+          if (s.status === "ok" || s.status === "failed" || s.status === "skipped") done += 1;
+        }
         if (cab.error) h += '<div class="refresh-step-error">' + escapeHtml(cab.error) + "</div>";
       }
     } else {
-      for (const s of j.state.steps) h += stepHtml(j, s);
+      for (const s of j.state.steps) {
+        h += stepHtml(j, s);
+        total += 1;
+        if (s.status === "ok" || s.status === "failed" || s.status === "skipped") done += 1;
+      }
     }
     const ok = j.state.steps.filter((s) => s.status === "ok").length;
-    summary += (summary ? "; " : "") + lbl + ": " + ok + "/" + j.state.steps.length;
+    const run = j.state.steps.find((s) => s.status === "running");
+    let line = lbl + ": " + ok + "/" + j.state.steps.length;
+    if (run) line += " · " + run.label + "…";
+    summary += (summary ? "; " : "") + line;
   }
   $("#refreshList").innerHTML = h;
   if (summary) $("#refreshSummary").textContent = summary;
+  renderRefreshBar(done, total);
   const hdr = refreshHeaderText();
   if (hdr.text) setStatus(hdr.text, { error: hdr.error });
+}
+
+// Полоса общего прогресса под сводкой: доля завершённых шагов (ок/ошибка/пропуск).
+function renderRefreshBar(done, total) {
+  const bar = $("#refreshBar");
+  if (!bar) return;
+  const fill = $("#refreshBarFill");
+  if (!total) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  const pct = Math.round((done / total) * 100);
+  if (fill) fill.style.width = pct + "%";
+  bar.classList.toggle("full", done >= total);
 }
 
 async function loadRefreshHistory() {
@@ -9772,6 +9847,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   const cabCopyPricing = $("#cabCopyPricing");
   if (cabCopyPricing) cabCopyPricing.addEventListener("click", () => copyPricingSettingsAll());
+  const cabSizeRefresh = $("#cabSizeRefresh");
+  if (cabSizeRefresh) cabSizeRefresh.addEventListener("click", () => loadSystemSize(true));
   $("#refreshStart").addEventListener("click", () => {
     if (refreshAllMode) startRefreshAll();
     else startRefreshJob();

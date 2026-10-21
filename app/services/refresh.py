@@ -1127,6 +1127,20 @@ _KIND_LABELS = {
 }
 
 
+def plan_substeps(api: str, include_detail: bool, date_from=None, date_to=None,
+                  kinds: Optional[list] = None) -> list:
+    """Публичный план под-этапов обновления в виде [{kind, label, status}].
+
+    Используется массовыми действиями, чтобы показать весь список этапов
+    (карточки/остатки/цены/…) ещё до старта вложенного обновления — серыми
+    «ожидание». Статус всегда "pending"; живые статусы приходят из задания.
+    """
+    steps = _plan_steps(api, include_detail, date_from, date_to, kinds=kinds)
+    return [{"kind": k, "label": lbl, "status": "pending",
+             "rows": 0, "db_rows": 0, "window": "", "note": "", "error": ""}
+            for k, lbl, _ in steps]
+
+
 def _plan_steps(api: str, include_detail: bool, date_from=None, date_to=None,
                 cab_id: Optional[int] = None, kinds: Optional[list] = None):
     """Список (kind, label, callable) для массового обновления маркетплейса.

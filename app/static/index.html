@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=58">
+<link rel="stylesheet" href="/static/style.css?v=59">
 </head>
 <body>
 <nav class="navbar">
@@ -1031,6 +1031,21 @@
       <label class="cab-opt" title="Сравнение связок в «Обзоре» и «Прибыльности»: отметьте не менее двух связок одного МП в списке выше, данные сольются с колонкой «Владелец»"><input type="checkbox" id="cabCompare"> Сравнение продаж между кабинетами</label>
       <label class="cab-opt" title="Хранить настройки автопилота цен на каждый кабинет (на сервере) и копировать их между кабинетами"><input type="checkbox" id="cabSyncPricing"> Синхронизация автопилота цен</label>
       <label class="cab-opt" title="Не показывать в списке связки без заданных ключей"><input type="checkbox" id="cabHideNoKeys"> Скрывать кабинеты без ключей</label>
+      <div class="cab-size" id="cabSizeBlock" title="Объём файлов проекта (без venv/.git/кэшей/логов) и базы данных PostgreSQL">
+        <div class="cab-size-row">
+          <span class="cab-size-cap">Размер проекта:</span>
+          <span id="cabSizeProject" class="cab-size-val">…</span>
+          <button type="button" id="cabSizeRefresh" class="cab-size-refresh hidden" aria-label="Обновить размер" title="Пересчитать размер">&#8635;</button>
+        </div>
+        <div class="cab-size-row">
+          <span class="cab-size-cap">Размер базы:</span>
+          <span id="cabSizeDb" class="cab-size-val">…</span>
+        </div>
+        <details class="cab-size-details hidden" id="cabSizeDetails">
+          <summary>База по схемам</summary>
+          <div id="cabSizeSchemas" class="cab-size-schemas"></div>
+        </details>
+      </div>
       <button id="cabCopyPricing" class="btn cab-copy-pricing hidden" title="Скопировать настройки автопилота текущего кабинета во все связки">Скопировать настройки автопилота во все кабинеты</button>
     </div>
   </div>
@@ -1043,6 +1058,7 @@
     </div>
     <div class="modal-body">
       <div class="refresh-summary" id="refreshSummary"></div>
+      <div class="refresh-bar" id="refreshBar"><i id="refreshBarFill"></i></div>
       <div class="refresh-list" id="refreshList"></div>
       <label class="refresh-detail">
         <input type="checkbox" id="refreshDetail"> вкл. Детализацию продаж (WB: finance, лимит 1 запрос / 12 ч; Ozon: детализация реализаций + выкупы)
@@ -1090,7 +1106,7 @@
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=142"></script>
+  <script src="/static/app.js?v=144"></script>
 <script src="/static/autoreload.js?v=1"></script>
 </body>
 </html>

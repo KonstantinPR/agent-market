@@ -84,6 +84,7 @@ GET /api/replenish
 GET /api/sales
 GET /api/stocks
 GET /api/storage-cost
+GET /api/system/size
 GET /api/tickets
 GET /api/warehouse/counterparties
 GET /api/warehouse/docs
