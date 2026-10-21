@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "140";
+const UI_VERSION = "142";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -9535,8 +9535,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.querySelectorAll(".nav-link").forEach((link) => {
     link.addEventListener("click", (e) => {
-      e.preventDefault();
       if (!link.dataset.tab) return;
+      e.preventDefault();
       if (navLinks) navLinks.classList.remove("open");
       openTab(link.dataset.tab, link);
     });
