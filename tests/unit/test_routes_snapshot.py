@@ -72,6 +72,7 @@ GET /api/prices
 GET /api/pricing-ozon/defaults
 GET /api/pricing/defaults
 GET /api/pricing/history
+GET /api/pricing/last-apply
 GET /api/progress
 GET /api/products
 GET /api/products/price-settings

@@ -1276,7 +1276,10 @@ def record_minpromo_export(db: Session, rows: list, s: dict) -> int:
             continue
         db.add(models.PriceChange(
             article=r["article"], nm_id=str(r.get("nm_id") or ""),
+            marketplace="wb",
             calculated_at=now, applied_at=None,
+            before_price=float(r.get("current_vis") or 0),
+            after_price=None,
             before_discount=float(r.get("current_discount") or 0),
             after_discount=None,
             action="MINPRICE", status="exported",
@@ -1295,6 +1298,85 @@ def minpromo_last_export(db: Session) -> Optional[datetime]:
             models.PriceChange.status == "exported",
         )
     ).scalar_one_or_none()
+
+
+#: Записи одного нажатия «Применить» идут с общим applied_at; допуск на
+#: погрешность часов/дробных секунд группировки «пачки».
+_LAST_APPLY_TOL_SECONDS = 5
+
+
+def last_apply_summary(db: Session, marketplace: Optional[str] = None,
+                       top: int = 10) -> Optional[dict]:
+    """Сводка последнего применения автопилота по активной связке.
+
+    «Пачка» — записи журнала с одинаковым applied_at (одно нажатие «Применить»).
+    marketplace (wb/ozon) фильтрует журнал; None — все. Возвращает None, если
+    применений ещё не было.
+    """
+    q = select(models.PriceChange).where(
+        models.PriceChange.applied_at.is_not(None),
+        models.PriceChange.status == "applied",
+    )
+    if marketplace:
+        q = q.where(models.PriceChange.marketplace == marketplace)
+    last_at = db.execute(
+        select(func.max(models.PriceChange.applied_at)).where(
+            models.PriceChange.applied_at.is_not(None),
+            models.PriceChange.status == "applied",
+            *([models.PriceChange.marketplace == marketplace] if marketplace else []),
+        )
+    ).scalar_one_or_none()
+    if last_at is None:
+        return None
+    q = q.where(
+        models.PriceChange.applied_at >= last_at - timedelta(seconds=_LAST_APPLY_TOL_SECONDS)
+    ).order_by(models.PriceChange.applied_at.desc())
+    rows = db.execute(q).scalars().all()
+    if not rows:
+        return None
+
+    n = len(rows)
+    action_counts: dict = {}
+    sum_before_d = sum_after_d = 0.0
+    cnt_d = 0
+    sum_before_p = sum_after_p = 0.0
+    cnt_p = 0
+    for r in rows:
+        action_counts[r.action] = action_counts.get(r.action, 0) + 1
+        if r.before_discount is not None and r.after_discount is not None:
+            sum_before_d += float(r.before_discount)
+            sum_after_d += float(r.after_discount)
+            cnt_d += 1
+        if r.before_price is not None and r.after_price is not None:
+            sum_before_p += float(r.before_price)
+            sum_after_p += float(r.after_price)
+            cnt_p += 1
+
+    def _avg(total, cnt):
+        return round(total / cnt, 2) if cnt else None
+
+    arts = [{"article": r.article, "nm_id": r.nm_id, "action": r.action,
+             "before_price": float(r.before_price or 0),
+             "after_price": (float(r.after_price) if r.after_price is not None else None),
+             "before_discount": float(r.before_discount or 0),
+             "after_discount": (float(r.after_discount) if r.after_discount is not None else None)}
+            for r in rows[:top]]
+    marketplaces = sorted({r.marketplace for r in rows if r.marketplace})
+    return {
+        "applied_at": str(last_at),
+        "marketplace": (marketplaces[0] if len(marketplaces) == 1
+                        else ("mixed" if marketplaces else None)),
+        "marketplaces": marketplaces,
+        "count": n,
+        "actions": action_counts,
+        "avg_before_discount": _avg(sum_before_d, cnt_d),
+        "avg_after_discount": _avg(sum_after_d, cnt_d),
+        "avg_before_price": _avg(sum_before_p, cnt_p),
+        "avg_after_price": _avg(sum_after_p, cnt_p),
+        "articles": arts,
+        "articles_total": n,
+        "top": top,
+    }
 
 
 def _base_row(f: dict) -> dict:
@@ -2570,7 +2652,11 @@ def _record(db: Session, rows: list, applied_at: Optional[datetime], error: Opti
                       and error is None)
         db.add(models.PriceChange(
             article=r["article"], nm_id=str(r.get("nm_id") or ""),
+            marketplace="wb",
             calculated_at=datetime.now(), applied_at=applied_at if is_applied else None,
+            before_price=_wb_vis(r.get("price"), r.get("current_discount")),
+            after_price=(_wb_vis(r.get("price"), r.get("target_discount"))
+                         if is_applied else None),
             before_discount=float(r.get("current_discount") or 0),
             after_discount=float(r.get("target_discount")) if is_applied else None,
             action=r.get("action") or "",
@@ -2578,6 +2664,14 @@ def _record(db: Session, rows: list, applied_at: Optional[datetime], error: Opti
             reason=str(error) if error else (r.get("reason", "") or ""),
         ))
     db.commit()
+
+
+def _wb_vis(price, discount) -> float:
+    """Витринная цена WB = базовая × (1 − скидка%). Базовая цена не меняется."""
+    base = _num(price)
+    if base <= 0:
+        return 0.0
+    return round(base * (1 - _num(discount) / 100.0), 2)
 
 
 def apply_recommendations(

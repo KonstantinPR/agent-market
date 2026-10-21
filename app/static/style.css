@@ -439,6 +439,20 @@ body.busy .btn { pointer-events: none; opacity: .6; }
 }
 .prices-age:empty { display: none; }
 .prices-age[data-stale="1"] { color: #b06a00; }
+/* Последнее применение автопилота (плашка в тулбаре автопилота цен). */
+.last-apply {
+  display: inline-block;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #2e7d32;
+  font-size: 12px;
+  vertical-align: middle;
+  cursor: help;
+}
+.last-apply:empty { display: none; }
+.last-apply.empty { color: #888; }
 .spinner {
   width: 14px;
   height: 14px;

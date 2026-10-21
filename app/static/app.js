@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "144";
+const UI_VERSION = "145";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -8954,6 +8954,57 @@ const HIST_PAGE = 10;
 let _histRows = null;
 let _histShown = HIST_PAGE;
 
+// Последнее применение автопилота по активной связке: плашка в тулбаре +
+// короткий суффикс для зелёной строки состояния («что и когда применили»).
+let _pricingLastApply = null;
+
+function fmtLastApplyShort(la) {
+  if (!la) return "";
+  const t = String(la.applied_at || "").slice(11, 16);
+  return "посл. прим. " + (t ? t + " " : "") + la.count + " арт.";
+}
+
+function fmtLastApplyFull(la) {
+  if (!la) return "";
+  const mp = MP_LABELS[la.marketplace] || (la.marketplace === "mixed" ? "WB+Ozon" : (la.marketplace || ""));
+  let s = "Последнее применение" + (mp ? " " + mp : "") + ": " + (la.applied_at || "");
+  s += " · применено: " + la.count;
+  const a = la.actions || {};
+  const parts = [];
+  if (a.RAISE) parts.push("поднять " + a.RAISE);
+  if (a.LOWER) parts.push("снизить " + a.LOWER);
+  if (a.HALVE) parts.push("÷2 " + a.HALVE);
+  if (a.MIN) parts.push("мин. " + a.MIN);
+  if (parts.length) s += " (" + parts.join(", ") + ")";
+  if (la.avg_before_price != null && la.avg_after_price != null) {
+    s += " · витрина ср. " + fmt(la.avg_before_price) + " → " + fmt(la.avg_after_price) + " ₽";
+  }
+  if (la.avg_before_discount != null && la.avg_after_discount != null) {
+    s += " · скидка ср. " + fmt(la.avg_before_discount) + "% → " + fmt(la.avg_after_discount) + "%";
+  }
+  return s;
+}
+
+async function refreshPricingLastApply(mp) {
+  const el = $("#pricingLastApply");
+  try {
+    _pricingLastApply = await api("/pricing/last-apply?mp=" + (mp || ""));
+  } catch (err) {
+    _pricingLastApply = null;
+  }
+  if (el) {
+    const la = _pricingLastApply && _pricingLastApply.last_apply;
+    if (la) {
+      el.textContent = fmtLastApplyFull(la);
+      el.classList.remove("empty");
+    } else {
+      el.textContent = "Применений ещё не было";
+      el.classList.add("empty");
+    }
+  }
+  return _pricingLastApply;
+}
+
 async function renderPricingHistory() {
   const box = $("#pricingHistory");
   let data;
@@ -9167,8 +9218,11 @@ async function renderPricing(apply) {
       } catch (e) { /* ignore */ }
       // Сводка — в общую зелёную строку состояния шапки (как везде); полный
       // текст длиннее HEADER_MSG_MAX — уходит в тултип через normalizeStatus.
+      const laSuffix = fmtLastApplyShort(_pricingLastApply && _pricingLastApply.last_apply);
+      if (laSuffix) summary += " · " + laSuffix;
       msg.textContent = summary;
     };
+    await refreshPricingLastApply("wb");
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,
@@ -9221,8 +9275,11 @@ async function renderPricingOzon(apply) {
       if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
       if (data.as_of) summary += " · на " + data.as_of;
       if (data.note) summary += " · " + data.note;
+      const laSuffix = fmtLastApplyShort(_pricingLastApply && _pricingLastApply.last_apply);
+      if (laSuffix) summary += " · " + laSuffix;
       msg.textContent = summary;
     };
+    await refreshPricingLastApply("ozon");
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", ozPricingHeaders), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,

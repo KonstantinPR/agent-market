@@ -878,8 +878,12 @@ def _record_ozon(db: Session, rows: list, applied_at: Optional[datetime],
                       and r.get("status") == "applied" and error is None)
         db.add(models.PriceChange(
             article=r["article"], nm_id=str(r.get("nm_id") or ""),
+            marketplace="ozon",
             calculated_at=datetime.now(),
             applied_at=applied_at if is_applied else None,
+            before_price=float(r.get("price") or 0),
+            after_price=(float(r.get("target_price"))
+                         if is_applied and r.get("target_price") is not None else None),
             before_discount=float(r.get("price") or 0),
             after_discount=float(r.get("target_price")) if is_applied else None,
             action=r.get("action") or "",

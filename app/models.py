@@ -252,15 +252,23 @@ class NmArticle(Base):
 
 
 class PriceChange(Base):
-    """Журнал решений автопилота цен WB (applied и skipped с причинами)."""
+    """Журнал решений автопилота цен WB/Ozon (applied и skipped с причинами).
+
+    before_discount/after_discount — скидки, % (WB). before_price/after_price —
+    цена (витрина) до/после применения; у WB базовая цена не меняется, поэтому
+    цена витрины = база×(1−скидка). marketplace различает WB и Ozon.
+    """
 
     __tablename__ = "price_changes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     nm_id: Mapped[str] = mapped_column(String(40), default="")
+    marketplace: Mapped[str] = mapped_column(String(10), default="wb", index=True)
     calculated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), index=True)
     applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    before_price: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    after_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=True)
     before_discount: Mapped[float] = mapped_column(Numeric(6, 2), default=0)
     after_discount: Mapped[float] = mapped_column(Numeric(6, 2), nullable=True)
     action: Mapped[str] = mapped_column(String(20), default="")

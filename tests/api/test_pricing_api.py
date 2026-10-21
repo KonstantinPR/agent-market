@@ -101,6 +101,23 @@ def test_apply_pushes_and_writes_history(db, api_client):
     assert row["before_discount"] == 0.0 and row["after_discount"] > 0
 
 
+def test_last_apply_endpoint_after_apply(db, api_client):
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    api_client.post("/api/pricing/apply", json={})
+    body = api_client.get("/api/pricing/last-apply").json()
+    la = body["last_apply"]
+    assert la is not None
+    assert la["count"] == 1
+    assert la["marketplace"] == "wb"
+    assert la["articles"][0]["article"] == "TST-1"
+
+
+def test_last_apply_endpoint_empty(db, api_client):
+    body = api_client.get("/api/pricing/last-apply").json()
+    assert body["last_apply"] is None
+
+
 def test_apply_error_returns_502_and_logs(db, api_client, stub_wb):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))

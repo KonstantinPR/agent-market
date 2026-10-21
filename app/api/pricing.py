@@ -82,6 +82,18 @@ def pricing_apply_min(payload: dict = Body(default={}), db: Session = Depends(ge
         raise HTTPException(status_code=502, detail=f"WB API не принял минимальные цены: {e}")
 
 
+@router.get("/pricing/last-apply")
+def pricing_last_apply(mp: str = "", top: int = 10, db: Session = Depends(get_db)):
+    """Последнее применение автопилота по активной связке (плашка + зелёная строка).
+
+    mp = wb|ozon фильтрует по маркетплейсу; пусто — все применения связки.
+    """
+    marketplace = mp if mp in ("wb", "ozon") else None
+    res = pricing_service.last_apply_summary(db, marketplace=marketplace,
+                                             top=min(max(top, 1), 50))
+    return {"last_apply": res}
+
+
 @router.get("/pricing/history")
 def pricing_history(limit: int = 50, db: Session = Depends(get_db)):
     """Журнал решений автопилота (последние события)."""

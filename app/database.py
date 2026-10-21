@@ -40,6 +40,10 @@ def ensure_schema(seed: bool = True) -> None:
             ("products", "subject VARCHAR(200) NOT NULL DEFAULT ''"),
             ("products", "volume_l NUMERIC(10, 3) NOT NULL DEFAULT 0"),
             ("products", "composition TEXT NOT NULL DEFAULT ''"),
+            # Журнал автопилота: маркетплейс и цена витрины до/после применения
+            ("price_changes", "marketplace VARCHAR(10) NOT NULL DEFAULT 'wb'"),
+            ("price_changes", "before_price NUMERIC(10, 2) NOT NULL DEFAULT 0"),
+            ("price_changes", "after_price NUMERIC(10, 2)"),
         ]:
             conn.execute(text(
                 f"ALTER TABLE {col} ADD COLUMN IF NOT EXISTS {ddl}"

@@ -2270,3 +2270,79 @@ def test_record_minpromo_export_and_last_export(db):
     got = pricing_service.minpromo_last_export(db)
     assert got is not None
     assert got.date() == now.date()
+
+
+# ------------------------------------------- last_apply_summary (плашка применения)
+
+
+def _rec(db, art, *, mp="wb", applied=True, action="LOWER",
+         before_d=10.0, after_d=20.0, before_p=2000.0, after_p=1600.0,
+         when=None):
+    db.add(models.PriceChange(
+        article=art, nm_id="111", marketplace=mp,
+        calculated_at=datetime.now(), applied_at=(when or datetime.now()) if applied else None,
+        before_discount=before_d, after_discount=after_d if applied else None,
+        before_price=before_p, after_price=after_p if applied else None,
+        action=action, status="applied" if applied else "suggested", reason="тест",
+    ))
+    db.commit()
+
+
+def test_last_apply_summary_none_when_no_applies(db):
+    _rec(db, "A1", applied=False)
+    assert pricing_service.last_apply_summary(db) is None
+
+
+def test_last_apply_summary_groups_last_batch(db):
+    early = datetime.now() - timedelta(hours=3)
+    _rec(db, "OLD", when=early)
+    # пачка из двух записей с общим applied_at (одно «Применить»)
+    at = datetime.now()
+    _rec(db, "A1", when=at, action="LOWER", before_d=10.0, after_d=20.0)
+    _rec(db, "A2", when=at, action="RAISE", before_d=30.0, after_d=25.0,
+         before_p=1000.0, after_p=1100.0)
+    res = pricing_service.last_apply_summary(db)
+    assert res["count"] == 2
+    assert res["actions"] == {"LOWER": 1, "RAISE": 1}
+    assert res["marketplace"] == "wb"
+    assert res["avg_before_discount"] == pytest.approx(20.0)
+    assert res["avg_after_discount"] == pytest.approx(22.5)
+    assert {a["article"] for a in res["articles"]} == {"A1", "A2"}
+    assert res["articles_total"] == 2
+
+
+def test_last_apply_summary_filters_by_marketplace(db):
+    at = datetime.now()
+    _rec(db, "W1", mp="wb", when=at)
+    _rec(db, "O1", mp="ozon", when=at)
+    assert pricing_service.last_apply_summary(db, marketplace="wb")["count"] == 1
+    assert pricing_service.last_apply_summary(db, marketplace="ozon")["count"] == 1
+    mixed = pricing_service.last_apply_summary(db)
+    assert mixed["marketplace"] == "mixed"
+    assert mixed["marketplaces"] == ["ozon", "wb"]
+
+
+def test_last_apply_summary_top_limits_articles(db):
+    at = datetime.now()
+    for i in range(5):
+        _rec(db, "A%d" % i, when=at)
+    res = pricing_service.last_apply_summary(db, top=2)
+    assert res["count"] == 5
+    assert len(res["articles"]) == 2
+    assert res["articles_total"] == 5
+    assert res["top"] == 2
+
+
+def test_record_writes_marketplace_and_vis_prices(db):
+    """apply_rows пишет marketplace=wb и витринные цены до/после."""
+    res = pricing_service.apply_rows(
+        db, [_ui_row(art="V1", price=2000.0, cur_disc=10.0, tgt_disc=25.0)],
+        provider=_FakeProvider(), today=TODAY)
+    assert res["pushed"] == 1
+    rec = db.execute(
+        select(models.PriceChange).where(models.PriceChange.article == "V1")
+    ).scalars().one()
+    assert rec.marketplace == "wb"
+    assert float(rec.before_price) == pytest.approx(1800.0)   # 2000 × (1−10%)
+    assert float(rec.after_price) == pytest.approx(1500.0)    # 2000 × (1−25%)
+

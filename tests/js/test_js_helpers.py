@@ -701,6 +701,20 @@ assert.ok(/refresh-step\s*' \+ s\.status/.test(jsSrc) ||
 assert.ok(htmlSrc.includes('id="refreshBar"'),
   "в модалке есть полоса прогресса refreshBar");
 
+// Автопилот: плашка «последнее применение» + суффикс в зелёной строке.
+assert.ok(htmlSrc.includes('id="pricingLastApply"'),
+  "в тулбаре автопилота есть плашка pricingLastApply");
+assert.ok(jsSrc.includes("refreshPricingLastApply") &&
+  jsSrc.includes('"/pricing/last-apply?mp="'),
+  "app.js грузит /pricing/last-apply по активному маркетплейсу");
+assert.ok(jsSrc.includes("fmtLastApplyShort") && jsSrc.includes("fmtLastApplyFull"),
+  "есть короткий и полный форматы последнего применения");
+assert.ok(/refreshPricingLastApply\("wb"\)/.test(jsSrc) &&
+  /refreshPricingLastApply\("ozon"\)/.test(jsSrc),
+  "renderPricing и renderPricingOzon обновляют плашку своего МП");
+assert.ok(jsSrc.includes('summary += " · " + laSuffix'),
+  "суффикс последнего применения добавляется в зелёную строку");
+
 // Список «Артикулы» на «Детализация Продаж WB»: текст + Excel, как меню PDF.
 const { marginArtsList, setMarginArts, marginArtsParam } = sandbox;
 setMarginArts([" tst-1 ", "TST-1", "", "2001"]);
