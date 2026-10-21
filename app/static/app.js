@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "145";
+const UI_VERSION = "146";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -300,10 +300,20 @@ function qs(params) {
 // держит «Применить» в состоянии «думает» неограниченно долго: счётчик
 // busyDepth уменьшается только в finally(), который не наступит никогда.
 const API_TIMEOUT_MS = 120000;
+// Разделу «Автоматизация» обход папок с фото / сборка архива может занять дольше
+// обычного запроса — там лимит выше.
+const API_TIMEOUT_LONG_MS = 300000;
 
 function apiSignal() {
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     return AbortSignal.timeout(API_TIMEOUT_MS);
+  }
+  return undefined;
+}
+
+function apiSignalLong() {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(API_TIMEOUT_LONG_MS);
   }
   return undefined;
 }
@@ -329,8 +339,14 @@ async function api(path) {
 // «Красивое» сообщение об ошибке API: из FastAPI {"detail": "..."} берём текст,
 // а не сырой JSON. Сетевые/таймаут-ошибки — как есть.
 function apiErrorMessage(err) {
+  if (err && err.name === "AbortError") {
+    return "Сервер не ответил за " + Math.round(API_TIMEOUT_MS / 1000) + " с. Попробуйте ещё раз.";
+  }
   if (err && typeof err.message === "string") {
     const m = err.message.trim();
+    if (m === "signal timed out" || m === "The operation was aborted.") {
+      return "Сервер не ответил за " + Math.round(API_TIMEOUT_MS / 1000) + " с. Попробуйте ещё раз.";
+    }
     try {
       const j = JSON.parse(m);
       if (j && typeof j.detail === "string") return j.detail;
@@ -4770,8 +4786,8 @@ function _autoNamesFormData() {
   return fd;
 }
 
-async function _autoPostJson(url, fd) {
-  const resp = await fetch(url, { method: "POST", body: fd, signal: apiSignal() });
+async function _autoPostJson(url, fd, signal) {
+  const resp = await fetch(url, { method: "POST", body: fd, signal: signal || apiSignal() });
   const j = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(j.detail || String(resp.status));
   return j;
@@ -4843,7 +4859,7 @@ async function onAutoFoldPreview() {
   const box = document.getElementById("autoFoldPreviewBox");
   if (msg) { msg.textContent = "Считаю…"; msg.classList.remove("error"); }
   try {
-    const rep = await _autoPostJson("/api/automation/foldering/preview", _autoFoldFormData());
+    const rep = await _autoPostJson("/api/automation/foldering/preview", _autoFoldFormData(), apiSignalLong());
     _renderFoldReport(rep, box);
     if (msg) msg.textContent = "Найдено артикулов: " + fmt(rep.found) + ", папок нет у " + fmt(rep.missing.length);
   } catch (err) {
@@ -4857,11 +4873,46 @@ async function onAutoFoldBuild() {
   if (msg) { msg.textContent = "Собираю архив…"; msg.classList.remove("error"); }
   try {
     const mp = (document.getElementById("autoFoldMarket") || {}).value || "WB";
-    await _autoPostDownload("/api/automation/foldering/build", _autoFoldFormData(), "foldering_" + mp.toLowerCase() + ".zip");
-    if (msg) msg.textContent = "Архив скачан";
+    const start = await _autoPostJson("/api/automation/foldering/build", _autoFoldFormData(), apiSignalLong());
+    const jobId = start.job_id;
+    if (!jobId) throw new Error(start.rejected || "Не удалось запустить сборку");
+    // Сборка идёт в фоне: опрашиваем статус, затем качаем готовый файл. Так
+    // долгое чтение фото не упирается в таймаут браузера.
+    const st = await _autoPollBuild(jobId, msg);
+    if (st.status === "failed") throw new Error(st.error || "Сборка не удалась");
+    const resp = await fetch("/api/automation/foldering/build/" + jobId + "/download",
+      { signal: apiSignal() });
+    if (!resp.ok) {
+      let m = String(resp.status);
+      try { const j = await resp.json(); m = j.detail || m; } catch (e) { /* not json */ }
+      throw new Error(m);
+    }
+    const blob = await resp.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "foldering_" + mp.toLowerCase() + ".zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    if (msg) msg.textContent = "Архив скачан (" + fmt(st.found) + " арт., " + fmt(st.photos) + " фото)";
   } catch (err) {
-    if (msg) { msg.textContent = "Ошибка: " + err.message; msg.classList.add("error"); }
+    if (msg) { msg.textContent = "Ошибка: " + apiErrorMessage(err); msg.classList.add("error"); }
   }
+}
+
+// Опрос фоновой сборки архива: раз в секунду до 10 минут.
+async function _autoPollBuild(jobId, msg) {
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const resp = await fetch("/api/automation/foldering/build/" + jobId, { signal: apiSignalLong() });
+    const st = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(st.detail || String(resp.status));
+    if (st.status === "done" || st.status === "failed") return st;
+    if (msg) msg.textContent = "Собираю архив… (готово " + fmt(st.found) + " арт.)";
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error("Сборка не завершилась за 10 минут");
 }
 
 async function onAutoNamesBuild() {

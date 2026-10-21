@@ -2,6 +2,7 @@
 """Раздел «Автоматизация»: фолдеринг фото, размножение имён, кроп, штрихкоды."""
 
 from fastapi import Form
+from fastapi.responses import FileResponse
 
 from app.api._common import *  # noqa: F401,F403
 from app.services import barcodes as barcode_service
@@ -186,6 +187,9 @@ async def automation_foldering_build(
     change_order: Optional[int] = Form(None),
     db: Session = Depends(get_db),
 ):
+    """Ставит сборку архива в фон. Возвращает {job_id} — опрашивать
+    GET /automation/foldering/build/{job_id}, готовое качать с .../download.
+    Синхронная сборка упиралась в таймаут браузера на медленном чтении фото."""
     arts, nm_extra = await _load_inputs(articles, file)
     if not arts:
         raise HTTPException(status_code=400, detail="Не переданы артикулы")
@@ -194,14 +198,32 @@ async def automation_foldering_build(
     nm_map = {} if mp == "OZON" else _db_nm_map(db)
     nm_map.update(nm_extra)
 
-    entries, report = foldering_service.plan(arts, nm_map, mp, is_replace, order)
-    if not entries:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Нет фото для сборки: не найдено {len(report['missing'])}, без nmID {len(report['no_nm'])}",
-        )
-    buf = foldering_service.build_zip(entries, leading_nulls=leading_nulls, change_order=change_order)
-    return _zip_response(buf, f"foldering_{mp.lower()}.zip")
+    return foldering_service.start_build_job(
+        arts, nm_map, mp, is_replace, order,
+        leading_nulls=leading_nulls, change_order=change_order)
+
+
+@router.get("/automation/foldering/build/{job_id}")
+def automation_foldering_build_state(job_id: int):
+    st = foldering_service.job_state(job_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    return st
+
+
+@router.get("/automation/foldering/build/{job_id}/download")
+def automation_foldering_build_download(job_id: int):
+    st = foldering_service.job_state(job_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    if st.get("status") != "done":
+        raise HTTPException(status_code=409,
+                            detail=st.get("error") or "Архив ещё не готов")
+    path = foldering_service.zip_path(job_id)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=410, detail="Файл архива недоступен")
+    return FileResponse(path, media_type="application/zip",
+                        filename=st["filename"])
 
 
 # ------------------------------------------------------------------ размножение имён

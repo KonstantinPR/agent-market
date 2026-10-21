@@ -17,9 +17,23 @@ STATIC_DIR = BASE_DIR / "app" / "static"
 
 @asynccontextmanager
 async def lifespan(_app):
+    import threading
+
     from app.database import ensure_schema
 
     ensure_schema(seed=False)
+
+    # Прогрев индекса фото в фоне: первый запрос раздела «Фото для маркетплейса»
+    # иначе строит индекс на месте (обход C:\YandexDisk\ФОТОГРАФИИ ~3 с, а при
+    # залипании Яндекс.Диска — сильно дольше). Нить demon, старт не блокирует.
+    def _warm_photos():
+        try:
+            from app.services import photos as photos_service
+            photos_service.get_index()._get()  # noqa: SLF001
+        except Exception:  # noqa: BLE001 — прогрев не должен ронять старт
+            pass
+
+    threading.Thread(target=_warm_photos, daemon=True).start()
     yield
 
 

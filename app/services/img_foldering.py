@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import io
 import re
+import threading
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from app.config import BASE_DIR
 from app.services import photos as photos_service
 
 #: Порог, после которого архив разбивается на части (МБ).
@@ -269,3 +272,103 @@ def _readme(max_part_mb: int, total: int, parts: int, lines: list[str]) -> str:
         f"Каждая часть < {max_part_mb} МБ, папки не дробятся\n\n"
         "Распределение папок:\n" + "\n".join(lines) + "\n"
     )
+
+
+# ------------------------------------------------------------------ фоновые задания
+# Сборка архива идёт в фоновой нити (как refresh/batch): чтение фото с диска
+# может затянуться, а синхронный запрос упёрся бы в таймаут браузера. UI получает
+# job_id, опрашивает статус и затем скачивает готовый файл по ссылке.
+
+_BUILD_DIR = BASE_DIR / "data" / "foldering"
+_LOCK = threading.Lock()
+_SEQ = 0
+_JOBS: dict = {}
+
+
+def _next_id() -> int:
+    global _SEQ
+    _SEQ += 1
+    return _SEQ
+
+
+def _now() -> str:
+    return datetime.now().isoformat(sep=" ", timespec="seconds")
+
+
+def start_build_job(
+    articles: list,
+    nm_map: Optional[dict] = None,
+    marketplace: str = "WB",
+    is_replace: str = "ONLY_NEW",
+    order: str = "ASCENDING",
+    leading_nulls: bool = False,
+    change_order=None,
+) -> dict:
+    """Ставит сборку архива в фоновую нить. Возвращает {job_id} или {rejected}."""
+    mp = (marketplace or "WB").strip().upper()
+    with _LOCK:
+        job_id = _next_id()
+        job = {
+            "id": job_id, "status": "running", "marketplace": mp,
+            "started_at": _now(), "finished_at": None,
+            "found": 0, "photos": 0, "missing": [], "no_nm": [],
+            "zip_path": None, "filename": f"foldering_{mp.lower()}.zip",
+            "error": "",
+        }
+        _JOBS[job_id] = job
+    threading.Thread(
+        target=_build_worker,
+        args=(job_id, list(articles or []), dict(nm_map or {}), mp,
+              is_replace, order, bool(leading_nulls), change_order),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id}
+
+
+def _build_worker(job_id, articles, nm_map, mp, is_replace, order,
+                  leading_nulls, change_order) -> None:
+    job = _JOBS[job_id]
+    try:
+        entries, report = plan(articles, nm_map, mp, is_replace, order)
+        job["found"] = report["found"]
+        job["photos"] = report["photos"]
+        job["missing"] = report["missing"]
+        job["no_nm"] = report["no_nm"]
+        if not entries:
+            job["status"] = "failed"
+            job["error"] = (f"Нет фото для сборки: не найдено {len(report['missing'])}, "
+                            f"без nmID {len(report['no_nm'])}")
+            return
+        buf = build_zip(entries, leading_nulls=leading_nulls, change_order=change_order)
+        out_dir = _BUILD_DIR / f"job{job_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / job["filename"]
+        path.write_bytes(buf.getvalue())
+        job["zip_path"] = str(path)
+        job["status"] = "done"
+    except Exception as e:  # noqa: BLE001 — падение воркера не должно висеть в UI
+        job["status"] = "failed"
+        job["error"] = str(e)[:300]
+    finally:
+        job["finished_at"] = _now()
+
+
+def job_state(job_id: int) -> Optional[dict]:
+    job = _JOBS.get(job_id)
+    if job is None:
+        return None
+    return {
+        "id": job["id"], "status": job["status"], "marketplace": job["marketplace"],
+        "started_at": job["started_at"], "finished_at": job["finished_at"],
+        "found": job["found"], "photos": job["photos"],
+        "missing": job["missing"], "no_nm": job["no_nm"],
+        "filename": job["filename"], "error": job["error"],
+        "ready": bool(job["zip_path"]),
+    }
+
+
+def zip_path(job_id: int) -> Optional[Path]:
+    job = _JOBS.get(job_id)
+    if job and job.get("zip_path"):
+        return Path(job["zip_path"])
+    return None

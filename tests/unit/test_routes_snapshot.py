@@ -23,6 +23,8 @@ SNAPSHOT = """
 DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
+GET /api/automation/foldering/build/{job_id}
+GET /api/automation/foldering/build/{job_id}/download
 GET /api/automation/template
 GET /api/batch
 GET /api/batch/actions
