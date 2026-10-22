@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "158";
+const UI_VERSION = "159";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3268,6 +3268,8 @@ const marginArtsMenu = makeArtsMenu({
   tab: "margin-detail",
 });
 
+function marginArtsList() { return marginArtsMenu.list(); }
+function setMarginArts(values) { return marginArtsMenu.set(values); }
 function marginArtsParam() { return marginArtsMenu.param(); }
 function updateMarginArtsButton() { marginArtsMenu.updateButton(); }
 function syncMarginArtsNote() { marginArtsMenu.syncNote(); }
@@ -4851,12 +4853,25 @@ async function uploadFile(url, input, msgSel, tab) {
   }
 }
 
-function initDates() {
+// Диапазон «последние N дней»: с сегодня − (N − 1) по сегодня. Общий для
+// пресетов шапки/Обзора и периода массовых действий — чтобы «месяц» везде
+// означал одно и то же окно.
+function presetRange(days) {
+  const n = Math.max(1, parseInt(days, 10) || 0);
   const to = new Date();
   const from = new Date();
-  from.setDate(to.getDate() - 30);
-  $("#fFrom").value = from.toISOString().slice(0, 10);
-  $("#fTo").value = to.toISOString().slice(0, 10);
+  from.setDate(to.getDate() - (n - 1));
+  return { date_from: from.toISOString().slice(0, 10),
+           date_to: to.toISOString().slice(0, 10) };
+}
+
+// Шапка по умолчанию — последние 30 дней; пресет показывает это явно.
+function initDates() {
+  const r = presetRange(30);
+  $("#fFrom").value = r.date_from;
+  $("#fTo").value = r.date_to;
+  const preset = $("#fPreset");
+  if (preset) preset.value = "30";
 }
 
 // Быстрый выбор периода для пары дат «С … по …»: предустановки «последние
@@ -4874,11 +4889,9 @@ function initDatePreset(presetId, fromId, toId, onApply) {
   preset.addEventListener("change", () => {
     const days = parseInt(preset.value, 10);
     if (!days) return;
-    const to = new Date();
-    const from = new Date();
-    from.setDate(to.getDate() - (days - 1));
-    fromEl.value = from.toISOString().slice(0, 10);
-    toEl.value = to.toISOString().slice(0, 10);
+    const r = presetRange(days);
+    fromEl.value = r.date_from;
+    toEl.value = r.date_to;
     try { localStorage.setItem("daterange-preset:" + presetId, preset.value); } catch (e) { /* ignore */ }
     if (onApply) onApply();
   });
@@ -7685,6 +7698,26 @@ async function retryFailedRefresh() {
   }
 }
 
+// Период массовых действий: по умолчанию — даты из шапки (там «Последний
+// месяц»), либо пресет, выбранный в самом меню. Меню показывает точные даты,
+// чтобы перед запуском было видно, за какой период пойдут действия.
+function batchPeriodRange() {
+  const sel = $("#batchPeriod");
+  const days = sel ? parseInt(sel.value, 10) || 0 : 0;
+  if (days) {
+    const r = presetRange(days);
+    return { date_from: r.date_from, date_to: r.date_to, from_preset: true };
+  }
+  const r = paneDates();
+  return { date_from: r.date_from, date_to: r.date_to, from_preset: false };
+}
+
+function batchPeriodLabel(r) {
+  if (!r.date_from || !r.date_to) return "не задан";
+  const d = (s) => String(s).split("-").reverse().join(".");
+  return d(r.date_from) + " — " + d(r.date_to);
+}
+
 // ------------------------------------------------ массовые действия по связкам
 // Кнопка «Массовые действия» у связки в шапке: один прогон — обновление,
 // пересчёт автопилота, отправка коррекции цен и шаблон мин. цены автоакций
@@ -7706,6 +7739,10 @@ function initBatchMenu() {
   }
   const scope = $("#batchScope");
   if (scope) scope.addEventListener("change", updateBatchHint);
+  const period = $("#batchPeriod");
+  if (period) period.addEventListener("change", updateBatchHint);
+  const menuBtn = $("#batchMenuBtn");
+  if (menuBtn) menuBtn.addEventListener("click", updateBatchHint);
   const go = $("#batchGo");
   if (go) go.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); startBatch(); });
   const menu = $("#batchMenu");
@@ -7716,19 +7753,28 @@ function initBatchMenu() {
 function updateBatchHint() {
   const hint = $("#batchHint");
   if (!hint) return;
+  const per = batchPeriodRange();
+  const period = "Период: " + batchPeriodLabel(per)
+    + (per.from_preset ? " (выбран здесь). " : " (из шапки). ");
+  const go = $("#batchGo");
+  if (go) {
+    go.title = "Запустить выбранные действия по выбранным связкам за период "
+      + batchPeriodLabel(per) + (per.from_preset ? " (выбран в меню)" : " (из шапки)")
+      + ". Порядок: обновление → пересчёт → коррекция цен → шаблон минцены";
+  }
   const acts = batchActions();
-  if (!acts.length) { hint.textContent = "Выберите хотя бы одно действие"; return; }
-  if (acts.includes("apply")) { hint.textContent = "Коррекция цен изменит цены в кабинетах"; return; }
+  if (!acts.length) { hint.textContent = (period + "Выберите хотя бы одно действие").trim(); return; }
+  if (acts.includes("apply")) { hint.textContent = (period + "Коррекция цен изменит цены в кабинетах").trim(); return; }
   if (acts.includes("analytics")) {
-    hint.textContent = "Файлы аналитики будут перезаписаны в папки Dropbox (период — из шапки)";
+    hint.textContent = (period + "Файлы аналитики будут перезаписаны в папки Dropbox").trim();
     return;
   }
   if (acts.includes("detail_check")) {
-    hint.textContent = "Проверка детализаций сверяется с WB (finance-API) за период из шапки; "
-      + "пропущенные отчёты догрузятся — это может занять несколько минут";
+    hint.textContent = (period + "Проверка детализаций сверяется с WB (finance-API); "
+      + "пропущенные отчёты догрузятся — это может занять несколько минут").trim();
     return;
   }
-  hint.textContent = "";
+  hint.textContent = period.trim();
 }
 
 async function startBatch() {
@@ -7737,6 +7783,7 @@ async function startBatch() {
   if (!acts.length) { if (hint) hint.textContent = "Выберите хотя бы одно действие"; return; }
   const scope = ($("#batchScope") && $("#batchScope").value) || "all";
   const includeDetail = !!($("#batchDetail") && $("#batchDetail").checked);
+  const per = batchPeriodRange();
   const dd = $("#batchDropdown");
   if (dd) dd.classList.remove("open");
 
@@ -7755,7 +7802,8 @@ async function startBatch() {
       const mp = MP_LABELS[c.marketplace] || c.marketplace || "";
       return "• " + (c.owner || c.name || ("#" + c.id)) + " (" + mp + "): " + n;
     });
-    const msg = "Отправить коррекцию цен?\nИзменений к отправке (по витринным ценам):\n\n"
+    const msg = "Отправить коррекцию цен?\nПериод: " + batchPeriodLabel(per)
+      + "\nИзменений к отправке (по витринным ценам):\n\n"
       + lines.join("\n") + "\n\nЭто изменит цены в кабинетах маркетплейса.";
     if (!window.confirm(msg)) { if (hint) hint.textContent = "Отменено"; return; }
     confirmed = true;
@@ -7763,10 +7811,9 @@ async function startBatch() {
 
   let res;
   try {
-    const f = filters();
     res = await apiPost("/batch/run", {
       actions: acts, scope, include_detail: includeDetail, confirmed,
-      date_from: f.date_from, date_to: f.date_to,
+      date_from: per.date_from, date_to: per.date_to,
     });
   } catch (err) {
     if (hint) hint.textContent = "Ошибка запуска: " + apiErrorMessage(err);
@@ -10151,6 +10198,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initWriteDb();
   initOzBySize();
   initHelp();
+  initHeaderTip();
   initYandexTab();
   initAutomationTabs();
   initTableHover();

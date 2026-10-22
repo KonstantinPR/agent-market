@@ -726,8 +726,32 @@ assert.ok(jsSrc.includes('"analytics"') && jsSrc.includes('"batchAnalytics"'),
   "batchActions() знает про действие analytics");
 assert.ok(/for \(const id of \["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics", "batchDetailCheck"\]\)/.test(jsSrc),
   "initBatchMenu подписывает batchAnalytics/batchDetailCheck на updateBatchHint");
-assert.ok(jsSrc.includes("date_from: f.date_from, date_to: f.date_to"),
-  "startBatch передаёт период из шапки (date_from/date_to)");
+assert.ok(jsSrc.includes("const per = batchPeriodRange();") &&
+  jsSrc.includes("date_from: per.date_from, date_to: per.date_to"),
+  "startBatch передаёт период массовых действий (из шапки или выбранный в меню)");
+
+// «Массовые действия»: период виден до запуска и выбирается прямо в меню.
+assert.ok(htmlSrc.includes('id="batchPeriod"'),
+  "в меню массовых действий есть селектор периода");
+assert.ok(htmlSrc.includes('<option value="" selected>Как в шапке</option>'),
+  "по умолчанию период массовых действий берётся из шапки");
+assert.ok(htmlSrc.includes('<option value="30">Последний месяц</option>'),
+  "в меню есть пресет «Последний месяц»");
+assert.ok(jsSrc.includes("function presetRange(days)") &&
+  jsSrc.includes("function batchPeriodRange()") &&
+  jsSrc.includes("function batchPeriodLabel(r)"),
+  "есть общий presetRange и batchPeriodRange/batchPeriodLabel");
+assert.ok(jsSrc.includes('"Период: " + batchPeriodLabel(per)'),
+  "подсказка у кнопки «Запустить» показывает точный период");
+assert.ok(jsSrc.includes("presetRange(30)"),
+  "шапка по умолчанию — последние 30 дней (явный пресет «Последний месяц»)");
+const pr30 = sandbox.presetRange(30);
+assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(pr30.date_from) && /^\d{4}-\d{2}-\d{2}$/.test(pr30.date_to),
+  "presetRange возвращает ISO-даты");
+assert.strictEqual((new Date(pr30.date_to) - new Date(pr30.date_from)) / 864e5 + 1, 30,
+  "presetRange(30) — окно ровно 30 дней включительно");
+assert.strictEqual(sandbox.batchPeriodLabel({ date_from: "2026-09-23", date_to: "2026-10-22" }),
+  "23.09.2026 — 22.10.2026", "batchPeriodLabel форматирует даты как ДД.ММ.ГГГГ");
 
 // «Массовые действия → Проверить пропущенные детализации».
 assert.ok(htmlSrc.includes('id="batchDetailCheck"'),
@@ -852,6 +876,8 @@ assert.ok(excelCss.includes(".margin-arts-text"), "есть CSS для поля 
 // не исчезает, как только курсор сошёл с заголовка/иконки «?».
 assert.ok(jsSrc.includes("function _hdrTipInside(el)"),
   "подсказка заголовка понимает, что курсор внутри неё");
+assert.ok(jsSrc.includes("initHeaderTip();"),
+  "initHeaderTip подключён в DOMContentLoaded — title-подсказки в тёмном окошке");
 assert.ok(jsSrc.includes("function _hdrTipHasSelection()"),
   "подсказка не прячется, пока её текст выделен");
 assert.ok(jsSrc.includes("setTimeout(hideHeaderTip, 250)"),
