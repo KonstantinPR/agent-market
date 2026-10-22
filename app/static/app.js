@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "157";
+const UI_VERSION = "158";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1454,6 +1454,7 @@ const DASH_GROUPINGS = {
   price: "Ценовой сегмент",
   margin: "Рентабельность",
   abc: "ABC по выручке",
+  xyz: "XYZ по стабильности спроса",
   marketplace: "Маркетплейс",
 };
 const DASH_GROUP_KEY = "dash-group-by";
@@ -1870,6 +1871,334 @@ async function renderDashboard() {
   paintDashFreshness(dashData.freshness);
   const exp = $("#exportDashboard");
   if (exp) exp.href = "/api/export/dashboard" + qs(dashQuery());
+  await renderDashXyz();
+}
+
+// ----------------------------------------------------- ABC/XYZ-анализ
+// Классы стабильности спроса (XYZ): X — стабильный, Y — умеренные колебания,
+// Z — скачки, NEW — «Новинка» (мало активных месяцев в окне). Цвета классов
+// одни и те же в матрице, на графиках и в легенде.
+const XYZ_CLASS_COLORS = {
+  X: "#2f9e44", Y: "#f0b429", Z: "#e03131", NEW: "#868e96",
+};
+const XYZ_CLASS_LABELS = {
+  X: "X — стабильный спрос",
+  Y: "Y — умеренные колебания",
+  Z: "Z — скачки спроса",
+  NEW: "Новинка — мало истории",
+};
+const XYZ_CLASS_ORDER = ["X", "Y", "Z", "NEW"];
+const ABC_ROW_LABELS = {
+  A: "A — первые 80 % выручки",
+  B: "B — 80–95 % выручки",
+  C: "C — остальное",
+};
+// Спрос считается по WB (помесячной детализации Ozon нет) — это видно в подписи.
+const XYZ_MARKETPLACE = "WB";
+
+function dashXyzQuery() {
+  const q = dashQuery();
+  // Группировка таблицы и режим сравнения периодов к XYZ-разделу отношения не имеют.
+  delete q.group_by;
+  delete q.compare;
+  delete q.compare_mode;
+  delete q.compare_from;
+  delete q.compare_to;
+  const sel = $("#dashXyzMinActive");
+  if (sel && sel.value) {
+    q.min_active_months = sel.value;
+  }
+  return q;
+}
+
+// Компактная сумма: 74к ₽ / 1,2 млн ₽ (в ячейках матрицы места мало).
+function fmtMoneyShort(n) {
+  const v = Number(n) || 0;
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(1).replace(".", ",") + " млн ₽";
+  if (a >= 1e3) return Math.round(v / 1e3) + "к ₽";
+  return Math.round(v) + " ₽";
+}
+
+function xyzClassShort(code) {
+  return code === "NEW" ? "Новинка" : (code || "");
+}
+
+// Матрица ABC × XYZ: строки A/B/C, столбцы X/Y/Z/«Новинка». В ячейке —
+// артикулов, выручка и её доля; заливка — интенсивность по выручке.
+function xyzMatrixHtml(d) {
+  const m = d.matrix || {};
+  const cells = m.cells || [];
+  const abcRows = m.abc_rows || ["A", "B", "C"];
+  const xyzCols = m.xyz_cols || ["X", "Y", "Z", "NEW"];
+  const byKey = {};
+  cells.forEach((c) => { byKey[c.abc + "|" + c.xyz] = c; });
+  const posTotal = cells.reduce((s, c) => s + Math.max(0, c.revenue || 0), 0);
+  const maxRev = cells.reduce((s, c) => Math.max(s, c.revenue || 0), 0);
+  const cellHtml = (c, extra, abc, xyz) => {
+    const rev = c.revenue || 0;
+    const share = posTotal ? Math.max(0, rev) / posTotal * 100 : 0;
+    const rel = maxRev ? Math.max(0, rev) / maxRev : 0;
+    const bg = rev < 0
+      ? "rgba(224, 49, 49, 0.14)"
+      : "rgba(13, 110, 253, " + (0.05 + 0.4 * rel).toFixed(3) + ")";
+    const tip = fmt(c.articles || 0) + " арт. · выручка " + fmtMoney(rev)
+      + " · прибыль " + fmtMoney(c.margin || 0)
+      + (posTotal ? " · " + share.toFixed(1) + " % выручки" : "");
+    const cls = "xyz-cell" + (extra || "");
+    const data = abc && xyz ? ' data-abc="' + abc + '" data-xyz="' + xyz + '"' : "";
+    return '<td class="' + cls + '" style="background:' + bg
+      + '" title="' + tip + '"' + data + '>'
+      + '<span class="xyz-cell-n">' + fmt(c.articles || 0) + "</span>"
+      + '<span class="xyz-cell-r">' + fmtMoneyShort(rev) + "</span>"
+      + '<span class="xyz-cell-s">' + (posTotal ? share.toFixed(1) + " %" : "—") + "</span>"
+      + "</td>";
+  };
+  let h = '<table class="xyz-matrix"><thead><tr><th class="xyz-corner">ABC \\ XYZ</th>';
+  xyzCols.forEach((x) => {
+    h += '<th class="xyz-col" title="' + (XYZ_CLASS_LABELS[x] || x) + '">'
+      + xyzClassShort(x) + "</th>";
+  });
+  h += '<th class="xyz-col">Итого</th></tr></thead><tbody>';
+  abcRows.forEach((a) => {
+    const rowCells = xyzCols.map((x) => byKey[a + "|" + x]
+      || { articles: 0, revenue: 0, margin: 0 });
+    const rowArt = rowCells.reduce((s, c) => s + (c.articles || 0), 0);
+    const rowRev = rowCells.reduce((s, c) => s + (c.revenue || 0), 0);
+    h += '<tr><th class="xyz-row" title="' + (ABC_ROW_LABELS[a] || a) + '">' + a + "</th>";
+    rowCells.forEach((c, idx) => { h += cellHtml(c, "", a, xyzCols[idx]); });
+    h += cellHtml({ articles: rowArt, revenue: rowRev, margin: 0 }, " xyz-total");
+    h += "</tr>";
+  });
+  const totArt = cells.reduce((s, c) => s + (c.articles || 0), 0);
+  const totRev = cells.reduce((s, c) => s + (c.revenue || 0), 0);
+  h += '<tr class="xyz-sum"><th>Итого</th>';
+  xyzCols.forEach((x) => {
+    const col = cells.filter((c) => c.xyz === x);
+    h += cellHtml({
+      articles: col.reduce((s, c) => s + (c.articles || 0), 0),
+      revenue: col.reduce((s, c) => s + (c.revenue || 0), 0),
+      margin: col.reduce((s, c) => s + (c.margin || 0), 0),
+    }, " xyz-total");
+  });
+  h += cellHtml({ articles: totArt, revenue: totRev, margin: 0 }, " xyz-total") + "</tr>";
+  h += "</tbody></table>";
+  return h;
+}
+
+// Свод по классам XYZ: артикулов, выручка, прибыль.
+function xyzClassStats(d) {
+  const by = {};
+  XYZ_CLASS_ORDER.forEach((c) => { by[c] = { articles: 0, revenue: 0, margin: 0 }; });
+  (d.rows || []).forEach((r) => {
+    const c = by[r.xyz_class] ? r.xyz_class : "NEW";
+    by[c].articles += 1;
+    by[c].revenue += r.revenue || 0;
+    by[c].margin += r.margin || 0;
+  });
+  return by;
+}
+
+// «Спрос по классам»: столбцы — сколько артикулов в каждом классе,
+// в подсказке — выручка и прибыль класса.
+function paintDashXyzClasses(d) {
+  const by = xyzClassStats(d);
+  setChart("chartXyzClasses", {
+    type: "bar",
+    data: {
+      labels: XYZ_CLASS_ORDER.map(xyzClassShort),
+      datasets: [{
+        label: "Артикулов",
+        data: XYZ_CLASS_ORDER.map((c) => by[c].articles),
+        backgroundColor: XYZ_CLASS_ORDER.map((c) => XYZ_CLASS_COLORS[c]),
+        maxBarThickness: 56,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (it) => {
+              const c = XYZ_CLASS_ORDER[it.dataIndex];
+              const b = by[c];
+              return "Артикулов: " + fmt(b.articles)
+                + " · выручка " + fmtMoney(b.revenue)
+                + " · прибыль " + fmtMoney(b.margin);
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { maxTicksLimit: 8 } },
+        y: { ticks: { callback: (v) => fmt(v) } },
+      },
+    },
+  });
+}
+
+// «Выручка по ABC»: столбцы — выручка классов A/B/C, линия — накопленная
+// доля (Парето). Ось долей — справа.
+function paintDashXyzAbc(d) {
+  const m = d.matrix || {};
+  const cells = m.cells || [];
+  const abcRows = m.abc_rows || ["A", "B", "C"];
+  const data = abcRows.map((a) => {
+    const sub = cells.filter((c) => c.abc === a);
+    return {
+      abc: a,
+      revenue: sub.reduce((s, c) => s + (c.revenue || 0), 0),
+      articles: sub.reduce((s, c) => s + (c.articles || 0), 0),
+    };
+  });
+  const total = data.reduce((s, x) => s + Math.max(0, x.revenue), 0);
+  let acc = 0;
+  const cum = data.map((x) => {
+    acc += Math.max(0, x.revenue);
+    return total ? Math.round(acc / total * 1000) / 10 : 0;
+  });
+  setChart("chartXyzAbc", {
+    type: "bar",
+    data: {
+      labels: data.map((x) => x.abc),
+      datasets: [
+        {
+          label: "Выручка",
+          data: data.map((x) => x.revenue),
+          backgroundColor: ["#e8590c", "#f0b429", "#868e96"],
+          maxBarThickness: 56,
+          order: 2,
+        },
+        {
+          type: "line",
+          label: "Накопленная доля, %",
+          data: cum,
+          borderColor: "#1c7ed6",
+          backgroundColor: "#1c7ed6",
+          yAxisID: "y1",
+          tension: 0.2,
+          pointRadius: 4,
+          borderWidth: 2,
+          order: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true },
+        tooltip: {
+          callbacks: {
+            label: (it) => {
+              if (it.dataset.type === "line") return it.label + ": " + (it.parsed.y || 0) + " %";
+              const x = data[it.dataIndex];
+              return "Выручка: " + fmtMoney(x.revenue)
+                + " · артикулов: " + fmt(x.articles);
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { maxTicksLimit: 8 } },
+        y: { ticks: { callback: (v) => fmtMoney(v) } },
+        y1: { position: "right", min: 0, max: 100, ticks: { callback: (v) => v + " %" } },
+      },
+    },
+  });
+}
+
+// «Стабильность vs объём»: X — средний месячный объём, Y — коэффициент
+// вариации, цвет — класс. Новинки (мало истории) не рисуем: у них CV
+// посчитан по 1–5 месяцам и точки только засоряют график.
+function paintDashXyzScatter(d) {
+  const rows = (d.rows || []).filter((r) => r.xyz_class && r.xyz_class !== "NEW");
+  const datasets = ["X", "Y", "Z"].map((c) => ({
+    label: c,
+    data: rows.filter((r) => r.xyz_class === c)
+      .map((r) => ({ x: r.avg_month_qty || 0, y: r.cv_pct || 0 })),
+    backgroundColor: dashRgba(XYZ_CLASS_COLORS[c], 0.6, XYZ_CLASS_COLORS[c]),
+    borderColor: XYZ_CLASS_COLORS[c],
+    pointRadius: 3.5,
+    pointHoverRadius: 6,
+  })).filter((ds) => ds.data.length);
+  setChart("chartXyzScatter", {
+    type: "scatter",
+    data: { datasets: datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true },
+        tooltip: {
+          callbacks: {
+            label: (it) => "Объём: " + fmtVol(it.parsed.x) + " шт/мес · CV: "
+              + fmtPct(it.parsed.y),
+          },
+        },
+      },
+      scales: {
+        x: {
+          title: { display: true, text: "Средний объём, шт/мес" },
+          ticks: { callback: (v) => fmtVol(v) },
+        },
+        y: {
+          title: { display: true, text: "Коэффициент вариации, %" },
+          ticks: { callback: (v) => v + " %" },
+        },
+      },
+    },
+  });
+}
+
+// Подпись под заголовком раздела: окно, пороги и что именно посчитано.
+function dashXyzNoteText(meta) {
+  const parts = [];
+  if (meta.note) parts.push(meta.note);
+  if (meta.window_months) {
+    parts.push("Спрос — по окну " + meta.window_months + " мес (" + (meta.date_from || "")
+      + " … " + (meta.date_to || "") + "), " + XYZ_MARKETPLACE + ".");
+  }
+  if (meta.min_active_months) {
+    parts.push("Класс X/Y/Z — с " + meta.min_active_months + " активными месяцами; "
+      + "пороги CV: X ≤ " + fmtPct(meta.x_cv_threshold) + ", Y ≤ "
+      + fmtPct(meta.y_cv_threshold) + ".");
+  }
+  parts.push("Выручка и прибыль — за выбранный период, ABC — по ней.");
+  return parts.join(" ");
+}
+
+async function renderDashXyz() {
+  const mx = $("#dashXyzMatrix");
+  if (!mx) return;
+  const note = $("#dashXyzNote");
+  const cnt = $("#dashXyzCount");
+  let d;
+  try {
+    d = await api("/dashboard/xyz" + qs(dashXyzQuery()));
+  } catch (err) {
+    mx.innerHTML = '<div class="xyz-empty">Не удалось построить ABC/XYZ-анализ: '
+      + apiErrorMessage(err) + "</div>";
+    if (note) note.textContent = "";
+    if (cnt) cnt.textContent = "";
+    return;
+  }
+  const meta = d.meta || {};
+  const rows = d.rows || [];
+  _dashXyzData = d;
+  _dashXyzRows = rows;
+  if (note) note.textContent = dashXyzNoteText(meta);
+  if (cnt) cnt.textContent = rows.length ? fmt(rows.length) + " арт." : "";
+  if (!rows.length) {
+    mx.innerHTML = '<div class="xyz-empty">Нет данных о продажах за выбранный период.</div>';
+    return;
+  }
+  mx.innerHTML = xyzMatrixHtml(d);
+  paintDashXyzClasses(d);
+  paintDashXyzAbc(d);
+  paintDashXyzScatter(d);
 }
 
 const marginHeaders = [
@@ -5006,7 +5335,18 @@ async function onAutoFoldBuild() {
     a.click();
     a.remove();
     URL.revokeObjectURL(a.href);
-    if (msg) msg.textContent = "Архив скачан (" + fmt(st.found) + " арт., " + fmt(st.photos) + " фото)";
+    if (msg) {
+      let text = "Архив скачан (" + fmt(st.found) + " арт., " + fmt(st.photos) + " фото";
+      const miss = (st.missing || []).length;
+      const noNm = (st.no_nm || []).length;
+      if (miss) text += ", " + fmt(miss) + " арт. без фото";
+      if (noNm) text += ", " + fmt(noNm) + " арт. без nmID";
+      msg.textContent = text + ")";
+      if (miss || noNm) {
+        const lost = [].concat(st.missing || [], st.no_nm || []);
+        msg.title = "Не вошли в архив:\n" + lost.join("\n");
+      }
+    }
   } catch (err) {
     if (msg) { msg.textContent = "Ошибка: " + apiErrorMessage(err); msg.classList.add("error"); }
   }
@@ -10275,6 +10615,120 @@ document.addEventListener("DOMContentLoaded", async () => {
   const pricingUpload = $("#pricingUpload");
   if (pricingUpload) pricingUpload.addEventListener("click", () => uploadPricingToDisk());
   initTicketsTab();
-  initHeaderTip();
+  const minSel = $("#dashXyzMinActive");
+  if (minSel) {
+    minSel.addEventListener("change", () => {
+      renderDashXyz();
+    });
+  }
+  initXyzDrill();
   loadTab(currentTab);
 });
+
+// ----------------------------------------------------- ABC/XYZ: раскрытие ячейки
+// Клик по ячейке матрицы открывает модалку с артикулами этой ячейки и их
+// вкладом; список можно скопировать в буфер обмена.
+let _dashXyzData = null;
+let _dashXyzRows = [];
+let _dashXyzRowsDrill = [];
+
+function initXyzDrill() {
+  const modal = $("#xyzDrillModal");
+  const close = $("#xyzDrillClose");
+  const backdrop = $("#xyzDrillBackdrop");
+  const copy = $("#xyzDrillCopy");
+  if (close) close.addEventListener("click", () => { if (modal) modal.classList.add("hidden"); });
+  if (backdrop) backdrop.addEventListener("click", () => { if (modal) modal.classList.add("hidden"); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal) modal.classList.add("hidden");
+  });
+  if (copy) {
+    copy.addEventListener("click", async () => {
+      const rows = _dashXyzRowsDrill || [];
+      const arts = rows.map((r) => r.article).filter(Boolean).join("\n");
+      const done = () => {
+        copy.textContent = "Скопировано";
+        setTimeout(() => { copy.textContent = "Скопировать артикулы"; }, 900);
+      };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(arts);
+          done();
+        } else {
+          throw new Error("clipboard unavailable");
+        }
+      } catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = arts;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        done();
+      }
+    });
+  }
+  // Клик по ячейке матрицы (делегирование — ячейки перерисовываются).
+  const mx = $("#dashXyzMatrix");
+  if (mx) {
+    mx.addEventListener("click", (e) => {
+      const td = e.target.closest ? e.target.closest("td.xyz-cell[data-abc]") : null;
+      if (!td) return;
+      openXyzDrill(td.dataset.abc, td.dataset.xyz);
+    });
+  }
+}
+
+function openXyzDrill(abc, xyz) {
+  const modal = $("#xyzDrillModal");
+  const tbody = $("#xyzDrillTbody");
+  const title = $("#xyzDrillTitle");
+  const countEl = $("#xyzDrillCount");
+  const revEl = $("#xyzDrillRev");
+  const mEl = $("#xyzDrillMargin");
+  const hintEl = $("#xyzDrillHint");
+  if (!modal || !tbody) return;
+  const rows = (_dashXyzRows || []).filter(
+    (r) => (r.abc || "") === abc && (r.xyz_class || "") === xyz);
+  rows.sort((a, b) => (b.revenue || 0) - (a.revenue || 0));
+  _dashXyzRowsDrill = rows;
+  if (title) {
+    title.textContent = (abc || "") + " × " + (xyz === "NEW" ? "Новинка" : (xyz || ""));
+  }
+  tbody.innerHTML = "";
+  let totalRev = 0, totalM = 0;
+  rows.forEach((r) => { totalRev += r.revenue || 0; totalM += r.margin || 0; });
+  rows.forEach((r) => {
+    const share = totalRev ? (r.revenue || 0) / totalRev * 100 : 0;
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + escapeHtml(r.article || "") + "</td>"
+      + "<td>" + escapeHtml(r.name || "") + "</td>"
+      + "<td>" + escapeHtml(r.abc || "") + "</td>"
+      + "<td>" + escapeHtml(r.xyz_class || "") + "</td>"
+      + '<td class="num">' + fmt(r.sells || 0) + "</td>"
+      + '<td class="num">' + fmt(r.avg_month_qty || 0) + "</td>"
+      + '<td class="num">' + fmtPct(r.cv_pct) + "</td>"
+      + '<td class="num">' + fmt(r.active_months || 0) + "</td>"
+      + '<td class="num">' + fmtMoney(r.revenue || 0) + "</td>"
+      + '<td class="num">' + fmtMoney(r.margin || 0) + "</td>"
+      + '<td class="num">' + share.toFixed(1) + " %</td>";
+    tbody.appendChild(tr);
+  });
+  if (countEl) countEl.textContent = fmt(rows.length);
+  if (revEl) revEl.textContent = fmtMoney(totalRev);
+  if (mEl) mEl.textContent = fmtMoney(totalM);
+  // В ячейке бывают артикулы без помесячного спроса (только возвраты) — их
+  // в списке нет, показываем разницу, чтобы счётчики не расходились.
+  if (hintEl) {
+    const cell = ((_dashXyzData && _dashXyzData.matrix
+      && _dashXyzData.matrix.cells) || []).find(
+      (c) => c.abc === abc && c.xyz === xyz);
+    const total = cell ? (cell.articles || 0) : rows.length;
+    hintEl.textContent = total > rows.length
+      ? "Показано " + rows.length + " из " + total
+        + " артикулов ячейки: у остальных нет помесячного спроса (только возвраты). "
+        + "Итоги ниже — по показанным строкам."
+      : "";
+  }
+  modal.classList.remove("hidden");
+}

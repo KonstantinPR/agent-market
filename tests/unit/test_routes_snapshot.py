@@ -37,6 +37,7 @@ GET /api/cabinets
 GET /api/cards
 GET /api/custom-stock
 GET /api/dashboard
+GET /api/dashboard/xyz
 GET /api/export/dashboard
 GET /api/export/margin/detail
 GET /api/export/margin/funnel

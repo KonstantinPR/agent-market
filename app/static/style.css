@@ -1452,12 +1452,160 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .fresh-meta { color: #888; font-size: 12px; }
 .fresh-row { cursor: help; }
 
-.detail-gaps { margin: 8px 0; }
-.detail-gaps-bar {
+/* --- ABC/XYZ-анализ (раздел «Обзор») --- */
+.dash-xyz-note {
+  color: #666;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+.dash-xyz-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: #444;
+}
+.dash-xyz-toolbar label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
 }
-.detail-gaps-bar .hint { color: #666; font-size: 13px; }
-#wbGapsBox { margin-top: 8px; }
+.dash-xyz-toolbar select {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.dash-xyz-cols {
+  grid-template-columns: minmax(400px, 1.6fr) repeat(3, minmax(250px, 1fr));
+}
+@media (max-width: 1500px) {
+  .dash-xyz-cols { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
+}
+@media (max-width: 900px) {
+  .dash-xyz-cols { grid-template-columns: 1fr; }
+}
+.dash-xyz-matrix-col { min-width: 0; }
+.chart-xyz { height: 215px; }
+.xyz-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+.xyz-matrix th, .xyz-matrix td {
+  border: 1px solid #e3e6ea;
+  padding: 6px 7px;
+  text-align: center;
+  vertical-align: top;
+}
+.xyz-matrix thead th {
+  background: #f6f8fa;
+  color: #444;
+  font-weight: 600;
+}
+.xyz-corner { background: #f6f8fa; color: #999; font-weight: 500; }
+.xyz-row { background: #f6f8fa; color: #333; font-weight: 600; }
+.xyz-cell[data-abc] {
+  cursor: pointer;
+}
+.xyz-cell[data-abc]:hover {
+  outline: 2px solid #0d6efd;
+  outline-offset: -2px;
+}
+.xyz-cell-n { display: block; font-size: 13px; font-weight: 600; }
+.xyz-cell-r { display: block; color: #555; }
+.xyz-cell-s { display: block; color: #98a0a8; font-size: 11px; }
+.xyz-sum th, .xyz-sum td { border-top: 2px solid #d5d9de; font-weight: 600; }
+.xyz-empty { color: #888; padding: 18px 4px; }
+
+/* Модалка ABC/XYZ */
+.xyz-modal.hidden { display: none; }
+.xyz-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 2000;
+  padding: 40px 16px;
+}
+.xyz-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 24, 30, 0.45);
+}
+.xyz-modal-dialog {
+  position: relative;
+  width: min(1100px, 96vw);
+  max-height: 86vh;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.xyz-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eef1f5;
+}
+.xyz-modal-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.xyz-modal-sub {
+  color: #7c8594;
+  font-weight: 400;
+  margin-left: 8px;
+}
+.xyz-modal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.xyz-modal-body {
+  padding: 10px 16px 16px;
+  overflow: auto;
+}
+.xyz-modal-table-wrap {
+  overflow: auto;
+}
+.xyz-modal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.xyz-modal-table th, .xyz-modal-table td {
+  border: 1px solid #eef1f5;
+  padding: 6px 8px;
+  text-align: left;
+}
+.xyz-modal-table th {
+  background: #f8f9fb;
+  text-align: left;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.xyz-modal-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.xyz-modal-foot {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 8px 0 0;
+  color: #5f6b7a;
+  font-variant-numeric: tabular-nums;
+}
+.xyz-modal-hint {
+  margin-right: auto;
+  color: #98a0a8;
+}

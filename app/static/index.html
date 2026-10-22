@@ -235,6 +235,7 @@
               <option value="price">Ценовой сегмент</option>
               <option value="margin">Рентабельность</option>
               <option value="abc">ABC по выручке</option>
+              <option value="xyz">XYZ по стабильности спроса</option>
               <option value="marketplace">Маркетплейс</option>
             </select>
           </label>
@@ -245,6 +246,45 @@
         </div>
         <div class="table-wrap" id="dashTable"></div>
         <span id="dashTablePager"></span>
+      </div>
+    </section>
+    <section class="dash-sec" data-csec="xyz">
+      <div class="dash-sec-head">
+        <span class="dash-drag" draggable="true" title="Перетащить, чтобы изменить порядок">⠿</span>
+        <button type="button" class="dash-sec-title" aria-expanded="true">
+          <h3>ABC/XYZ-анализ <span class="dash-count" id="dashXyzCount"></span></h3>
+          <span class="dash-chev" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="dash-sec-body">
+        <p class="dash-xyz-note" id="dashXyzNote"></p>
+        <div class="dash-xyz-toolbar">
+          <label>Класс «Новинка»
+            <select id="dashXyzMinActive" title="Порог: меньше заданного числа активных месяцев в окне — класс «Новинка (мало истории)»">
+              <option value="6">6 активных месяцев</option>
+              <option value="3">3 активных месяца</option>
+              <option value="1">1 активный месяц</option>
+            </select>
+          </label>
+        </div>
+        <div class="dash-cols dash-xyz-cols">
+          <div class="dash-col dash-xyz-matrix-col">
+            <h4>Матрица ABC × XYZ</h4>
+            <div class="dash-xyz-matrix" id="dashXyzMatrix"></div>
+          </div>
+          <div class="dash-col">
+            <h4>Спрос по классам</h4>
+            <div class="chart-sm chart-xyz"><canvas id="chartXyzClasses"></canvas></div>
+          </div>
+          <div class="dash-col">
+            <h4>Выручка по ABC</h4>
+            <div class="chart-sm chart-xyz"><canvas id="chartXyzAbc"></canvas></div>
+          </div>
+          <div class="dash-col">
+            <h4>Стабильность vs объём</h4>
+            <div class="chart-sm chart-xyz"><canvas id="chartXyzScatter"></canvas></div>
+          </div>
+        </div>
       </div>
     </section>
     <section class="dash-sec" data-csec="stock">
@@ -1138,9 +1178,52 @@
     </div>
   </div>
 </div>
-<script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=157"></script>
-<script src="/static/autoreload.js?v=1"></script>
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script src="/static/app.js?v=158"></script>
+  <script src="/static/autoreload.js?v=1"></script>
+  <div id="xyzDrillModal" class="xyz-modal hidden">
+    <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
+    <div class="xyz-modal-dialog" role="dialog" aria-modal="true">
+      <div class="xyz-modal-head">
+        <div class="xyz-modal-title">
+          ABC × XYZ <span id="xyzDrillTitle" class="xyz-modal-sub"></span>
+        </div>
+        <div class="xyz-modal-actions">
+          <button id="xyzDrillCopy" class="btn">Скопировать артикулы</button>
+          <button id="xyzDrillClose" class="btn">Закрыть</button>
+        </div>
+      </div>
+      <div class="xyz-modal-body">
+        <div class="xyz-modal-table-wrap">
+          <table class="xyz-modal-table">
+            <thead>
+              <tr>
+                <th>Артикул</th>
+                <th>Наименование</th>
+                <th>ABC</th>
+                <th>XYZ</th>
+                <th class="num" title="Продано за выбранный период (из детализации продаж)">Продано, шт</th>
+                <th class="num" title="Средние продажи в месяц за окно анализа">Средн. в мес., шт</th>
+                <th class="num" title="Коэффициент вариации помесячных продаж, %">CV, %</th>
+                <th class="num" title="Сколько месяцев в окне были продажи">Активных мес.</th>
+                <th class="num" title="Выручка за выбранный период">Выручка, руб</th>
+                <th class="num" title="Прибыль за выбранный период">Прибыль, руб</th>
+                <th class="num" title="Доля артикула в выручке ячейки">Доля, %</th>
+              </tr>
+            </thead>
+            <tbody id="xyzDrillTbody"></tbody>
+          </table>
+        </div>
+        <div class="xyz-modal-foot">
+          <span id="xyzDrillHint" class="xyz-modal-hint"></span>
+          <span>Строк: <span id="xyzDrillCount">0</span></span>
+          <span>Выручка: <span id="xyzDrillRev">0 ₽</span></span>
+          <span>Прибыль: <span id="xyzDrillMargin">0 ₽</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
+
 

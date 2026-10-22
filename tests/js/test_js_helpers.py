@@ -66,6 +66,51 @@ assert.strictEqual(
 );
 assert.strictEqual(qs({}), "", "qs empty");
 
+assert.ok(sandbox.xyzMatrixHtml, "есть xyzMatrixHtml");
+assert.ok(sandbox.xyzClassShort, "есть xyzClassShort");
+assert.ok(sandbox.xyzClassStats, "есть xyzClassStats");
+assert.ok(sandbox.dashXyzNoteText, "есть dashXyzNoteText");
+
+const xyzData = {
+  rows: [
+    {article:"A1", name:"Т1", abc:"A", xyz_class:"X", avg_month_qty:10, cv_pct:5, active_months:12, revenue:1000, margin:200},
+    {article:"A2", name:"Т2", abc:"C", xyz_class:"NEW", avg_month_qty:1, cv_pct:0, active_months:2, revenue:50, margin:10},
+  ],
+  count: 2,
+  meta: {marketplace:"WB", window_months:12, min_active_months:6, x_cv_threshold:15, y_cv_threshold:40},
+  matrix: {
+    abc_rows:["A","B","C"], xyz_cols:["X","Y","Z","NEW"],
+    cells:[
+      {abc:"A",xyz:"X",articles:1,revenue:1000,margin:200},
+      {abc:"C",xyz:"NEW",articles:1,revenue:50,margin:10},
+    ],
+    totals:{articles:2,revenue:1050,margin:210},
+  },
+};
+const mx = sandbox.xyzMatrixHtml(xyzData);
+assert.ok(mx.includes("xyz-matrix"), "матрица рендерит таблицу");
+assert.ok(mx.includes("A1") || mx.includes("A2") || mx.includes("арт"), "матрица содержит данные");
+// Артикулы в матрице не выводятся в тексте ячеек — проверяем, что итоги/сумма по строке A есть.
+assert.ok(mx.includes("Итого"), "матрица содержит итоги");
+
+assert.strictEqual(sandbox.xyzClassShort("X"), "X");
+assert.ok(["NEW", "Новинка"].includes(sandbox.xyzClassShort("NEW")), "xyzClassShort NEW");
+
+// Раскрытие ячейки матрицы: у кликабельных ячеек есть data-abc/data-xyz.
+assert.ok(sandbox.openXyzDrill, "есть openXyzDrill");
+assert.ok(mx.includes('data-abc="A"') && mx.includes('data-xyz="X"'),
+  "ячейки матрицы кликабельны (drill-down)");
+
+// Порог «Новинка» (6/3/1) уходит из селектора в запрос к API.
+assert.ok(sandbox.dashXyzQuery, "есть dashXyzQuery");
+const _origQS = doc.querySelector;
+doc.querySelector = (sel) => (sel === "#dashXyzMinActive"
+  ? Object.assign(el(), { value: "3" }) : _origQS(sel));
+let xyzQ = null;
+try { xyzQ = sandbox.dashXyzQuery(); } finally { doc.querySelector = _origQS; }
+assert.strictEqual(xyzQ.min_active_months, "3", "порог «Новинка» попадает в запрос");
+assert.strictEqual(xyzQ.group_by, undefined, "group_by в XYZ-запросе не нужен");
+
 // Фильтр по колонкам таблиц: числовые — numMatch (диапазон/оператор), текст —
 // вхождение подстроки без регистра; «Итого» пересчитывается по отфильтрованным.
 const { numMatch, filterActive, rowPassesFilters, recomputeFooters } = sandbox;

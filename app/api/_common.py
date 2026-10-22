@@ -42,6 +42,7 @@ from app.services import (
     thumbs as thumbs_service,
     tickets as tickets_service,
     warehouse as warehouse_service,
+    xyz as xyz_service,
     yandex_disk as yandex_service,
 )
 from app.services.cabinets import active_credentials

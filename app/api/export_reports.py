@@ -44,6 +44,20 @@ def export_dashboard(
     prefixes = dashboard_service.grouped_margin(
         db, from_, to_, mp_param, group_by=group_by or "prefix")
 
+    # ABC/XYZ-анализ (только WB).
+    xyz_block = None
+    if str(mp_param or "").strip().lower() != "ozon":
+        try:
+            detail = dashboard_service.combined_detail(db, from_, to_, "wb")
+            ab = dashboard_service._by_article(detail)
+            xyz = xyz_service.xyz_rows(db, from_, to_, "wb", ab_rows=ab)
+            xyz_map = {str(r["article"]).strip().upper(): r["xyz_class"]
+                       for r in xyz["rows"]}
+            matrix = xyz_service.abc_xyz_matrix(ab, xyz_map)
+            xyz_block = {"rows": xyz["rows"], "matrix": matrix}
+        except Exception:
+            xyz_block = None
+
     def _kpi_frame(row):
         return {
             "Показатель": row["marketplace"] or "Итого",
@@ -101,6 +115,36 @@ def export_dashboard(
         "Снижение цены": frame(price["down"]["rows"], price_cols, price_ru),
         "Группы": frame(prefixes["rows"], prefix_cols, prefix_ru),
     }
+    if xyz_block:
+        xyz_rows = xyz_block["rows"]
+        xyz_df = pd.DataFrame([{
+            "Артикул": r.get("article"),
+            "Наименование": r.get("name"),
+            "ABC": r.get("abc"),
+            "XYZ": r.get("xyz_class"),
+            "Класс": r.get("xyz_label"),
+            "Средн. в мес., шт": r.get("avg_month_qty"),
+            "CV, %": r.get("cv_pct"),
+            "Активных мес.": r.get("active_months"),
+            "Выручка, руб": r.get("revenue"),
+            "Прибыль, руб": r.get("margin"),
+        } for r in xyz_rows])
+        if xyz_df.empty:
+            xyz_df = pd.DataFrame(columns=["Артикул", "Наименование", "ABC", "XYZ",
+                                           "Класс", "Средн. в мес., шт", "CV, %",
+                                           "Активных мес.", "Выручка, руб", "Прибыль, руб"])
+        sheets["ABC×XYZ"] = xyz_df
+
+        cells = xyz_block["matrix"].get("cells") or []
+        mt = pd.DataFrame([{
+            "ABC": c.get("abc"), "XYZ": c.get("xyz"),
+            "Артикулов": c.get("articles"),
+            "Выручка, руб": c.get("revenue"),
+            "Прибыль, руб": c.get("margin"),
+        } for c in cells])
+        if mt.empty:
+            mt = pd.DataFrame(columns=["ABC", "XYZ", "Артикулов", "Выручка, руб", "Прибыль, руб"])
+        sheets["ABC×XYZ матрица"] = mt
     buf = excel_io.dfs_to_excel_stream(sheets)
     fname = f"dashboard_{from_}_{to_}.xlsx"
     return StreamingResponse(

@@ -374,6 +374,136 @@ def api_dashboard(
                               group_by=group_by)
 
 
+def _xyz_payload(db, from_, to_, min_active_months: int = None):
+    """ABC/XYZ-анализ одной связки: построчные классы + матрица ABC×XYZ (WB).
+
+    Спрос (X/Y/Z) считается только по WB: в таблице продаж нет помесячной
+    детализации Ozon. Поэтому и ABC-сводка берётся по WB — иначе в матрице
+    были бы артикулы Ozon без класса спроса.
+    """
+    detail = dashboard_service.combined_detail(db, from_, to_, "wb")
+    ab = dashboard_service._by_article(detail)
+    xyz = xyz_service.xyz_rows(db, from_, to_, "wb", ab_rows=ab,
+                               min_active_months=min_active_months)
+    xyz_map = {str(r["article"]).strip().upper(): r["xyz_class"]
+               for r in xyz["rows"]}
+    matrix = xyz_service.abc_xyz_matrix(ab, xyz_map)
+    return {"rows": xyz["rows"], "count": xyz["count"], "meta": xyz["meta"],
+            "matrix": matrix}
+
+
+#: Допустимые пороги «Новинка» (число активных месяцев) — как в UI-селекторе.
+XYZ_MIN_ACTIVE_CHOICES = (1, 3, 6)
+
+
+def _xyz_min_active(value) -> Optional[int]:
+    """Порог «Новинка» из запроса: None — взять дефолт из настроек.
+
+    Значение вне диапазона 1..12 месяцев отбрасывается (None), чтобы
+    нельзя было запросить порог, при котором X/Y/Z не набираются.
+    """
+    if value is None:
+        return None
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return None
+    if v < 1 or v > 12:
+        return None
+    return v
+
+
+def _xyz_empty(note: str) -> dict:
+    """Пустой ответ XYZ (выбран не WB) — с пояснением вместо данных."""
+    cells = [{"abc": a, "xyz": x, "articles": 0, "revenue": 0.0, "margin": 0.0}
+             for a in xyz_service.ABC_ROWS for x in xyz_service.XYZ_COLS]
+    return {
+        "rows": [],
+        "count": 0,
+        "meta": {"note": note, "marketplace": "WB",
+                 "window_months": 0, "min_active_months": 0,
+                 "x_cv_threshold": 0.0, "y_cv_threshold": 0.0},
+        "matrix": {
+            "cells": cells,
+            "abc_rows": list(xyz_service.ABC_ROWS),
+            "xyz_cols": list(xyz_service.XYZ_COLS),
+            "totals": {"articles": 0, "revenue": 0.0, "margin": 0.0},
+        },
+    }
+
+
+@router.get("/dashboard/xyz")
+def api_dashboard_xyz(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    marketplace: Optional[str] = None,
+    links: Optional[str] = None,
+    min_active_months: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """ABC/XYZ-анализ: стабильность спроса (X/Y/Z) + матрица ABC×XYZ.
+
+    Считается по WB (для Ozon детализация не собирается). links=id,id,… —
+    слияние по связкам: строки получают owner, матрица суммируется.
+    min_active_months — порог класса «Новинка» (сколько активных месяцев
+    нужно, чтобы попасть в X/Y/Z); в UI это 6 / 3 / 1, по умолчанию — из
+    настроек (6). Недопустимое значение игнорируется.
+    """
+    from_, to_ = _parse_window400(date_from, date_to)
+    if str(marketplace or "").strip().lower() == "ozon":
+        return _xyz_empty("ABC/XYZ-анализ считается только по Wildberries — "
+                          "выбран Ozon.")
+    min_active_months = _xyz_min_active(min_active_months)
+    link_infos = _resolve_links_param(db, links)
+    # Связки Ozon в XYZ не участвуют: помесячного спроса по ним нет.
+    link_infos = [i for i in link_infos if i.marketplace != "ozon"]
+
+    if len(link_infos) > 1:
+        payloads = cabinet_service.run_per_link(
+            db, link_infos,
+            lambda db, info: dict(
+                _xyz_payload(db, from_, to_, min_active_months),
+                _owner=cabinet_service.link_owner(db, info)),
+        )
+        results = [(p.get("_owner", ""), p) for _, p in payloads]
+        return _merge_xyz(results, from_, to_)
+
+    return _xyz_payload(db, from_, to_, min_active_months)
+
+
+def _merge_xyz(payloads, from_, to_):
+    rows = []
+    cells = {}
+    meta = None
+    for owner, p in payloads:
+        rows.extend(dict(r, owner=owner) for r in p["rows"])
+        if meta is None:
+            meta = p["meta"]
+        for c in p["matrix"]["cells"]:
+            key = (c["abc"], c["xyz"])
+            cell = cells.setdefault(key, dict(c))
+            cell["articles"] += c["articles"]
+            cell["revenue"] = round(cell["revenue"] + c["revenue"], 2)
+            cell["margin"] = round(cell["margin"] + c["margin"], 2)
+    rows.sort(key=lambda r: float(r.get("avg_month_qty") or 0), reverse=True)
+    cells_list = list(cells.values())
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "meta": meta or {},
+        "matrix": {
+            "cells": cells_list,
+            "abc_rows": list(xyz_service.ABC_ROWS),
+            "xyz_cols": list(xyz_service.XYZ_COLS),
+            "totals": {
+                "articles": sum(c["articles"] for c in cells_list),
+                "revenue": round(sum(c["revenue"] for c in cells_list), 2),
+                "margin": round(sum(c["margin"] for c in cells_list), 2),
+            },
+        },
+    }
+
+
 @router.post("/sync/{code}")
 def api_sync(code: str, date_from: Optional[str] = None, date_to: Optional[str] = None):
     if code not in ("wb", "ozon"):

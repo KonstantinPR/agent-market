@@ -1610,3 +1610,142 @@ def test_dashboard_export_xlsx_multi_sheet(api_client, db):
     groups = sheets["Группы"]
     assert groups[groups["Группа"] == "TIE"].iloc[0]["Прибыль, руб"] == pytest.approx(1600.0)
     assert len(sheets["Прибыльные"]) >= 5
+
+
+# ------------------------------------------------------------- ABC/XYZ (Обзор)
+def _seed_xyz(db):
+    """Три артикула WB: стабильный (X), скачущий (Z) и новичок (NEW)."""
+    from datetime import date
+    from app import models as m
+    from app.services.sync import marketplace_id
+
+    wb_id = marketplace_id(db, "wb")
+    for art in ("STAB-1", "SPIKE-1", "FRESH-1"):
+        db.add(m.Product(article=art, name="Товар " + art, net_cost=100.0))
+
+    # Выручка периода (01..30.09) — она же даёт ABC.
+    def wb(op_key, article, day, qty, amount, for_pay):
+        return m.WbDetailRow(op_key=op_key, source="excel", article=article,
+                             doc_type_name="Продажа", sale_dt=day, quantity=qty,
+                             retail_amount=amount, for_pay=for_pay)
+
+    db.add_all([
+        wb("x1", "STAB-1", date(2026, 9, 5), 10, 1000.0, 900.0),
+        wb("x2", "SPIKE-1", date(2026, 9, 6), 6, 500.0, 400.0),
+        wb("x3", "FRESH-1", date(2026, 9, 7), 1, 100.0, 90.0),
+    ])
+    db.commit()
+
+    # Помесячный спрос: 6 месяцев (04..09.2026).
+    months = [date(2026, m_, 15) for m_ in (4, 5, 6, 7, 8, 9)]
+    spike = [40, 10, 40, 10, 40, 10]
+    rows = []
+    for i, day in enumerate(months):
+        rows.append(m.Sale(marketplace_id=wb_id, date=day, article="STAB-1",
+                           quantity=5, revenue=50.0, source="v5"))
+        rows.append(m.Sale(marketplace_id=wb_id, date=day, article="SPIKE-1",
+                           quantity=spike[i], revenue=50.0, source="v5"))
+    # Новичок продавал всего 2 месяца.
+    for i, day in enumerate(months[:2]):
+        rows.append(m.Sale(marketplace_id=wb_id, date=day, article="FRESH-1",
+                           quantity=1, revenue=10.0, source="v5"))
+    db.add_all(rows)
+    db.commit()
+
+
+def test_dashboard_xyz_rows_and_matrix(api_client, db):
+    """XYZ: строки с классом и ABC, матрица 3×4, итоги сходятся с ячейками."""
+    _seed_xyz(db)
+    r = api_client.get("/api/dashboard/xyz", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-30",
+    })
+    assert r.status_code == 200
+    body = r.json()
+
+    rows = {x["article"]: x for x in body["rows"]}
+    assert set(rows) == {"STAB-1", "SPIKE-1", "FRESH-1"}
+    assert rows["STAB-1"]["xyz_class"] == "X"
+    assert rows["SPIKE-1"]["xyz_class"] == "Z"
+    assert rows["FRESH-1"]["xyz_class"] == "NEW"
+    assert rows["STAB-1"]["abc"] == "A"        # 1000 из 1600 выручки
+    assert rows["SPIKE-1"]["abc"] == "B"       # накопленная доля ~94 %
+    assert rows["FRESH-1"]["abc"] == "C"
+    assert rows["STAB-1"]["active_months"] == 6
+    assert rows["STAB-1"]["avg_month_qty"] == pytest.approx(2.5)
+    assert body["count"] == 3
+
+    mtx = body["matrix"]
+    assert mtx["abc_rows"] == ["A", "B", "C"]
+    assert mtx["xyz_cols"] == ["X", "Y", "Z", "NEW"]
+    assert len(mtx["cells"]) == 12
+    by_key = {(c["abc"], c["xyz"]): c for c in mtx["cells"]}
+    assert by_key[("A", "X")]["articles"] == 1
+    assert by_key[("B", "Z")]["articles"] == 1
+    assert by_key[("C", "NEW")]["articles"] == 1
+    assert by_key[("A", "X")]["revenue"] == pytest.approx(1000.0)
+
+    # Итоги матрицы = сумма по ячейкам и покрывают все артикулы периода.
+    assert mtx["totals"]["articles"] == 3
+    assert mtx["totals"]["revenue"] == pytest.approx(1600.0)
+    assert mtx["totals"]["articles"] == sum(c["articles"] for c in mtx["cells"])
+
+    meta = body["meta"]
+    assert meta["marketplace"] == "WB"
+    assert meta["min_active_months"] == 6
+    assert meta["window_months"] >= 6
+    assert meta["y_cv_threshold"] >= meta["x_cv_threshold"]
+
+
+def test_dashboard_xyz_ozon_is_empty_with_note(api_client, db):
+    """Ozon не считается (нет помесячной детализации) — пусто с пояснением."""
+    _seed_xyz(db)
+    body = api_client.get("/api/dashboard/xyz", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-30", "marketplace": "ozon",
+    }).json()
+    assert body["rows"] == []
+    assert body["count"] == 0
+    assert body["meta"]["note"]
+
+
+def test_dashboard_xyz_min_active_months_switch(api_client, db):
+    """Порог «Новинка» переключается: 2 активных месяца — NEW при 6 и 3, X при 1."""
+    _seed_xyz(db)
+    base = {"date_from": "2026-09-01", "date_to": "2026-09-30"}
+
+    def classes(min_active):
+        params = dict(base)
+        if min_active is not None:
+            params["min_active_months"] = min_active
+        body = api_client.get("/api/dashboard/xyz", params=params).json()
+        rows = {x["article"]: x for x in body["rows"]}
+        return body, rows
+
+    body, rows = classes(6)
+    assert body["meta"]["min_active_months"] == 6
+    assert rows["FRESH-1"]["xyz_class"] == "NEW"
+
+    body, rows = classes(3)
+    assert body["meta"]["min_active_months"] == 3
+    assert rows["FRESH-1"]["xyz_class"] == "NEW"
+
+    body, rows = classes(1)
+    assert body["meta"]["min_active_months"] == 1
+    assert rows["FRESH-1"]["xyz_class"] != "NEW"
+    assert rows["FRESH-1"]["active_months"] == 2
+    # Матрица пересчитана: новичок ушёл из столбца NEW, но остался в строке C.
+    by_key = {(c["abc"], c["xyz"]): c for c in body["matrix"]["cells"]}
+    assert by_key[("C", "NEW")]["articles"] == 0
+    assert sum(by_key[("C", x)]["articles"] for x in ("X", "Y", "Z")) == 1
+
+
+def test_dashboard_xyz_min_active_months_invalid_falls_back(api_client, db):
+    """Недопустимый порог игнорируется — берётся дефолт из настроек (6)."""
+    _seed_xyz(db)
+    body = api_client.get("/api/dashboard/xyz", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-30",
+        "min_active_months": 99,
+    }).json()
+    assert body["meta"]["min_active_months"] == 6
+    rows = {x["article"]: x for x in body["rows"]}
+    assert rows["FRESH-1"]["xyz_class"] == "NEW"
+    assert body["matrix"]["totals"]["articles"] == 3

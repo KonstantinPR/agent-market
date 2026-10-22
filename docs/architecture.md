@@ -34,29 +34,29 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 8452 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/static/columns.json` | 6042 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/api/ (19 файлов)` | 5353 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/services/sync.py` | 2661 | запись выгрузок WB/Ozon в БД |
-| `app/services/pricing.py` | 2418 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
-| `app/services/refresh.py` | 1473 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `tests/api/test_endpoints.py` | 1394 | HTTP-эндпоинты через TestClient |
-| `app/services/replenish.py` | 1307 | подсортировка WB, план дефицита, скорость продаж |
-| `app/static/style.css` | 1278 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/app.js` | 10734 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 6270 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/columns.json` | 6149 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/services/pricing.py` | 2886 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
+| `app/services/sync.py` | 2669 | запись выгрузок WB/Ozon в БД |
+| `tests/api/test_endpoints.py` | 1751 | HTTP-эндпоинты через TestClient |
+| `app/static/style.css` | 1611 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/services/refresh.py` | 1487 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
+| `app/services/replenish.py` | 1334 | подсортировка WB, план дефицита, скорость продаж |
+| `app/static/index.html` | 1229 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |
+| `tests/js/test_js_helpers.py` | 1110 | проверка app.js через Node `vm` |
 | `app/providers/ozon.py` | 1039 | HTTP к Ozon |
-| `app/static/index.html` | 1034 | разметка: навигация `data-tab` + секции `tab-*` |
 | `tests/unit/test_margin.py` | 927 | юнит-тесты маржинальности |
-| `app/services/margin.py` | 815 | маржинальность по детализациям, группировка артикулоразмеров |
-| `app/models.py` | 791 | SQLAlchemy-модели (схема БД) |
-| `tests/js/test_js_helpers.py` | 783 | проверка app.js через Node `vm` |
-| `app/services/pdf_demand.py` | 675 | PDF «Потребность в товаре» |
-| `app/services/tickets.py` | 557 | реестр тикетов `TICKETS.md` (create/validate/report) |
-| `app/services/dashboard.py` | 512 | сводные панели дашборда |
+| `app/services/margin.py` | 875 | маржинальность по детализациям, группировка артикулоразмеров |
+| `app/models.py` | 802 | SQLAlchemy-модели (схема БД) |
+| `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
+| `app/services/dashboard.py` | 692 | сводные панели дашборда |
+| `app/services/tickets.py` | 558 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/warehouse.py` | 467 | складские документы (приход/отгрузка, обороты) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 255 | индекс фото на диске, выбор папки, fallback по префиксу |
-| `app/database.py` | 218 | engine/session PostgreSQL |
+| `app/database.py` | 240 | engine/session PostgreSQL |
 | `scripts/load_sample.py` | 216 | демо-данные |
 | `app/services/base_price.py` | 178 | рекомендуемая (базовая) цена |
 | `app/services/thumbs.py` | 144 | миниатюры PDF в `data/thumbs/` |
@@ -66,10 +66,10 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/yandex_disk.py` | 108 | загрузка отчётов на Яндекс.Диск |
 | `app/providers/errors.py` | 100 | нормализованные ошибки апстримов |
 | `app/services/funnel.py` | 98 | воронка продаж (агрегация) |
+| `app/main.py` | 86 | сборка FastAPI-приложения, `/`, статика |
 | `app/services/common.py` | 76 | общие хелперы (wildcard-фильтр `like_*`, окна) |
 | `app/services/excel_io.py` | 73 | чтение/запись Excel |
-| `app/main.py` | 72 | сборка FastAPI-приложения, `/`, статика |
-| `app/config.py` | 58 | `Settings`, читается из `.env` |
+| `app/config.py` | 71 | `Settings`, читается из `.env` |
 | `app/services/columns.py` | 42 | loader columns.json (`export_cols` для Python) |
 | `app/providers/base.py` | 33 | базовый провайдер |
 | `app/providers/factory.py` | 22 | точка подмены провайдеров в тестах |

@@ -2,25 +2,26 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **136**, групп: **29**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **153**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
-- [automation](#automation) — 6 шт.
+- [automation](#automation) — 11 шт.
+- [batch](#batch) — 6 шт.
 - [cabinet](#cabinet) — 8 шт.
 - [cabinets](#cabinets) — 1 шт.
 - [cards](#cards) — 1 шт.
 - [custom-stock](#custom-stock) — 1 шт.
-- [dashboard](#dashboard) — 1 шт.
+- [dashboard](#dashboard) — 2 шт.
 - [export](#export) — 23 шт.
 - [funnel](#funnel) — 1 шт.
 - [import](#import) — 4 шт.
-- [margin](#margin) — 3 шт.
+- [margin](#margin) — 4 шт.
 - [ozon](#ozon) — 16 шт.
 - [prices](#prices) — 1 шт.
-- [pricing](#pricing) — 6 шт.
+- [pricing](#pricing) — 9 шт.
 - [pricing-ozon](#pricing-ozon) — 5 шт.
 - [products](#products) — 6 шт.
 - [progress](#progress) — 1 шт.
@@ -33,6 +34,7 @@
 - [stocks](#stocks) — 1 шт.
 - [storage-cost](#storage-cost) — 1 шт.
 - [sync](#sync) — 1 шт.
+- [system](#system) — 1 шт.
 - [tickets](#tickets) — 8 шт.
 - [warehouse](#warehouse) — 14 шт.
 - [wb](#wb) — 11 шт.
@@ -42,12 +44,28 @@
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
+| POST | `/api/automation/barcodes/build` | `automation_barcodes_build` | ZIP с PNG-штрихкодами: bar_0001.png, bar_0002.png… |
+| GET | `/api/automation/barcodes/catalog` | `automation_barcodes_catalog` | Штрихкоды из каталога: product_sizes.barcode; у товара без размеров — |
+| POST | `/api/automation/barcodes/preview` | `automation_barcodes_preview` | Предпросмотр: первые MAX_PREVIEW кодов рендерятся в data-url PNG. |
 | POST | `/api/automation/crop/build` | `automation_crop_build` |  |
-| POST | `/api/automation/foldering/build` | `automation_foldering_build` |  |
+| POST | `/api/automation/foldering/build` | `automation_foldering_build` | Ставит сборку архива в фон. Возвращает {job_id} — опрашивать |
+| GET | `/api/automation/foldering/build/{job_id}` | `automation_foldering_build_state` |  |
+| GET | `/api/automation/foldering/build/{job_id}/download` | `automation_foldering_build_download` |  |
 | POST | `/api/automation/foldering/preview` | `automation_foldering_preview` |  |
 | POST | `/api/automation/names/download` | `automation_names_download` |  |
 | POST | `/api/automation/names/multiply` | `automation_names_multiply` |  |
 | GET | `/api/automation/template` | `automation_template` | Excel-шаблон списка артикулов (Артикул + nm_id) с примерами строк. |
+
+## batch
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| GET | `/api/batch` | `api_batch_active` |  |
+| GET | `/api/batch/actions` | `api_batch_actions` | Реестр массовых действий для меню (порядок, подписи, необратимость). |
+| POST | `/api/batch/preview` | `api_batch_preview` | Предпросмотр: сколько изменений уйдёт по каждой связке (без записи). |
+| POST | `/api/batch/run` | `api_batch_run` | Запускает массовый прогон. Коррекция цен требует confirmed=true. |
+| GET | `/api/batch/{job_id}` | `api_batch_state` |  |
+| GET | `/api/batch/{job_id}/minpromo/{cab_id}` | `api_batch_minpromo` | Скачать сгенерированный шаблон мин. цены автоакций по связке прогона. |
 
 ## cabinet
 
@@ -85,6 +103,7 @@
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
 | GET | `/api/dashboard` | `api_dashboard` | Обзор: KPI из детализаций + топы + дельты цены + склад + свежесть. |
+| GET | `/api/dashboard/xyz` | `api_dashboard_xyz` | ABC/XYZ-анализ: стабильность спроса (X/Y/Z) + матрица ABC×XYZ. |
 
 ## export
 
@@ -133,6 +152,7 @@
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
+| POST | `/api/margin/articles-import` | `api_margin_articles_import` | Excel со списком артикулов → токены для фильтра «Артикулы». |
 | GET | `/api/margin/detail` | `api_margin_detail` | Прибыльность по Детализации Продаж WB напрямую из wb_detail_rows. |
 | GET | `/api/margin/funnel` | `api_margin_funnel` | Прибыльность по Воронке Продаж WB (данные funnel_metric, оценка). |
 | GET | `/api/margin/ozon-detail` | `api_margin_ozon_detail` | Прибыльность по Детализации Продаж Ozon напрямую из ozon_detail_rows. |
@@ -173,6 +193,9 @@
 | GET | `/api/pricing/defaults` | `pricing_defaults` |  |
 | POST | `/api/pricing/export` | `pricing_export` | Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся. |
 | GET | `/api/pricing/history` | `pricing_history` | Журнал решений автопилота (последние события). |
+| GET | `/api/pricing/last-apply` | `pricing_last_apply` | Последнее применение автопилота по активной связке (плашка + зелёная строка). |
+| POST | `/api/pricing/minpromo-export` | `pricing_minpromo_export` | Файл «Минимальные цены и блокировки для автоакций» WB (.xlsx). |
+| GET | `/api/pricing/minpromo-status` | `pricing_minpromo_status` | Дата последней выгрузки шаблона автоакций и остаток 30-дневного срока. |
 | POST | `/api/pricing/recommendations` | `pricing_recommendations` | Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов). |
 
 ## pricing-ozon
@@ -261,6 +284,12 @@
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
 | POST | `/api/sync/{code}` | `api_sync` |  |
+
+## system
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| GET | `/api/system/size` | `api_system_size` | Размер файлов проекта (без venv/.git/кэшей/логов) и базы PostgreSQL. |
 
 ## tickets
 

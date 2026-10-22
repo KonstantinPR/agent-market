@@ -7,6 +7,7 @@
 
 import logging
 from datetime import date
+from typing import Optional
 
 import pandas as pd
 from sqlalchemy import desc, func, select
@@ -14,6 +15,7 @@ from sqlalchemy import desc, func, select
 from app import models
 from app.config import settings
 from app.services import margin as margin_service
+from app.services import xyz as xyz_service
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ GROUPINGS = {
     "price": "Ценовой сегмент",
     "margin": "Рентабельность",
     "abc": "ABC по выручке",
+    "xyz": "XYZ по стабильности спроса",
 }
 
 MP_GROUP_LABELS = {"wb": "WB", "ozon": "Ozon"}
@@ -100,16 +103,21 @@ def _margin_segment(pct: float) -> str:
 
 
 def _abc_labels(df: pd.DataFrame) -> pd.Series:
-    """ABC по выручке: A — первые 80 % выручки, B — до 95 %, C — остальное."""
-    labels = pd.Series("C", index=df.index, dtype=object)
-    if df.empty or float(df["revenue"].sum() or 0) <= 0:
-        return pd.Series("C (нет выручки)", index=df.index, dtype=object)
-    order = df.sort_values("revenue", ascending=False).index
-    total = float(df["revenue"].sum())
-    cum = df.loc[order, "revenue"].cumsum() / total
-    labels.loc[order[cum <= 0.8]] = "A (до 80 % выручки)"
-    labels.loc[order[(cum > 0.8) & (cum <= 0.95)]] = "B (80–95 %)"
-    labels.loc[order[cum > 0.95]] = "C (остальное)"
+    """ABC по выручке: A — первые 80 % выручки, B — до 95 %, C — остальное.
+
+    Артикулы без выручки (только расходные строки) в ранжировании не участвуют
+    и сразу попадают в «C (нет выручки)» — иначе они размывали бы долю C.
+    Само разбиение считает ``xyz_service.abc_ranks`` — тем же кодом, что и
+    матрица ABC×XYZ: иначе группы в таблице и в матрице разъезжаются.
+    """
+    labels = pd.Series("C (нет выручки)", index=df.index, dtype=object)
+    if df is None or df.empty:
+        return labels
+    ranks = xyz_service.abc_ranks(df)
+    has_rev = pd.to_numeric(df["revenue"], errors="coerce").fillna(0) > 0
+    labels[has_rev & (ranks == "A")] = "A (до 80 % выручки)"
+    labels[has_rev & (ranks == "B")] = "B (80–95 %)"
+    labels[has_rev & (ranks == "C")] = "C (остальное)"
     return labels
 
 
@@ -122,8 +130,22 @@ def _supplier_map(db) -> dict:
     }
 
 
-def _article_groups(cur: pd.DataFrame, db, group_by: str) -> pd.Series:
-    """Подпись группы для каждой строки артикула (cur из _by_article)."""
+def _xyz_map(db, date_from, date_to) -> dict:
+    """``{article(UPPER): xyz_class}`` для группировки group_by='xyz' (WB)."""
+    try:
+        res = xyz_service.xyz_rows(db, date_from, date_to)
+    except Exception:  # noqa: BLE001 — группировка не должна ронять дашборд
+        log.warning("XYZ: не удалось построить карту классов", exc_info=True)
+        return {}
+    return {str(r["article"]).strip().upper(): r["xyz_class"] for r in res["rows"]}
+
+
+def _article_groups(cur: pd.DataFrame, db, group_by: str,
+                    xyz_map: Optional[dict] = None) -> pd.Series:
+    """Подпись группы для каждой строки артикула (cur из _by_article).
+
+    ``xyz_map`` — ``{article(UPPER): xyz_class}`` для group_by='xyz'.
+    """
     if group_by == "supplier":
         smap = _supplier_map(db)
         return cur["article"].map(
@@ -138,6 +160,12 @@ def _article_groups(cur: pd.DataFrame, db, group_by: str) -> pd.Series:
             lambda v: _margin_segment(float(v or 0)))
     if group_by == "abc":
         return _abc_labels(cur)
+    if group_by == "xyz":
+        xmap = xyz_map or {}
+        return cur["article"].map(
+            lambda a: xyz_service.XYZ_LABELS.get(
+                xmap.get(str(a).strip().upper()),
+                xyz_service.NO_DATA_LABEL))
     return cur["article"].map(prefix_group)
 
 # Единый набор колонок сводных строк дашборда (есть в обеих детализациях).
@@ -364,7 +392,10 @@ def grouped_margin(db, date_from, date_to, marketplace=None, limit=None, offset=
         g = g.loc[:, [c for c in cols if c in g.columns]]
     else:
         cur = _by_article(detail).copy()
-        cur["prefix"] = _article_groups(cur, db, group_by)
+        xyz_map = None
+        if group_by == "xyz":
+            xyz_map = _xyz_map(db, date_from, date_to)
+        cur["prefix"] = _article_groups(cur, db, group_by, xyz_map)
         samples = (cur.sort_values("revenue", ascending=False)
                    .groupby("prefix")["article"]
                    .apply(lambda s: ", ".join(s.head(5).astype(str))))

@@ -31,6 +31,14 @@ class Settings(BaseSettings):
 
     default_net_cost: float = 500.0
 
+    #: XYZ-анализ (стабильность спроса) в разделе «Обзор».
+    #: Окно, месяцев (включая текущий); минимум активных месяцев, чтобы попасть
+    #: в X/Y/Z (иначе класс «Новинка»); квантили CV для терцильных порогов X/Y/Z.
+    xyz_window_months: int = 12
+    xyz_min_active_months: int = 6
+    xyz_x_cv_quantile: float = 0.33
+    xyz_y_cv_quantile: float = 0.67
+
     #: Корень Dropbox-хранилища, куда «Массовые действия → Обновить аналитику
     #: на диск» перезаписывает Excel-отчёты Прибыльности. Внутри — папка
     #: компании (companies.analytics_dir) и подпапка WB/OZON.
