@@ -8,6 +8,7 @@ from app.api._common import (
     _fmt_days,
     _parse_window400,
     _replenish_cols,
+    _resolve_compare_window,
     _xlsx_response,
 )
 
@@ -21,6 +22,9 @@ def export_dashboard(
     date_to: Optional[str] = None,
     marketplace: Optional[str] = None,
     compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     group_by: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -30,8 +34,8 @@ def export_dashboard(
 
     prev = None
     if compare and from_ and to_:
-        delta = (to_ - from_).days
-        prev = (from_ - timedelta(days=delta), from_ - timedelta(days=1))
+        prev = _resolve_compare_window(
+            date_from, date_to, compare_mode or "", compare_from, compare_to)
 
     kpis = dashboard_service.dashboard_kpis(db, from_, to_, prev, mp_param)
     profit = dashboard_service.top_products(db, from_, to_, mp_param, kind="profit")

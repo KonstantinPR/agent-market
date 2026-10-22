@@ -1542,6 +1542,55 @@ def test_dashboard_daily_has_profit(api_client, db):
     assert by_date["2026-09-16"]["profit"] == pytest.approx(280.0)
 
 
+def test_dashboard_compare_period_series(api_client, db):
+    """compare_mode=prev добавляет daily_prev/per_marketplace_prev + compare_window."""
+    from datetime import date, timedelta
+    from app import models as m
+    from app.services.sync import marketplace_id
+
+    db.add(m.Product(article="A-1", name="Товар", net_cost=10.0))
+    db.commit()
+    wb_id = marketplace_id(db, "wb")
+    day = date(2026, 9, 20)
+    # текущее окно 13..20 и предыдущее 05..12
+    db.add_all([
+        m.Sale(marketplace_id=wb_id, date=day - timedelta(days=2), article="A-1",
+               quantity=2, revenue=1000.0, income=900.0, commission=-50.0,
+               logistics=-20.0, storage=0.0, source="api"),
+        m.Sale(marketplace_id=wb_id, date=day - timedelta(days=10), article="A-1",
+               quantity=1, revenue=400.0, income=350.0, commission=-20.0,
+               logistics=-10.0, storage=0.0, source="api"),
+    ])
+    db.commit()
+
+    off = api_client.get("/api/dashboard", params={
+        "date_from": "2026-09-13", "date_to": "2026-09-20"}).json()
+    assert off["compare_window"] is None
+    assert off["daily_prev"] == []
+    assert off["per_marketplace_prev"] == []
+
+    body = api_client.get("/api/dashboard", params={
+        "date_from": "2026-09-13", "date_to": "2026-09-20",
+        "compare": 1, "compare_mode": "prev"}).json()
+    assert body["compare_window"] == {"from": "2026-09-05", "to": "2026-09-12"}
+    assert len(body["daily_prev"]) == 1
+    prev_day = body["daily_prev"][0]
+    assert prev_day["date"] == "2026-09-10"
+    assert prev_day["revenue"] == pytest.approx(400.0)
+    prev_mp = {x["marketplace"]: x for x in body["per_marketplace_prev"]}
+    assert prev_mp["wb"]["revenue"] == pytest.approx(400.0)
+
+
+def test_dashboard_compare_mode_custom(api_client, db):
+    """compare_mode=custom берёт явные compare_from/compare_to."""
+    _seed_dashboard(db)
+    body = api_client.get("/api/dashboard", params={
+        "date_from": "2026-09-13", "date_to": "2026-09-20",
+        "compare": 1, "compare_mode": "custom",
+        "compare_from": "2026-09-01", "compare_to": "2026-09-05"}).json()
+    assert body["compare_window"] == {"from": "2026-09-01", "to": "2026-09-05"}
+
+
 def test_dashboard_export_xlsx_multi_sheet(api_client, db):
     """Экспорт дашборда — один xlsx с листами KPI/топы/цены/группы."""
     _seed_dashboard(db)

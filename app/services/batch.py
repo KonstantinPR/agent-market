@@ -20,7 +20,7 @@
 job_state, UI опрашивает GET /api/batch/{job_id}.
 """
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +45,8 @@ ACTIONS = [
     {"id": "apply", "label": "Отправить коррекцию цен", "write": True},
     {"id": "minpromo", "label": "Мин. цены автоакций", "write": False, "mp": ("wb",)},
     {"id": "analytics", "label": "Обновить аналитику на диск", "write": False},
+    {"id": "detail_check", "label": "Проверить пропущенные детализации",
+     "write": False, "mp": ("wb",)},
 ]
 
 _ACTION_BY_ID = {a["id"]: a for a in ACTIONS}
@@ -238,6 +240,8 @@ def _step_out(step: dict) -> dict:
     subs = _refresh_substeps(step)
     if subs is not None:
         out["substeps"] = subs
+    if step.get("details"):
+        out["details"] = step["details"]
     return out
 
 
@@ -384,6 +388,35 @@ def _do_analytics(db: Session, info, date_from, date_to) -> tuple:
     return (f"{res['folder']} · файлов: {len(res['files'])} ({files})", res["rows"])
 
 
+def _do_detail_check(db: Session, info, date_from, date_to, step: dict) -> tuple:
+    """Сверить отчёты WB о продажах с базой и догрузить пропущенные.
+
+    Окно проверки — как в шапке (С/По). Пропущенные отчёты грузятся одним
+    запросом окон (пагинация rrdId внутри сервера). Список периодов кладём в
+    step["details"], чтобы модалка показала, за какие периоды отчётов не было.
+    """
+    if info.marketplace != "wb":
+        return ("только для WB — пропущено", 0)
+    gaps = refresh_service.wb_detail_gaps(
+        db, date_from=date_from, date_to=date_to)
+    missing = gaps.get("missing") or []
+    step["details"] = [
+        {"report_id": m["report_id"], "date_from": m["date_from"],
+         "date_to": m["date_to"], "downloaded": False}
+        for m in missing
+    ]
+    if not missing:
+        return (f"все отчёты загружены ({gaps.get('available', 0)})", 0)
+    refresh_service.pull_wb_detail(
+        db, from_=date.fromisoformat(gaps["from"]),
+        to_=date.fromisoformat(gaps["to"]), write_db=True)
+    for d in step["details"]:
+        d["downloaded"] = True
+    return (
+        f"догружено отчётов: {len(missing)} · период "
+        f"{gaps['from']}…{gaps['to']}", len(missing))
+
+
 def minpromo_path(job_id: int, cab_id: int) -> Optional[Path]:
     job = _JOBS.get(job_id)
     if job is None:
@@ -507,6 +540,11 @@ def _worker(job_id: int, acts: list, scope: str, include_detail: bool,
                         _run_step(
                             job, step,
                             lambda: _do_analytics(db, info, date_from, date_to))
+                    elif aid == "detail_check":
+                        _run_step(
+                            job, step,
+                            lambda: _do_detail_check(
+                                db, info, date_from, date_to, step))
             except Exception as e:  # noqa: BLE001
                 cab["status"] = "failed"
                 cab.setdefault("error", str(e)[:300])

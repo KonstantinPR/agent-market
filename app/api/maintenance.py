@@ -3,6 +3,7 @@
 from app.api._common import *  # noqa: F401,F403
 from app.api._common import (
     _parse_window400,
+    _resolve_compare_window,
     _resolve_links_param,
 )
 from app.services import cabinets as cabinet_service
@@ -51,25 +52,12 @@ def api_pulls(db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # Обзор (dashboard), в т.ч. сравнение между связками (параметр links=id,id,…)
 # ---------------------------------------------------------------------------
-def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
-                       link_mp="", group_by="prefix"):
-    """Полный ответ /dashboard для одной связки (search_path уже выставлен).
+def _sales_aggregate(db, from_, to_, mp_param, cost_map):
+    """Свёртка продаж окна: (per_mp, total, daily).
 
-    link_mp — маркетплейс связки: если задан, дашборд считается только по нему.
-    Иначе dashboard_kpis создаёт нулевые карточки обеих МП, и при слиянии
-    (merge) карточке чужого МП доставался owner этой связки.
+    Источник — таблица Продажи (source != detail). Прибыль считается как
+    доход − |комиссия| − |логистика| − |хранение| − себестоимость проданного.
     """
-    if link_mp:
-        mp_param = link_mp
-    # Себестоимость проданного: net_cost товара по UPPER-матчингу артикула.
-    # Справочник маленький — читаем его в память и умножаем в Python. Это
-    # принципиально: коррелированный подзапрос в SQL делал по индексу/сканированию
-    # products на каждую строку продаж (O(n²)) и вешал дневной график на Postgres.
-    cost_map = {
-        (a or "").strip().upper(): float(c or 0.0)
-        for a, c in db.execute(
-            select(models.Product.article, models.Product.net_cost))
-    }
     query = (
         select(
             models.Marketplace.code.label("marketplace"),
@@ -128,11 +116,46 @@ def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
         total["sells"] = sum(p["sells"] for p in per_mp.values())
         total["revenue"] = round(sum(p["revenue"] for p in per_mp.values()), 2)
         total["income"] = round(sum(p["income"] for p in per_mp.values()), 2)
+    return per_mp, total, daily
+
+
+def _dashboard_payload(db, from_, to_, mp_param, prev, top, owner="",
+                       link_mp="", group_by="prefix"):
+    """Полный ответ /dashboard для одной связки (search_path уже выставлен).
+
+    link_mp — маркетплейс связки: если задан, дашборд считается только по нему.
+    Иначе dashboard_kpis создаёт нулевые карточки обеих МП, и при слиянии
+    (merge) карточке чужого МП доставался owner этой связки.
+    """
+    if link_mp:
+        mp_param = link_mp
+    # Себестоимость проданного: net_cost товара по UPPER-матчингу артикула.
+    # Справочник маленький — читаем его в память и умножаем в Python. Это
+    # принципиально: коррелированный подзапрос в SQL делал по индексу/сканированию
+    # products на каждую строку продаж (O(n²)) и вешал дневной график на Postgres.
+    cost_map = {
+        (a or "").strip().upper(): float(c or 0.0)
+        for a, c in db.execute(
+            select(models.Product.article, models.Product.net_cost))
+    }
+    per_mp, total, daily = _sales_aggregate(db, from_, to_, mp_param, cost_map)
+
+    # Прошлое окно — только для графиков сравнения (Динамика / Доход по МП).
+    per_mp_prev, daily_prev = [], {}
+    if prev is not None and prev[0] is not None and prev[1] is not None:
+        prev_mp, _prev_total, daily_prev = _sales_aggregate(
+            db, prev[0], prev[1], mp_param, cost_map)
+        per_mp_prev = list(prev_mp.values())
 
     return {
         "per_marketplace": list(per_mp.values()),
+        "per_marketplace_prev": per_mp_prev,
         "total": total,
         "daily": sorted(daily.values(), key=lambda d: d["date"]),
+        "daily_prev": sorted(daily_prev.values(), key=lambda d: d["date"]),
+        "compare_window": ({"from": str(prev[0]), "to": str(prev[1])}
+                           if prev is not None and prev[0] is not None
+                           and prev[1] is not None else None),
         "kpis": dashboard_service.dashboard_kpis(db, from_, to_, prev, mp_param),
         "tops": {
             "profit": dashboard_service.top_products(
@@ -159,8 +182,11 @@ def _sum_float_row(base: dict, add: dict, keys) -> None:
 def _merge_dashboards(payloads, from_, to_, top, freshness):
     """Сшивает ответы /dashboard по связкам: владелец в каждой строке/карточке."""
     per_mp = []
+    per_mp_prev = []
     total = {"sells": 0, "revenue": 0.0, "income": 0.0}
     daily = {}
+    daily_prev = {}
+    compare_window = None
     kt = {"sells": 0, "returns_qty": 0, "revenue": 0.0, "income": 0.0,
           "margin_gross": 0.0, "margin": 0.0, "articles": 0, "net_cost_est": 0}
     prev_sum = {"sells": 0, "returns_qty": 0, "revenue": 0.0, "income": 0.0,
@@ -172,10 +198,20 @@ def _merge_dashboards(payloads, from_, to_, top, freshness):
         owner = payload.get("_owner", "")
         for e in payload["per_marketplace"]:
             per_mp.append(dict(e, owner=owner))
+        for e in payload.get("per_marketplace_prev") or []:
+            per_mp_prev.append(dict(e, owner=owner))
+        if compare_window is None and payload.get("compare_window"):
+            compare_window = payload["compare_window"]
         for k in ("sells", "revenue", "income"):
             total[k] = (total[k] or 0) + (payload["total"].get(k) or 0)
         for d in payload["daily"]:
             dd = daily.setdefault(d["date"], {"date": d["date"], "revenue": 0.0, "income": 0.0, "sells": 0, "profit": 0.0})
+            dd["revenue"] += float(d.get("revenue") or 0)
+            dd["income"] += float(d.get("income") or 0)
+            dd["sells"] += int(d.get("sells") or 0)
+            dd["profit"] += float(d.get("profit") or 0)
+        for d in payload.get("daily_prev") or []:
+            dd = daily_prev.setdefault(d["date"], {"date": d["date"], "revenue": 0.0, "income": 0.0, "sells": 0, "profit": 0.0})
             dd["revenue"] += float(d.get("revenue") or 0)
             dd["income"] += float(d.get("income") or 0)
             dd["sells"] += int(d.get("sells") or 0)
@@ -218,6 +254,11 @@ def _merge_dashboards(payloads, from_, to_, top, freshness):
         d["revenue"] = round(d["revenue"], 2)
         d["income"] = round(d["income"], 2)
 
+    for d in daily_prev.values():
+        d["profit"] = round(d["profit"], 2)
+        d["revenue"] = round(d["revenue"], 2)
+        d["income"] = round(d["income"], 2)
+
     margin = kt["margin"] or 0
     income = kt["income"] or 0
     sells = kt["sells"] or 0
@@ -248,8 +289,11 @@ def _merge_dashboards(payloads, from_, to_, top, freshness):
 
     return {
         "per_marketplace": per_mp,
+        "per_marketplace_prev": per_mp_prev,
         "total": total,
         "daily": sorted(daily.values(), key=lambda d: d["date"]),
+        "daily_prev": sorted(daily_prev.values(), key=lambda d: d["date"]),
+        "compare_window": compare_window,
         "kpis": {"total": kt, "per_mp": per_mp_kpi, "compare": compare},
         "tops": {
             "profit": {"rows": _slice(tops_profit, top), "count": len(tops_profit)},
@@ -276,6 +320,9 @@ def api_dashboard(
     date_to: Optional[str] = None,
     marketplace: Optional[str] = None,
     compare: int = 0,
+    compare_mode: Optional[str] = None,
+    compare_from: Optional[str] = None,
+    compare_to: Optional[str] = None,
     top: Optional[int] = None,
     links: Optional[str] = None,
     group_by: Optional[str] = None,
@@ -285,6 +332,9 @@ def api_dashboard(
 
     marketplace: 'wb' | 'ozon' | 'wb,ozon' | 'all' (пусто = все).
     compare=1 добавляет сравнение маржи с предыдущим аналогичным окном.
+    compare_mode ("prev"|"last_year"|"custom") + compare_from/compare_to — окно
+    сравнения для графиков «Динамика за период» и «Доход по маркетплейсам»
+    (daily_prev / per_marketplace_prev / compare_window).
     links=id,id,… — сравнение между связками: каждая связка считается под своей
     схемой, ответы сшиваются, в строках/карточках появляется «owner» (владелец).
     Фильтр связок по marketplace: при выбранном одном МП сравниваются только
@@ -298,8 +348,8 @@ def api_dashboard(
 
     prev = None
     if compare and from_ and to_:
-        delta = (to_ - from_).days
-        prev = (from_ - timedelta(days=delta), from_ - timedelta(days=1))
+        prev = _resolve_compare_window(
+            date_from, date_to, compare_mode or "", compare_from, compare_to)
 
     link_infos = _resolve_links_param(db, links)
     wanted = dashboard_service._wanted(mp_param)

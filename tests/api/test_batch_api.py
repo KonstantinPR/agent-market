@@ -71,7 +71,7 @@ def test_batch_actions_endpoint(api_client):
     assert r.status_code == 200
     body = r.json()
     assert [a["id"] for a in body["actions"]] == [
-        "refresh", "recalc", "apply", "minpromo", "analytics"]
+        "refresh", "recalc", "apply", "minpromo", "analytics", "detail_check"]
     assert set(body["scopes"]) == {"all", "active", "main"}
 
 
@@ -101,6 +101,51 @@ def test_batch_state_unknown_404(api_client):
 
 def test_batch_minpromo_unknown_404(api_client):
     assert api_client.get("/api/batch/99999/minpromo/1").status_code == 404
+
+
+def test_batch_run_detail_check_reports_missing_periods(
+        db_engine, api_client, db, patch_factory, monkeypatch):
+    """Прогон «проверить пропущенные детализации»: находит пропуски и догружает."""
+    from app.services import refresh as refresh_service
+
+    _drop_schema()
+    c = _mk_cab(db, "b-gaps", marketplace="wb",
+                creds=secrets.encrypt({"wb": {"standard": "x", "finance": "y"}}))
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c])
+
+    monkeypatch.setattr(
+        refresh_service, "wb_detail_gaps",
+        lambda db, date_from=None, date_to=None, **kw: {
+            "from": "2026-08-01", "to": "2026-09-30", "period": "weekly",
+            "available": 9, "downloaded": 8,
+            "missing": [{"report_id": "777", "date_from": "2026-08-01",
+                         "date_to": "2026-08-07", "create_date": ""}],
+            "checked_from": "2026-08-01", "checked_to": "2026-09-30"})
+    pulled = []
+    monkeypatch.setattr(refresh_service, "pull_wb_detail",
+                        lambda *a, **kw: pulled.append(kw))
+
+    r = api_client.post("/api/batch/run", json={
+        "actions": ["detail_check"], "scope": "all",
+        "date_from": "2026-08-01", "date_to": "2026-09-30"})
+    assert r.status_code == 200, r.text
+    st = _wait_batch(r.json()["job_id"])
+    assert st["status"] == "done"
+    assert st["ok"] == 1 and st["failed"] == 0, st["steps"]
+
+    step = st["steps"][0]
+    assert step["action"] == "detail_check"
+    assert step["status"] == "ok"
+    assert "догружено отчётов: 1" in step["note"]
+    assert step["details"][0]["report_id"] == "777"
+    assert step["details"][0]["downloaded"] is True
+    # подробности видны и в разрезе по кабинетам
+    assert st["cabs"][0]["steps"][0]["details"][0]["report_id"] == "777"
+    assert pulled, "пропущенный отчёт не был догружен"
+
+    db.rollback()
+    _drop_schema()
+    engine.dispose()
 
 
 def test_batch_run_refresh_completes(db_engine, api_client, db, patch_factory):

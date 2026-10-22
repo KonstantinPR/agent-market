@@ -5,50 +5,14 @@ import pandas as pd
 from app.api._common import *  # noqa: F401,F403
 from app.api._common import (
     _cashflow_received,
+    _compare_window,  # noqa: F401  (реэкспорт: тесты и детализации)
     _margin_detail_totals,
     _parse_window400,
+    _resolve_compare_window,
     _resolve_links_param,
 )
 
 router = APIRouter()
-
-
-def _compare_window(date_from, date_to, ozon_small=True):
-    """Окно предыдущего аналогичного периода или None, если compare невозможно."""
-    try:
-        f = date.fromisoformat(date_from)
-        t = date.fromisoformat(date_to)
-        delta = (t - f).days
-        prev_from = f - timedelta(days=delta + (1 if ozon_small else 0))
-        return prev_from, f - timedelta(days=1)
-    except (ValueError, TypeError):
-        return None
-
-
-def _resolve_compare_window(date_from, date_to, mode="", compare_from=None,
-                            compare_to=None, ozon_small=True):
-    """Окно сравнения по режиму селектора «Сравнить ▾».
-
-    mode:
-      ""/"prev" — предыдущий аналогичный период (как ``_compare_window``);
-      "custom"  — явные даты ``compare_from``/``compare_to`` (обе обязательны);
-      "last_year" — то же окно, сдвинутое на год назад (год = 365 дней).
-    Возвращает (prev_from, prev_to) либо None, если окно построить нельзя.
-    """
-    mode = (mode or "").strip().lower()
-    if mode == "custom":
-        try:
-            return date.fromisoformat(compare_from), date.fromisoformat(compare_to)
-        except (ValueError, TypeError):
-            return None
-    if mode == "last_year":
-        try:
-            f = date.fromisoformat(date_from)
-            t = date.fromisoformat(date_to)
-            return f - timedelta(days=365), t - timedelta(days=365)
-        except (ValueError, TypeError):
-            return None
-    return _compare_window(date_from, date_to, ozon_small=ozon_small)
 
 
 # ---------------------------------------------------------------------------

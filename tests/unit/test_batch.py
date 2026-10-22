@@ -28,12 +28,19 @@ def _mk_job(job_id, steps):
 def test_actions_public_order_and_write_flag():
     acts = batch_service.actions_public()
     assert [a["id"] for a in acts] == [
-        "refresh", "recalc", "apply", "minpromo", "analytics"]
+        "refresh", "recalc", "apply", "minpromo", "analytics", "detail_check"]
     by = {a["id"]: a for a in acts}
     assert by["apply"]["write"] is True
     assert by["refresh"]["write"] is False
     assert by["analytics"]["write"] is False
+    assert by["detail_check"]["write"] is False
     assert all(a["label"] for a in acts)
+
+
+def test_detail_check_is_wb_only_and_last():
+    assert batch_service._ACTION_BY_ID["detail_check"].get("mp") == ("wb",)
+    assert batch_service._normalize_actions(
+        ["detail_check", "refresh"]) == ["refresh", "detail_check"]
 
 
 def test_minpromo_is_wb_only():
@@ -91,6 +98,72 @@ def test_do_analytics_reports_folder_and_files(monkeypatch):
     assert rows == 12
     assert "файлов: 2" in note
     assert "margin_funnel.xlsx" in note and "margin_detail.xlsx" in note
+
+
+def test_do_detail_check_no_gaps_reports_all_loaded(monkeypatch):
+    monkeypatch.setattr(
+        refresh_service, "wb_detail_gaps",
+        lambda db, date_from=None, date_to=None, **kw: {
+            "from": "2026-09-01", "to": "2026-09-30", "available": 4,
+            "downloaded": 4, "missing": []})
+    called = []
+    monkeypatch.setattr(refresh_service, "pull_wb_detail",
+                        lambda *a, **kw: called.append(1))
+    info = _Info(1, "Связка", "wb", "Фирма")
+    step = {}
+    note, rows = batch_service._do_detail_check(
+        db=None, info=info, date_from="2026-09-01", date_to="2026-09-30",
+        step=step)
+    assert rows == 0
+    assert "все отчёты загружены" in note
+    assert step["details"] == []
+    assert called == []
+
+
+def test_do_detail_check_downloads_missing(monkeypatch):
+    monkeypatch.setattr(
+        refresh_service, "wb_detail_gaps",
+        lambda db, date_from=None, date_to=None, **kw: {
+            "from": "2026-08-01", "to": "2026-09-30", "available": 9,
+            "downloaded": 7, "missing": [
+                {"report_id": "111", "date_from": "2026-08-01",
+                 "date_to": "2026-08-07", "create_date": ""},
+                {"report_id": "222", "date_from": "2026-08-08",
+                 "date_to": "2026-08-14", "create_date": ""}]})
+    calls = {}
+
+    def _pull(db, from_=None, to_=None, write_db=True):
+        calls["from"] = from_
+        calls["to"] = to_
+        calls["write_db"] = write_db
+
+    monkeypatch.setattr(refresh_service, "pull_wb_detail", _pull)
+    info = _Info(1, "Связка", "wb", "Фирма")
+    step = {}
+    note, rows = batch_service._do_detail_check(
+        db=None, info=info, date_from="2026-08-01", date_to="2026-09-30",
+        step=step)
+    assert rows == 2
+    assert "догружено отчётов: 2" in note
+    assert calls["from"].isoformat() == "2026-08-01"
+    assert calls["to"].isoformat() == "2026-09-30"
+    assert calls["write_db"] is True
+    assert len(step["details"]) == 2
+    assert all(d["downloaded"] for d in step["details"])
+
+
+def test_do_detail_check_skips_non_wb(monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("для Ozon проверка не должна вызываться")
+
+    monkeypatch.setattr(refresh_service, "wb_detail_gaps", _boom)
+    info = _Info(2, "Ozon", "ozon", "Фирма")
+    step = {}
+    note, rows = batch_service._do_detail_check(
+        db=None, info=info, date_from=None, date_to=None, step=step)
+    assert rows == 0
+    assert "только для WB" in note
+    assert "details" not in step
 
 
 def test_job_state_attaches_live_refresh_substeps(monkeypatch):

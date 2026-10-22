@@ -679,10 +679,18 @@ assert.ok(htmlSrc.includes('id="batchAnalytics"'),
   "в меню массовых действий есть чекбокс batchAnalytics");
 assert.ok(jsSrc.includes('"analytics"') && jsSrc.includes('"batchAnalytics"'),
   "batchActions() знает про действие analytics");
-assert.ok(/for \(const id of \["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics"\]\)/.test(jsSrc),
-  "initBatchMenu подписывает batchAnalytics на updateBatchHint");
+assert.ok(/for \(const id of \["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics", "batchDetailCheck"\]\)/.test(jsSrc),
+  "initBatchMenu подписывает batchAnalytics/batchDetailCheck на updateBatchHint");
 assert.ok(jsSrc.includes("date_from: f.date_from, date_to: f.date_to"),
   "startBatch передаёт период из шапки (date_from/date_to)");
+
+// «Массовые действия → Проверить пропущенные детализации».
+assert.ok(htmlSrc.includes('id="batchDetailCheck"'),
+  "в меню массовых действий есть чекбокс batchDetailCheck");
+assert.ok(jsSrc.includes("detail_check: \"batchDetailCheck\""),
+  "batchActions() знает про действие detail_check");
+assert.ok(jsSrc.includes('s.action === "detail_check"') && jsSrc.includes("s.details"),
+  "stepHtml показывает периоды пропущенных детализаций");
 assert.ok(apiSrc.includes("date_from=payload.get(\"date_from\")"),
   "api /batch/run прокидывает date_from в сервис");
 assert.ok(jsSrc.includes("Файлы аналитики будут перезаписаны"),
@@ -714,6 +722,62 @@ assert.ok(/refreshPricingLastApply\("wb"\)/.test(jsSrc) &&
   "renderPricing и renderPricingOzon обновляют плашку своего МП");
 assert.ok(jsSrc.includes('summary += " · " + laSuffix'),
   "суффикс последнего применения добавляется в зелёную строку");
+
+// Обзор: сравнение за периоды на графиках «Динамика» и «Доход по МП».
+assert.ok(htmlSrc.includes('id="btnDashCompare"') && htmlSrc.includes('id="dashComparePanel"'),
+  "в фильтрах Обзора есть меню «Сравнить ▾» для периодов");
+assert.ok(/"dashboard": \{ btn: "btnDashCompare", panel: "dashComparePanel" \}/.test(jsSrc),
+  "CMP_TABS знает вкладку dashboard");
+assert.ok(jsSrc.includes('const cmp = cmpQuery("dashboard")'),
+  "dashQuery подмешивает cmpQuery(dashboard)");
+assert.ok(jsSrc.includes("d.daily_prev") && jsSrc.includes('label: "Пред. период"'),
+  "«Динамика за период» рисует прошлый период вторым рядом");
+assert.ok(jsSrc.includes("per_marketplace_prev"),
+  "«Доход по МП» использует per_marketplace_prev для парных столбцов");
+assert.ok(jsSrc.includes("function dashPrevColor"),
+  "есть приглушение цвета для прошлого периода");
+assert.ok(jsSrc.includes("function paintDashCompareCaption"),
+  "подпись окна сравнения выводится в заголовке «Динамика за период»");
+
+// Множественные виды графика «Динамика за период»: столбцы / линия / кривая / область.
+assert.ok(htmlSrc.includes('id="chartType"') && htmlSrc.includes('value="smooth"')
+  && htmlSrc.includes('value="area"'),
+  "виды графика: столбцы, линия, кривая, область");
+assert.ok(jsSrc.includes("function dashRgba"),
+  "есть dashRgba для полупрозрачной заливки области");
+assert.ok(jsSrc.includes('chartType === "smooth"') && jsSrc.includes('chartType === "area"'),
+  "paintDashDailyChart учитывает кривую и область");
+// Значения по умолчанию для «Динамики за период»: Доход / По неделям / Область.
+assert.ok(/<option value="income" selected/.test(htmlSrc),
+  "по умолчанию выбран показатель «Доход»");
+assert.ok(/<option value="week" selected/.test(htmlSrc),
+  "по умолчанию группировка «По неделям»");
+assert.ok(/<option value="area" selected/.test(htmlSrc),
+  "по умолчанию вид графика «Область»");
+
+// Итоговые суммы в подписи графика + день в метках оси X.
+assert.ok(jsSrc.includes("function dashPeriodTotal"),
+  "есть dashPeriodTotal для итогов по периоду");
+assert.ok(jsSrc.includes("(было ") && jsSrc.includes('m.label + ": " + fmtMoney(cur)'),
+  "подпись графика показывает итог текущего и предыдущего периодов");
+assert.ok(jsSrc.includes('gran === "month"') && jsSrc.includes('Number(p[2]) + "." + p[1]'),
+  "метки оси X содержат день (ДД.ММ) для дневной/недельной группировки");
+
+// Секция «Итого» сворачивается как остальные разделы обзора.
+assert.ok(htmlSrc.includes('data-csec="hero"') && htmlSrc.includes('class="dash-sec dash-hero"'),
+  "секция Итого оформлена сворачиваемой секцией обзора");
+
+// Быстрый выбор периода (пресеты) у пар дат «С … по …».
+assert.ok(htmlSrc.includes('id="fPreset"') && htmlSrc.includes('id="dashPreset"'),
+  "в шапке и дашборде есть пресеты периода");
+assert.ok(htmlSrc.includes("Последние 2 недели") && htmlSrc.includes("Последний месяц")
+  && htmlSrc.includes("Последний квартал") && htmlSrc.includes("Последний год"),
+  "пресеты: 2 недели / месяц / квартал / год");
+assert.ok(jsSrc.includes("function initDatePreset"),
+  "есть initDatePreset для пар дат");
+assert.ok(jsSrc.includes('initDatePreset("fPreset", "fFrom", "fTo"')
+  && jsSrc.includes('initDatePreset("dashPreset", "dashFrom", "dashTo"'),
+  "пресеты подключены к шапке и к дашборду");
 
 // Список «Артикулы» на «Детализация Продаж WB»: текст + Excel, как меню PDF.
 const { marginArtsList, setMarginArts, marginArtsParam } = sandbox;

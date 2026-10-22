@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "146";
+const UI_VERSION = "157";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1140,6 +1140,9 @@ function dashQuery() {
   const mp = $("#dashMarketplace").value;
   if (mp) q.marketplace = mp;
   if ($("#dashCompare").checked) q.compare = 1;
+  // Период сравнения для графиков (Сравнить ▾): compare=1 + режим/даты.
+  const cmp = cmpQuery("dashboard");
+  if (cmp.compare) { q.compare = 1; Object.assign(q, cmp); }
   const links = cabLinksAll();
   if (links) q.links = links;
   return q;
@@ -1440,6 +1443,9 @@ const DASH_PREFIX_COLORS = [
   "#8a5a2b", "#7f7f7f", "#b59a3e", "#e05252", "#2e7d32", "#1565c0",
 ];
 
+// Прошлый период на графиках сравнения: единый приглушённый серый.
+const DASH_PREV_COLOR = "rgba(120, 120, 120, 0.55)";
+
 // Признаки группировки товаров: общий выбор для таблицы «Прибыльность по
 // группам» и графика «Показатели → По группам товаров».
 const DASH_GROUPINGS = {
@@ -1472,23 +1478,54 @@ function dashChartA() {
   const labels = rows.map((x) => x.owner || MP_LABELS[x.marketplace] || x.marketplace);
   const values = rows.map((x) => x[metric] || 0);
   const colors = rows.map((x) => MP_COLORS[x.marketplace] || "#999");
-  return { labels, values, colors, m };
+  // Прошлый период — те же МП (матч по owner+marketplace), нет данных → null.
+  const prevRows = (dashData && dashData.per_marketplace_prev) || [];
+  const prevByKey = new Map(prevRows.map((x) =>
+    [(x.owner || "") + "|" + (x.marketplace || ""), x]));
+  const prevValues = rows.map((x) => {
+    const k = (x.owner || "") + "|" + (x.marketplace || "");
+    return prevByKey.has(k) ? (prevByKey.get(k)[metric] || 0) : null;
+  });
+  const prevColors = rows.map((x) => dashPrevColor(MP_COLORS[x.marketplace] || "#999"));
+  return { labels, values, colors, prevValues, prevColors,
+           hasPrev: prevRows.length > 0, m };
+}
+
+// #rrggbb → rgba(r,g,b,a); при некорректном вводе возвращает fallback.
+function dashRgba(hex, alpha, fallback) {
+  const h = String(hex || "").replace("#", "");
+  if (h.length !== 6 || !/^[0-9a-fA-F]{6}$/.test(h)) return fallback;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// Приглушает цвет текущего периода для парного столбца «прошлый период».
+function dashPrevColor(hex) {
+  return dashRgba(hex, 0.45, DASH_PREV_COLOR);
 }
 
 function paintDashChartA() {
   const a = dashChartA();
   const horizontal = a.horizontal || a.labels.length > 6;
+  const datasets = [{
+    label: a.m.label,
+    data: a.values,
+    backgroundColor: a.colors,
+    maxBarThickness: 56,
+  }];
+  if (a.hasPrev) {
+    datasets.push({
+      label: "Пред. период",
+      data: a.prevValues,
+      backgroundColor: a.prevColors,
+      maxBarThickness: 56,
+    });
+  }
   setChart("chartMpIncome", {
     type: "bar",
-    data: {
-      labels: a.labels,
-      datasets: [{
-        label: a.m.label,
-        data: a.values,
-        backgroundColor: a.colors,
-        maxBarThickness: 56,
-      }],
-    },
+    data: { labels: a.labels, datasets: datasets },
     options: chartOpts(a, horizontal),
   });
   const cap = $("#dashChartACap");
@@ -1508,7 +1545,7 @@ function chartOpts(a, horizontal) {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: { display: false },
+      legend: { display: !!a.hasPrev },
       tooltip: {
         callbacks: {
           title: (items) => {
@@ -1546,26 +1583,48 @@ function chartOpts(a, horizontal) {
 }
 
 function paintDashDailyChart(d) {
-  const metric = $("#chartMetric") ? $("#chartMetric").value : "revenue";
-  const gran = $("#chartGran") ? $("#chartGran").value : "day";
-  const chartType = $("#chartType") ? $("#chartType").value : "bar";
+  const metric = $("#chartMetric") ? $("#chartMetric").value : "income";
+  const gran = $("#chartGran") ? $("#chartGran").value : "week";
+  const chartType = $("#chartType") ? $("#chartType").value : "area";
   const m = DASH_METRICS[metric] || DASH_METRICS.revenue;
   const rows = bucketDaily(d.daily, gran);
   const data = rows.map((x) => x[metric] || 0);
-  const dataset = chartType === "line"
-    ? { label: m.label, data, borderColor: m.color, backgroundColor: m.color, fill: false, tension: 0.25, pointRadius: 2 }
+  // Вид графика: столбцы / прямая линия / кривая (сглаженная) / область (кривая с заливкой).
+  const isLine = chartType === "line" || chartType === "smooth" || chartType === "area";
+  const tension = chartType === "smooth" || chartType === "area" ? 0.35 : 0;
+  const fill = chartType === "area";
+  const cjsType = isLine ? "line" : "bar";
+  const datasets = [];
+  const ds = isLine
+    ? { label: m.label, data, borderColor: m.color,
+        backgroundColor: fill ? dashRgba(m.color, 0.25, m.color) : m.color,
+        fill, tension, pointRadius: 2, borderWidth: 2 }
     : { label: m.label, data, backgroundColor: m.color, maxBarThickness: 32 };
+  datasets.push(ds);
+  // Прошлый период — наложением по индексу бакета (day N ↔ day N): обрезаем
+  // прошлый ряд до длины текущего, чтобы столбцы/точки сравнивались 1:1.
+  const prevRows = bucketDaily(d.daily_prev || [], gran);
+  const hasPrev = prevRows.length > 0;
+  if (hasPrev) {
+    const prevData = rows.map((_, i) => prevRows[i] ? (prevRows[i][metric] || 0) : null);
+    const pc = DASH_PREV_COLOR;
+    datasets.push(isLine
+      ? { label: "Пред. период", data: prevData, borderColor: pc, backgroundColor: pc,
+          borderDash: [5, 4], fill: false, tension, pointRadius: 2, borderWidth: 2 }
+      : { label: "Пред. период", data: prevData, backgroundColor: pc, maxBarThickness: 32 });
+  }
   setChart("chartDaily", {
-    type: chartType,
-    data: { labels: rows.map((r) => dashBucketLabel(r.date, gran)), datasets: [dataset] },
+    type: cjsType,
+    data: { labels: rows.map((r) => dashBucketLabel(r.date, gran)), datasets: datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: hasPrev } },
       scales: {
         x: { ticks: { maxTicksLimit: 14 } },
         y: { ticks: { callback: (v) => fmtMoney(v) } },
       },
+      // Для area/smooth линии кривизна/заливка уже в dataset.
     },
   });
 }
@@ -1581,7 +1640,8 @@ function dashWeekKey(dateStr) {
 
 function dashBucketLabel(key, gran) {
   const p = key.split("-");
-  return gran === "week" ? Number(p[2]) + "." + p[1] : p[1] + "." + p[0];
+  if (gran === "month") return p[1] + "." + p[0];
+  return Number(p[2]) + "." + p[1];
 }
 
 function bucketDaily(rows, gran) {
@@ -1603,6 +1663,30 @@ function bucketDaily(rows, gran) {
 function paintDashCharts(d) {
   paintDashChartA();
   paintDashDailyChart(d);
+  paintDashCompareCaption(d);
+}
+
+// Сумма показателя по ряду за весь период (для итогов в подписи графика).
+function dashPeriodTotal(rows, metric) {
+  return (rows || []).reduce((acc, r) => acc + (r[metric] || 0), 0);
+}
+
+// Подпись окна сравнения в заголовке «Динамика за период» (если включено)
+// с итоговыми суммами текущего и предыдущего периодов.
+function paintDashCompareCaption(d) {
+  const cap = $("#dashChartBDailyCap");
+  if (!cap) return;
+  const cw = d && d.compare_window;
+  const metric = $("#chartMetric") ? $("#chartMetric").value : "income";
+  const m = DASH_METRICS[metric] || DASH_METRICS.income;
+  let text = "Динамика за период";
+  if (cw) {
+    const cur = dashPeriodTotal(d.daily, metric);
+    const prev = dashPeriodTotal(d.daily_prev, metric);
+    text += " · сравнение с " + cw.from + "…" + cw.to
+      + " · " + m.label + ": " + fmtMoney(cur) + " (было " + fmtMoney(prev) + ")";
+  }
+  cap.textContent = text;
 }
 
 function repaintDashCharts() {
@@ -3866,6 +3950,7 @@ const CMP_TABS = {
   "oz-detail": { btn: "btnOzDetailCompare", panel: "ozDetailComparePanel" },
   "margin-detail": { btn: "btnMarginDetailCompare", panel: "marginDetailComparePanel" },
   "margin-ozon-detail": { btn: "btnMarginOzonDetailCompare", panel: "marginOzonDetailComparePanel" },
+  "dashboard": { btn: "btnDashCompare", panel: "dashComparePanel" },
 };
 const CMP_MODE_LABELS = {
   prev: "Предыдущий период",
@@ -4443,6 +4528,32 @@ function initDates() {
   from.setDate(to.getDate() - 30);
   $("#fFrom").value = from.toISOString().slice(0, 10);
   $("#fTo").value = to.toISOString().slice(0, 10);
+}
+
+// Быстрый выбор периода для пары дат «С … по …»: предустановки «последние
+// 2 недели / месяц / квартал / год». Пресет подставляет даты (сегодня − N дней …
+// сегодня) и вызывает onApply; ручная правка дат сбрасывает пресет на «— свой —».
+function initDatePreset(presetId, fromId, toId, onApply) {
+  const preset = document.getElementById(presetId);
+  const fromEl = document.getElementById(fromId);
+  const toEl = document.getElementById(toId);
+  if (!preset || !fromEl || !toEl) return;
+  const resetInputs = () => {
+    if (preset.value) preset.value = "";
+    try { localStorage.removeItem("daterange-preset:" + presetId); } catch (e) { /* ignore */ }
+  };
+  preset.addEventListener("change", () => {
+    const days = parseInt(preset.value, 10);
+    if (!days) return;
+    const to = new Date();
+    const from = new Date();
+    from.setDate(to.getDate() - (days - 1));
+    fromEl.value = from.toISOString().slice(0, 10);
+    toEl.value = to.toISOString().slice(0, 10);
+    try { localStorage.setItem("daterange-preset:" + presetId, preset.value); } catch (e) { /* ignore */ }
+    if (onApply) onApply();
+  });
+  [fromEl, toEl].forEach((el) => el.addEventListener("change", resetInputs));
 }
 
 function filenameFromDisposition(d) {
@@ -7240,15 +7351,16 @@ async function retryFailedRefresh() {
 // по выбранным связкам. Разрушающее действие (коррекция цен) подтверждается
 // предпросмотром с числом изменений по каждой связке.
 function batchActions() {
-  const ids = ["refresh", "recalc", "apply", "minpromo", "analytics"];
+  const ids = ["refresh", "recalc", "apply", "minpromo", "analytics", "detail_check"];
   const map = { refresh: "batchRefresh", recalc: "batchRecalc", apply: "batchApply",
-                minpromo: "batchMinpromo", analytics: "batchAnalytics" };
+                minpromo: "batchMinpromo", analytics: "batchAnalytics",
+                detail_check: "batchDetailCheck" };
   return ids.filter((id) => { const el = $("#" + map[id]); return el && el.checked; });
 }
 
 function initBatchMenu() {
   // Чекбоксы не запоминаем: при каждой загрузке apply/minpromo выключены.
-  for (const id of ["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics"]) {
+  for (const id of ["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics", "batchDetailCheck"]) {
     const el = $("#" + id);
     if (el) el.addEventListener("change", updateBatchHint);
   }
@@ -7269,6 +7381,11 @@ function updateBatchHint() {
   if (acts.includes("apply")) { hint.textContent = "Коррекция цен изменит цены в кабинетах"; return; }
   if (acts.includes("analytics")) {
     hint.textContent = "Файлы аналитики будут перезаписаны в папки Dropbox (период — из шапки)";
+    return;
+  }
+  if (acts.includes("detail_check")) {
+    hint.textContent = "Проверка детализаций сверяется с WB (finance-API) за период из шапки; "
+      + "пропущенные отчёты догрузятся — это может занять несколько минут";
     return;
   }
   hint.textContent = "";
@@ -7440,6 +7557,18 @@ function stepHtml(j, s) {
         '<span class="rs-status">' + escapeHtml(stepText(sub)) + "</span></div>";
       if (sub.note) h += '<div class="refresh-step-note sub">' + escapeHtml(sub.note) + "</div>";
       if (sub.error) h += '<div class="refresh-step-error sub">' + escapeHtml(sub.error) + "</div>";
+    }
+    h += "</div>";
+  }
+  if (s.action === "detail_check" && s.details && s.details.length) {
+    h += '<div class="refresh-sub">';
+    for (const d of s.details) {
+      const mark = d.downloaded ? "✓ догружен" : "пропущен";
+      const period = (d.date_from || "?") + " — " + (d.date_to || "?");
+      h += '<div class="refresh-step sub ' + (d.downloaded ? "ok" : "pending") + '">' +
+        '<span class="rs-name">Отчёт ' + escapeHtml(String(d.report_id || "—"))
+        + " · " + escapeHtml(period) + "</span>" +
+        '<span class="rs-status">' + mark + "</span></div>";
     }
     h += "</div>";
   }
@@ -7647,6 +7776,7 @@ function updateCrumb(name) {
 
 function syncHeaderForTab(name) {
   const mp = document.getElementById("fMarketplaceWrap");
+  const presetWrap = document.getElementById("fPresetWrap");
   const fromWrap = document.getElementById("fFromWrap");
   const toWrap = document.getElementById("fToWrap");
   const applyBtn = document.getElementById("btnApply");
@@ -7655,6 +7785,7 @@ function syncHeaderForTab(name) {
   const isApi = !!name && (name.startsWith("wb-") || name.startsWith("oz-") || name === "products");
   const isAuto = !!name && name.startsWith("automation");
   if (mp) mp.classList.toggle("hidden", isApi || isAuto);
+  if (presetWrap) presetWrap.classList.toggle("hidden", isAuto);
   if (fromWrap) fromWrap.classList.toggle("hidden", isAuto);
   if (toWrap) toWrap.classList.toggle("hidden", isAuto);
   if (applyBtn) applyBtn.classList.toggle("hidden", isAuto);
@@ -9834,6 +9965,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const el = $("#" + id);
     if (el) el.addEventListener("change", () => loadTab("dashboard"));
   });
+  initDatePreset("fPreset", "fFrom", "fTo", () => loadTab(currentTab));
+  initDatePreset("dashPreset", "dashFrom", "dashTo", () => loadTab("dashboard"));
   document.addEventListener("click", (ev) => {
     const title = ev.target.closest(".dash-sec-title");
     if (title) {

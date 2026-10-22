@@ -344,6 +344,9 @@ main { padding: 20px; }
   color: #111;
 }
 .dash-filters .dash-range { gap: 8px; }
+/* Быстрый выбор периода: пресет «2 недели / месяц / квартал / год». */
+.filters label#fPresetWrap select,
+.dash-filters .dash-range select#dashPreset { max-width: 150px; }
 .dash-filters-right { margin-left: auto; display: inline-flex; gap: 10px; }
 @media (max-width: 980px) {
   .dash-filters-right { margin-left: 0; }
@@ -1257,9 +1260,8 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .colview-row.colview-sub { gap: 4px; }
 
 /* ---------- Дашборд (Обзор) ---------- */
-.dash-hero {
-  margin-bottom: 14px;
-}
+/* «Итого» — такая же сворачиваемая секция (.dash-sec), как и остальные. */
+.dash-hero .dash-sec-body { padding-bottom: 0; }
 .dash-kpis {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
