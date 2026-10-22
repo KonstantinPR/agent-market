@@ -10,6 +10,7 @@ from app.api._common import (
     _parse_window400,
     _resolve_compare_window,
     _resolve_links_param,
+    resolve_compare_periods,
 )
 
 router = APIRouter()
@@ -19,7 +20,7 @@ router = APIRouter()
 # Детализация продаж WB
 # ---------------------------------------------------------------------------
 def _wb_detail_payload(db, from_, to_, article_like, compare, compare_window, owner="",
-                       tokens=None):
+                       tokens=None, cmp_periods=None, cmp_fields=None):
     arts, matched = article_tokens_service.resolve_articles(db, tokens) \
         if tokens else (None, set())
     df = margin_service.margin_detail_dataframe(
@@ -27,7 +28,41 @@ def _wb_detail_payload(db, from_, to_, article_like, compare, compare_window, ow
         default_net_cost=settings.default_net_cost, articles=arts,
     )
     prev_window = None
-    if compare and compare_window:
+    cmp_meta = None
+    if cmp_periods and cmp_fields:
+        # Мультивыбор: выбранные поля за каждое окно (до 3); окна с одинаковыми
+        # датами считаем один раз.
+        frames = {}
+        windows = []
+        for win in cmp_periods:
+            key = (win["date_from"], win["date_to"])
+            if key not in frames:
+                frames[key] = margin_service.margin_detail_dataframe(
+                    db, date_from=date.fromisoformat(win["date_from"]),
+                    date_to=date.fromisoformat(win["date_to"]),
+                    article_like=article_like,
+                    default_net_cost=settings.default_net_cost, articles=arts,
+                )
+            windows.append((win, frames[key]))
+        df, cmp_cols = margin_service.compare_margin_periods_multi(
+            df, windows, cmp_fields)
+        prev_window = {"date_from": cmp_periods[0]["date_from"],
+                       "date_to": cmp_periods[0]["date_to"]}
+        cmp_meta = {
+            "periods": [
+                {k: win[k] for k in
+                 ("key", "mode", "label", "short", "date_from", "date_to")}
+                for win in cmp_periods
+            ],
+            "fields": [
+                {"key": m,
+                 "label": margin_service.MARGIN_CMP_FIELDS[m][0],
+                 "kind": margin_service.MARGIN_CMP_FIELDS[m][1]}
+                for m in cmp_fields
+            ],
+            "columns": cmp_cols,
+        }
+    elif compare and compare_window:
         prev_from, prev_to = compare_window
         prev_df = margin_service.margin_detail_dataframe(
             db, date_from=prev_from, date_to=prev_to, article_like=article_like,
@@ -49,7 +84,7 @@ def _wb_detail_payload(db, from_, to_, article_like, compare, compare_window, ow
     if owner and not df.empty:
         df = df.copy()
         df["owner"] = owner
-    return df, detail_articles, prev_window, matched
+    return df, detail_articles, prev_window, matched, cmp_meta
 
 
 @router.get("/margin/detail")
@@ -62,6 +97,8 @@ def api_margin_detail(
     compare_mode: Optional[str] = None,
     compare_from: Optional[str] = None,
     compare_to: Optional[str] = None,
+    compare_fields: Optional[str] = None,
+    compare_periods: Optional[str] = None,
     links: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -76,6 +113,11 @@ def api_margin_detail(
     явные compare_from/compare_to, last_year — то же окно год назад.
     Требует даты date_from/date_to.
 
+    compare_fields + compare_periods — мультивыбор «Сравнения»: выбранные поля
+    (см. ``margin_service.MARGIN_CMP_FIELDS``) за до 3 периодов. compare_periods:
+    ``prev``, ``last_year``, ``year:2025``, ``custom:2025-03-01:2025-03-31``.
+    Колонки ``cmp<N>_<field>``, метаданные — в ``compare_meta``.
+
     links=id,id,… — сравнение между WB-связками: строки из всех связок сводятся
     вместе с колонкой «owner» (владельца связки), итоги считаются по сводке.
 
@@ -88,6 +130,11 @@ def api_margin_detail(
     compare_window = _resolve_compare_window(
         date_from, date_to, compare_mode, compare_from, compare_to,
         ozon_small=False) if compare else None
+    cmp_periods = resolve_compare_periods(
+        date_from, date_to, compare_periods, ozon_small=False,
+    ) if compare and compare_periods else []
+    cmp_fields = [f.strip() for f in (compare_fields or "").split(",") if f.strip()]
+    cmp_fields = [f for f in cmp_fields if f in margin_service.MARGIN_CMP_FIELDS]
     tokens = article_tokens_service.split_tokens(articles)
 
     link_infos = _resolve_links_param(db, links, "wb")
@@ -97,21 +144,26 @@ def api_margin_detail(
             db, link_infos,
             lambda db, info: _wb_detail_payload(
                 db, from_, to_, article_like, bool(compare), compare_window,
-                owner=cabinet_service.link_owner(db, info), tokens=tokens),
+                owner=cabinet_service.link_owner(db, info), tokens=tokens,
+                cmp_periods=cmp_periods, cmp_fields=cmp_fields),
         )
-        frames = [df for _, (df, _, _, _) in results if df is not None and not df.empty]
+        frames = [df for _, (df, _, _, _, _) in results if df is not None and not df.empty]
         df = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
-        detail_articles = sum(da for _, (_, da, _, _) in results)
-        prev_window = next((pw for _, (_, _, pw, _) in results if pw), None)
-        for _, (_, _, _, m) in results:
+        detail_articles = sum(da for _, (_, da, _, _, _) in results)
+        prev_window = next((pw for _, (_, _, pw, _, _) in results if pw), None)
+        cmp_meta = next((cm for _, (_, _, _, _, cm) in results if cm), None)
+        for _, (_, _, _, m, _) in results:
             matched |= m
     else:
-        df, detail_articles, prev_window, matched = _wb_detail_payload(
+        df, detail_articles, prev_window, matched, cmp_meta = _wb_detail_payload(
             db, from_, to_, article_like, bool(compare), compare_window, owner="",
-            tokens=tokens)
+            tokens=tokens, cmp_periods=cmp_periods, cmp_fields=cmp_fields)
 
     estimated = int(df["net_cost_est"].sum()) if not df.empty and "net_cost_est" in df else 0
-    totals = _margin_detail_totals(df)
+    cmp_cols_meta = (cmp_meta or {}).get("columns", [])
+    avg_cols = [c["k"] for c in cmp_cols_meta if c.get("totals") == "avg"]
+    sum_cols = [c["k"] for c in cmp_cols_meta if c.get("totals") == "sum"]
+    totals = _margin_detail_totals(df, avg_cols=avg_cols, sum_cols=sum_cols)
     payload = {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
@@ -119,6 +171,7 @@ def api_margin_detail(
         "estimated": estimated,
         "default_net_cost": settings.default_net_cost,
         "prev_window": prev_window,
+        "compare_meta": cmp_meta,
         "totals": totals,
     }
     if tokens:

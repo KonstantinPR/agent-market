@@ -397,6 +397,101 @@ def test_api_margin_detail_compare(api_client):
     assert "margin_pp" not in row2
 
 
+def test_api_margin_detail_multi_compare(api_client):
+    """Сравнения: несколько полей × до 3 периодов (prev + календарный год)."""
+    def rows(srid, day, qty, for_pay):
+        return [{"Srid": srid, "Артикул поставщика": "CMP-2",
+                 "Дата продажи": day, "Тип документа": "Продажа",
+                 "Кол-во": qty, "Вайлдберриз реализовал Товар (Пр)": for_pay + 100,
+                 "К перечислению Продавцу за реализованный Товар": for_pay}]
+    api_client.post("/api/wb/detail-upload", files={
+        "files": ("a.xlsx", _xlsx(pd.DataFrame(rows("m1", "2026-09-01", 2, 700.0))), XLSX)})
+    api_client.post("/api/wb/detail-upload", files={
+        "files": ("b.xlsx", _xlsx(pd.DataFrame(rows("m2", "2025-03-05", 3, 600.0))), XLSX)})
+    body = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-02",
+        "compare": 1,
+        "compare_fields": "margin,sells,margin_pct",
+        "compare_periods": "prev,year:2025",
+    }).json()
+    meta = body["compare_meta"]
+    assert [w["key"] for w in meta["periods"]] == ["cmp1", "cmp2"]
+    assert meta["periods"][0]["short"] == "пред. период"
+    assert meta["periods"][1]["label"] == "Весь 2025"
+    assert meta["periods"][1]["date_from"] == "2025-01-01"
+    assert meta["periods"][1]["date_to"] == "2025-12-31"
+    assert [c["k"] for c in meta["columns"]] == [
+        "cmp1_margin", "cmp1_sells", "cmp1_margin_pct",
+        "cmp2_margin", "cmp2_sells", "cmp2_margin_pct"]
+    assert [f["key"] for f in meta["fields"]] == ["margin", "sells", "margin_pct"]
+    row = next(x for x in body["rows"] if x["article"] == "CMP-2")
+    # в пред. окне (2026-08-31) данных нет
+    assert row["cmp1_margin"] == "" and row["cmp1_sells"] == ""
+    # в 2025: income=600, продано 3 → margin = 600 − 500×3 = −900
+    assert row["cmp2_sells"] == 3
+    assert row["cmp2_margin"] == pytest.approx(-900.0)
+    assert row["cmp2_margin_pct"] == pytest.approx(round(-900.0 / 700.0 * 100, 2))
+    assert body["totals"]["cmp2_sells"] == 3
+    assert body["totals"]["cmp2_margin"] == pytest.approx(-900.0)
+    assert "avg" in body["totals"]["cmp2_margin_pct"]
+    assert body["prev_window"] == {"date_from": "2026-08-31", "date_to": "2026-08-31"}
+
+
+def test_api_margin_detail_multi_compare_limits_and_drops_unknown(api_client):
+    def rows(srid, day, qty, for_pay):
+        return [{"Srid": srid, "Артикул поставщика": "CMP-3",
+                 "Дата продажи": day, "Тип документа": "Продажа",
+                 "Кол-во": qty, "Вайлдберриз реализовал Товар (Пр)": for_pay + 100,
+                 "К перечислению Продавцу за реализованный Товар": for_pay}]
+    api_client.post("/api/wb/detail-upload", files={
+        "files": ("a.xlsx", _xlsx(pd.DataFrame(rows("l1", "2026-09-01", 1, 500.0))), XLSX)})
+    body = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-01",
+        "compare": 1,
+        "compare_fields": "margin,nope",
+        "compare_periods": "prev,last_year,year:2025,year:2024,bad",
+    }).json()
+    meta = body["compare_meta"]
+    assert [w["key"] for w in meta["periods"]] == ["cmp1", "cmp2", "cmp3"]
+    assert [f["key"] for f in meta["fields"]] == ["margin"]
+    # 2024 и мусорный токен отброшены лимитом/валидацией
+    assert meta["periods"][2]["date_from"] == "2025-01-01"
+    row = body["rows"][0]
+    assert "cmp1_margin" in row and "cmp4_margin" not in row
+    # без полей сравнение не включается (легаси-режим)
+    legacy = api_client.get("/api/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-01",
+        "compare": 1, "compare_periods": "year:2025",
+    }).json()
+    assert legacy["compare_meta"] is None
+    assert "sells_pp" in legacy["rows"][0]
+
+
+def test_export_margin_detail_multi_compare(api_client):
+    """Экспорт динамических колонок сравнения: подписи с периодом и значение."""
+    def rows(srid, day, qty, for_pay):
+        return [{"Srid": srid, "Артикул поставщика": "CMP-4",
+                 "Дата продажи": day, "Тип документа": "Продажа",
+                 "Кол-во": qty, "Вайлдберриз реализовал Товар (Пр)": for_pay + 100,
+                 "К перечислению Продавцу за реализованный Товар": for_pay}]
+    api_client.post("/api/wb/detail-upload", files={
+        "files": ("a.xlsx", _xlsx(pd.DataFrame(rows("e1", "2026-09-01", 2, 700.0))), XLSX)})
+    api_client.post("/api/wb/detail-upload", files={
+        "files": ("b.xlsx", _xlsx(pd.DataFrame(rows("e2", "2025-03-05", 3, 600.0))), XLSX)})
+    r = api_client.get("/api/export/margin/detail", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-02",
+        "compare": 1, "compare_fields": "margin",
+        "compare_periods": "prev,year:2025",
+    })
+    assert r.status_code == 200
+    out = pd.read_excel(io.BytesIO(r.content))
+    assert "Прибыль · 2025" in out.columns
+    assert "Прибыль · пред. период" in out.columns
+    row = out[out["Артикул"] == "CMP-4"].iloc[0]
+    assert row["Прибыль · 2025"] == pytest.approx(-900.0)
+
+
+
 def test_margin_detail_totals_row(api_client):
     """Ответ /margin/detail содержит totals — суммы по числовым колонкам."""
     df = pd.DataFrame([

@@ -3,7 +3,9 @@ from datetime import date
 
 from sqlalchemy import select
 
-from app.services.margin import (compare_margin_periods, margin_detail_dataframe,
+from app.services.margin import (MARGIN_CMP_FIELDS, compare_margin_periods,
+                                 compare_margin_periods_multi,
+                                 margin_detail_dataframe,
                                  storage_split, ozon_margin_detail_dataframe,
                                  funnel_dataframe)
 from app import models
@@ -917,11 +919,72 @@ def test_funnel_dataframe_name_prefers_funnel_title(db):
 
 
 def test_funnel_dataframe_article_like_filters_output_only(db):
-    db.add(models.Product(article="A1", name="Товар A1", net_cost=0.0))
-    db.add(models.Product(article="B2", name="Товар B2", net_cost=0.0))
+    db.add(models.Product(article="A1", name="Фураж A1", net_cost=0.0))
+    db.add(models.Product(article="B2", name="Фураж B2", net_cost=0.0))
     db.add(_funnel_row(article="A1"))
     db.add(_funnel_row(article="B2", nm_id="1002"))
     db.commit()
     df = funnel_dataframe(db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 10),
                           article_like="A1")
     assert list(df["article"]) == ["A1"]
+
+
+def test_compare_margin_periods_multi_per_period_columns():
+    """Мультисравнение: выбранные поля за каждое окно → cmp<N>_<field>."""
+    cur = pd.DataFrame([
+        {"article": "A1", "margin": 400.0, "margin_gross": 500.0, "sells": 2},
+        {"article": "A2", "margin": 300.0, "margin_gross": 350.0, "sells": 1},
+    ])
+    w1 = {"key": "cmp1", "short": "пред. период"}
+    w2 = {"key": "cmp2", "short": "2025"}
+    f1 = pd.DataFrame([{"article": "A1", "margin": 100.0,
+                        "margin_gross": 150.0, "sells": 5}])
+    f2 = pd.DataFrame([{"article": "A2", "margin": 200.0,
+                        "margin_gross": 250.0, "sells": 3}])
+    out, meta = compare_margin_periods_multi(
+        cur, [(w1, f1), (w2, f2)], ["margin", "margin_gross"])
+    by = {r["article"]: r for r in out.to_dict("records")}
+    assert by["A1"]["cmp1_margin"] == 100.0
+    assert by["A1"]["cmp1_margin_gross"] == 150.0
+    assert by["A1"]["cmp2_margin"] is None
+    assert by["A2"]["cmp2_margin"] == 200.0
+    assert by["A2"]["cmp1_margin"] is None
+    assert [c["k"] for c in meta] == [
+        "cmp1_margin", "cmp1_margin_gross", "cmp2_margin", "cmp2_margin_gross"]
+    assert meta[0]["kind"] == "money"
+    assert meta[0]["totals"] == "sum"
+    assert meta[0]["period"] == "cmp1"
+    assert "Прибыль" in meta[0]["label"]
+    assert "пред. период" in meta[0]["label"]
+
+
+def test_compare_margin_periods_multi_empty_window():
+    cur = pd.DataFrame([{"article": "A1", "margin": 10.0, "sells": 1}])
+    out, meta = compare_margin_periods_multi(
+        cur, [({"key": "cmp1", "short": "2025"}, pd.DataFrame())], ["margin"])
+    assert out.iloc[0]["cmp1_margin"] is None
+    assert meta[0]["totals"] == "sum"
+    assert meta[0]["label"] == "Прибыль · 2025"
+
+
+def test_compare_margin_periods_multi_avg_kinds():
+    cur = pd.DataFrame([{"article": "A1", "margin_pct": 10.0, "sells": 1}])
+    f1 = pd.DataFrame([{"article": "A1", "margin_pct": 5.0, "sells": 1}])
+    _, meta = compare_margin_periods_multi(
+        cur, [({"key": "cmp1", "short": "2025"}, f1)], ["margin_pct"])
+    assert meta[0]["kind"] == "pct"
+    assert meta[0]["totals"] == "avg"
+
+
+def test_margin_cmp_fields_match_frontend():
+    """Белый список полей сравнения совпадает с app.js (иначе UI пришлёт
+    поле, которое бэкенд молча отбросит)."""
+    import re
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[2] / "app" / "static" / "app.js"
+          ).read_text(encoding="utf-8")
+    block = re.search(r"const MARGIN_CMP_FIELDS = \[(.*?)\n\];", js, re.S)
+    assert block, "app.js: нет MARGIN_CMP_FIELDS"
+    keys = re.findall(r'k:\s*"([^"]+)"', block.group(1))
+    assert keys == list(MARGIN_CMP_FIELDS)
+

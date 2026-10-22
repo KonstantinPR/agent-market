@@ -20,13 +20,18 @@ const APP_PATH = process.argv[2];
 
 const el = (sel) => ({
   value: "", checked: false, innerHTML: "", textContent: "", dataset: {},
-  addEventListener() {}, appendChild() {}, setAttribute() {},
+  children: [], title: "", type: "", className: "",
+  addEventListener() {},
+  appendChild(c) { this.children.push(c); },
+  setAttribute() {},
+  closest() { return null; },
   classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
   style: {}, files: { length: 0 }, disabled: false,
 });
 const doc = {
   querySelector: () => el(), querySelectorAll: () => [],
   getElementById: () => el(), createElement: () => el(),
+  createTextNode: (t) => ({ textContent: String(t) }),
   addEventListener() {},
 };
 
@@ -1089,6 +1094,61 @@ if (!/\.colview-filter\s*\{/.test(cssSrc)) {
 if (colviewFail) throw new Error(`${colviewFail} ошибок фильтра «Вид таблицы»`);
 
 console.log("COLVIEW_FILTER_OK");
+
+// --- «Сравнения» в «Детализации Продаж WB»: поля × периоды ---
+const normObj = (o) => JSON.parse(JSON.stringify(o));
+lsStore["cmpPeriodState"] = JSON.stringify({
+  "margin-detail": {
+    fields: ["margin", "sells"],
+    periods: [{ mode: "prev" }, { mode: "year", year: "2025" }],
+  },
+});
+assert.deepStrictEqual(normObj(sandbox.cmpQuery("margin-detail")), {
+  compare: 1, compare_fields: "sells,margin",
+  compare_periods: "prev,year:2025",
+}, "cmpQuery margin-detail: поля не в порядке справочника или периоды потеряны");
+assert.ok(sandbox.cmpButtonLabel("margin-detail").indexOf("2 поля · 2 периода") >= 0,
+  "кнопка не показывает количество полей/периодов: " + sandbox.cmpButtonLabel("margin-detail"));
+
+lsStore["cmpPeriodState"] = JSON.stringify({
+  "margin-detail": { mode: "custom", from: "2025-01-01", to: "2025-03-31" },
+});
+assert.deepStrictEqual(normObj(sandbox.cmpQuery("margin-detail")), {
+  compare: 1, compare_fields: "margin_gross,margin",
+  compare_periods: "custom:2025-01-01:2025-03-31",
+}, "старое состояние {mode,from,to} не мигрировало в один период");
+
+lsStore["cmpPeriodState"] = JSON.stringify({
+  "margin-detail": { fields: ["margin"], periods: [{ mode: "custom" }] },
+});
+assert.deepStrictEqual(normObj(sandbox.cmpQuery("margin-detail")), {},
+  "произвольный период без дат не должен включать сравнение");
+
+lsStore["cmpPeriodState"] = JSON.stringify({ "margin-detail": { mode: "" } });
+assert.deepStrictEqual(normObj(sandbox.cmpQuery("margin-detail")), {},
+  "выключенное сравнение не должно давать параметров");
+assert.strictEqual(sandbox.cmpButtonLabel("margin-detail"), "Сравнения ▾");
+
+// панель собирается без DOM-ошибок: 12 полей и строки периодов
+lsStore["cmpPeriodState"] = JSON.stringify({
+  "margin-detail": { fields: ["margin"], periods: [{ mode: "prev" }, { mode: "year", year: "2025" }] },
+});
+let capPanel = null;
+doc.getElementById = (id) => {
+  const e = el();
+  if (id === "marginDetailComparePanel") capPanel = e;
+  return e;
+};
+sandbox.initMarginDetailCompare();
+assert.ok(capPanel, "панель «Сравнения» не найдена");
+assert.strictEqual(capPanel.children.length, 3, "ожидались блоки: поля, периоды, подсказка");
+const fSec = capPanel.children[0];
+assert.strictEqual(fSec.children[1].children.length, 12, "должно быть 12 чекбоксов полей");
+const pSec = capPanel.children[1];
+assert.strictEqual(pSec.children[1].children.length, 2, "должно быть 2 строки периодов");
+assert.strictEqual(pSec.children[1].children[0].children.length, 4,
+  "в строке периода: режим, год, даты, удаление");
+assert.strictEqual(pSec.children[2].children[0].disabled, false, "«+ Добавить период» доступна при 2 периодах");
 
 console.log("JS_TESTS_OK");
 """

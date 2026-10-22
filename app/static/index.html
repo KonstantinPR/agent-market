@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=62">
+<link rel="stylesheet" href="/static/style.css?v=64">
 </head>
 <body>
 <nav class="navbar">
@@ -377,8 +377,8 @@
         <div class="view-menu-panel hidden" id="marginDetailArtsPanel"></div>
       </div>
       <div class="view-menu" id="marginDetailCompareMenu">
-        <button type="button" class="btn" id="btnMarginDetailCompare" title="Показывать рядом с текущим периодом предыдущий аналогичный период, тот же период год назад или произвольный диапазон дат">Сравнить &#9662;</button>
-        <div class="view-menu-panel hidden" id="marginDetailComparePanel"></div>
+        <button type="button" class="btn" id="btnMarginDetailCompare" title="Сравнения: выберите аналитические поля и до трёх периодов — аналогичный прошлый, тот же период год назад, весь календарный год или произвольный диапазон дат">Сравнения &#9662;</button>
+        <div class="view-menu-panel cmp-panel hidden" id="marginDetailComparePanel"></div>
       </div>
       <span class="toolbar-right">
         <span id="marginDetailTablePager"></span>
@@ -1189,7 +1189,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=159"></script>
+  <script src="/static/app.js?v=161"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

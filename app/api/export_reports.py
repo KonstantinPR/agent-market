@@ -583,9 +583,12 @@ def export_margin_detail(
     compare_mode: Optional[str] = None,
     compare_from: Optional[str] = None,
     compare_to: Optional[str] = None,
+    compare_fields: Optional[str] = None,
+    compare_periods: Optional[str] = None,
     cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    from app.api._common import resolve_compare_periods
     from app.api.margin import _resolve_compare_window
 
     from_, to_ = _parse_window400(date_from, date_to)
@@ -597,7 +600,29 @@ def export_margin_detail(
         db, date_from=from_, date_to=to_, article_like=article_like,
         default_net_cost=settings.default_net_cost, articles=arts,
     )
-    if compare and date_from and date_to:
+    cmp_periods = resolve_compare_periods(
+        date_from, date_to, compare_periods, ozon_small=False,
+    ) if compare and compare_periods else []
+    cmp_fields = [f.strip() for f in (compare_fields or "").split(",") if f.strip()]
+    cmp_fields = [f for f in cmp_fields if f in margin_service.MARGIN_CMP_FIELDS]
+    labels = {}
+    if cmp_periods and cmp_fields:
+        frames = {}
+        windows = []
+        for win in cmp_periods:
+            key = (win["date_from"], win["date_to"])
+            if key not in frames:
+                frames[key] = margin_service.margin_detail_dataframe(
+                    db, date_from=date.fromisoformat(win["date_from"]),
+                    date_to=date.fromisoformat(win["date_to"]),
+                    article_like=article_like,
+                    default_net_cost=settings.default_net_cost, articles=arts,
+                )
+            windows.append((win, frames[key]))
+        df, cmp_cols = margin_service.compare_margin_periods_multi(
+            df, windows, cmp_fields)
+        labels = {c["k"]: c["label"] for c in cmp_cols}
+    elif compare and date_from and date_to:
         cw = _resolve_compare_window(date_from, date_to, compare_mode,
                                      compare_from, compare_to, ozon_small=False)
         if cw:
@@ -610,7 +635,11 @@ def export_margin_detail(
             df = margin_service.compare_margin_periods(df, prev_df)
     if missing_only:
         df = df[df["net_cost_est"] == True].drop(columns=["net_cost_est"])
-    df, ru = excel_io.project_export(df, export_cols("export_margin_detail"), cols)
+    rename = export_cols("export_margin_detail")
+    if labels:
+        rename = dict(rename)
+        rename.update(labels)
+    df, ru = excel_io.project_export(df, rename, cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Маржа")
     fname = (("detail_missing_cost" if missing_only else "margin_detail")) + f"_{from_}_{to_}.xlsx"

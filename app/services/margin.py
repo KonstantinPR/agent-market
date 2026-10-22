@@ -12,6 +12,24 @@ from app.services import ozon_article
 from app.services.common import like_col, like_re
 from app.services.sync import _is_goods_row, _redistribute_articleless, storage_split, marketplace_id
 
+# Поля «Детализации Продаж WB», доступные для сравнения по периодам.
+# key -> (подпись, тип значения, вид итога). Должно совпадать с
+# MARGIN_CMP_FIELDS в app/static/app.js (паритет проверяет tests/unit/test_margin.py).
+MARGIN_CMP_FIELDS = {
+    "sells": ("Продано, шт", "int", "sum"),
+    "revenue": ("Выручка", "money", "sum"),
+    "income": ("К перечислению", "money", "sum"),
+    "commission": ("Комиссия", "money", "sum"),
+    "logistics": ("Логистика", "money", "sum"),
+    "storage": ("Хранение (оц)", "money", "sum"),
+    "services": ("Услуги", "money", "sum"),
+    "margin_gross": ("Маржа, до себестоимости", "money", "sum"),
+    "margin": ("Прибыль", "money", "sum"),
+    "margin_per_one": ("Прибыль на ед.", "money", "avg"),
+    "margin_pct": ("Прибыль, %", "pct", "avg"),
+    "return_rate": ("Доля возвратов, %", "pct", "avg"),
+}
+
 
 def funnel_dataframe(
     db: Session,
@@ -829,6 +847,40 @@ def compare_margin_periods(current: pd.DataFrame, prev: pd.DataFrame) -> pd.Data
         col = cur[c]
         cur[c] = col.astype(object).where(col.notna(), None)
     return cur
+
+
+def compare_margin_periods_multi(current: pd.DataFrame, windows, metrics) -> tuple:
+    """Навешивает на сводку детализации выбранные показатели за несколько периодов.
+
+    windows — список ``(описание_окна, df_за_окно)``; описание содержит ``key``
+    (``cmp1``, ``cmp2``, …) и ``short`` (короткая подпись периода). metrics —
+    ключи из ``MARGIN_CMP_FIELDS``. Колонки называются ``cmp<N>_<metric>``;
+    артикул, которого не было в периоде, получает None.
+    Возвращает ``(df, columns_meta)``; columns_meta — подписи/типы для UI и Excel.
+    """
+    cur = current.copy()
+    meta = []
+    for win, frame in windows:
+        prev_maps = {}
+        if frame is not None and not frame.empty and "article" in frame.columns:
+            arts = frame["article"]
+            for m in metrics:
+                if m in frame.columns:
+                    prev_maps[m] = pd.Series(frame[m].values, index=arts).to_dict()
+        for m in metrics:
+            label, kind, stats = MARGIN_CMP_FIELDS[m]
+            key = "%s_%s" % (win["key"], m)
+            if m in prev_maps:
+                vals = cur["article"].map(prev_maps[m])
+                cur[key] = vals.astype(object).where(vals.notna(), None)
+            else:
+                cur[key] = pd.Series([None] * len(cur), index=cur.index, dtype=object)
+            meta.append({
+                "k": key, "label": "%s · %s" % (label, win["short"]),
+                "kind": kind, "totals": stats,
+                "period": win["key"], "period_label": win["short"],
+            })
+    return cur, meta
 
 
 def compare_detail_periods(

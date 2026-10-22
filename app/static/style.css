@@ -372,6 +372,47 @@ main { padding: 20px; }
 .chk-wrap { display: inline-flex; gap: 10px; align-items: center; }
 .chk { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; color: #333; cursor: pointer; }
 .chk.off { opacity: .45; cursor: default; }
+.cmp-panel {
+  left: 0;
+  right: auto;
+  width: 420px;
+  min-width: 0;
+  max-width: calc(100vw - 32px);
+}
+.cmp-sec { display: flex; flex-direction: column; gap: 4px; }
+.cmp-sec-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+.cmp-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+.cmp-fields .chk { cursor: pointer; font-size: 12.5px; }
+.cmp-periods { display: flex; flex-direction: column; gap: 4px; }
+.cmp-period-row { display: flex; align-items: center; gap: 6px; }
+.cmp-period-row select { max-width: 168px; font-size: 12.5px; }
+.cmp-period-row .cmp-year { max-width: 74px; }
+.cmp-period-row .off { display: none; }
+.cmp-dates { display: inline-flex; align-items: center; gap: 3px; }
+.cmp-dates input {
+  width: 118px;
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+.cmp-del { padding: 2px 8px; line-height: 1; }
+.cmp-actions { display: flex; gap: 8px; margin-top: 2px; }
+.cmp-actions .btn { padding: 3px 10px; font-size: 12.5px; }
+.cmp-add:disabled, .cmp-reset:disabled { opacity: .45; cursor: default; }
 .toolbar input[type="date"], .toolbar input:not([type]) {
   border: 1px solid #ccc;
   border-radius: 3px;

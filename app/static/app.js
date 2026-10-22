@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "159";
+const UI_VERSION = "161";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3337,25 +3337,48 @@ async function renderMarginDetail(p) {
   const data = await api("/margin/detail" + p);
   let headers = colViewHeaders("margin-detail", marginHeaders);
   if (linked) headers = [ownerCol()].concat(headers);
+  let cmpKeys = [];
   if (compare) {
-    headers = headers.concat([
-      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано, шт за предыдущий период той же длительности."},
-      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период: Доход − расходы МП − себестоимость × продано."},
-      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Изменение прибыли, ₽: текущий период минус предыдущий."},
-      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли в % к предыдущему периоду. Пусто, если в прошлом периоде прибыли не было."},
-    ].filter((h) => !headers.some((x) => x.k === h.k)));
+    const meta = data.compare_meta;
+    if (meta && (meta.columns || []).length) {
+      const fmts = { money: cellFmts.moneyCls, int: cellFmts.int, pct: cellFmts.pct };
+      const dyn = meta.columns.map((c) => ({
+        k: c.k, label: c.label, num: true,
+        render: fmts[c.kind] || cellFmts.text,
+        tip: "Значение поля «" + (c.label || c.k) + "» за период " + (c.period_label || "") + ".",
+      }));
+      cmpKeys = dyn.map((h) => h.k);
+      headers = headers.concat(dyn.filter((h) => !headers.some((x) => x.k === h.k)));
+    } else {
+      cmpKeys = ["sells_pp", "margin_pp", "delta_ru", "delta_pct"];
+      headers = headers.concat([
+        { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано, шт за предыдущий период той же длительности."},
+        { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период: Доход − расходы МП − себестоимость × продано."},
+        { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Изменение прибыли, ₽: текущий период минус предыдущий."},
+        { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли в % к предыдущему периоду. Пусто, если в прошлом периоде прибыли не было."},
+      ].filter((h) => !headers.some((x) => x.k === h.k)));
+    }
   }
   pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-detail"));
   const exportBtn = $("#exportMarginDetail");
   if (exportBtn) {
-    const cp = colViewParam("margin-detail", compare ? ["sells_pp", "margin_pp", "delta_ru", "delta_pct"] : null);
+    const cp = colViewParam("margin-detail", cmpKeys.length ? cmpKeys : null);
     exportBtn.dataset.url = "/api/export/margin/detail" + p + (cp ? (p ? "&" : "?") + cp : "");
   }
   // Статус один на весь раздел: сначала писалось «сравнение: …», следом
   // «Строк: N» — второе затирало первое. Теперь собираем одну строку.
-  const cmpMsg = (compare && data.prev_window) ?
-    "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to :
-    (compare ? "для сравнения нужны даты «С» и «По»" : "");
+  let cmpMsg = "";
+  if (compare) {
+    const meta = data.compare_meta;
+    if (meta && (meta.periods || []).length) {
+      cmpMsg = "сравнение: " + meta.periods.map(
+        (w) => w.label + " (" + w.date_from + "…" + w.date_to + ")").join("; ");
+    } else if (data.prev_window) {
+      cmpMsg = "сравнение: " + data.prev_window.date_from + " … " + data.prev_window.date_to;
+    } else {
+      cmpMsg = "для сравнения нужны даты «С» и «По»";
+    }
+  }
   const tail = cmpMsg ? " · " + cmpMsg : (linked ? " · сравнение связок" : "");
   // Список «Артикулы»: сервер вернул, сколько значений распознано и какие нет.
   if (data.articles) {
@@ -4275,6 +4298,8 @@ function initReplenishExtraMenu() {
 // Прибыльность WB, Прибыльность Ozon). Заменяет одиночную галку «Сравнить с
 // пред. периодом»: режимы «предыдущий период» / «тот же период год назад» /
 // «произвольный период» (две даты). Состояние помним на каждую вкладку.
+// У «Детализации Продаж WB» (margin-detail) — расширенный селектор
+// «Сравнения»: несколько полей × до трёх периодов (см. initMarginDetailCompare).
 const CMP_PERIOD_KEY = "cmpPeriodState";
 const CMP_TABS = {
   "wb-detail": { btn: "btnWbDetailCompare", panel: "wbDetailComparePanel" },
@@ -4288,6 +4313,78 @@ const CMP_MODE_LABELS = {
   last_year: "Тот же период год назад",
   custom: "Произвольный период",
 };
+// Поля «Детализации Продаж WB» для селектора «Сравнения».
+// Должно совпадать с MARGIN_CMP_FIELDS в app/services/margin.py.
+const MARGIN_CMP_FIELDS = [
+  { k: "sells", label: "Продано, шт", kind: "int" },
+  { k: "revenue", label: "Выручка", kind: "money" },
+  { k: "income", label: "К перечислению", kind: "money" },
+  { k: "commission", label: "Комиссия", kind: "money" },
+  { k: "logistics", label: "Логистика", kind: "money" },
+  { k: "storage", label: "Хранение (оц)", kind: "money" },
+  { k: "services", label: "Услуги", kind: "money" },
+  { k: "margin_gross", label: "Маржа, до себестоимости", kind: "money" },
+  { k: "margin", label: "Прибыль", kind: "money" },
+  { k: "margin_per_one", label: "Прибыль на ед.", kind: "money" },
+  { k: "margin_pct", label: "Прибыль, %", kind: "pct" },
+  { k: "return_rate", label: "Доля возвратов, %", kind: "pct" },
+];
+const MARGIN_CMP_DEFAULT_FIELDS = ["margin", "margin_gross"];
+const MARGIN_CMP_MODES = [
+  ["prev", "Предыдущий аналогичный"],
+  ["last_year", "Тот же период год назад"],
+  ["year", "Весь год"],
+  ["custom", "Произвольный период"],
+];
+function marginCmpField(k) {
+  return MARGIN_CMP_FIELDS.find((f) => f.k === k) || null;
+}
+// Состояние расширенного селектора: { fields: [...], periods: [{mode,year,from,to}] }.
+// Старое состояние { mode, from, to } мигрирует в один период.
+function marginCmpState() {
+  const raw = cmpAll()["margin-detail"] || {};
+  const fields = (Array.isArray(raw.fields) ? raw.fields : [])
+    .filter((k) => marginCmpField(k));
+  let periods;
+  if (Array.isArray(raw.periods)) {
+    periods = raw.periods;
+  } else if (raw.mode) {
+    periods = [{ mode: raw.mode, from: raw.from || "", to: raw.to || "", year: raw.year || "" }];
+  } else {
+    periods = [];
+  }
+  periods = periods.slice(0, 3).map((p) => ({
+    mode: MARGIN_CMP_MODES.some((m) => m[0] === p.mode) ? p.mode : "prev",
+    year: p.year ? String(p.year) : "",
+    from: p.from || "",
+    to: p.to || "",
+  }));
+  return {
+    fields: fields.length ? fields : MARGIN_CMP_DEFAULT_FIELDS.slice(),
+    periods: periods,
+  };
+}
+// Токены compare_periods для запроса (порядок = порядок колонок).
+function marginCmpSpecs(st) {
+  const out = [];
+  for (const p of st.periods) {
+    if (p.mode === "custom") {
+      if (p.from && p.to && p.from <= p.to) out.push("custom:" + p.from + ":" + p.to);
+    } else if (p.mode === "year") {
+      if (p.year) out.push("year:" + p.year);
+    } else {
+      out.push(p.mode);
+    }
+  }
+  return out;
+}
+function cmpPlural(n, one, few, many) {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return one;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
+  return many;
+}
 function cmpAll() {
   let all = {};
   try { all = JSON.parse(localStorage.getItem(CMP_PERIOD_KEY) || "{}") || {}; } catch (e) { all = {}; }
@@ -4295,6 +4392,7 @@ function cmpAll() {
 }
 // Состояние селектора вкладки: mode "" (не сравнивать) | prev | last_year | custom.
 function cmpState(tab) {
+  if (tab === "margin-detail") return marginCmpState();
   const s = cmpAll()[tab] || {};
   const mode = ["", "prev", "last_year", "custom"].includes(s.mode) ? s.mode : "";
   return { mode: mode, from: s.from || "", to: s.to || "" };
@@ -4306,6 +4404,19 @@ function saveCmpState(tab, st) {
 }
 // Параметры запроса сравнения для вкладки (пусто, если режим выключен).
 function cmpQuery(tab) {
+  if (tab === "margin-detail") {
+    const st = marginCmpState();
+    const specs = marginCmpSpecs(st);
+    if (!st.fields.length || !specs.length) return {};
+    const fields = MARGIN_CMP_FIELDS
+      .filter((f) => st.fields.includes(f.k)).map((f) => f.k);
+    if (!fields.length) return {};
+    return {
+      compare: 1,
+      compare_fields: fields.join(","),
+      compare_periods: specs.join(","),
+    };
+  }
   const st = cmpState(tab);
   if (!st.mode) return {};
   const q = { compare: 1, compare_mode: st.mode };
@@ -4317,6 +4428,14 @@ function cmpQuery(tab) {
   return q;
 }
 function cmpButtonLabel(tab) {
+  if (tab === "margin-detail") {
+    const st = marginCmpState();
+    const n = marginCmpSpecs(st).length;
+    const fields = MARGIN_CMP_FIELDS.filter((f) => st.fields.includes(f.k)).length;
+    if (!fields || !n) return "Сравнения ▾";
+    return "Сравнения: " + fields + " " + cmpPlural(fields, "поле", "поля", "полей")
+      + " · " + n + " " + cmpPlural(n, "период", "периода", "периодов") + " ▾";
+  }
   const st = cmpState(tab);
   if (!st.mode) return "Сравнить ▾";
   if (st.mode === "custom") {
@@ -4326,6 +4445,7 @@ function cmpButtonLabel(tab) {
 }
 function initCompareMenus() {
   Object.keys(CMP_TABS).forEach((tab) => {
+    if (tab === "margin-detail") return;
     const btn = document.getElementById(CMP_TABS[tab].btn);
     const panel = document.getElementById(CMP_TABS[tab].panel);
     if (!btn || !panel) return;
@@ -4388,16 +4508,191 @@ function initCompareMenus() {
     fromEl.addEventListener("change", commit);
     toEl.addEventListener("change", commit);
 
-    const menu = btn.closest(".view-menu");
-    if (menu) menu.addEventListener("click", (e) => e.stopPropagation());
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const wasHidden = panel.classList.contains("hidden");
-      document.querySelectorAll(".view-menu-panel").forEach((p) => p.classList.add("hidden"));
-      if (wasHidden) panel.classList.remove("hidden");
-    });
-    document.addEventListener("click", () => panel.classList.add("hidden"));
+    bindCompareMenu(btn, panel);
   });
+  initMarginDetailCompare();
+}
+// Открытие/закрытие панели «Сравнить ▾» / «Сравнения ▾».
+function bindCompareMenu(btn, panel) {
+  const menu = btn.closest(".view-menu");
+  if (menu) menu.addEventListener("click", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasHidden = panel.classList.contains("hidden");
+    document.querySelectorAll(".view-menu-panel").forEach((p) => p.classList.add("hidden"));
+    if (wasHidden) panel.classList.remove("hidden");
+  });
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+}
+// «Сравнения ▾» для «Прибыльность → Детализация Продаж WB»: чекбоксы полей
+// и до трёх периодов (аналогичный прошлый, год назад, весь год, произвольный).
+function initMarginDetailCompare() {
+  const cfg = CMP_TABS["margin-detail"];
+  const btn = document.getElementById(cfg.btn);
+  const panel = document.getElementById(cfg.panel);
+  if (!btn || !panel) return;
+  const state = marginCmpState();
+  btn.textContent = cmpButtonLabel("margin-detail");
+  panel.innerHTML = "";
+
+  let reloadTimer = null;
+  const apply = () => {
+    saveCmpState("margin-detail", {
+      fields: MARGIN_CMP_FIELDS.filter((f) => state.fields.includes(f.k)).map((f) => f.k),
+      periods: state.periods.slice(0, 3).map((p) => ({
+        mode: p.mode, year: p.year, from: p.from, to: p.to,
+      })),
+    });
+    btn.textContent = cmpButtonLabel("margin-detail");
+    if (currentTab !== "margin-detail") return;
+    // Годовые окна считаются дольше — быстрые клики по чекбоксам склеиваем.
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => loadTab("margin-detail"), 300);
+  };
+
+  const fieldsBox = document.createElement("div");
+  fieldsBox.className = "cmp-sec";
+  const fieldsTitle = document.createElement("div");
+  fieldsTitle.className = "cmp-sec-title";
+  fieldsTitle.textContent = "Поля для сравнения";
+  fieldsBox.appendChild(fieldsTitle);
+  const grid = document.createElement("div");
+  grid.className = "cmp-fields";
+  for (const f of MARGIN_CMP_FIELDS) {
+    const lab = document.createElement("label");
+    lab.className = "chk";
+    lab.title = "Сравнивать «" + f.label + "» за каждый выбранный период";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = state.fields.includes(f.k);
+    cb.addEventListener("change", () => {
+      if (cb.checked) {
+        if (!state.fields.includes(f.k)) state.fields.push(f.k);
+      } else {
+        state.fields = state.fields.filter((k) => k !== f.k);
+      }
+      apply();
+    });
+    lab.appendChild(cb);
+    lab.appendChild(document.createTextNode(" " + f.label));
+    grid.appendChild(lab);
+  }
+  fieldsBox.appendChild(grid);
+
+  const periodsBox = document.createElement("div");
+  periodsBox.className = "cmp-sec";
+  const periodsTitle = document.createElement("div");
+  periodsTitle.className = "cmp-sec-title";
+  periodsTitle.textContent = "Периоды сравнения (до 3)";
+  periodsBox.appendChild(periodsTitle);
+  const rows = document.createElement("div");
+  rows.className = "cmp-periods";
+  periodsBox.appendChild(rows);
+
+  const nowYear = new Date().getFullYear();
+  const renderPeriods = () => {
+    rows.innerHTML = "";
+    state.periods.forEach((p, idx) => {
+      const row = document.createElement("div");
+      row.className = "cmp-period-row";
+
+      const sel = document.createElement("select");
+      for (const [v, label] of MARGIN_CMP_MODES) {
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = label;
+        if (p.mode === v) o.selected = true;
+        sel.appendChild(o);
+      }
+      row.appendChild(sel);
+
+      const yearSel = document.createElement("select");
+      yearSel.className = "cmp-year";
+      for (let y = nowYear; y >= nowYear - 5; y--) {
+        const o = document.createElement("option");
+        o.value = String(y);
+        o.textContent = String(y);
+        yearSel.appendChild(o);
+      }
+      if (!p.year) p.year = String(nowYear - 1);
+      yearSel.value = p.year;
+      yearSel.title = "Календарный год целиком: 01.01–31.12";
+      yearSel.addEventListener("change", () => { p.year = yearSel.value; apply(); });
+      row.appendChild(yearSel);
+
+      const dates = document.createElement("span");
+      dates.className = "cmp-dates";
+      const fromEl = document.createElement("input");
+      fromEl.type = "date";
+      fromEl.value = p.from || "";
+      const toEl = document.createElement("input");
+      toEl.type = "date";
+      toEl.value = p.to || "";
+      fromEl.addEventListener("change", () => { p.from = fromEl.value; apply(); });
+      toEl.addEventListener("change", () => { p.to = toEl.value; apply(); });
+      dates.appendChild(fromEl);
+      dates.appendChild(document.createTextNode("–"));
+      dates.appendChild(toEl);
+      row.appendChild(dates);
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "btn cmp-del";
+      del.textContent = "×";
+      del.title = "Убрать период";
+      del.addEventListener("click", () => {
+        state.periods.splice(idx, 1);
+        renderPeriods();
+        apply();
+      });
+      row.appendChild(del);
+
+      const sync = () => {
+        yearSel.classList.toggle("off", p.mode !== "year");
+        dates.classList.toggle("off", p.mode !== "custom");
+      };
+      sel.addEventListener("change", () => { p.mode = sel.value; sync(); apply(); });
+      sync();
+      rows.appendChild(row);
+    });
+    addBtn.disabled = state.periods.length >= 3;
+    resetBtn.disabled = state.periods.length === 0;
+  };
+
+  const actions = document.createElement("div");
+  actions.className = "cmp-actions";
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "btn cmp-add";
+  addBtn.textContent = "+ Добавить период";
+  addBtn.addEventListener("click", () => {
+    if (state.periods.length >= 3) return;
+    state.periods.push({ mode: "prev", year: "", from: "", to: "" });
+    renderPeriods();
+    apply();
+  });
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "btn cmp-reset";
+  resetBtn.textContent = "Не сравнивать";
+  resetBtn.addEventListener("click", () => {
+    state.periods = [];
+    renderPeriods();
+    apply();
+  });
+  actions.appendChild(addBtn);
+  actions.appendChild(resetBtn);
+  periodsBox.appendChild(actions);
+
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = "Год считается целиком (01.01–31.12), текущий год может быть "
+    + "неполным. Значения показываются рядом с текущим окном без дельт.";
+  panel.appendChild(fieldsBox);
+  panel.appendChild(periodsBox);
+  panel.appendChild(hint);
+  renderPeriods();
+  bindCompareMenu(btn, panel);
 }
 
 function replenishPdfUrl() {

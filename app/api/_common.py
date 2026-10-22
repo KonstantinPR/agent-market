@@ -128,6 +128,87 @@ def _resolve_compare_window(date_from, date_to, mode="", compare_from=None,
     return _compare_window(date_from, date_to, ozon_small=ozon_small)
 
 
+_CMP_YEAR_MIN, _CMP_YEAR_MAX = 2000, 2100
+
+
+def _cmp_short(d_from, d_to):
+    """Короткая подпись окна для заголовка колонки (ДД.ММ–ДД.ММ.ГГГГ)."""
+    if d_from == d_to:
+        return d_from.strftime("%d.%m.%Y")
+    if d_from.year == d_to.year:
+        return "%s–%s" % (d_from.strftime("%d.%m"), d_to.strftime("%d.%m.%Y"))
+    return "%s–%s" % (d_from.strftime("%d.%m.%Y"), d_to.strftime("%d.%m.%Y"))
+
+
+def resolve_compare_periods(date_from, date_to, specs, ozon_small=False, limit=3):
+    """Окна сравнения из параметра ``compare_periods`` для мультивыбора периодов.
+
+    Токены через запятую, порядок задаёт порядок колонок:
+      ``prev`` — предыдущий аналогичный период;
+      ``last_year`` — то же окно год назад;
+      ``year:2025`` — весь календарный год (01.01–31.12);
+      ``custom:2025-03-01:2025-03-31`` — произвольный диапазон.
+    Битые/пустые токены пропускаются, одинаковые окна схлопываются,
+    возвращается не больше ``limit`` окон.
+    """
+    out = []
+    seen = set()
+    for raw in (specs or "").split(","):
+        spec = raw.strip()
+        if not spec:
+            continue
+        mode = spec
+        if spec.startswith("year:"):
+            mode = "year"
+            try:
+                year = int(spec.split(":", 1)[1].strip())
+            except (TypeError, ValueError):
+                continue
+            if not (_CMP_YEAR_MIN <= year <= _CMP_YEAR_MAX):
+                continue
+            window = (date(year, 1, 1), date(year, 12, 31))
+            label = "Весь %d" % year
+            short = str(year)
+        elif spec.startswith("custom:"):
+            mode = "custom"
+            parts = spec.split(":", 2)
+            if len(parts) != 3:
+                continue
+            try:
+                window = (date.fromisoformat(parts[1].strip()),
+                          date.fromisoformat(parts[2].strip()))
+            except (TypeError, ValueError):
+                continue
+            if window[0] > window[1]:
+                continue
+            label = "Произвольный период"
+            short = _cmp_short(*window)
+        elif spec in ("prev", "last_year"):
+            window = _resolve_compare_window(
+                date_from, date_to, spec, ozon_small=ozon_small)
+            if not window:
+                continue
+            label = ("Предыдущий аналогичный" if spec == "prev"
+                     else "Тот же период год назад")
+            short = "пред. период" if spec == "prev" else "год назад"
+        else:
+            continue
+        if window in seen:
+            continue
+        seen.add(window)
+        out.append({
+            "key": "cmp%d" % (len(out) + 1),
+            "mode": mode,
+            "label": label,
+            "short": short,
+            "date_from": window[0].isoformat(),
+            "date_to": window[1].isoformat(),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _resolve_links_param(db, links_param, mp_code=None):
     """Параметр `links=id,id,…` → список включённых связок (CabinetInfo).
 
@@ -268,12 +349,15 @@ _MARGIN_AVG_TOTALS = (
 )
 
 
-def _margin_detail_totals(df: pd.DataFrame) -> dict:
+def _margin_detail_totals(df: pd.DataFrame, avg_cols=(), sum_cols=()) -> dict:
     """Итоги для «Детализации» маржинальности: суммы + средние по удельным.
 
     _df_totals даёт суммы денежных/количественных колонок (включая остатки WB);
     сверху добавляются `{avg}` для удельных и процентных показателей —
     фронт рендерит их как «≈ среднее по видимым строкам».
+    ``avg_cols``/``sum_cols`` — динамические колонки сравнения периодов:
+    удельные/процентные считаются средними, деньги и штуки — суммой
+    (object-dtype _df_totals не суммирует).
     """
     totals = _df_totals(df)
     # margin_accrued хранится dtype=object (float + None) и _df_totals его
@@ -289,12 +373,18 @@ def _margin_detail_totals(df: pd.DataFrame) -> dict:
         s = pd.to_numeric(pd.Series(df[c]), errors="coerce").dropna()
         if len(s):
             totals[c] = round(float(s.sum()), 2)
-    for c in _MARGIN_AVG_TOTALS:
+    for c in tuple(_MARGIN_AVG_TOTALS) + tuple(avg_cols):
         if c not in df.columns:
             continue
         s = pd.to_numeric(pd.Series(df[c]), errors="coerce").dropna()
         if len(s):
             totals[c] = {"avg": round(float(s.mean()), 2)}
+    for c in tuple(sum_cols):
+        if c not in df.columns:
+            continue
+        s = pd.to_numeric(pd.Series(df[c]), errors="coerce").dropna()
+        if len(s):
+            totals[c] = round(float(s.sum()), 2)
     return totals
 
 
