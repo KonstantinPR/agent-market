@@ -23,10 +23,15 @@ APP_JS = ROOT / "app" / "static" / "app.js"
 ALLOWED_EXPR = {
     "set.key",  # colview: ключ = storageKey (+ «_<mode>»), считает colViewSet
     "k",        # цикл «сброса колонок»: перебор Object.keys(localStorage)
+    "cfg.key",  # дашборд: ключ из dashTableSource, все 4 есть в LS_COLVIEW_KEYS
 }
 
 # ozBySizeKey(tab) → префикс "ozBySize:" (функция определена в app.js).
 CALL_PREFIX = {"ozBySizeKey": "ozBySize:"}
+
+# Ключи arts-меню задаются в конфиге makeArtsMenu({ key: "..." }) и дальше
+# используются как cfg.key — собираем их из литералов конфигов.
+ARTS_KEY = re.compile(r'makeArtsMenu\(\{\s*key:\s*"([^"]+)"')
 
 # Первый аргумент: либо строковый литерал целиком, либо выражение до «)».
 LS_CALL = re.compile(r'localStorage\.(?:getItem|setItem|removeItem)\(\s*("([^"]*)"|[^)]+)')
@@ -92,6 +97,9 @@ def _resolve(expr: str, ls_keys, colview, consts):
     if expr in ALLOWED_EXPR:
         return None  # покрыто реестром по построению
     if expr.startswith('"'):
+        concat = re.match(r'^"([^"]*)"\s*\+', expr)
+        if concat:
+            return concat.group(1) + "*"  # префикс: "base:" + id
         return expr.strip('"')
     m = NAME.match(expr)
     if m and m.group(1) in consts:
@@ -126,6 +134,7 @@ def _actual_keys(src, ls_keys, colview, consts):
         resolved = _resolve(_first_arg(m.group(1)), ls_keys, colview, consts)
         if resolved is not None:
             keys.add(resolved)
+    keys.update(ARTS_KEY.findall(src))
     keys.update(STORAGE_KEY.findall(src))
     return keys
 

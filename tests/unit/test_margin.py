@@ -1,13 +1,18 @@
+import json
+
 import pandas as pd
+import pytest
 from datetime import date
 
 from sqlalchemy import select
 
+from app.services.funnel import FUNNEL_CMP_FIELDS
 from app.services.margin import (MARGIN_CMP_FIELDS, compare_margin_periods,
                                  compare_margin_periods_multi,
+                                 compare_funnel_periods,
                                  margin_detail_dataframe,
                                  storage_split, ozon_margin_detail_dataframe,
-                                 funnel_dataframe)
+                                 funnel_dataframe, funnel_prev_dataframe)
 from app import models
 
 
@@ -987,4 +992,114 @@ def test_margin_cmp_fields_match_frontend():
     assert block, "app.js: нет MARGIN_CMP_FIELDS"
     keys = re.findall(r'k:\s*"([^"]+)"', block.group(1))
     assert keys == list(MARGIN_CMP_FIELDS)
+
+
+def _past_json(**kw):
+    base = {
+        "period": {"start": "2026-08-12", "end": "2026-09-11"},
+        "openCount": 50, "cartCount": 10, "orderCount": 2, "cancelCount": 1,
+        "buyoutCount": 1, "orderSum": 2000.0, "buyoutSum": 1000.0,
+        "cancelSum": 500.0, "avgPrice": 1000.0,
+        "conversions": {"addToCartPercent": 20.0, "cartToOrderPercent": 20.0,
+                        "buyoutPercent": 50.0},
+    }
+    base.update(kw)
+    return json.dumps(base)
+
+
+def test_funnel_prev_dataframe_from_past_block(db):
+    """prev воронки: метрики и точные даты берутся из past_json среза."""
+    db.add(models.Product(article="A1", name="Товар", net_cost=300.0))
+    db.add(_funnel_row(past_json=_past_json()))
+    db.commit()
+    cur = funnel_dataframe(db, date_from=date(2026, 9, 1),
+                           date_to=date(2026, 9, 10))
+    prev = funnel_prev_dataframe(db, cur, "2026-09-01", "2026-09-10")
+    assert prev is not None
+    assert prev.attrs["period_from"] == "2026-08-12"
+    assert prev.attrs["period_to"] == "2026-09-11"
+    row = prev.set_index("article").loc["A1"]
+    assert row["views"] == 50 and row["adds"] == 10
+    assert row["orders"] == 2 and row["cancelled"] == 1 and row["buyouts"] == 1
+    assert row["revenue"] == 2000.0 and row["buyout_sum"] == 1000.0
+    assert row["margin"] == pytest.approx(1400.0)       # 2000 - 300×2
+    assert row["margin_pct"] == pytest.approx(70.0)
+    assert row["cart_pct"] == pytest.approx(20.0)
+    assert row["order_pct"] == pytest.approx(4.0)
+    assert row["conv_buyout_percent"] == pytest.approx(50.0)
+    assert pd.isna(row["product_rating"])
+
+
+def test_compare_funnel_periods_prev_and_stored(db):
+    """Мультисравнение воронки: prev из past + год из сохранённого среза."""
+    from app.api._common import resolve_compare_periods
+    db.add(models.Product(article="A1", name="Товар", net_cost=300.0))
+    db.add_all([
+        _funnel_row(past_json=_past_json()),
+        _funnel_row(date_from=date(2025, 1, 1), date_to=date(2025, 12, 31),
+                    views=200, adds=8, orders=6, buyouts=5,
+                    revenue=5400.0, buyout_sum=4500.0, avg_price=900.0),
+    ])
+    db.commit()
+    cur = funnel_dataframe(db, date_from=date(2026, 9, 1),
+                           date_to=date(2026, 9, 10))
+    periods = resolve_compare_periods("2026-09-01", "2026-09-10",
+                                      "prev,year:2025")
+    df, meta = compare_funnel_periods(
+        db, cur, periods, ["margin", "orders", "margin_pct"])
+    assert [w["key"] for w in meta["periods"]] == ["cmp1", "cmp2"]
+    assert meta["periods"][0]["date_from"] == "2026-08-12"
+    assert meta["periods"][0]["date_to"] == "2026-09-11"
+    assert meta["periods"][1]["date_from"] == "2025-01-01"
+    assert all(w["available"] for w in meta["periods"])
+    assert [c["k"] for c in meta["columns"]] == [
+        "cmp1_margin", "cmp1_orders", "cmp1_margin_pct",
+        "cmp2_margin", "cmp2_orders", "cmp2_margin_pct"]
+    row = df.iloc[0]
+    assert row["cmp1_orders"] == 2
+    assert row["cmp1_margin"] == pytest.approx(1400.0)
+    assert row["cmp2_orders"] == 6
+    assert row["cmp2_margin"] == pytest.approx(3600.0)   # 5400 - 300×6
+    assert df.attrs["date_from"] == "2026-09-01"
+
+
+def test_compare_funnel_periods_missing_stored_window(db):
+    """Период без сохранённого среза: available=False и пустые колонки."""
+    from app.api._common import resolve_compare_periods
+    db.add(models.Product(article="A1", net_cost=0.0))
+    db.add(_funnel_row(past_json=_past_json()))
+    db.commit()
+    cur = funnel_dataframe(db, date_from=date(2026, 9, 1),
+                           date_to=date(2026, 9, 10))
+    periods = resolve_compare_periods("2026-09-01", "2026-09-10",
+                                      "prev,year:2025")
+    df, meta = compare_funnel_periods(db, cur, periods, ["orders"])
+    assert meta["periods"][0]["available"] is True
+    assert meta["periods"][1]["available"] is False
+    assert meta["columns"][1]["available"] is False
+    assert df.iloc[0]["cmp2_orders"] is None
+
+
+def test_funnel_dataframe_strict_window_skips_overlap(db):
+    """strict_window не подставляет пересекающийся/последний срез."""
+    db.add(_funnel_row())
+    db.commit()
+    loose = funnel_dataframe(db, date_from=date(2026, 9, 5),
+                             date_to=date(2026, 9, 12))
+    strict = funnel_dataframe(db, date_from=date(2026, 9, 5),
+                              date_to=date(2026, 9, 12), strict_window=True)
+    assert len(loose) == 1 and loose.attrs["matched"] is False
+    assert strict.empty and strict.attrs["available"] is False
+
+
+def test_funnel_cmp_fields_match_frontend():
+    """Белый список полей сравнения воронки совпадает с app.js."""
+    import re
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[2] / "app" / "static" / "app.js"
+          ).read_text(encoding="utf-8")
+    block = re.search(r"const FUNNEL_CMP_FIELDS = \[(.*?)\n\];", js, re.S)
+    assert block, "app.js: нет FUNNEL_CMP_FIELDS"
+    keys = re.findall(r'k:\s*"([^"]+)"', block.group(1))
+    assert keys == list(FUNNEL_CMP_FIELDS)
 

@@ -1,5 +1,6 @@
 """Расчёт маржинальности по детализациям продаж WB/Ozon (detail-отчёты) и воронке WB."""
-from datetime import date
+import json
+from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -37,6 +38,8 @@ def funnel_dataframe(
     date_to=None,
     article_like: Optional[str] = None,
     articles: Optional[set] = None,
+    strict_window: bool = False,
+    with_storage: bool = True,
 ) -> pd.DataFrame:
     """Прибыльность по Воронке Продаж WB (funnel_metric + себестоимость).
 
@@ -49,6 +52,11 @@ def funnel_dataframe(
     в маржу не входит. article_like фильтрует только вывод и не влияет на
     агрегацию. В attrs: date_from/date_to — показанный срез, matched — совпал ли
     срез с запрошенным диапазоном.
+
+    strict_window=True — для кадров сравнения: берётся только срез, целиком
+    лежащий внутри запрошенного окна (без fallback на пересечение/последний);
+    иначе пустой df с attrs available=False. with_storage=False пропускает
+    расчёт storage_est (в сравнении он не нужен).
     """
     base_cols = [c for c in funnel_service.funnel_columns()
                  if c not in ("past_json", "comparison_json")]
@@ -59,7 +67,12 @@ def funnel_dataframe(
                 + ["dy_" + k for k in funnel_service.FUNNEL_DY_KEYS])
 
     def _empty():
-        return pd.DataFrame(columns=all_cols)
+        df = pd.DataFrame(columns=all_cols)
+        df.attrs["date_from"] = ""
+        df.attrs["date_to"] = ""
+        df.attrs["matched"] = False
+        df.attrs["available"] = False
+        return df
 
     def _num(v):
         try:
@@ -86,6 +99,9 @@ def funnel_dataframe(
     if date_from is not None and date_to is not None:
         requested = (date_from, date_to)
         chosen = funnel_service.pick_funnel_window(windows, requested[0], requested[1])
+        if strict_window and (chosen is None or not (
+                chosen[0] >= requested[0] and chosen[1] <= requested[1])):
+            return _empty()
         from_, to_ = chosen if chosen is not None else (latest[0], latest[1])
     else:
         from_, to_ = latest[0], latest[1]
@@ -127,7 +143,7 @@ def funnel_dataframe(
             )
             if (a or "").strip()
         },
-    )
+    ) if with_storage else {}
 
     art_check = like_re(article_like)
     seen = set()
@@ -211,6 +227,89 @@ def funnel_dataframe(
     out.attrs["date_from"] = str(from_)
     out.attrs["date_to"] = str(to_)
     out.attrs["matched"] = bool(requested) and (from_, to_) == requested
+    out.attrs["available"] = True
+    return out
+
+
+def funnel_prev_dataframe(db: Session, current: pd.DataFrame,
+                          date_from, date_to) -> Optional[pd.DataFrame]:
+    """Прошлый период воронки из блока ``statistic.past`` показанного среза.
+
+    WB отдаёт в каждом срезе метрики предыдущего окна (past_json) вместе с его
+    точными датами ``period.start/end``. Возвращает кадр по артикулам с полями
+    из ``funnel.FUNNEL_CMP_FIELDS``; маржа/проценты считаются по тем же
+    формулам, что и в текущем окне. None — если past-блока нет.
+    """
+    if current is None or current.empty:
+        return None
+
+    def _num(v):
+        try:
+            f = float(v)
+            return int(f) if f.is_integer() else f
+        except (TypeError, ValueError):
+            return None
+
+    costs = {}
+    if "net_cost" in current.columns:
+        costs = dict(zip(current["article"], current["net_cost"]))
+
+    rows = db.execute(
+        select(models.FunnelMetric.article, models.FunnelMetric.past_json)
+        .where(models.FunnelMetric.date_from == date_from,
+               models.FunnelMetric.date_to == date_to)
+    ).all()
+    recs = []
+    period = None
+    for article, raw in rows:
+        try:
+            past = json.loads(raw or "{}")
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(past, dict) or not past:
+            continue
+        per = past.get("period") or {}
+        if period is None and per.get("start") and per.get("end"):
+            period = (str(per["start"]), str(per["end"]))
+        views = _num(past.get("openCount"))
+        adds = _num(past.get("cartCount"))
+        orders = _num(past.get("orderCount"))
+        revenue = _num(past.get("orderSum"))
+        avg_price = _num(past.get("avgPrice"))
+        revenue_eff = revenue
+        if revenue_eff is None and avg_price is not None and orders is not None:
+            revenue_eff = avg_price * orders
+        cost = float(costs.get(article) or 0)
+        margin = (round(revenue_eff - cost * orders, 2)
+                  if revenue_eff is not None and orders is not None else None)
+        conv = past.get("conversions") or {}
+        recs.append({
+            "article": str(article or ""),
+            "views": views,
+            "adds": adds,
+            "orders": orders,
+            "buyouts": _num(past.get("buyoutCount")),
+            "cancelled": _num(past.get("cancelCount")),
+            "revenue": revenue,
+            "buyout_sum": _num(past.get("buyoutSum")),
+            "margin": margin,
+            "margin_pct": (round(margin / revenue_eff * 100, 2)
+                           if margin is not None and revenue_eff else None),
+            "avg_price": avg_price,
+            "cart_pct": (round(adds / views * 100, 2)
+                         if adds is not None and views else None),
+            "order_pct": (round(orders / views * 100, 2)
+                          if orders is not None and views else None),
+            "conv_buyout_percent": _num(conv.get("buyoutPercent")),
+            "product_rating": None,
+        })
+    if not recs:
+        return None
+    out = pd.DataFrame(
+        recs, columns=["article"] + list(funnel_service.FUNNEL_CMP_FIELDS))
+    out.attrs["period_from"] = period[0] if period else ""
+    out.attrs["period_to"] = period[1] if period else ""
+    out.attrs["available"] = True
     return out
 
 
@@ -849,15 +948,18 @@ def compare_margin_periods(current: pd.DataFrame, prev: pd.DataFrame) -> pd.Data
     return cur
 
 
-def compare_margin_periods_multi(current: pd.DataFrame, windows, metrics) -> tuple:
-    """Навешивает на сводку детализации выбранные показатели за несколько периодов.
+def compare_margin_periods_multi(current: pd.DataFrame, windows, metrics,
+                                 fields=None) -> tuple:
+    """Навешивает на сводку выбранные показатели за несколько периодов.
 
     windows — список ``(описание_окна, df_за_окно)``; описание содержит ``key``
     (``cmp1``, ``cmp2``, …) и ``short`` (короткая подпись периода). metrics —
-    ключи из ``MARGIN_CMP_FIELDS``. Колонки называются ``cmp<N>_<metric>``;
-    артикул, которого не было в периоде, получает None.
+    ключи из ``fields`` (по умолчанию ``MARGIN_CMP_FIELDS``; для воронки
+    передаётся ``funnel.FUNNEL_CMP_FIELDS``). Колонки называются
+    ``cmp<N>_<metric>``; артикул, которого не было в периоде, получает None.
     Возвращает ``(df, columns_meta)``; columns_meta — подписи/типы для UI и Excel.
     """
+    spec = fields or MARGIN_CMP_FIELDS
     cur = current.copy()
     meta = []
     for win, frame in windows:
@@ -868,7 +970,7 @@ def compare_margin_periods_multi(current: pd.DataFrame, windows, metrics) -> tup
                 if m in frame.columns:
                     prev_maps[m] = pd.Series(frame[m].values, index=arts).to_dict()
         for m in metrics:
-            label, kind, stats = MARGIN_CMP_FIELDS[m]
+            label, kind, stats = spec[m]
             key = "%s_%s" % (win["key"], m)
             if m in prev_maps:
                 vals = cur["article"].map(prev_maps[m])
@@ -881,6 +983,82 @@ def compare_margin_periods_multi(current: pd.DataFrame, windows, metrics) -> tup
                 "period": win["key"], "period_label": win["short"],
             })
     return cur, meta
+
+
+def compare_funnel_periods(db: Session, current: pd.DataFrame, cmp_periods,
+                           cmp_fields, article_like=None, articles=None) -> tuple:
+    """Сравнение воронки по полям/периодам.
+
+    ``prev`` берётся из past-блока показанного среза (даты — фактические от WB),
+    остальные периоды — только из сохранённых срезов, целиком лежащих внутри
+    запрошенного окна. Период без среза остаётся в meta с ``available=False``
+    и пустыми колонками.
+    """
+    snap_from = str(current.attrs.get("date_from") or "") if current is not None else ""
+    snap_to = str(current.attrs.get("date_to") or "") if current is not None else ""
+    frames = {}
+    windows = []
+    periods = []
+    for win in cmp_periods:
+        w = dict(win)
+        w["requested_from"] = win["date_from"]
+        w["requested_to"] = win["date_to"]
+        frame = None
+        if win["mode"] == "prev" and snap_from and snap_to:
+            key = ("prev", snap_from, snap_to)
+            if key not in frames:
+                frames[key] = funnel_prev_dataframe(db, current, snap_from, snap_to)
+            frame = frames[key]
+            if frame is not None and not frame.empty:
+                if frame.attrs.get("period_from") and frame.attrs.get("period_to"):
+                    w["date_from"] = frame.attrs["period_from"]
+                    w["date_to"] = frame.attrs["period_to"]
+                else:
+                    d1 = date.fromisoformat(snap_from)
+                    d2 = date.fromisoformat(snap_to)
+                    length = (d2 - d1).days + 1
+                    w["date_from"] = (d1 - timedelta(days=length)).isoformat()
+                    w["date_to"] = (d1 - timedelta(days=1)).isoformat()
+        elif win["mode"] != "prev":
+            key = (win["date_from"], win["date_to"])
+            if key not in frames:
+                frames[key] = funnel_dataframe(
+                    db, date_from=date.fromisoformat(key[0]),
+                    date_to=date.fromisoformat(key[1]),
+                    article_like=article_like, articles=articles,
+                    strict_window=True, with_storage=False)
+            frame = frames[key]
+            if frame is not None and not frame.empty:
+                w["date_from"] = str(frame.attrs.get("date_from") or w["date_from"])
+                w["date_to"] = str(frame.attrs.get("date_to") or w["date_to"])
+        w["available"] = bool(frame is not None and not frame.empty)
+        w["short"] = funnel_service.short_window(
+            date.fromisoformat(w["date_from"]), date.fromisoformat(w["date_to"]))
+        windows.append((w, frame))
+        periods.append(w)
+
+    df, cols = compare_margin_periods_multi(
+        current, windows, cmp_fields, fields=funnel_service.FUNNEL_CMP_FIELDS)
+    if current is not None:
+        df.attrs.update(current.attrs)
+    by_key = {p["key"]: p for p in periods}
+    for col in cols:
+        col["available"] = bool(by_key.get(col["period"], {}).get("available"))
+    meta = {
+        "periods": [
+            {k: p.get(k) for k in ("key", "mode", "label", "short", "date_from",
+                                   "date_to", "requested_from", "requested_to",
+                                   "available")}
+            for p in periods
+        ],
+        "fields": [
+            {"key": m, "label": funnel_service.FUNNEL_CMP_FIELDS[m][0],
+             "kind": funnel_service.FUNNEL_CMP_FIELDS[m][1]}
+            for m in cmp_fields
+        ],
+        "columns": cols,
+    }
+    return df, meta
 
 
 def compare_detail_periods(

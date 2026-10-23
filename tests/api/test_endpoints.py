@@ -752,6 +752,129 @@ def test_margin_funnel_picks_widest_snapshot_inside_window(api_client):
     assert view["date_to"] == "2026-09-12"
 
 
+def test_margin_funnel_compare_prev_and_stored_year(api_client, db):
+    """Сравнение воронки: prev из past-блока + год из сохранённого среза."""
+    import json
+    from datetime import date as _date
+
+    from app import models
+
+    db.add(models.Product(article="TST-1", name="Товар", net_cost=300.0))
+    db.add_all([
+        models.FunnelMetric(
+            date_from=_date(2026, 9, 1), date_to=_date(2026, 9, 10),
+            nm_id="1001", article="TST-1", views=100, adds=5, orders=4,
+            buyouts=3, avg_price=1000.0, revenue=4000.0, buyout_sum=3000.0,
+            past_json=json.dumps({
+                "period": {"start": "2026-08-12", "end": "2026-09-11"},
+                "openCount": 50, "cartCount": 10, "orderCount": 2,
+                "cancelCount": 1, "buyoutCount": 1,
+                "orderSum": 2000.0, "buyoutSum": 1000.0, "cancelSum": 500.0,
+                "avgPrice": 1000.0,
+                "conversions": {"buyoutPercent": 50.0},
+            }),
+        ),
+        models.FunnelMetric(
+            date_from=_date(2025, 1, 1), date_to=_date(2025, 12, 31),
+            nm_id="1001", article="TST-1", views=200, adds=8, orders=6,
+            buyouts=5, avg_price=900.0, revenue=5400.0, buyout_sum=4500.0,
+        ),
+    ])
+    db.commit()
+
+    body = api_client.get("/api/margin/funnel", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "compare": 1, "compare_fields": "margin,orders,margin_pct",
+        "compare_periods": "prev,year:2025",
+    }).json()
+    meta = body["compare_meta"]
+    assert [w["key"] for w in meta["periods"]] == ["cmp1", "cmp2"]
+    assert meta["periods"][0]["date_from"] == "2026-08-12"
+    assert meta["periods"][0]["date_to"] == "2026-09-11"
+    assert meta["periods"][0]["available"] is True
+    assert meta["periods"][1]["available"] is True
+    assert [c["k"] for c in meta["columns"]] == [
+        "cmp1_margin", "cmp1_orders", "cmp1_margin_pct",
+        "cmp2_margin", "cmp2_orders", "cmp2_margin_pct"]
+    row = body["rows"][0]
+    assert row["cmp1_orders"] == 2
+    assert row["cmp1_margin"] == pytest.approx(1400.0)   # 2000 - 300×2
+    assert row["cmp1_margin_pct"] == pytest.approx(70.0)
+    assert row["cmp2_orders"] == 6
+    assert row["cmp2_margin"] == pytest.approx(3600.0)   # 5400 - 300×6
+    assert body["totals"]["cmp1_margin"] == pytest.approx(1400.0)
+    assert body["totals"]["cmp2_orders"] == 6
+    assert body["prev_window"] == {"date_from": "2026-08-12",
+                                   "date_to": "2026-09-11"}
+
+
+def test_margin_funnel_compare_missing_period(api_client, db):
+    """Нет сохранённого среза за год: период available=false, колонки пустые."""
+    import json
+    from datetime import date as _date
+
+    from app import models
+
+    db.add(models.Product(article="TST-1", name="Товар", net_cost=300.0))
+    db.add(models.FunnelMetric(
+        date_from=_date(2026, 9, 1), date_to=_date(2026, 9, 10),
+        nm_id="1001", article="TST-1", views=100, orders=4,
+        revenue=4000.0, avg_price=1000.0,
+        past_json=json.dumps({
+            "period": {"start": "2026-08-12", "end": "2026-09-11"},
+            "openCount": 50, "orderCount": 2, "orderSum": 2000.0,
+            "avgPrice": 1000.0,
+        }),
+    ))
+    db.commit()
+
+    body = api_client.get("/api/margin/funnel", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "compare": 1, "compare_fields": "orders",
+        "compare_periods": "prev,year:2025",
+    }).json()
+    meta = body["compare_meta"]
+    assert meta["periods"][0]["available"] is True
+    assert meta["periods"][1]["available"] is False
+    cmp2 = next(c for c in meta["columns"] if c["k"] == "cmp2_orders")
+    assert cmp2["available"] is False
+    assert body["rows"][0]["cmp2_orders"] == ""
+
+
+def test_export_margin_funnel_compare_cols(api_client, db):
+    """Экспорт воронки: динамические cmp-колонки и их подписи."""
+    import json
+    from datetime import date as _date
+
+    from app import models
+
+    db.add(models.Product(article="TST-1", name="Товар", net_cost=300.0))
+    db.add(models.FunnelMetric(
+        date_from=_date(2026, 9, 1), date_to=_date(2026, 9, 10),
+        nm_id="1001", article="TST-1", views=100, orders=4,
+        revenue=4000.0, avg_price=1000.0,
+        past_json=json.dumps({
+            "period": {"start": "2026-08-12", "end": "2026-09-11"},
+            "openCount": 50, "orderCount": 2, "orderSum": 2000.0,
+            "avgPrice": 1000.0,
+        }),
+    ))
+    db.commit()
+
+    r = api_client.get("/api/export/margin/funnel", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "compare": 1, "compare_fields": "orders,margin",
+        "compare_periods": "prev",
+        "cols": "article,cmp1_orders,cmp1_margin",
+    })
+    assert r.status_code == 200
+    out = pd.read_excel(io.BytesIO(r.content))
+    assert list(out.columns) == [
+        "Артикул", "Заказы · 12.08–11.09.2026", "Маржа · 12.08–11.09.2026"]
+    assert out.iloc[0]["Заказы · 12.08–11.09.2026"] == 2
+    assert out.iloc[0]["Маржа · 12.08–11.09.2026"] == pytest.approx(1400.0)
+
+
 # ---------------------------------------------------------------------- импорт
 def test_import_products(api_client):
     df = pd.DataFrame([

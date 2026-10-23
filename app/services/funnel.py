@@ -50,6 +50,35 @@ FUNNEL_DY_KEYS = {
     "avg_price": "avgPriceDynamic",
 }
 
+# Поля «Воронки Продаж WB», доступные для сравнения по периодам.
+# key -> (подпись, тип значения, вид итога). Должно совпадать с
+# FUNNEL_CMP_FIELDS в app/static/app.js (паритет проверяет tests/unit/test_margin.py).
+FUNNEL_CMP_FIELDS = {
+    "views": ("Просмотры", "int", "sum"),
+    "adds": ("В корзину", "int", "sum"),
+    "orders": ("Заказы", "int", "sum"),
+    "buyouts": ("Выкупы", "int", "sum"),
+    "cancelled": ("Отмены", "int", "sum"),
+    "revenue": ("Выручка", "money", "sum"),
+    "buyout_sum": ("Сумма выкупов", "money", "sum"),
+    "margin": ("Маржа", "money", "sum"),
+    "margin_pct": ("Маржа, %", "pct", "avg"),
+    "avg_price": ("Ср. цена", "money", "avg"),
+    "cart_pct": ("В корзину, %", "pct", "avg"),
+    "order_pct": ("Заказы, %", "pct", "avg"),
+    "conv_buyout_percent": ("Выкуп, %", "pct", "avg"),
+    "product_rating": ("Рейтинг товара", "num", "avg"),
+}
+
+
+def short_window(d_from, d_to) -> str:
+    """Короткая подпись окна (ДД.ММ–ДД.ММ.ГГГГ) для колонок сравнения."""
+    if d_from == d_to:
+        return d_from.strftime("%d.%m.%Y")
+    if d_from.year == d_to.year:
+        return "%s–%s" % (d_from.strftime("%d.%m"), d_to.strftime("%d.%m.%Y"))
+    return "%s–%s" % (d_from.strftime("%d.%m.%Y"), d_to.strftime("%d.%m.%Y"))
+
 
 def flatten_past_dy(row: dict) -> None:
     """Дополняет строку воронки прошлым периодом (past_*) и динамикой (dy_*).

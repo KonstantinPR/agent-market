@@ -8,6 +8,17 @@ import pytest
 from app.services import tickets as t
 
 
+@pytest.fixture(autouse=True)
+def _detached_from_branch(monkeypatch):
+    """Тесты не зависят от ветки, на которой запущен pytest.
+
+    `create()` без явного branch берёт номер из текущей ветки (`t-56-...`),
+    из-за чего на рабочей ветке тесты получали T-56 вместо T-1. Здесь
+    принудительно отключаем неявный источник — как будто мы на main.
+    """
+    monkeypatch.setattr(t, "current_branch", lambda cwd=None: None)
+
+
 @pytest.fixture()
 def tfile(tmp_path):
     p = tmp_path / "TICKETS.md"

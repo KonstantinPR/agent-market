@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "166";
+const UI_VERSION = "168";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -186,6 +186,13 @@ function initWriteDb() {
 // Значение: точный ключ либо префикс с «*» (ключи вида base + суффикс).
 const LS_KEYS = {
   "marginDetailArticles": "Список «Артикулы» на «Детализация Продаж WB» (JSON)",
+  "marginOzonDetailArticles": "Список «Артикулы» на «Анализ Продаж OZON» (JSON)",
+  "marginFunnelArticles": "Список «Артикулы» на «Воронка Продаж WB» (JSON)",
+  "wbDetailArticles": "Список «Артикулы» на «Детализация продаж WB» (JSON)",
+  "ozDetailArticles": "Список «Артикулы» на «Детализация реализаций Ozon» (JSON)",
+  "pricingArticles": "Список «Артикулы» в «Цены» (JSON)",
+  "replenishArticles": "Список «Артикулы» в «Потребность в товаре» (JSON)",
+  "daterange-preset:*": "Пресет периода для пары дат: daterange-preset:<id элемента>",
   "dash-group-by": "Обзор: группировка строк таблицы (prefix/article)",
   "dash-table": "Обзор: вид таблицы (profit/revenue/…)",
   "write_db_*": "«в БД» у кнопок скачивания: write_db_<api>_<kind>",
@@ -687,7 +694,13 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     mountXBar(container, tscroll);
     if (st.onFilter) st.onFilter(list, st.rows);
     normalizeStatus();
+    // Шапка пересобрана — возвращаем ручки перетаскивания (они живут в DOM,
+    // а не в headers, поэтому после каждого paint их нужно создать заново).
+    try { if (typeof _initHeaderColumnDrag === "function") _initHeaderColumnDrag(container); } catch(e){}
   };
+  // Полная перерисовка таблицы (шапка + тело) — для перетаскивания колонок:
+  // порядок меняется в colView, а без перерисовки DOM остаётся старым.
+  st.repaint = paint;
   // Перерисовка только тела и «Итого» при вводе в фильтр — шапку (и фокус в
   // полосе фильтров) не трогаем, поэтому курсор не слетает.
   const refreshBody = () => {
@@ -737,7 +750,6 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     });
   }
   paint();
-  try { if (container && typeof _initHeaderColumnDrag === "function") _initHeaderColumnDrag(container); } catch(e){}
 }
 
 function applyStickyCols(wrap, headers, pinned) {
@@ -828,12 +840,40 @@ function _colviewTabForContainer(container) {
 
 function _initHeaderColumnDrag(container) {
   try {
-    if (!container || container._hdragBound) return;
+    if (!container) return;
+    // Ручка перетаскивания живёт в шапке, а не на самом th: так текст
+    // заголовка остаётся выделяемым/копируемым (см. 74714ba).
+    const tab0 = _colviewTabForContainer(container);
+    const set0 = tab0 && colViewSet ? colViewSet(tab0) : null;
+    const st0 = tab0 && colViewState ? colViewState(tab0) : null;
+    if (set0 && st0) {
+      const pin0 = st0.pin || [];
+      container.querySelectorAll("thead tr:not(.filter-row):not(.totals-row) th[data-k]").forEach((th) => {
+        const k = th.dataset.k;
+        let grip = th.querySelector ? th.querySelector(".th-grip") : null;
+        if (pin0.includes(k)) {
+          if (grip && typeof grip.remove === "function") grip.remove();
+          return;
+        }
+        if (!grip) {
+          grip = document.createElement("span");
+          grip.className = "th-grip";
+          grip.draggable = true;
+          grip.title = "Перетащить колонку";
+          grip.textContent = "\u2630";
+          grip.addEventListener("click", (e) => e.stopPropagation());
+          th.insertBefore(grip, th.firstChild || null);
+        }
+      });
+    }
+    if (container._hdragBound) return;
     container._hdragBound = true;
     let dragKey = null;
     container.addEventListener("dragstart", (ev) => {
       const th = ev.target && ev.target.closest ? ev.target.closest("thead th[data-k]") : null;
       if (!th) return;
+      // Нативный drag стартует только с ручки — иначе нельзя выделить текст.
+      if (!ev.target.closest || !ev.target.closest(".th-grip")) return;
       const tr = th.parentElement;
       if (tr && (tr.classList.contains("filter-row") || tr.classList.contains("totals-row"))) return;
       const tab = _colviewTabForContainer(container);
@@ -928,20 +968,17 @@ function _initHeaderColumnDrag(container) {
       if (colViewSave) colViewSave(tab, st2);
       container.querySelectorAll("thead th.th-drag-over, thead th.th-drag-over-left, thead th.th-dragging").forEach((x)=>{x.classList.remove("th-drag-over");x.classList.remove("th-drag-over-left");x.classList.remove("th-dragging");});
       dragKey = null;
-      if (container._pt) { container._pt.sort = container._pt.sort; }
-      if (typeof paint === "function" && container._pt) {
-        // will be repainted below
-      }
-      // repaint
-      if (container._pt) {
-        // trigger same path as filter changes
-        const listFn = null;
-      }
-      // easiest: call paint logic via existing refresh
-      if (typeof refreshBody === "function" && container.querySelector(".tscroll > div")) {
-        try { refreshBody(); } catch(e){}
-      } else if (typeof paint === "function") {
-        try { paint(); } catch(e){}
+      // colViewHeaders читает уже сохранённый порядок; незнакомые порядку
+      // колонки (например, служебная колонка связи) оставляем в начале.
+      if (container._pt && Array.isArray(container._pt.headers)) {
+        const known = new Set(st2.order || []);
+        const fixed = container._pt.headers.filter((h) => !known.has(h.k));
+        container._pt.headers = fixed.concat(
+          colViewHeaders(tab, container._pt.headers).filter((h) => known.has(h.k))
+        );
+        if (typeof container._pt.repaint === "function") {
+          try { container._pt.repaint(); } catch (e) {}
+        }
       }
     }, true);
     container.addEventListener("dragend", () => {
@@ -1264,7 +1301,7 @@ async function loadTabInner(name, f) {
   try {
     if (name === "dashboard") await renderDashboard(qs(f));
     else if (name === "margin-funnel") {
-      await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined, articles: funnelArtsMenu.param() || undefined, links: cabLinksFor("wb") }));
+      await renderMarginFunnel(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginFunnelLike") || undefined, articles: funnelArtsMenu.param() || undefined, ...cmpQuery("margin-funnel"), links: cabLinksFor("wb") }));
     } else if (name === "margin-detail") {
       await renderMarginDetail(qs({ date_from: f.date_from, date_to: f.date_to, article_like: tabLike("marginDetailLike") || undefined, articles: marginArtsParam() || undefined, ...cmpQuery("margin-detail"), links: cabLinksFor("wb") }));
     } else if (name === "margin-ozon-detail") {
@@ -3238,11 +3275,39 @@ function marginFunnelFooters(rows) {
 }
 
 async function renderMarginFunnel(p) {
+  const compare = /compare=1/.test(p || "");
   const linked = /links=/.test(p || "");
   const data = await api("/margin/funnel" + p);
-  let headers = colViewHeaders("margin-funnel", funnelHeaders);
+  // Колонки сравнения — динамические: отдаём их в «Вид таблицы» (секция
+  // «Сравнения»), чтобы их можно было скрыть/переставить как обычные.
+  let dyn = [];
+  const cmpCols = (data.compare_meta && data.compare_meta.columns) || [];
+  if (compare && cmpCols.length) {
+    const fmts = {
+      money: cellFmts.moneyCls, int: cellFmts.int, pct: cellFmts.pct,
+      num: (v) => (v == null || v === "") ? "—"
+        : String(Math.round(Number(v) * 100) / 100),
+    };
+    dyn = cmpCols.map((c) => ({
+      k: c.k, label: c.label, num: true,
+      render: fmts[c.kind] || cellFmts.text,
+      tip: "Значение поля «" + (c.label || c.k) + "» за период "
+        + (c.period_label || "") + "." + (c.available === false
+          ? " За этот период нет сохранённого среза." : ""),
+    }));
+  }
+  setColViewDyn("margin-funnel", dyn);
+  let headers = colViewHeaders("margin-funnel", funnelHeaders.concat(dyn));
   if (linked) headers = [ownerCol()].concat(headers);
-  pagedTable($("#marginFunnelTable"), headers, data.rows || [], marginFunnelFooters(data.rows || []), null, colViewPinKeys("margin-funnel"));
+  const footers = marginFunnelFooters(data.rows || []);
+  if (footers && cmpCols.length) {
+    for (const c of cmpCols) {
+      if (data.totals && Object.prototype.hasOwnProperty.call(data.totals, c.k)) {
+        footers[c.k] = data.totals[c.k];
+      }
+    }
+  }
+  pagedTable($("#marginFunnelTable"), headers, data.rows || [], footers, null, colViewPinKeys("margin-funnel"));
   const cp = colViewParam("margin-funnel");
   $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p + (cp ? (p ? "&" : "?") + cp : "");
   const msg = statusEl();
@@ -3254,23 +3319,39 @@ async function renderMarginFunnel(p) {
   }
   const artsMsg = (data.articles && data.articles.tokens)
     ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
+  const cmpPeriods = (data.compare_meta && data.compare_meta.periods) || [];
+  const cmpMissing = compare ? cmpPeriods.filter((w) => !w.available) : [];
+  let cmpMsg = "";
+  if (compare) {
+    cmpMsg = cmpPeriods.length
+      ? "сравнение: " + cmpPeriods.map(
+        (w) => w.label + " (" + w.date_from + "…" + w.date_to + ")"
+          + (w.available ? "" : " — нет среза")).join("; ")
+      : "для сравнения нужны поля и периоды";
+  }
+  const tail = cmpMsg ? " · " + cmpMsg : (linked ? " · сравнение связок" : "");
+  let warnText = "";
   if (data.snapshot_from && data.snapshot_to) {
     msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to +
-      (data.matched ? "" : " (запрошено " + data.date_from + " — " + data.date_to + ")") + artsMsg;
-    if (warn) {
-      if (!data.matched && data.rows && data.rows.length) {
-        warn.style.display = "block";
-        warn.textContent = "В базе нет среза точно за " + data.date_from + " — " + data.date_to
-          + ". Показан срез " + data.snapshot_from + " — " + data.snapshot_to
-          + " (итоги — по нему). Чтобы увидеть свой период, нажмите «Обновить базу» в шапке.";
-      } else {
-        warn.style.display = "none";
-        warn.textContent = "";
-      }
+      (data.matched ? "" : " (запрошено " + data.date_from + " — " + data.date_to + ")") +
+      tail + artsMsg;
+    if (!data.matched && data.rows && data.rows.length) {
+      warnText = "В базе нет среза точно за " + data.date_from + " — " + data.date_to
+        + ". Показан срез " + data.snapshot_from + " — " + data.snapshot_to
+        + " (итоги — по нему). Чтобы увидеть свой период, нажмите «Обновить базу» в шапке.";
     }
   } else {
-    msg.textContent = "Нет данных. Сначала скачайте WB API ▸ Воронка продаж." + artsMsg;
-    if (warn) { warn.style.display = "none"; warn.textContent = ""; }
+    msg.textContent = "Нет данных. Сначала скачайте WB API ▸ Воронка продаж." + tail + artsMsg;
+  }
+  if (cmpMissing.length && data.rows && data.rows.length) {
+    warnText += (warnText ? " " : "")
+      + "Нет сохранённого среза для сравнения: "
+      + cmpMissing.map((w) => w.label + " (" + w.date_from + "…" + w.date_to + ")").join("; ")
+      + ". Колонки этих периодов пустые.";
+  }
+  if (warn) {
+    warn.style.display = warnText ? "block" : "none";
+    warn.textContent = warnText;
   }
 }
 
@@ -4536,6 +4617,7 @@ const CMP_TABS = {
   "wb-detail": { btn: "btnWbDetailCompare", panel: "wbDetailComparePanel" },
   "oz-detail": { btn: "btnOzDetailCompare", panel: "ozDetailComparePanel" },
   "margin-detail": { btn: "btnMarginDetailCompare", panel: "marginDetailComparePanel" },
+  "margin-funnel": { btn: "btnMarginFunnelCompare", panel: "marginFunnelComparePanel" },
   "margin-ozon-detail": { btn: "btnMarginOzonDetailCompare", panel: "marginOzonDetailComparePanel" },
   "dashboard": { btn: "btnDashCompare", panel: "dashComparePanel" },
 };
@@ -4567,15 +4649,42 @@ const MARGIN_CMP_MODES = [
   ["year", "Весь год"],
   ["custom", "Произвольный период"],
 ];
-function marginCmpField(k) {
-  return MARGIN_CMP_FIELDS.find((f) => f.k === k) || null;
+// Поля «Воронки Продаж WB» для селектора «Сравнения».
+// Должно совпадать с FUNNEL_CMP_FIELDS в app/services/funnel.py.
+const FUNNEL_CMP_FIELDS = [
+  { k: "views", label: "Просмотры", kind: "int" },
+  { k: "adds", label: "В корзину", kind: "int" },
+  { k: "orders", label: "Заказы", kind: "int" },
+  { k: "buyouts", label: "Выкупы", kind: "int" },
+  { k: "cancelled", label: "Отмены", kind: "int" },
+  { k: "revenue", label: "Выручка", kind: "money" },
+  { k: "buyout_sum", label: "Сумма выкупов", kind: "money" },
+  { k: "margin", label: "Маржа", kind: "money" },
+  { k: "margin_pct", label: "Маржа, %", kind: "pct" },
+  { k: "avg_price", label: "Ср. цена", kind: "money" },
+  { k: "cart_pct", label: "В корзину, %", kind: "pct" },
+  { k: "order_pct", label: "Заказы, %", kind: "pct" },
+  { k: "conv_buyout_percent", label: "Выкуп, %", kind: "pct" },
+  { k: "product_rating", label: "Рейтинг товара", kind: "num" },
+];
+const FUNNEL_CMP_DEFAULT_FIELDS = ["views", "orders", "buyouts", "revenue", "margin", "margin_pct"];
+// Вкладки с расширенным селектором: поля × до трёх периодов.
+const CMP_MULTI_TABS = {
+  "margin-detail": { fields: MARGIN_CMP_FIELDS, defaults: MARGIN_CMP_DEFAULT_FIELDS },
+  "margin-funnel": { fields: FUNNEL_CMP_FIELDS, defaults: FUNNEL_CMP_DEFAULT_FIELDS },
+};
+function cmpMultiCfg(tab) {
+  return CMP_MULTI_TABS[tab] || null;
 }
 // Состояние расширенного селектора: { fields: [...], periods: [{mode,year,from,to}] }.
 // Старое состояние { mode, from, to } мигрирует в один период.
-function marginCmpState() {
-  const raw = cmpAll()["margin-detail"] || {};
+function cmpMultiState(tab) {
+  const cfg = CMP_MULTI_TABS[tab];
+  if (!cfg) return { fields: [], periods: [] };
+  const raw = cmpAll()[tab] || {};
+  const keys = new Set(cfg.fields.map((f) => f.k));
   const fields = (Array.isArray(raw.fields) ? raw.fields : [])
-    .filter((k) => marginCmpField(k));
+    .filter((k) => keys.has(k));
   let periods;
   if (Array.isArray(raw.periods)) {
     periods = raw.periods;
@@ -4591,9 +4700,12 @@ function marginCmpState() {
     to: p.to || "",
   }));
   return {
-    fields: fields.length ? fields : MARGIN_CMP_DEFAULT_FIELDS.slice(),
+    fields: fields.length ? fields : cfg.defaults.slice(),
     periods: periods,
   };
+}
+function marginCmpState() {
+  return cmpMultiState("margin-detail");
 }
 // Токены compare_periods для запроса (порядок = порядок колонок).
 function marginCmpSpecs(st) {
@@ -4623,7 +4735,7 @@ function cmpAll() {
 }
 // Состояние селектора вкладки: mode "" (не сравнивать) | prev | last_year | custom.
 function cmpState(tab) {
-  if (tab === "margin-detail") return marginCmpState();
+  if (cmpMultiCfg(tab)) return cmpMultiState(tab);
   const s = cmpAll()[tab] || {};
   const mode = ["", "prev", "last_year", "custom"].includes(s.mode) ? s.mode : "";
   return { mode: mode, from: s.from || "", to: s.to || "" };
@@ -4635,11 +4747,12 @@ function saveCmpState(tab, st) {
 }
 // Параметры запроса сравнения для вкладки (пусто, если режим выключен).
 function cmpQuery(tab) {
-  if (tab === "margin-detail") {
-    const st = marginCmpState();
+  const cfg = cmpMultiCfg(tab);
+  if (cfg) {
+    const st = cmpMultiState(tab);
     const specs = marginCmpSpecs(st);
     if (!st.fields.length || !specs.length) return {};
-    const fields = MARGIN_CMP_FIELDS
+    const fields = cfg.fields
       .filter((f) => st.fields.includes(f.k)).map((f) => f.k);
     if (!fields.length) return {};
     return {
@@ -4659,10 +4772,11 @@ function cmpQuery(tab) {
   return q;
 }
 function cmpButtonLabel(tab) {
-  if (tab === "margin-detail") {
-    const st = marginCmpState();
+  const cfg = cmpMultiCfg(tab);
+  if (cfg) {
+    const st = cmpMultiState(tab);
     const n = marginCmpSpecs(st).length;
-    const fields = MARGIN_CMP_FIELDS.filter((f) => st.fields.includes(f.k)).length;
+    const fields = cfg.fields.filter((f) => st.fields.includes(f.k)).length;
     if (!fields || !n) return "Сравнения ▾";
     return "Сравнения: " + fields + " " + cmpPlural(fields, "поле", "поля", "полей")
       + " · " + n + " " + cmpPlural(n, "период", "периода", "периодов") + " ▾";
@@ -4676,7 +4790,7 @@ function cmpButtonLabel(tab) {
 }
 function initCompareMenus() {
   Object.keys(CMP_TABS).forEach((tab) => {
-    if (tab === "margin-detail") return;
+    if (cmpMultiCfg(tab)) return;
     const btn = document.getElementById(CMP_TABS[tab].btn);
     const panel = document.getElementById(CMP_TABS[tab].panel);
     if (!btn || !panel) return;
@@ -4741,7 +4855,7 @@ function initCompareMenus() {
 
     bindCompareMenu(btn, panel);
   });
-  initMarginDetailCompare();
+  Object.keys(CMP_MULTI_TABS).forEach((tab) => initCmpPanel(tab));
 }
 // Открытие/закрытие панели «Сравнить ▾» / «Сравнения ▾».
 function bindCompareMenu(btn, panel) {
@@ -4755,35 +4869,37 @@ function bindCompareMenu(btn, panel) {
   });
   document.addEventListener("click", () => panel.classList.add("hidden"));
 }
-// «Сравнения ▾» для «Прибыльность → Детализация Продаж WB»: чекбоксы полей
-// и до трёх периодов (аналогичный прошлый, год назад, весь год, произвольный).
-function initMarginDetailCompare() {
-  const cfg = CMP_TABS["margin-detail"];
+// «Сравнения ▾»: чекбоксы полей и до трёх периодов (аналогичный прошлый,
+// год назад, весь год, произвольный). Общий для вкладок из CMP_MULTI_TABS.
+function initCmpPanel(tab) {
+  const cfg = CMP_TABS[tab];
+  const fieldDefs = (CMP_MULTI_TABS[tab] || {}).fields || [];
+  if (!cfg) return;
   const btn = document.getElementById(cfg.btn);
   const panel = document.getElementById(cfg.panel);
   if (!btn || !panel) return;
-  const state = marginCmpState();
-  btn.textContent = cmpButtonLabel("margin-detail");
+  const state = cmpMultiState(tab);
+  btn.textContent = cmpButtonLabel(tab);
   panel.innerHTML = "";
 
   let reloadTimer = null;
   const apply = () => {
-    saveCmpState("margin-detail", {
-      fields: MARGIN_CMP_FIELDS.filter((f) => state.fields.includes(f.k)).map((f) => f.k),
+    saveCmpState(tab, {
+      fields: fieldDefs.filter((f) => state.fields.includes(f.k)).map((f) => f.k),
       periods: state.periods.slice(0, 3).map((p) => ({
         mode: p.mode, year: p.year, from: p.from, to: p.to,
       })),
     });
-    btn.textContent = cmpButtonLabel("margin-detail");
-    if (currentTab !== "margin-detail") return;
+    btn.textContent = cmpButtonLabel(tab);
+    if (currentTab !== tab) return;
     // Годовые окна считаются дольше — быстрые клики по чекбоксам склеиваем.
     if (reloadTimer) clearTimeout(reloadTimer);
-    reloadTimer = setTimeout(() => loadTab("margin-detail"), 300);
+    reloadTimer = setTimeout(() => loadTab(tab), 300);
   };
 
   const fieldsGrid = document.createElement("div");
   fieldsGrid.className = "cmp-fields";
-  for (const f of MARGIN_CMP_FIELDS) {
+  for (const f of fieldDefs) {
     const lab = document.createElement("label");
     lab.className = "chk";
     lab.title = "Сравнивать «" + f.label + "» за каждый выбранный период";
@@ -4923,10 +5039,18 @@ function initMarginDetailCompare() {
   const hint = document.createElement("div");
   hint.className = "cmp-hint";
   hint.textContent = "Год считается целиком (01.01–31.12), текущий год может быть "
-    + "неполным. Значения показываются рядом с текущим окном без дельт.";
+    + "неполным. Значения показываются рядом с текущим окном без дельт."
+    + (tab === "margin-funnel"
+      ? " Для воронки «пред. период» берётся из блока WB, остальные периоды — "
+        + "только из сохранённых срезов (иначе колонки пустые)."
+      : "");
   panel.appendChild(hint);
   renderPeriods();
   bindCompareMenu(btn, panel);
+}
+
+function initMarginDetailCompare() {
+  initCmpPanel("margin-detail");
 }
 
 function replenishPdfUrl() {

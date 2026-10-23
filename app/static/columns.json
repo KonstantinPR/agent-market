@@ -170,6 +170,16 @@
    "exportDicts": [
     "export_wb_detail_rows",
     "export_wb_detail_summary"
+   ],
+   "dynamicColumns": [
+    "sells_pp",
+    "revenue_pp",
+    "commission_pp",
+    "for_pay_pp",
+    "logistics_pp",
+    "storage_pp",
+    "delta_ru",
+    "delta_pct"
    ]
   },
   "oz-detail": {
@@ -353,6 +363,16 @@
    "exportDicts": [
     "OZON_DETAIL_RU_COLUMNS",
     "OZON_DETAIL_SUMMARY_RU_COLUMNS"
+   ],
+   "dynamicColumns": [
+    "sells_pp",
+    "seller_total_pp",
+    "amount_pp",
+    "commission_pp",
+    "services_pp",
+    "income_pp",
+    "delta_ru",
+    "delta_pct"
    ]
   },
   "wb-cards": {

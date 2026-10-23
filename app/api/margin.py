@@ -434,6 +434,9 @@ def api_margin_funnel(
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
     articles: Optional[str] = None,
+    compare: int = 0,
+    compare_fields: Optional[str] = None,
+    compare_periods: Optional[str] = None,
     links: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -443,6 +446,13 @@ def api_margin_funnel(
     самый широкий внутри запрошенного → самый свежий пересекающийся → последний
     в базе. date_from/date_to — запрошенный период, snapshot_from/snapshot_to —
     фактически показанный срез, matched — совпали ли они.
+
+    compare_fields + compare_periods — мультивыбор «Сравнения»: выбранные поля
+    (см. ``funnel.FUNNEL_CMP_FIELDS``) за до 3 периодов. ``prev`` берётся из
+    past-блока показанного среза (маркетплейс сам считает предыдущее окно),
+    ``last_year``/``year:YYYY``/``custom:FROM:TO`` — только из сохранённых
+    срезов. Колонки ``cmp<N>_<field>``, метаданные — в ``compare_meta``;
+    недоступный период помечается ``available=false``.
 
     articles=ART1,ART2,… — фильтр по списку (как на «Детализация Продаж WB»):
     артикулы/баркоды/nmID WB/артикулы Ozon резолвятся в UPPER-артикулы и
@@ -455,6 +465,11 @@ def api_margin_funnel(
     tokens = article_tokens_service.split_tokens(articles)
     arts, matched = article_tokens_service.resolve_articles(db, tokens) \
         if tokens else (None, set())
+    cmp_periods = resolve_compare_periods(
+        date_from, date_to, compare_periods, ozon_small=False,
+    ) if compare and compare_periods else []
+    cmp_fields = [f.strip() for f in (compare_fields or "").split(",") if f.strip()]
+    cmp_fields = [f for f in cmp_fields if f in funnel_service.FUNNEL_CMP_FIELDS]
 
     def _funnel(db, info=None):
         owner = cabinet_service.link_owner(db, info) if info is not None else ""
@@ -462,22 +477,32 @@ def api_margin_funnel(
             db, date_from=from_, date_to=to_, article_like=article_like,
             articles=arts,
         )
+        cmp_meta = None
+        if cmp_periods and cmp_fields:
+            df, cmp_meta = margin_service.compare_funnel_periods(
+                db, df, cmp_periods, cmp_fields, article_like=article_like,
+                articles=arts)
         if owner and not df.empty:
             df = df.copy()
             df["owner"] = owner
-        return df
+        return df, cmp_meta
 
     link_infos = _resolve_links_param(db, links, "wb")
     if len(link_infos) > 1:
         results = cabinet_service.run_per_link(db, link_infos,
                                lambda db, info: _funnel(db, info))
-        frames = [f for _, f in results if f is not None and not f.empty]
+        frames = [f for _, (f, _m) in results if f is not None and not f.empty]
         df = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
-        snap = next((f for _, f in results if not f.empty), pd.DataFrame())
+        snap = next((f for _, (f, _m) in results if not f.empty), pd.DataFrame())
+        cmp_meta = next((m for _, (_f, m) in results if m), None)
     else:
-        df = _funnel(db)
+        df, cmp_meta = _funnel(db)
         snap = df
 
+    cmp_cols_meta = (cmp_meta or {}).get("columns", [])
+    avg_cols = [c["k"] for c in cmp_cols_meta if c.get("totals") == "avg"]
+    sum_cols = [c["k"] for c in cmp_cols_meta if c.get("totals") == "sum"]
+    totals = _margin_detail_totals(df, avg_cols=avg_cols, sum_cols=sum_cols)
     payload = {
         "rows": df.replace({None: ""}).to_dict("records"),
         "count": len(df),
@@ -486,7 +511,13 @@ def api_margin_funnel(
         "snapshot_from": snap.attrs.get("date_from", ""),
         "snapshot_to": snap.attrs.get("date_to", ""),
         "matched": bool(snap.attrs.get("matched", False)),
+        "compare_meta": cmp_meta,
+        "totals": totals,
     }
+    if cmp_meta and cmp_meta.get("periods"):
+        first = cmp_meta["periods"][0]
+        payload["prev_window"] = {"date_from": first["date_from"],
+                                  "date_to": first["date_to"]}
     if tokens:
         up_all = {t.upper() for t in tokens}
         payload["articles"] = {

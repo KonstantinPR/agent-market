@@ -703,18 +703,37 @@ def export_margin_funnel(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    compare: int = 0,
+    compare_fields: Optional[str] = None,
+    compare_periods: Optional[str] = None,
     cols: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    from app.api._common import resolve_compare_periods
+
     from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.funnel_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like
     )
-    df, ru = excel_io.project_export(df, export_cols("export_margin_funnel"), cols)
+    cmp_periods = resolve_compare_periods(
+        date_from, date_to, compare_periods, ozon_small=False,
+    ) if compare and compare_periods else []
+    cmp_fields = [f.strip() for f in (compare_fields or "").split(",") if f.strip()]
+    cmp_fields = [f for f in cmp_fields if f in funnel_service.FUNNEL_CMP_FIELDS]
+    labels = {}
+    if cmp_periods and cmp_fields:
+        df, cmp_meta = margin_service.compare_funnel_periods(
+            db, df, cmp_periods, cmp_fields, article_like=article_like)
+        labels = {c["k"]: c["label"] for c in cmp_meta.get("columns", [])}
+    rename = export_cols("export_margin_funnel")
+    if labels:
+        rename = dict(rename)
+        rename.update(labels)
+    df, ru = excel_io.project_export(df, rename, cols)
     df = df.rename(columns=ru)
     buf = excel_io.df_to_excel_stream(df, sheet_name="Воронка")
-    fname = f"margin_funnel_{from_}_{to_}.xlsx"
+    fname = f"margin_funnel_{from_}_{to_}" + ("_compare" if cmp_periods and cmp_fields else "") + ".xlsx"
     return StreamingResponse(
         buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},

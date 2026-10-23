@@ -1206,6 +1206,110 @@ assert.ok(!capV.children.some((c) => c.className === "colview-grp"),
 assert.ok(jsSrc.includes('setColViewDyn("margin-detail"'),
   "renderMarginDetail не регистрирует динамические колонки");
 
+// --- «Сравнения» в «Воронке Продаж WB» (T-56) ---
+lsStore["cmpPeriodState"] = JSON.stringify({
+  "margin-funnel": {
+    fields: ["margin", "orders", "views"],
+    periods: [{ mode: "prev" }, { mode: "year", year: "2025" }],
+  },
+});
+assert.deepStrictEqual(normObj(sandbox.cmpQuery("margin-funnel")), {
+  compare: 1, compare_fields: "views,orders,margin",
+  compare_periods: "prev,year:2025",
+}, "cmpQuery margin-funnel: поля не в порядке справочника или периоды потеряны");
+assert.ok(sandbox.cmpButtonLabel("margin-funnel").indexOf("3 поля · 2 периода") >= 0,
+  "кнопка воронки не показывает количество полей/периодов: " + sandbox.cmpButtonLabel("margin-funnel"));
+
+lsStore["cmpPeriodState"] = JSON.stringify({
+  "margin-funnel": { fields: ["margin"], periods: [{ mode: "custom" }] },
+});
+assert.deepStrictEqual(normObj(sandbox.cmpQuery("margin-funnel")), {},
+  "произвольный период без дат не должен включать сравнение воронки");
+assert.strictEqual(sandbox.cmpButtonLabel("margin-funnel"), "Сравнения ▾");
+
+// панель воронки: 14 кураторских полей и строки периодов
+lsStore["cmpPeriodState"] = JSON.stringify({
+  "margin-funnel": { fields: ["margin"], periods: [{ mode: "prev" }, { mode: "year", year: "2025" }] },
+});
+let capFunnel = null;
+doc.getElementById = (id) => {
+  const e = el();
+  if (id === "marginFunnelComparePanel") capFunnel = e;
+  return e;
+};
+sandbox.initCmpPanel("margin-funnel");
+assert.ok(capFunnel, "панель «Сравнения» воронки не найдена");
+assert.strictEqual(capFunnel.children.length, 6, "ожидались блоки: поля, разделитель, периоды, кнопки, разделитель, подсказка");
+assert.strictEqual(capFunnel.children[0].children.length, 14, "должно быть 14 чекбоксов полей воронки");
+assert.strictEqual(capFunnel.children[2].children.length, 2, "должно быть 2 строки периодов");
+assert.strictEqual(capFunnel.children[2].children[0].children.length, 4,
+  "в строке периода: режим, год, удаление, даты");
+
+// колонки сравнения воронки в «Вид таблицы» и экспорте
+const funnelDyn = [
+  { k: "cmp1_orders", label: "Заказы · пред. период" },
+  { k: "cmp2_orders", label: "Заказы · 2025" },
+];
+const baseFH = [{ k: "article", label: "Артикул" }, { k: "orders", label: "Заказы" }];
+sandbox.setColViewDyn("margin-funnel", funnelDyn);
+const withFunnelDyn = baseFH.concat(funnelDyn);
+let hv2 = sandbox.colViewHeaders("margin-funnel", withFunnelDyn);
+assert.ok(hv2.some((h) => h.k === "cmp1_orders"), "колонка сравнения воронки не попала в заголовки");
+assert.ok(sandbox.colViewParam("margin-funnel").includes("cmp1_orders"),
+  "колонка сравнения воронки не попала в cols экспорта");
+lsStore["marginFunnelCols"] = JSON.stringify({ cmp1_orders: false });
+hv2 = sandbox.colViewHeaders("margin-funnel", withFunnelDyn);
+assert.ok(!hv2.some((h) => h.k === "cmp1_orders"), "скрытая колонка сравнения воронки осталась в таблице");
+assert.ok(!sandbox.colViewParam("margin-funnel").includes("cmp1_orders"),
+  "скрытая колонка сравнения воронки осталась в экспорте");
+assert.ok(sandbox.colViewParam("margin-funnel").includes("cmp2_orders"),
+  "вторая колонка сравнения воронки должна остаться");
+delete lsStore["marginFunnelCols"];
+
+let capVF = null;
+doc.querySelector = (sel) => {
+  if (sel === "#marginFunnelViewPanel") {
+    if (!capVF) capVF = el();
+    return capVF;
+  }
+  return el();
+};
+sandbox.buildColViewMenu("margin-funnel");
+assert.ok(capVF, "панель «Вид таблицы» воронки не собралась");
+const dynGrpF = capVF.children.filter((c) => c.className === "colview-grp").pop();
+assert.ok(dynGrpF, "в «Вид таблицы» воронки нет секции динамических колонок");
+assert.strictEqual(dynGrpF.children[0].textContent, "Сравнения",
+  "секция сравнения воронки подписана неверно");
+assert.strictEqual(dynGrpF.children[1].children.length, 2,
+  "в секции сравнения воронки должны быть обе колонки");
+sandbox.setColViewDyn("margin-funnel", []);
+
+assert.ok(/const FUNNEL_CMP_FIELDS = \[/.test(jsSrc), "нет справочника FUNNEL_CMP_FIELDS");
+assert.ok(jsSrc.includes("marginFunnelComparePanel"), "нет панели сравнения воронки");
+assert.ok(jsSrc.includes('cmpQuery("margin-funnel")'), "loadTab не передаёт сравнение воронки в запрос");
+assert.ok(jsSrc.includes('setColViewDyn("margin-funnel"'),
+  "renderMarginFunnel не регистрирует динамические колонки");
+
+// Перетаскивание колонок: ручка живёт в шапке (текст заголовка остаётся
+// выделяемым), после drop таблица перерисовывается через st.repaint.
+assert.ok(jsSrc.includes('className = "th-grip"'), "нет ручки перетаскивания в шапке");
+assert.ok(jsSrc.includes("st.repaint = paint"), "paint не доступен обработчику drag");
+assert.ok(jsSrc.includes("container._pt.repaint"), "drop не вызывает перерисовку таблицы");
+assert.ok(cssSrc.includes(".th-grip"), "нет CSS для ручки перетаскивания");
+const dragTh = el();
+dragTh.dataset = { k: "article" };
+dragTh.insertBefore = (c) => { dragTh.children.push(c); };
+dragTh.querySelector = () => null;
+const dragBox = el();
+dragBox._pt = { colviewTab: "margin-funnel" };
+dragBox.querySelectorAll = (sel) => (sel.includes("thead") ? [dragTh] : []);
+sandbox._initHeaderColumnDrag(dragBox);
+const dragGrip = dragTh.children.find((c) => c.className === "th-grip");
+assert.ok(dragGrip, "ручка перетаскивания не добавлена в заголовок");
+assert.strictEqual(dragGrip.draggable, true, "ручка перетаскивания не draggable");
+assert.strictEqual(dragTh.draggable, undefined,
+  "сам th не должен быть draggable (иначе ломается выделение текста)");
+
 console.log("JS_TESTS_OK");
 """
 

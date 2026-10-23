@@ -131,10 +131,16 @@ def test_register_view_covers_json_tabs():
 
 
 def test_json_modes_match_export_dicts():
-    """Колонки режимов вкладки == объединение её export-словарей (строго)."""
+    """Колонки режимов + dynamicColumns == объединение export-словарей (строго).
+
+    dynamicColumns — колонки сравнения, которые рендер добавляет к таблице
+    только при включённом сравнении (в «Вид таблицы» их нет), но экспорт
+    должен знать их ключи и подписи.
+    """
     doc = _load_json()
     for tab, tdef in sorted(doc["tabs"].items()):
         mode_keys = json_tab_keys(doc, tab)
+        dynamic = set(tdef.get("dynamicColumns", []))
         dict_names = tdef.get("exportDicts", [])
         if not dict_names:
             assert tab in DASH_HEADER_FIELD, (
@@ -146,10 +152,11 @@ def test_json_modes_match_export_dicts():
         for name in dict_names:
             assert name in doc["dicts"], f"{tab}: нет словаря {name}"
             dict_keys |= {c["k"] for c in doc["dicts"][name]}
-        assert mode_keys == dict_keys, (
-            "вкладка %s: колонки режимов и export-словари разошлись.\n"
+        declared = mode_keys | dynamic
+        assert declared == dict_keys, (
+            "вкладка %s: колонки режимов/dynamicColumns и export-словари разошлись.\n"
             "  только в режимах: %s\n  только в словарях: %s"
-            % (tab, sorted(mode_keys - dict_keys), sorted(dict_keys - mode_keys))
+            % (tab, sorted(declared - dict_keys), sorted(dict_keys - declared))
         )
 
 
@@ -236,6 +243,12 @@ def test_json_is_sane():
             for k in group["keys"]:
                 if k not in json_tab_keys(doc, tab):
                     problems.append("%s: группа «%s» ссылается на %s" % (tab, group["title"], k))
+        dynamic = tdef.get("dynamicColumns", [])
+        if len(dynamic) != len(set(dynamic)):
+            problems.append("%s: дубли в dynamicColumns" % tab)
+        overlap = sorted(set(dynamic) & json_tab_keys(doc, tab))
+        if overlap:
+            problems.append("%s: dynamicColumns повторяют режимы: %s" % (tab, overlap))
     for name, entries in sorted(doc["dicts"].items()):
         keys = [c["k"] for c in entries]
         dups = sorted({k for k in keys if keys.count(k) > 1})

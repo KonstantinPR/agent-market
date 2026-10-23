@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=68">
+<link rel="stylesheet" href="/static/style.css?v=69">
 </head>
 <body>
 <nav class="navbar">
@@ -327,6 +327,10 @@
       <div class="view-menu" id="marginFunnelArtsMenu">
         <button type="button" class="btn" id="btnMarginFunnelArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="marginFunnelArtsPanel"></div>
+      </div>
+      <div class="view-menu" id="marginFunnelCompareMenu">
+        <button type="button" class="btn" id="btnMarginFunnelCompare" title="Сравнения: выберите аналитические поля и до трёх периодов. «Пред. период» берётся из блока WB, остальные — только из сохранённых срезов">Сравнения &#9662;</button>
+        <div class="view-menu-panel cmp-panel hidden" id="marginFunnelComparePanel"></div>
       </div>
       <span class="toolbar-right">
         <span id="marginFunnelTablePager"></span>
@@ -1189,7 +1193,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=166"></script>
+  <script src="/static/app.js?v=168"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

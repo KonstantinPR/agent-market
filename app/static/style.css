@@ -1635,6 +1635,9 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 
 
 /* Перетаскивание колонок в шапке таблицы */
+.th-grip { display: inline-block; cursor: grab; opacity: .35; margin-right: 4px; font-size: 11px; line-height: 1; user-select: none; }
+th:hover .th-grip { opacity: .75; }
+.th-grip:active { cursor: grabbing; }
 th.th-dragging { opacity: .35; cursor: grabbing; }
 th.th-drag-over { box-shadow: inset -2px 0 0 #7aa7d0; }
 th.th-drag-over-left { box-shadow: inset 2px 0 0 #7aa7d0; }
