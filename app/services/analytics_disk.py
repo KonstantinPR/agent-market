@@ -7,6 +7,8 @@
 доступны с других устройств через синхронизацию Dropbox.
 
 Период берётся из шапки (С/По), как у существующих кнопок «Загрузить на диск».
+Каждый файл получает второй (пустой) лист с датами периода в названии —
+«01.09.2026-10.09.2026», чтобы по открытой книге было видно, за что отчёт.
 Отчёты и их колонки — те же, что и в HTTP-экспорте (export_reports.py),
 поэтому генерируем их прямо из сервис-датафреймов, без StreamingResponse.
 """
@@ -14,6 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -64,10 +67,25 @@ def company_dir(db: Session, info, root: Optional[str] = None) -> Optional[Path]
     return base / Path(rel) / mp_dir
 
 
-def _df_to_bytes(df, sheet_name: str, export_name: str) -> bytes:
+def period_sheet_name(from_, to_) -> str:
+    """Название листа-метки периода: «01.09.2026-10.09.2026».
+
+    Excel ограничивает имя листа 31 символом и запрещает : \\ / ? * [ ] —
+    точки и дефисы разрешены, 21 символ влезает с запасом.
+    """
+    return f"{from_:%d.%m.%Y}-{to_:%d.%m.%Y}"
+
+
+def _df_to_bytes(df, sheet_name: str, export_name: str,
+                 period: Optional[str] = None) -> bytes:
     df, ru = excel_io.project_export(df, export_cols(export_name), None)
     df = df.rename(columns=ru)
-    buf = excel_io.df_to_excel_stream(df, sheet_name=sheet_name)
+    # Второй лист — пустая метка периода: по имени видно, за какие даты отчёт
+    # (сам файл перезаписывается, имя файла стабильное).
+    sheets = {sheet_name: df}
+    if period:
+        sheets[period] = pd.DataFrame()
+    buf = excel_io.dfs_to_excel_stream(sheets)
     return buf.getvalue()
 
 
@@ -88,12 +106,13 @@ def write_reports(db: Session, info, date_from, date_to, root: Optional[str] = N
         raise RuntimeError(f"маркетплейс {info.marketplace} не поддерживается")
     from_, to_ = parse_window(date_from, date_to)
     folder.mkdir(parents=True, exist_ok=True)
+    period = period_sheet_name(from_, to_)
 
     files = []
     rows = 0
     for fname, sheet, export_name, fn in reports:
         df = fn(db, from_, to_)
-        data = _df_to_bytes(df, sheet, export_name)
+        data = _df_to_bytes(df, sheet, export_name, period=period)
         tmp = folder / (fname + ".tmp")
         tmp.write_bytes(data)
         shutil.move(str(tmp), str(folder / fname))  # атомарная замена

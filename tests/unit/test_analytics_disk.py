@@ -73,7 +73,7 @@ def test_write_reports_creates_and_overwrites(db, tmp_path, monkeypatch):
              fake_report("detail")),
         ),
     })
-    monkeypatch.setattr(ad, "_df_to_bytes", lambda df, sheet, name: b"DATA")
+    monkeypatch.setattr(ad, "_df_to_bytes", lambda df, sheet, name, **kw: b"DATA")
 
     res = ad.write_reports(db, wb, "2026-09-01", "2026-09-10", root=str(tmp_path))
     folder = tmp_path / "ИП ПРУДНИКОВ" / "AGENT MARKET" / "АНАЛИТИКА" / "WB"
@@ -88,7 +88,7 @@ def test_write_reports_creates_and_overwrites(db, tmp_path, monkeypatch):
     assert not list(folder.glob("*.tmp"))
 
     # повторный запуск перезаписывает (файл не растёт, .tmp не копится)
-    monkeypatch.setattr(ad, "_df_to_bytes", lambda df, sheet, name: b"NEW")
+    monkeypatch.setattr(ad, "_df_to_bytes", lambda df, sheet, name, **kw: b"NEW")
     res2 = ad.write_reports(db, wb, "2026-09-01", "2026-09-10", root=str(tmp_path))
     assert res2["files"] == res["files"]
     assert (folder / "margin_funnel.xlsx").read_bytes() == b"NEW"
@@ -107,3 +107,26 @@ def test_write_reports_raises_for_unknown_marketplace(db, tmp_path, monkeypatch)
     monkeypatch.setattr(ad, "_REPORTS_BY_MP", {})
     with pytest.raises(RuntimeError, match="не поддерживается"):
         ad.write_reports(db, cab, "2026-09-01", "2026-09-10", root=str(tmp_path))
+
+
+def test_period_sheet_name_fits_excel_limits():
+    from datetime import date
+
+    name = ad.period_sheet_name(date(2026, 9, 1), date(2026, 9, 10))
+    assert name == "01.09.2026-10.09.2026"
+    assert len(name) <= 31
+    assert not set(name) & set(r":\/?*[]")
+
+
+def test_df_to_bytes_adds_empty_period_sheet():
+    """Второй лист книги назван периодом и пуст (данные — только на первом)."""
+    from io import BytesIO
+
+    data = ad._df_to_bytes(
+        pd.DataFrame({"A": [1, 2]}), "Воронка", "export_margin_funnel",
+        period="01.09.2026-10.09.2026")
+    xl = pd.ExcelFile(BytesIO(data), engine="openpyxl")
+    assert xl.sheet_names == ["Воронка", "01.09.2026-10.09.2026"]
+    assert len(pd.read_excel(xl, sheet_name="Воронка")) == 2
+    assert pd.read_excel(xl, sheet_name="01.09.2026-10.09.2026").empty
+

@@ -3,6 +3,8 @@
 from app.api._common import *  # noqa: F401,F403
 from app.api._common import _wb_creds  # noqa: F401  (импорт * не тащит _-имена)
 
+from sqlalchemy.exc import SQLAlchemyError
+
 router = APIRouter()
 
 
@@ -56,6 +58,14 @@ def pricing_apply(payload: dict = Body(default={}), db: Session = Depends(get_db
         raise HTTPException(status_code=422, detail=str(e))
     except WbApiError as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(e))
+    except SQLAlchemyError as e:  # noqa: BLE001
+        # Ошибка схемы/записи журнала — это не отказ WB API (иначе пользователь
+        # видит «WB API не принял изменение цен» на UndefinedColumn).
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка БД при записи журнала автопилота: {e}",
+        )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"WB API не принял изменение цен: {e}")
 

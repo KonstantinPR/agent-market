@@ -20,17 +20,25 @@ const APP_PATH = process.argv[2];
 
 const el = (sel) => ({
   value: "", checked: false, innerHTML: "", textContent: "", dataset: {},
-  children: [], title: "", type: "", className: "",
+  children: [], title: "", type: "", className: "", tagName: "",
+  options: [], selectedIndex: 0, parentNode: { insertBefore() {} },
   addEventListener() {},
-  appendChild(c) { this.children.push(c); },
+  appendChild(c) {
+    this.children.push(c);
+    if (c && c.tagName === "option") this.options.push(c);
+  },
+  insertBefore() {},
   setAttribute() {},
   closest() { return null; },
+  querySelector: () => null,
+  querySelectorAll: () => [],
   classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
   style: {}, files: { length: 0 }, disabled: false,
 });
 const doc = {
   querySelector: () => el(), querySelectorAll: () => [],
-  getElementById: () => el(), createElement: () => el(),
+  getElementById: () => el(),
+  createElement: (tag) => { const e = el(); e.tagName = String(tag || "").toLowerCase(); return e; },
   createTextNode: (t) => ({ textContent: String(t) }),
   addEventListener() {},
 };
@@ -727,6 +735,8 @@ assert.ok(htmlSrc.includes("app.js?v=" + uiVer),
 // «Массовые действия → Обновить аналитику на диск»: чекбокс + прокидка дат.
 assert.ok(htmlSrc.includes('id="batchAnalytics"'),
   "в меню массовых действий есть чекбокс batchAnalytics");
+assert.ok(/id="batchAnalytics"[^>]*\bchecked\b/.test(htmlSrc),
+  "«Обновить аналитику на диск» включён по умолчанию");
 assert.ok(jsSrc.includes('"analytics"') && jsSrc.includes('"batchAnalytics"'),
   "batchActions() знает про действие analytics");
 assert.ok(/for \(const id of \["batchRefresh", "batchRecalc", "batchApply", "batchMinpromo", "batchAnalytics", "batchDetailCheck"\]\)/.test(jsSrc),
@@ -1141,14 +1151,60 @@ doc.getElementById = (id) => {
 };
 sandbox.initMarginDetailCompare();
 assert.ok(capPanel, "панель «Сравнения» не найдена");
-assert.strictEqual(capPanel.children.length, 3, "ожидались блоки: поля, периоды, подсказка");
-const fSec = capPanel.children[0];
-assert.strictEqual(fSec.children[1].children.length, 12, "должно быть 12 чекбоксов полей");
-const pSec = capPanel.children[1];
-assert.strictEqual(pSec.children[1].children.length, 2, "должно быть 2 строки периодов");
-assert.strictEqual(pSec.children[1].children[0].children.length, 4,
-  "в строке периода: режим, год, даты, удаление");
-assert.strictEqual(pSec.children[2].children[0].disabled, false, "«+ Добавить период» доступна при 2 периодах");
+assert.strictEqual(capPanel.children.length, 6, "ожидались блоки: поля, разделитель, периоды, кнопки, разделитель, подсказка");
+assert.strictEqual(capPanel.children[0].children.length, 12, "должно быть 12 чекбоксов полей");
+assert.strictEqual(capPanel.children[2].children.length, 2, "должно быть 2 строки периодов");
+assert.strictEqual(capPanel.children[2].children[0].children.length, 4,
+  "в строке периода: режим, год, удаление, даты");
+const acts = capPanel.children[3];
+assert.strictEqual(acts.children.length, 2, "ожидались кнопки «+ Добавить период» и «Не сравнивать»");
+assert.strictEqual(acts.children[0].disabled, false, "«+ Добавить период» доступна при 2 периодах");
+
+// --- Колонки сравнения в «Вид таблицы» ---
+// Рендер регистрирует их как динамические: они попадают в порядок/экспорт,
+// а скрытие галочкой убирает колонку из таблицы и выгрузки.
+const dynHeaders = [
+  { k: "cmp1_margin", label: "Прибыль · пред. период" },
+  { k: "cmp2_margin", label: "Прибыль · 2025" },
+];
+const baseMH = [{ k: "article", label: "Артикул" }, { k: "margin", label: "Прибыль" }];
+sandbox.setColViewDyn("margin-detail", dynHeaders);
+const withDyn = baseMH.concat(dynHeaders);
+let hv = sandbox.colViewHeaders("margin-detail", withDyn);
+assert.ok(hv.some((h) => h.k === "cmp1_margin"), "колонка сравнения не попала в заголовки таблицы");
+assert.ok(sandbox.colViewParam("margin-detail").includes("cmp1_margin"),
+  "колонка сравнения не попала в cols экспорта");
+lsStore["marginDetailCols"] = JSON.stringify({ cmp1_margin: false });
+hv = sandbox.colViewHeaders("margin-detail", withDyn);
+assert.ok(!hv.some((h) => h.k === "cmp1_margin"), "скрытая колонка сравнения осталась в таблице");
+assert.ok(!sandbox.colViewParam("margin-detail").includes("cmp1_margin"),
+  "скрытая колонка сравнения осталась в экспорте");
+assert.ok(sandbox.colViewParam("margin-detail").includes("cmp2_margin"),
+  "вторая колонка сравнения должна остаться");
+delete lsStore["marginDetailCols"];
+// секция «Сравнения» в панели «Вид таблицы»
+let capV = null;
+doc.querySelector = (sel) => {
+  if (sel === "#marginDetailViewPanel") {
+    if (!capV) capV = el();
+    return capV;
+  }
+  return el();
+};
+sandbox.buildColViewMenu("margin-detail");
+assert.ok(capV, "панель «Вид таблицы» не собралась");
+const dynGrp = capV.children.filter((c) => c.className === "colview-grp").pop();
+assert.ok(dynGrp, "в «Вид таблицы» нет секции динамических колонок");
+assert.strictEqual(dynGrp.children[0].textContent, "Сравнения", "секция сравнения подписана неверно");
+assert.strictEqual(dynGrp.children[1].children.length, 2, "в секции сравнения должны быть обе колонки");
+// без сравнения секция не нужна
+capV.children.length = 0;
+sandbox.setColViewDyn("margin-detail", []);
+sandbox.buildColViewMenu("margin-detail");
+assert.ok(!capV.children.some((c) => c.className === "colview-grp"),
+  "без сравнения секции «Сравнения» быть не должно");
+assert.ok(jsSrc.includes('setColViewDyn("margin-detail"'),
+  "renderMarginDetail не регистрирует динамические колонки");
 
 console.log("JS_TESTS_OK");
 """

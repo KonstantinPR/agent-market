@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "161";
+const UI_VERSION = "166";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -94,6 +94,19 @@ function fmtPct(n) {
   return (n == null || n === "" || isNaN(Number(n))) ? "—" : Number(n).toFixed(1) + "%";
 }
 function cls(n) { return Number(n) < 0 ? "neg" : "pos"; }
+
+// Пользователь выделяет текст мышью (например, название колонки, чтобы скопировать).
+// Клики по таблице/сворачиваемым заголовкам должны в этом случае молчать: иначе
+// протяжка мышью заканчивается click'ом и сбрасывает выделение (сортировка,
+// сворачивание секции, раскрытие ячейки ABC×XYZ).
+function textSelected() {
+  try {
+    const sel = window.getSelection && window.getSelection();
+    return !!(sel && !sel.isCollapsed && String(sel).trim());
+  } catch (e) {
+    return false;
+  }
+}
 
 let busyDepth = 0;
 function busyRun(fn) {
@@ -562,6 +575,7 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
   st.pinned = pinned || null;
   st.footersFn = opts.footersFn || null;
   st.onFilter = opts.onFilter || null;
+  if (opts.colviewTab) st.colviewTab = opts.colviewTab;
   if (!pagerSel && container.id) {
     const auto = document.getElementById(container.id + "Pager");
     if (auto) st.pagerSel = "#" + auto.id;
@@ -692,6 +706,7 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     if (btn) btn.textContent = pagerAllLabel(list);
     applyStickyRows(wrap);
     applyStickyCols(wrap, st.headers, st.pinned);
+    try { if (typeof _initHeaderColumnDrag === "function") _initHeaderColumnDrag(container); } catch(e){}
     if (st.onFilter) st.onFilter(list, st.rows);
     normalizeStatus();
   };
@@ -700,6 +715,8 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     container.addEventListener("click", (ev) => {
       const th = ev.target.closest("th[data-k]");
       if (!th || !container._pt) return;
+      // Выделяли текст заголовка — не сортируем (и не теряем выделение).
+      if (textSelected()) return;
       const k = th.dataset.k;
       const s = container._pt.sort;
       if (s && s.k === k) {
@@ -720,6 +737,7 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     });
   }
   paint();
+  try { if (container && typeof _initHeaderColumnDrag === "function") _initHeaderColumnDrag(container); } catch(e){}
 }
 
 function applyStickyCols(wrap, headers, pinned) {
@@ -772,6 +790,167 @@ function mountXBar(container, scroll) {
 // (заголовок, «Итого» и тело; класс ставит JS-делегирование на document).
 // Класс пересчитывается только при смене колонки — движение вверх-вниз по
 // той же колонке DOM не трогает; на выходе из таблицы подсветка снимается.
+
+function _colviewTabForContainer(container) {
+  try {
+    if (!container) return null;
+    const pt = container._pt;
+    if (pt && pt.colviewTab) return pt.colviewTab;
+    const id = container.id || "";
+    if (id === "marginFunnelTable") return "margin-funnel";
+    if (id === "marginDetailTable") return "margin-detail";
+    if (id === "marginOzonDetailTable") return "margin-ozon-detail";
+    if (id === "salesTable") return null;
+    if (id === "stocksTable") return null;
+    if (id === "productsTable") return "products";
+    if (id === "replenishTable") return "replenish";
+    if (id === "pricingTable") return "pricing";
+    if (id === "wbFunnelTable") return "wb-funnel";
+    if (id === "wbStockTable") return "wb-stock";
+    if (id === "wbPricesTable") return "wb-prices";
+    if (id === "ozStockTable") return "oz-stock";
+    if (id === "ozPricesTable") return "oz-prices";
+    if (id === "ozRealizationTable") return "oz-realization";
+    if (id === "wbStorageTable") return "wb-storage";
+    if (id === "wbSalesTable") return "wb-sales";
+    if (id === "wbDetailTable") return "wb-detail";
+    if (id === "ozDetailTable") return "oz-detail";
+    if (id === "ozPlacementTable") return "oz-placement";
+    if (id === "ozCashflowTable") return "oz-cashflow";
+    if (id === "ozAccrualTable") return "oz-accrual";
+    if (id === "dashTable") {
+      const cfg = dashTableCfg ? dashTableCfg(dashTable) : null;
+      return cfg ? cfg.colview : null;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function _initHeaderColumnDrag(container) {
+  try {
+    if (!container || container._hdragBound) return;
+    container._hdragBound = true;
+    let dragKey = null;
+    container.addEventListener("dragstart", (ev) => {
+      const th = ev.target && ev.target.closest ? ev.target.closest("thead th[data-k]") : null;
+      if (!th) return;
+      const tr = th.parentElement;
+      if (tr && (tr.classList.contains("filter-row") || tr.classList.contains("totals-row"))) return;
+      const tab = _colviewTabForContainer(container);
+      if (!tab) return;
+      const set = colViewSet ? colViewSet(tab) : null;
+      if (!set) return;
+      const c = _COLVIEWS ? _COLVIEWS[tab] : null;
+      if (c && c.pinnable) {
+        const pin = (colViewState ? (colViewState(tab).pin || []) : []);
+        if (pin.includes(th.dataset.k)) return;
+      }
+      dragKey = th.dataset.k;
+      th.classList.add("th-dragging");
+      try { ev.dataTransfer.setData("text/plain", dragKey); ev.dataTransfer.effectAllowed = "move"; } catch(e){}
+    }, true);
+    container.addEventListener("dragover", (ev) => {
+      const th = ev.target && ev.target.closest ? ev.target.closest("thead th[data-k]") : null;
+      if (!th || !dragKey) return;
+      const tr = th.parentElement;
+      if (tr && (tr.classList.contains("filter-row") || tr.classList.contains("totals-row"))) return;
+      const tab = _colviewTabForContainer(container);
+      if (!tab || dragKey === th.dataset.k) return;
+      const set = colViewSet ? colViewSet(tab) : null;
+      if (!set) return;
+      const c = _COLVIEWS ? _COLVIEWS[tab] : null;
+      if (c && c.pinnable) {
+        const pin = (colViewState ? (colViewState(tab).pin || []) : []);
+        if (pin.includes(th.dataset.k)) return;
+      }
+      const sameGrp = (a,b) => {
+        const ta = set.optional && set.optional.some((o) => o.k === a);
+        const tb = set.optional && set.optional.some((o) => o.k === b);
+        if (ta !== tb) return false;
+        const da = set.optional && set.optional.some((o) => o.k === a && o.dyn);
+        const db = set.optional && set.optional.some((o) => o.k === b && o.dyn);
+        if (da !== db) return false;
+        if (!set.groups || !set.groups.length) return true;
+        const gi = (kk) => { for (let i = 0; i < set.groups.length; i++) if (set.groups[i].keys.includes(kk)) return i; return -1; };
+        const ia = gi(a), ib = gi(b);
+        return ia !== -1 && ia === ib;
+      };
+      if (!sameGrp(dragKey, th.dataset.k)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      try { ev.dataTransfer.dropEffect = "move"; } catch(e){}
+      container.querySelectorAll("thead th.th-drag-over, thead th.th-drag-over-left").forEach((x)=>{x.classList.remove("th-drag-over");x.classList.remove("th-drag-over-left");});
+      const rect = th.getBoundingClientRect();
+      if (ev.clientX < rect.left + rect.width/2) th.classList.add("th-drag-over-left");
+      else th.classList.add("th-drag-over");
+    }, true);
+    container.addEventListener("drop", (ev) => {
+      const th = ev.target && ev.target.closest ? ev.target.closest("thead th[data-k]") : null;
+      if (!th || !dragKey) return;
+      const tr = th.parentElement;
+      if (tr && (tr.classList.contains("filter-row") || tr.classList.contains("totals-row"))) return;
+      const tab = _colviewTabForContainer(container);
+      if (!tab || dragKey === th.dataset.k) return;
+      const set = colViewSet ? colViewSet(tab) : null;
+      if (!set) return;
+      const st2 = colViewState ? colViewState(tab) : null;
+      if (!st2) return;
+      const c = _COLVIEWS ? _COLVIEWS[tab] : null;
+      if (c && c.pinnable) {
+        const pin = (st2.pin || []);
+        if (pin.includes(th.dataset.k)) return;
+      }
+      const sameGrp = (a,b) => {
+        const ta = set.optional && set.optional.some((o) => o.k === a);
+        const tb = set.optional && set.optional.some((o) => o.k === b);
+        if (ta !== tb) return false;
+        const da = set.optional && set.optional.some((o) => o.k === a && o.dyn);
+        const db = set.optional && set.optional.some((o) => o.k === b && o.dyn);
+        if (da !== db) return false;
+        if (!set.groups || !set.groups.length) return true;
+        const gi = (kk) => { for (let i = 0; i < set.groups.length; i++) if (set.groups[i].keys.includes(kk)) return i; return -1; };
+        const ia = gi(a), ib = gi(b);
+        return ia !== -1 && ia === ib;
+      };
+      if (!sameGrp(dragKey, th.dataset.k)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const o = (st2.order || []).slice();
+      const si = o.indexOf(dragKey);
+      const ti = o.indexOf(th.dataset.k);
+      if (si < 0 || ti < 0 || si === ti) return;
+      o.splice(si, 1);
+      let ni = o.indexOf(th.dataset.k);
+      const rect = th.getBoundingClientRect();
+      if (ev.clientX >= rect.left + rect.width/2) ni = ni + 1;
+      o.splice(Math.max(0, Math.min(ni, o.length)), 0, dragKey);
+      st2.order = o;
+      if (colViewSave) colViewSave(tab, st2);
+      container.querySelectorAll("thead th.th-drag-over, thead th.th-drag-over-left, thead th.th-dragging").forEach((x)=>{x.classList.remove("th-drag-over");x.classList.remove("th-drag-over-left");x.classList.remove("th-dragging");});
+      dragKey = null;
+      if (container._pt) { container._pt.sort = container._pt.sort; }
+      if (typeof paint === "function" && container._pt) {
+        // will be repainted below
+      }
+      // repaint
+      if (container._pt) {
+        // trigger same path as filter changes
+        const listFn = null;
+      }
+      // easiest: call paint logic via existing refresh
+      if (typeof refreshBody === "function" && container.querySelector(".tscroll > div")) {
+        try { refreshBody(); } catch(e){}
+      } else if (typeof paint === "function") {
+        try { paint(); } catch(e){}
+      }
+    }, true);
+    container.addEventListener("dragend", () => {
+      container.querySelectorAll("thead th.th-drag-over, thead th.th-drag-over-left, thead th.th-dragging").forEach((x)=>{x.classList.remove("th-drag-over");x.classList.remove("th-drag-over-left");x.classList.remove("th-dragging");});
+      dragKey = null;
+    }, true);
+  } catch(e){}
+}
+
 function initTableHover() {
   let prevTable = null, prevIdx = -1;
   let marked = [];
@@ -2296,6 +2475,15 @@ const ozonMarginHeaders = [
 // пользовательские отклонения — { колонка: true/false, order, pin }.
 // Состояние живёт в localStorage под ключом `<storageKey>[_<mode>]`.
 const _COLVIEWS = {};
+// Динамические колонки (напр. сравнение периодов у «Детализации Продаж WB»):
+// рендер таблицы регистрирует их перед отрисовкой — тогда они попадают в
+// «Вид таблицы», в порядок/итоги и в экспорт как обычные необязательные колонки.
+const _COLVIEW_DYN = {};
+function setColViewDyn(tab, headers) {
+  _COLVIEW_DYN[tab] = (headers || []).map((h) => ({
+    k: h.k, label: h.label, def: true, dyn: true,
+  }));
+}
 // columns.json — мастер колонок (наборы/def/группы/Excel-словари). null до fetch.
 let COLS = null;
 async function loadColViews() {
@@ -2365,21 +2553,35 @@ function applyColViewFilter(tab) {
     empty.hidden = !q || shown;
   }
 }
+// Колонки прежнего (однопериодного) сравнения: у «Детализации Продаж WB» они
+// остаются в headers только как совместимость со старым ответом API. В «Вид
+// таблицы» их не показываем — иначе рядом с секцией «Сравнения» висят пустые
+// дубли, а «Показать все» включает несуществующие колонки.
+const _LEGACY_CMP_COLS = new Set(["sells_pp", "margin_pp", "delta_ru", "delta_pct"]);
 function colViewSet(tab, modeHint) {
   const c = _COLVIEWS[tab];
   if (!c) return null;
   const mode = modeHint || (c.mode ? c.mode() : "default");
   const set = c.sets ? c.sets[mode] : { headers: c.headers };
   if (!set) return null;
+  const legacyCmp = tab === "margin-detail"
+    ? (k) => _LEGACY_CMP_COLS.has(k) : () => false;
   // optional/группы — из columns.json; до fetch (или без него) все колонки видимы.
   const tm = (COLS && COLS.tabs[tab] && COLS.tabs[tab].modes[mode]) || null;
-  const optional = tm
+  const optional = (tm
     ? tm.columns.map((x) => ({ k: x.k, label: x.label, def: x.def }))
-    : set.headers.map((h) => ({ k: h.k, label: h.label, def: true }));
+    : set.headers.map((h) => ({ k: h.k, label: h.label, def: true })))
+    .filter((o) => !legacyCmp(o.k));
+  // Динамические колонки текущего рендера — как обычные необязательные.
+  const dyn = _COLVIEW_DYN[tab] || [];
+  const baseHeaders = set.headers.filter((h) => !legacyCmp(h.k));
+  const headers = dyn.length
+    ? baseHeaders.concat(dyn.map((d) => ({ k: d.k, label: d.label })))
+    : baseHeaders;
   return {
     key: c.storageKey + (c.mode ? "_" + mode : ""),
-    headers: set.headers,
-    optional,
+    headers,
+    optional: optional.concat(dyn),
     groups: (COLS && COLS.tabs[tab] && COLS.tabs[tab].groups) || [],
   };
 }
@@ -2502,6 +2704,10 @@ function buildColViewMenu(tab) {
     const ta = set.optional.some((o) => o.k === a);
     const tb = set.optional.some((o) => o.k === b);
     if (ta !== tb) return false;
+    // Динамические колонки живут своей секцией — не смешиваем с обычными.
+    const da = set.optional.some((o) => o.k === a && o.dyn);
+    const db = set.optional.some((o) => o.k === b && o.dyn);
+    if (da !== db) return false;
     if (!set.groups.length) return true;
     const gi = (kk) => { for (let i = 0; i < set.groups.length; i++) if (set.groups[i].keys.includes(kk)) return i; return -1; };
     const ia = gi(a), ib = gi(b);
@@ -2581,7 +2787,7 @@ function buildColViewMenu(tab) {
     });
     row.appendChild(h);
   };
-  const item = (k, label, visOn, pinOn) => {
+  const item = (k, label, visOn, pinOn, parent) => {
     const row = document.createElement("div");
     row.className = "colview-row";
     row.dataset.lbl = label;
@@ -2621,7 +2827,7 @@ function buildColViewMenu(tab) {
       pinLbl.appendChild(pico);
       row.appendChild(pinLbl);
     }
-    panel.appendChild(row);
+    (parent || panel).appendChild(row);
   };
   const lblAll = document.createElement("label");
   lblAll.className = "chk";
@@ -2738,10 +2944,33 @@ function buildColViewMenu(tab) {
       panel.appendChild(grp);
     }
   } else {
-    for (const k of orderFor(set.optional.map((o) => o.k))) {
+    const flat = set.optional.filter((o) => !o.dyn);
+    for (const k of orderFor(flat.map((o) => o.k))) {
       const o = optByKey.get(k);
       if (o) item(o.k, o.label, !!st[o.k], pinSet.has(o.k));
     }
+  }
+  // Сравнение периодов: колонки появляются в меню, пока включено «Сравнения».
+  const dyn = set.optional.filter((o) => o.dyn);
+  if (dyn.length) {
+    const hrDyn = document.createElement("hr");
+    hrDyn.style.margin = "4px 0";
+    panel.appendChild(hrDyn);
+    const grp = document.createElement("div");
+    grp.className = "colview-grp";
+    grp.dataset.lbl = "Сравнения";
+    const gl = document.createElement("div");
+    gl.className = "colview-grp-lbl";
+    gl.textContent = "Сравнения";
+    grp.appendChild(gl);
+    const wrap = document.createElement("div");
+    wrap.className = "colview-grp-items";
+    for (const k of orderFor(dyn.map((o) => o.k))) {
+      const o = dyn.find((x) => x.k === k);
+      if (o) item(o.k, o.label, st[o.k] !== false, pinSet.has(o.k), wrap);
+    }
+    grp.appendChild(wrap);
+    panel.appendChild(grp);
   }
   // панель могли перестроить при включённом фильтре — применяем его заново
   applyColViewFilter(tab);
@@ -3335,34 +3564,36 @@ async function renderMarginDetail(p) {
   const compare = /compare=1/.test(p || "");
   const linked = /links=/.test(p || "");
   const data = await api("/margin/detail" + p);
-  let headers = colViewHeaders("margin-detail", marginHeaders);
-  if (linked) headers = [ownerCol()].concat(headers);
-  let cmpKeys = [];
+  // Колонки сравнения — динамические: отдаём их в «Вид таблицы» (секция
+  // «Сравнения»), чтобы их можно было скрыть/переставить как обычные.
+  let dyn = [];
   if (compare) {
     const meta = data.compare_meta;
     if (meta && (meta.columns || []).length) {
       const fmts = { money: cellFmts.moneyCls, int: cellFmts.int, pct: cellFmts.pct };
-      const dyn = meta.columns.map((c) => ({
+      dyn = meta.columns.map((c) => ({
         k: c.k, label: c.label, num: true,
         render: fmts[c.kind] || cellFmts.text,
         tip: "Значение поля «" + (c.label || c.k) + "» за период " + (c.period_label || "") + ".",
       }));
-      cmpKeys = dyn.map((h) => h.k);
-      headers = headers.concat(dyn.filter((h) => !headers.some((x) => x.k === h.k)));
     } else {
-      cmpKeys = ["sells_pp", "margin_pp", "delta_ru", "delta_pct"];
-      headers = headers.concat([
+      dyn = [
         { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано, шт за предыдущий период той же длительности."},
         { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период: Доход − расходы МП − себестоимость × продано."},
         { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Изменение прибыли, ₽: текущий период минус предыдущий."},
         { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли в % к предыдущему периоду. Пусто, если в прошлом периоде прибыли не было."},
-      ].filter((h) => !headers.some((x) => x.k === h.k)));
+      ];
     }
   }
+  setColViewDyn("margin-detail", dyn);
+  // legacy-колонки старого сравнения не отдаём: их нет в «Вид таблицы»
+  const baseHeaders = marginHeaders.filter((h) => !_LEGACY_CMP_COLS.has(h.k));
+  let headers = colViewHeaders("margin-detail", baseHeaders.concat(dyn));
+  if (linked) headers = [ownerCol()].concat(headers);
   pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-detail"));
   const exportBtn = $("#exportMarginDetail");
   if (exportBtn) {
-    const cp = colViewParam("margin-detail", cmpKeys.length ? cmpKeys : null);
+    const cp = colViewParam("margin-detail");
     exportBtn.dataset.url = "/api/export/margin/detail" + p + (cp ? (p ? "&" : "?") + cp : "");
   }
   // Статус один на весь раздел: сначала писалось «сравнение: …», следом
@@ -4550,14 +4781,8 @@ function initMarginDetailCompare() {
     reloadTimer = setTimeout(() => loadTab("margin-detail"), 300);
   };
 
-  const fieldsBox = document.createElement("div");
-  fieldsBox.className = "cmp-sec";
-  const fieldsTitle = document.createElement("div");
-  fieldsTitle.className = "cmp-sec-title";
-  fieldsTitle.textContent = "Поля для сравнения";
-  fieldsBox.appendChild(fieldsTitle);
-  const grid = document.createElement("div");
-  grid.className = "cmp-fields";
+  const fieldsGrid = document.createElement("div");
+  fieldsGrid.className = "cmp-fields";
   for (const f of MARGIN_CMP_FIELDS) {
     const lab = document.createElement("label");
     lab.className = "chk";
@@ -4575,19 +4800,17 @@ function initMarginDetailCompare() {
     });
     lab.appendChild(cb);
     lab.appendChild(document.createTextNode(" " + f.label));
-    grid.appendChild(lab);
+    fieldsGrid.appendChild(lab);
   }
-  fieldsBox.appendChild(grid);
+  panel.appendChild(fieldsGrid);
 
-  const periodsBox = document.createElement("div");
-  periodsBox.className = "cmp-sec";
-  const periodsTitle = document.createElement("div");
-  periodsTitle.className = "cmp-sec-title";
-  periodsTitle.textContent = "Периоды сравнения (до 3)";
-  periodsBox.appendChild(periodsTitle);
+  const sep1 = document.createElement("hr");
+  sep1.style.margin = "4px 0";
+  panel.appendChild(sep1);
+
   const rows = document.createElement("div");
   rows.className = "cmp-periods";
-  periodsBox.appendChild(rows);
+  panel.appendChild(rows);
 
   const nowYear = new Date().getFullYear();
   const renderPeriods = () => {
@@ -4597,6 +4820,7 @@ function initMarginDetailCompare() {
       row.className = "cmp-period-row";
 
       const sel = document.createElement("select");
+      sel.title = "Тип периода сравнения";
       for (const [v, label] of MARGIN_CMP_MODES) {
         const o = document.createElement("option");
         o.value = v;
@@ -4604,10 +4828,10 @@ function initMarginDetailCompare() {
         if (p.mode === v) o.selected = true;
         sel.appendChild(o);
       }
+      sel.value = p.mode;
       row.appendChild(sel);
 
       const yearSel = document.createElement("select");
-      yearSel.className = "cmp-year";
       for (let y = nowYear; y >= nowYear - 5; y--) {
         const o = document.createElement("option");
         o.value = String(y);
@@ -4625,15 +4849,16 @@ function initMarginDetailCompare() {
       const fromEl = document.createElement("input");
       fromEl.type = "date";
       fromEl.value = p.from || "";
+      fromEl.title = "Начало периода сравнения";
       const toEl = document.createElement("input");
       toEl.type = "date";
       toEl.value = p.to || "";
+      toEl.title = "Конец периода сравнения";
       fromEl.addEventListener("change", () => { p.from = fromEl.value; apply(); });
       toEl.addEventListener("change", () => { p.to = toEl.value; apply(); });
       dates.appendChild(fromEl);
       dates.appendChild(document.createTextNode("–"));
       dates.appendChild(toEl);
-      row.appendChild(dates);
 
       const del = document.createElement("button");
       del.type = "button";
@@ -4646,9 +4871,16 @@ function initMarginDetailCompare() {
         apply();
       });
       row.appendChild(del);
+      row.appendChild(dates);
 
+      // Селекты — те же выпадающие меню «▾», что и в остальных панелях.
+      initMenuSelect(sel);
+      initMenuSelect(yearSel);
+      // initMenuSelect прячет сам <select> и показывает обёртку перед ним — её и гасим.
+      const prev = yearSel.previousElementSibling;
+      const yearCtl = prev && prev.classList.contains("view-menu") ? prev : yearSel;
       const sync = () => {
-        yearSel.classList.toggle("off", p.mode !== "year");
+        yearCtl.classList.toggle("off", p.mode !== "year");
         dates.classList.toggle("off", p.mode !== "custom");
       };
       sel.addEventListener("change", () => { p.mode = sel.value; sync(); apply(); });
@@ -4682,14 +4914,16 @@ function initMarginDetailCompare() {
   });
   actions.appendChild(addBtn);
   actions.appendChild(resetBtn);
-  periodsBox.appendChild(actions);
+  panel.appendChild(actions);
+
+  const sep2 = document.createElement("hr");
+  sep2.style.margin = "4px 0";
+  panel.appendChild(sep2);
 
   const hint = document.createElement("div");
-  hint.className = "hint";
+  hint.className = "cmp-hint";
   hint.textContent = "Год считается целиком (01.01–31.12), текущий год может быть "
     + "неполным. Значения показываются рядом с текущим окном без дельт.";
-  panel.appendChild(fieldsBox);
-  panel.appendChild(periodsBox);
   panel.appendChild(hint);
   renderPeriods();
   bindCompareMenu(btn, panel);
@@ -9778,6 +10012,8 @@ async function buildPricingSettings() {
     if (openSet.has(grp.title)) det.open = true;
     const sum = document.createElement("summary");
     sum.className = "p-group-sum";
+    // Выделение названия группы мышью не должно сворачивать <details>.
+    sum.addEventListener("click", (e) => { if (textSelected()) e.preventDefault(); });
     sum.appendChild(document.createTextNode(grp.title));
     det.appendChild(sum);
     const body = document.createElement("div");
@@ -10653,6 +10889,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("click", (ev) => {
     const title = ev.target.closest(".dash-sec-title");
     if (title) {
+      // Название секции выделяют, чтобы скопировать — не сворачиваем.
+      if (textSelected()) return;
       const sec = title.closest("[data-csec]");
       if (sec) toggleDashSection(sec);
     }
@@ -11017,6 +11255,8 @@ function initXyzDrill() {
     mx.addEventListener("click", (e) => {
       const td = e.target.closest ? e.target.closest("td.xyz-cell[data-abc]") : null;
       if (!td) return;
+      // Выделяли цифры в ячейке — не открываем модалку.
+      if (textSelected()) return;
       openXyzDrill(td.dataset.abc, td.dataset.xyz);
     });
   }

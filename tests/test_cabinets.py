@@ -151,6 +151,46 @@ def test_ensure_cabinet_schemas_creates_schemas_and_tables(db_engine):
                 f"select to_regclass('{s}.ozon_detail_rows') is not null")).scalar() is True
 
 
+def test_ensure_cabinet_schemas_adds_new_columns_to_old_tables(db_engine):
+    """Старый кабинет получает колонки моделей, появившиеся после его раскатки.
+
+    Регресс: `price_changes` в схемах кабинетов осталась без `marketplace`, и
+    «Применить в WB» падал с `UndefinedColumn` (колонку добавляли только в
+    public/через create_all, который к существующей таблице колонки не добавляет).
+    """
+    _drop_cab_schemas()
+    with SessionLocal() as db:
+        user = cabinet_service.seed_user(db)
+        c1 = _mk_cab(db, code="c1", schema=CAB_OO, marketplace="wb", user=user)
+        c2 = _mk_cab(db, code="c2", schema=CAB_IP, marketplace="ozon", user=user)
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c1, c2])
+    # Откатываем кабинетные price_changes к «старой» форме.
+    with engine.begin() as conn:
+        for s in (CAB_OO, CAB_IP):
+            conn.execute(text(
+                f'alter table "{s}".price_changes '
+                f'drop column if exists marketplace cascade'))
+            conn.execute(text(
+                f'alter table "{s}".price_changes drop column if exists before_price'))
+            conn.execute(text(
+                f'alter table "{s}".price_changes drop column if exists after_price'))
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c1, c2])
+    with engine.begin() as conn:
+        for s, mp in ((CAB_OO, "wb"), (CAB_IP, "ozon")):
+            cols = {r[0]: r[1] for r in conn.execute(text(
+                "select column_name, column_default from information_schema.columns "
+                "where table_schema = :s and table_name = 'price_changes'"
+            ), {"s": s}).fetchall()}
+            assert {"marketplace", "before_price", "after_price"} <= set(cols)
+            # DEFAULT дописывает маркетплейс связки в уже существующие строки.
+            assert cols["marketplace"] and f"'{mp}'" in cols["marketplace"]
+            assert conn.execute(text(
+                f"select to_regclass('{s}.ix_price_changes_marketplace') "
+                "is not null")).scalar() is True
+    # Второй вызов — no-op (идемпотентность).
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c1, c2])
+
+
 # ---------------------------------------------------------------------------
 # Миграция public -> схемы
 # ---------------------------------------------------------------------------

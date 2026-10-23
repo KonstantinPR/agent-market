@@ -42,6 +42,23 @@ PER_CAB_TABLES = (
 
 MARKER_KEY = "cabinets"
 
+# Колонки, появившиеся в моделях после раскатки кабинетов. Таблицы кабинета
+# создаются один раз (`CREATE TABLE LIKE public...`), поэтому `create_all`
+# новые поля к ним не добавляет — досоздаём при каждом старте (идемпотентно).
+# {mp} — маркетплейс кабинета: ALTER с DEFAULT допишет его в старые строки,
+# иначе история Ozon-кабинета осталась бы помечена как WB.
+PER_CAB_COLUMN_MIGRATIONS = (
+    # Журнал автопилота: маркетплейс и цена витрины до/после применения.
+    ("price_changes", "marketplace", "varchar(10) NOT NULL DEFAULT '{mp}'"),
+    ("price_changes", "before_price", "numeric(10, 2) NOT NULL DEFAULT 0"),
+    ("price_changes", "after_price", "numeric(10, 2)"),
+)
+
+# Индексы под досозданные колонки (в модели index=True, в кабинете — нет).
+PER_CAB_INDEX_MIGRATIONS = (
+    ("ix_price_changes_marketplace", "price_changes", "marketplace"),
+)
+
 
 def _per_cab_table_objs() -> list:
     names = PER_CAB_TABLES
@@ -120,13 +137,50 @@ def ensure_cabinet_schemas(engine, cabinets: list) -> None:
     """
     if not cabinets:
         return
+    targets = {}  # schema -> marketplace связки
+    for c in cabinets:
+        targets[getattr(c, "schema")] = (getattr(c, "marketplace", "") or "wb").strip() or "wb"
     with engine.begin() as conn:
-        for schema in {getattr(c, "schema") for c in cabinets}:
+        for schema, marketplace in targets.items():
             conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
             conn.execute(text(f'SET search_path TO "{schema}", public'))
             for table in _per_cab_table_objs():
                 _create_table_in(conn, table, schema)
+            _add_missing_columns(conn, schema, marketplace)
         conn.execute(text("RESET search_path"))
+
+
+def _add_missing_columns(conn, schema: str, marketplace: str) -> list:
+    """Досоздаёт в кабинете колонки/индексы, появившиеся после его создания.
+
+    Без этого схема кабинета отстаёт от моделей: например, старая
+    `price_changes` без `marketplace` роняет применение цен в WB
+    (`UndefinedColumn`). Возвращает список добавленных колонок (для логов/тестов).
+    """
+    added = []
+    for table, column, ddl in PER_CAB_COLUMN_MIGRATIONS:
+        if not _table_exists(conn, schema, table):
+            continue
+        have = set(conn.execute(text(
+            "select column_name from information_schema.columns "
+            "where table_schema = :s and table_name = :t"
+        ), {"s": schema, "t": table}).scalars().all())
+        if column in have:
+            continue
+        stmt = ddl.replace("{mp}", marketplace.replace("'", "''"))
+        conn.execute(text(
+            f'ALTER TABLE "{schema}"."{table}" ADD COLUMN {column} {stmt}'
+        ))
+        added.append(f"{schema}.{table}.{column}")
+    for name, table, columns in PER_CAB_INDEX_MIGRATIONS:
+        if not _table_exists(conn, schema, table):
+            continue
+        conn.execute(text(
+            f'CREATE INDEX IF NOT EXISTS "{name}" ON "{schema}"."{table}" ({columns})'
+        ))
+    if added:
+        log.info("Досоздали колонки в схемах кабинетов: %s", ", ".join(added))
+    return added
 
 
 # ---------------------------------------------------------------------------
