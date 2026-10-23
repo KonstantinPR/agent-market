@@ -12,6 +12,7 @@ def ticket_api(tmp_path, monkeypatch):
     from app.main import app
 
     monkeypatch.setattr(ts, "TICKETS_FILE", tmp_path / "TICKETS.md")
+    monkeypatch.setattr(ts, "current_branch", lambda cwd=None: None)
     with TestClient(app) as c:
         yield c
 

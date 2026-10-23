@@ -2,6 +2,7 @@
 """API раздела «Автоматизация»."""
 
 import io
+import time
 import zipfile
 
 from PIL import Image
@@ -27,6 +28,16 @@ def _mk(tmp_path, name, data=b"x"):
     p = tmp_path / name
     p.write_bytes(data)
     return p
+
+
+def _wait_job(client, job_id, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = client.get(f"/api/automation/foldering/build/{job_id}").json()
+        if st["status"] in ("done", "failed"):
+            return st
+        time.sleep(0.02)
+    raise AssertionError(f"job {job_id} не завершился за {timeout} с")
 
 
 def _png_bytes(w=120, h=240):
@@ -124,6 +135,12 @@ def test_foldering_build_zip(client, db, tmp_path, monkeypatch):
 
     r = client.post("/api/automation/foldering/build", data={"articles": "b2", "marketplace": "WB"})
     assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    st = _wait_job(client, job_id)
+    assert st["status"] == "done", st
+
+    r = client.get(f"/api/automation/foldering/build/{job_id}/download")
+    assert r.status_code == 200
     assert r.headers["content-type"] == "application/zip"
     z = zipfile.ZipFile(io.BytesIO(r.content))
     assert z.namelist() == ["222/b2-1.jpg"]
@@ -131,7 +148,10 @@ def test_foldering_build_zip(client, db, tmp_path, monkeypatch):
 
 def test_foldering_build_no_photos(client):
     r = client.post("/api/automation/foldering/build", data={"articles": "nope", "marketplace": "WB"})
-    assert r.status_code == 400
+    assert r.status_code == 200
+    st = _wait_job(client, r.json()["job_id"])
+    assert st["status"] == "failed"
+    assert st["error"]
 
 
 # ------------------------------------------------------------------ кроп
