@@ -7,7 +7,7 @@ from app import models
 from app.services import warehouse_paths
 
 
-def _cabinet(db, code="oo_joinco"):
+def _cabinet(db, code="oo_joinco", schema=""):
     user = models.User(username="u-" + code, display_name="U")
     db.add(user)
     db.flush()
@@ -16,7 +16,7 @@ def _cabinet(db, code="oo_joinco"):
     db.flush()
     cab = models.Cabinet(
         user_id=user.id, company_id=company.id, code=code, name="Тест WB",
-        schema="", marketplace="wb", creds="", enabled=True, position=0,
+        schema=schema, marketplace="wb", creds="", enabled=True, position=0,
     )
     db.add(cab)
     db.flush()
@@ -65,6 +65,40 @@ def test_settings_roundtrip_and_missing_path(db, tmp_path):
     assert warehouse_paths.get_settings(db, cab.id)["root"].endswith("нет-такого-пути")
     with pytest.raises(ValueError, match="Путь импорта не найден"):
         warehouse_paths.scan_folders(db, cab.id)
+
+
+def test_settings_payload_lists_default_roots_and_ignores_extra_keys(db):
+    """GET-полезная нагрузка: оба дефолтных пути + флаг доступности.
+
+    В настройки при этом не должны попадать служебные/лишние поля.
+    """
+    cab = _cabinet(db)
+    payload = warehouse_paths.settings_payload(db, cab.id)
+    assert [r["path"] for r in payload["roots"]] == warehouse_paths.DEFAULT_ROOTS_JOIN
+    assert all("exists" in r for r in payload["roots"])
+    # Сохранённый путь — один из кандидатов (первый существующий или первый).
+    assert payload["root"] in warehouse_paths.DEFAULT_ROOTS_JOIN
+    assert isinstance(payload["root_exists"], bool)
+
+    saved = warehouse_paths.save_settings(db, cab.id, {
+        "mode": "update",
+        "roots": [{"path": "подделка"}],
+        "evil": "не сохранять",
+    })
+    assert saved["mode"] == "update"
+    assert "roots" not in saved
+    assert "evil" not in saved
+
+
+def test_default_roots_by_cabinet_code(db, tmp_path):
+    """Разные связки получают свои дефолтные пути (Джойнс / ИП Прудников)."""
+    join = _cabinet(db, code="oo_joinco", schema="paths_join")
+    prud = _cabinet(db, code="ip_prudnikov_wb", schema="paths_prud")
+    assert warehouse_paths.default_roots(join) == warehouse_paths.DEFAULT_ROOTS_JOIN
+    assert warehouse_paths.default_roots(prud) == warehouse_paths.DEFAULT_ROOTS_PRUD
+    # Первый существующий кандидат становится рабочим путём по умолчанию.
+    warehouse_paths.save_settings(db, join.id, {"root": str(tmp_path)})
+    assert warehouse_paths.get_settings(db, join.id)["root"] == str(tmp_path)
 
 
 def test_scan_and_import_folder(db, tmp_path):

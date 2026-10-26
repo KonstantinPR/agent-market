@@ -163,14 +163,25 @@ def api_doc_delete(doc_id: int, db: Session = Depends(get_db)):
 
 @router.get("/warehouse/paths/settings")
 def api_wh_paths_settings(cabinet_id: int, db: Session = Depends(get_db)):
+    """Настройки импорта из папок + список дефолтных путей для селектора.
+
+    ``roots`` — подсказка UI (оба варианта пути и их доступность), в JSON
+    настроек не сохраняется. Отдаём ``settings_payload``, а не «сырые»
+    настройки, чтобы фронтенд мог построить выбор пути без знания кодов связок.
+    """
     try:
-        return warehouse_paths_service.get_settings(db, cabinet_id)
+        return warehouse_paths_service.settings_payload(db, cabinet_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
 @router.put("/warehouse/paths/settings")
 def api_wh_paths_settings_put(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Сохранить настройки импорта для связки.
+
+    Сервис сам отбрасывает неизвестные ключи (``SETTING_KEYS``), поэтому
+    присланный из UI список ``roots`` в базу не попадёт.
+    """
     cabinet_id = payload.get("cabinet_id")
     if cabinet_id is None:
         raise HTTPException(400, "cabinet_id обязателен")
@@ -182,6 +193,7 @@ def api_wh_paths_settings_put(payload: dict = Body(...), db: Session = Depends(g
 
 @router.post("/warehouse/paths/scan")
 def api_wh_paths_scan(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Проверить папки в корне связки (без чтения Excel) и вернуть статусы."""
     cabinet_id = payload.get("cabinet_id")
     if cabinet_id is None:
         raise HTTPException(400, "cabinet_id обязателен")
@@ -193,6 +205,11 @@ def api_wh_paths_scan(payload: dict = Body(...), db: Session = Depends(get_db)):
 
 @router.post("/warehouse/paths/import")
 def api_wh_paths_import(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Импортировать одну папку отправки.
+
+    ``mode="new"`` — только если документа ещё нет; ``"update"`` — перезаписать
+    существующий (тот же ``source_ref``); ``dry_run`` — разбор без записи в БД.
+    """
     cabinet_id = payload.get("cabinet_id")
     folder = payload.get("folder") or ""
     if cabinet_id is None or not folder:

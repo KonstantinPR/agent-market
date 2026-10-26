@@ -115,10 +115,28 @@ def test_paths_settings_scan_and_import(api_client, db, tmp_path):
 
     r = api_client.put("/api/warehouse/paths/settings", json={
         "cabinet_id": cab.id,
-        "settings": {"root": str(tmp_path), "sheet": "ОПРЕДЛАРТ", "price_mode": "zero"},
+        "settings": {
+            "root": str(tmp_path), "sheet": "ОПРЕДЛАРТ", "price_mode": "zero",
+            # Служебные ключи не должны попасть в warehouse_settings (белый список).
+            "roots": [{"path": "подделка"}], "evil": 1,
+        },
     })
     assert r.status_code == 200
-    assert api_client.get(f"/api/warehouse/paths/settings?cabinet_id={cab.id}").json()["root"] == str(tmp_path)
+    data = api_client.get(f"/api/warehouse/paths/settings?cabinet_id={cab.id}").json()
+    assert data["root"] == str(tmp_path)
+    assert data["root_exists"] is True
+    # GET отдаёт оба дефолтных пути связки — по ним строится селект в UI.
+    assert [x["path"] for x in data["roots"]] == [
+        r"C:\YandexDisk\СЕТЕВЫЕ МАГАЗИНЫ\WILDBERRIES\ДЖОИНС\ОТПРАВКИ",
+        r"E:\Мой диск\ООО ДЖОИНС\ОТПРАВКИ",
+    ]
+    assert all("exists" in x for x in data["roots"])
+    # Белый список: служебные ключи не попали в сохранённый JSON.
+    import json
+    db.expire_all()
+    raw = json.loads(db.get(models.Cabinet, cab.id).warehouse_settings)
+    assert "roots" not in raw and "evil" not in raw
+    assert raw["root"] == str(tmp_path)
 
     scan = api_client.post("/api/warehouse/paths/scan", json={"cabinet_id": cab.id}).json()
     assert scan["summary"]["new"] == 1

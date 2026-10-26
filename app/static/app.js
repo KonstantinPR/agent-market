@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "169";
+const UI_VERSION = "170";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3928,23 +3928,59 @@ const whPathsHeaders = [
   { k: "warning", label: "Предупреждение", render: cellFmts.text, tip: "Например, несколько файлов DB*.xlsm в папке. Импорт при этом не блокируется." },
   { k: "_a", label: "", render: (v, r) => r._canImport ? '<button class="btn small" data-paths-idx="' + r._idx + '">Импорт</button>' : "", tip: "Импортировать только эту папку. Остатки меняются сразу; повторный импорт в режиме «Обновлять существующие» перезапишет документ." },
 ];
+// Список папок из последнего сканирования. Статусы приходят с сервера:
+// new | imported | bad_name | no_file | error (см. scan_folders).
 let whPathsRows = [];
+// Идёт запрос — блокируем кнопки, чтобы не запускать скан/импорт параллельно.
 let whPathsBusy = false;
+// Справочник контрагентов подгружаем один раз за сессию.
 let whPathsCpLoaded = false;
+// Кандидаты путей из GET /warehouse/paths/settings (оба варианта: C:\ и E:\).
+let whPathsRoots = [];
+// Был ли успешный скан для текущей связки/пути. Нужен, чтобы не показывать
+// «Импортировать» до того, как пользователь увидел список папок.
+let whPathsScanned = false;
+// Значение селекта «Другой путь…»: в этом режиме путь берётся из input.
+const WH_PATHS_CUSTOM = "__custom__";
 
 function whPathsSetMsg(text) {
   const el = $("#whPathsMsg");
   if (el) el.textContent = text || "";
 }
 
+// Сколько папок можно импортировать в текущем режиме: новые + (в режиме
+// «Обновлять существующие») уже импортированные, которые можно перезаписать.
+function whPathsImportableCount() {
+  const mode = $("#whPathsMode")?.value === "update" ? "update" : "new";
+  return whPathsRows.filter((r) => r.status === "new" || (r.status === "imported" && mode === "update")).length;
+}
+
+// Кнопка импорта: текст с количеством и доступность зависят от скана и режима.
+// Пока скан не сделан — кнопка выключена, чтобы не было «пустого» импорта.
+function whPathsUpdateImportButton() {
+  const btn = $("#whPathsImport");
+  if (!btn) return;
+  const mode = $("#whPathsMode")?.value === "update" ? "update" : "new";
+  const n = whPathsImportableCount();
+  const verb = mode === "update" ? "Обновить все" : "Импортировать все новые";
+  btn.textContent = verb + (whPathsScanned ? " (" + n + ")" : "");
+  btn.disabled = whPathsBusy || !whPathsScanned || n === 0;
+  btn.title = !whPathsScanned
+    ? "Сначала нажмите «Проверить папки» — тогда станет известно, что импортировать"
+    : n === 0
+      ? "Подходящих папок нет: всё уже импортировано или папки с ошибками"
+      : (mode === "update" ? "Перезаписать" : "Импортировать") + " " + n + " папок по одной";
+}
+
 function whPathsSetBusy(busy) {
   whPathsBusy = !!busy;
-  for (const id of ["whPathsSave", "whPathsScan", "whPathsImport", "whPathsCabinet"]) {
+  for (const id of ["whPathsSave", "whPathsScan", "whPathsImport", "whPathsCabinet", "whPathsRoot", "whPathsRootCustom"]) {
     const el = $("#" + id);
     if (el) el.disabled = whPathsBusy;
   }
   const p = $("#whPathsProgress");
   if (p && !whPathsBusy) { p.max = 1; p.value = 0; }
+  if (!whPathsBusy) whPathsUpdateImportButton();
 }
 
 function whPathsCabinetId() {
@@ -3984,13 +4020,92 @@ async function loadWhPathsCounterparties() {
   }
 }
 
+// Заполнить селект путей кандидатами с сервера.
+// Показываем ОБА дефолтных пути связки (C:\YandexDisk\... и E:\Мой диск\...):
+// ✓ — путь доступен, ✗ — папка/диск сейчас не найдены. Плюс «Другой путь…».
+function fillWhPathsRoots(s) {
+  const sel = $("#whPathsRoot");
+  if (!sel) return;
+  whPathsRoots = s.roots || [];
+  const root = (s.root || "").trim();
+  const seen = new Set();
+  sel.innerHTML = "";
+  const addOpt = (value, label) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    sel.appendChild(opt);
+  };
+  for (const r of whPathsRoots) {
+    if (!r || !r.path || seen.has(r.path)) continue;
+    seen.add(r.path);
+    addOpt(r.path, (r.exists ? "✓ " : "✗ ") + r.path + (r.exists ? "" : " — папка не найдена"));
+  }
+  // Сохранённый путь мог быть введён вручную и не совпадать с дефолтами —
+  // добавляем его отдельной опцией, чтобы он не «терялся» в селекте.
+  if (root && !seen.has(root)) {
+    seen.add(root);
+    addOpt(root, (s.root_exists ? "✓ " : "✗ ") + root + " (сохранённый путь)");
+  }
+  if (!sel.options.length) addOpt("", "Нет дефолтного пути для этой связки");
+  addOpt(WH_PATHS_CUSTOM, "Другой путь…");
+  // Выбранный путь: сохранённый, иначе первый кандидат.
+  sel.value = root && seen.has(root) ? root : sel.options[0].value;
+  syncWhPathsRootUI();
+}
+
+// Показать/спрятать поле «свой путь» и подсказать, доступна ли папка.
+function syncWhPathsRootUI() {
+  const sel = $("#whPathsRoot");
+  const customEl = $("#whPathsRootCustom");
+  const hint = $("#whPathsRootHint");
+  if (!sel) return;
+  const isCustom = sel.value === WH_PATHS_CUSTOM;
+  if (customEl) {
+    customEl.classList.toggle("hidden", !isCustom);
+    if (!isCustom) customEl.value = "";
+  }
+  const value = isCustom ? (customEl?.value || "").trim() : (sel.value || "").trim();
+  let text = "";
+  if (!value) {
+    text = "Путь не задан — проверка папок не запустится.";
+  } else {
+    const info = whPathsRoots.find((r) => r.path === value);
+    if (info && info.exists) text = "✓ Папка доступна.";
+    else if (info) text = "✗ Папка не найдена — проверьте, подключён ли диск.";
+    else text = "Свой путь: существование проверится при сканировании.";
+  }
+  if (hint) hint.textContent = text;
+}
+
+// Текущее значение пути: из селекта или из поля «свой путь».
+function whPathsRootValue() {
+  const sel = $("#whPathsRoot");
+  if (!sel) return "";
+  if (sel.value === WH_PATHS_CUSTOM) return ($("#whPathsRootCustom")?.value || "").trim();
+  return (sel.value || "").trim();
+}
+
+// Сбросить результаты скана (например, при смене связки/пути): старая таблица
+// относится к другому корню и показывать её нельзя.
+function whPathsResetScan(msg) {
+  whPathsRows = [];
+  whPathsScanned = false;
+  renderWhPathsResults();
+  whPathsSetMsg(msg || "");
+}
+
+// Загрузить настройки связки и заполнить все поля панели.
+// Сервер отдаёт вместе с настройками roots (оба дефолтных пути + exists).
 async function loadWhPathsSettings() {
   const id = whPathsCabinetId();
-  if (!id) return;
+  if (!id) {
+    whPathsResetScan("");
+    return;
+  }
   try {
     const s = await api("/warehouse/paths/settings?cabinet_id=" + id);
-    const rootEl = $("#whPathsRoot");
-    if (rootEl) rootEl.value = s.root || "";
+    fillWhPathsRoots(s);
     const modeEl = $("#whPathsMode");
     if (modeEl) modeEl.value = s.mode === "update" ? "update" : "new";
     const priceEl = $("#whPathsPriceMode");
@@ -4010,6 +4125,7 @@ async function loadWhPathsSettings() {
       }
       cpEl.value = val;
     }
+    whPathsResetScan("");
   } catch (err) {
     whPathsSetMsg("Не удалось загрузить настройки: " + err.message);
   }
@@ -4017,7 +4133,7 @@ async function loadWhPathsSettings() {
 
 function collectWhPathsSettings() {
   return {
-    root: ($("#whPathsRoot")?.value || "").trim(),
+    root: whPathsRootValue(),
     mode: $("#whPathsMode")?.value === "update" ? "update" : "new",
     price_mode: $("#whPathsPriceMode")?.value === "zero" ? "zero" : "cost",
     counterparty_id: Number($("#whPathsCounterparty")?.value || 1),
@@ -4053,26 +4169,75 @@ function renderWhPathsResults() {
     _canImport: r.status === "new" || (r.status === "imported" && mode === "update"),
   }));
   pagedTable(box, whPathsHeaders, rows);
+  // Количество новых папок могло измениться (после скана/импорта) — обновляем
+  // подпись и доступность кнопки «Импортировать все новые (N)».
+  whPathsUpdateImportButton();
 }
 
 async function scanWhPaths() {
   if (whPathsBusy) return;
+  // Перед сканом сохраняем выбранный путь и параметры: скан идёт по ним.
   if (!(await saveWhPathsSettings(true))) return;
   whPathsSetBusy(true);
   whPathsSetMsg("Проверяю папки…");
   try {
     const data = await apiPost("/warehouse/paths/scan", { cabinet_id: whPathsCabinetId() });
     whPathsRows = data.items || [];
+    whPathsScanned = true;
     renderWhPathsResults();
     const s = data.summary || {};
     whPathsSetMsg("Папок: " + fmt((data.items || []).length) +
       " · новых: " + fmt(s.new || 0) + " · уже импортировано: " + fmt(s.imported || 0) +
-      " · без файла: " + fmt(s.no_file || 0) + " · плохое имя: " + fmt(s.bad_name || 0));
+      " · без файла: " + fmt(s.no_file || 0) + " · плохое имя: " + fmt(s.bad_name || 0) +
+      (whPathsImportableCount() ? " · нажмите «Импортировать все новые (" + fmt(whPathsImportableCount()) + ")»" : ""));
   } catch (err) {
+    whPathsScanned = false;
     whPathsSetMsg("Ошибка проверки: " + err.message);
   } finally {
     whPathsSetBusy(false);
   }
+}
+
+// Автопроверка папок после открытия панели и смены связки/пути: пользователь
+// сразу видит все папки и сколько из них новых, не нужно угадывать кнопку.
+async function whPathsAutoScan() {
+  if (!whPathsCabinetId() || !whPathsRootValue()) {
+    whPathsResetScan("Выберите путь к папкам отправок");
+    return;
+  }
+  await scanWhPaths();
+}
+
+// Смена связки: у каждой связки свой путь и свои настройки — перечитываем их
+// и сразу проверяем папки нового корня.
+async function whPathsCabinetChanged() {
+  await loadWhPathsSettings();
+  await whPathsAutoScan();
+}
+
+// Смена пути в селекте. «Другой путь…» только показывает поле ввода —
+// сканировать будем после того, как пользователь введёт путь.
+async function whPathsRootSelectChanged() {
+  syncWhPathsRootUI();
+  if ($("#whPathsRoot")?.value === WH_PATHS_CUSTOM) {
+    whPathsResetScan("Введите свой путь в поле выше");
+    $("#whPathsRootCustom")?.focus();
+    return;
+  }
+  await whPathsAutoScan();
+}
+
+// Пользователь ввёл свой путь и подтвердил (Enter/blur) — проверяем папки.
+async function whPathsRootCustomChanged() {
+  syncWhPathsRootUI();
+  await whPathsAutoScan();
+}
+
+// Режим «новые/обновлять» не меняет список папок, но меняет количество
+// доступных к импорту — перерисовываем таблицу и кнопку без скана.
+function whPathsModeChanged() {
+  renderWhPathsResults();
+  whPathsUpdateImportButton();
 }
 
 async function importWhPathsRow(idx) {
@@ -4107,11 +4272,13 @@ async function importWhPathsRow(idx) {
 
 async function importAllWhPaths() {
   if (whPathsBusy) return;
-  if (!whPathsRows.length) {
+  if (!whPathsScanned) {
     whPathsSetMsg("Сначала нажмите «Проверить папки»");
     return;
   }
-  const mode = $("#whPathsMode")?.value || "new";
+  // В режиме «Только новые» берём статус new, в «Обновлять существующие» —
+  // ещё и imported (их документ будет перезаписан).
+  const mode = $("#whPathsMode")?.value === "update" ? "update" : "new";
   const idxs = whPathsRows
     .map((r, i) => ({ r, i }))
     .filter(({ r }) => r.status === "new" || (r.status === "imported" && mode === "update"))
@@ -4120,6 +4287,7 @@ async function importAllWhPaths() {
     whPathsSetMsg("Нет папок для импорта в выбранном режиме");
     return;
   }
+  // Прогресс считаем по числу папок; кнопки блокируем на каждом шаге.
   const p = $("#whPathsProgress");
   if (p) { p.max = idxs.length; p.value = 0; }
   let ok = 0, failed = 0;
@@ -4147,7 +4315,10 @@ async function importAllWhPaths() {
     renderWhPathsResults();
   }
   whPathsSetBusy(false);
-  whPathsSetMsg("Импорт завершён: успешно " + ok + ", ошибок " + failed);
+  whPathsSetMsg("Импорт завершён: успешно " + ok + ", ошибок " + failed +
+    " · документы обновлены в таблице ниже");
+  // После импорта обновляем список отправок, чтобы новые документы были видны
+  // сразу, без перезагрузки страницы.
   if (ok && currentTab === "wh-shipment") {
     await renderWhDocs("shipment", "whSTable", "headerMsg", "whSDetail");
   }
@@ -4164,8 +4335,11 @@ async function openWhPathsPanel() {
   if (!cabState.companies || !cabState.companies.length) await loadCabinets();
   fillWhPathsCabinets();
   await loadWhPathsCounterparties();
+  // Настройки + автопроверка папок: при открытии панели сразу видно, сколько
+  // папок в корне и сколько из них ещё не импортировано (а не только 440).
   await loadWhPathsSettings();
   whPathsSetMsg("");
+  await whPathsAutoScan();
 }
 
 const replenishHeaders = [
@@ -11505,7 +11679,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const whSFromPaths = $("#whSFromPaths");
   if (whSFromPaths) whSFromPaths.addEventListener("click", () => busyRun(openWhPathsPanel));
   const whPathsCabinet = $("#whPathsCabinet");
-  if (whPathsCabinet) whPathsCabinet.addEventListener("change", () => busyRun(loadWhPathsSettings));
+  if (whPathsCabinet) whPathsCabinet.addEventListener("change", () => busyRun(whPathsCabinetChanged));
+  const whPathsRoot = $("#whPathsRoot");
+  if (whPathsRoot) whPathsRoot.addEventListener("change", () => busyRun(whPathsRootSelectChanged));
+  const whPathsRootCustom = $("#whPathsRootCustom");
+  if (whPathsRootCustom) whPathsRootCustom.addEventListener("change", () => busyRun(whPathsRootCustomChanged));
+  const whPathsMode = $("#whPathsMode");
+  if (whPathsMode) whPathsMode.addEventListener("change", whPathsModeChanged);
   const whPathsSave = $("#whPathsSave");
   if (whPathsSave) whPathsSave.addEventListener("click", () => busyRun(() => saveWhPathsSettings(false)));
   const whPathsScan = $("#whPathsScan");

@@ -1138,6 +1138,13 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   background: #fbfcfe;
 }
 .paths-title { font-size: 13px; font-weight: 600; color: #263445; margin-bottom: 8px; }
+/* Короткая инструкция над формой: что делать по шагам. */
+.paths-steps {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #445;
+}
 .paths-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
@@ -1159,6 +1166,9 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 }
 .paths-grid label.chk { flex-direction: row; align-items: center; gap: 6px; }
 .paths-grid label.chk input { width: auto; }
+/* Селект пути и подсказка о доступности папки под ним. */
+.paths-grid #whPathsRoot { width: 100%; max-width: 100%; }
+.paths-grid #whPathsRootHint { min-height: 14px; }
 .paths-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .paths-actions progress { width: 180px; height: 12px; }
 .paths-note { font-size: 12px; color: #445; }

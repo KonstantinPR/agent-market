@@ -1,4 +1,31 @@
 # -*- coding: utf-8 -*-
+"""Импорт отправок WB из локальных папок (T-57).
+
+Как устроено
+------------
+1. У каждой WB-связки (``Cabinet``) свой корень с папками отправок. Путь и
+   прочие параметры лежат в ``cabinet.warehouse_settings`` (JSON): ``root``,
+   ``mode``, ``price_mode``, ``counterparty_id``, ``sheet``, ``skip_archive``.
+   Пока значений нет — берутся дефолты по ``cab.code`` (см. ``default_roots``).
+2. В корне лежат папки вида ``440 - 26.05.2026 - Рязань``:
+   ``<номер> - <ДД.ММ.ГГГГ> [- <примечание>]``. Номер и дата — из имени
+   папки, всё после даты — примечание (комментарий) документа.
+3. В папке берётся самый свежий ``DB*.xlsm`` (``~$*`` — временные файлы Excel,
+   их игнорируем). Если файлов несколько — импортируем самый новый и пишем
+   предупреждение со списком альтернатив.
+4. Из файла читается лист ``ОПРЕДЛАРТ`` (см. ``_read_opredlart``): нужны
+   колонки ``Артикул`` и ``Кол-во``, необязательные — ``Штрихкод`` и ``Размер``.
+   Остальные колонки (в т.ч. ``Куда``) игнорируются.
+5. Ключ идемпотентности — ``source_ref = "<cab.code>:<имя папки>"``. Поэтому
+   повторный импорт папки обновляет тот же ``WarehouseDoc``, а не создаёт
+   дубль; папки 354 и 358 с одинаковыми номерами — разные документы.
+6. Цена: при ``price_mode="cost"`` — ``products.net_cost`` (0, если товара
+   нет), при ``"zero"`` — всегда 0. ``recalc_net_cost`` не вызывается:
+   отправка не должна менять среднюю себестоимость приходов.
+7. Склад общий: ``cabinet_id`` пишется в документ только для истории/фильтра,
+   остатки по нему не разделяются.
+"""
+
 from __future__ import annotations
 
 import json
@@ -18,7 +45,24 @@ from app.services import cabinets as cabinet_service
 from app.services import warehouse as warehouse_service
 
 
+# Имя папки: номер - ДД.ММ.ГГГГ [- примечание]. Год: 2 цифры → 20xx,
+# 3 цифры/несуществующая дата → bad_name (см. _parse_folder_name).
 NAME_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?:\s*-\s*(.*))?\s*$")
+
+# Дефолтные корни отправок: первый существующий на диске становится рабочим,
+# оба варианта показываются в UI как кандидаты (локальный Яндекс.Диск и диск E:).
+DEFAULT_ROOTS_JOIN = [
+    r"C:\YandexDisk\СЕТЕВЫЕ МАГАЗИНЫ\WILDBERRIES\ДЖОИНС\ОТПРАВКИ",
+    r"E:\Мой диск\ООО ДЖОИНС\ОТПРАВКИ",
+]
+DEFAULT_ROOTS_PRUD = [
+    r"C:\YandexDisk\СЕТЕВЫЕ МАГАЗИНЫ\WILDBERRIES\ИП ПРУДНИКОВ\ОТПРАВКИ",
+    r"E:\Мой диск\ИП ПРУДНИКОВ\ОТПРАВКИ",
+]
+
+# Что разрешено принимать из UI в warehouse_settings: белый список не даёт
+# сохранить в JSON случайные/лишние поля (например, служебный список roots).
+SETTING_KEYS = ("root", "mode", "price_mode", "counterparty_id", "sheet", "skip_archive")
 
 
 @dataclass
@@ -34,31 +78,35 @@ class FolderInfo:
     source_ref: str
 
 
-def _default_settings_for(cab: models.Cabinet) -> Dict[str, Any]:
+def default_roots(cab: models.Cabinet) -> List[str]:
+    """Все дефолтные корни для связки (оба варианта, даже несуществующие).
+
+    Нужны UI, чтобы показать выбор пути: локальная копия Яндекс.Диска и диск
+    ``E:`` — обычно один и тот же каталог, доступный по разным путям.
+    """
     code = (cab.code or "").lower()
-    root = ""
     if "join" in code:
-        roots = [
-            r"C:\YandexDisk\СЕТЕВЫЕ МАГАЗИНЫ\WILDBERRIES\ДЖОИНС\ОТПРАВКИ",
-            r"E:\Мой диск\ООО ДЖОИНС\ОТПРАВКИ",
-        ]
-        for r in roots:
-            if os.path.exists(r):
-                root = r
-                break
-        if not root:
-            root = roots[0]
-    elif "prud" in code or code == "ip_prudnikov_wb":
-        roots = [
-            r"C:\YandexDisk\СЕТЕВЫЕ МАГАЗИНЫ\WILDBERRIES\ИП ПРУДНИКОВ\ОТПРАВКИ",
-            r"E:\Мой диск\ИП ПРУДНИКОВ\ОТПРАВКИ",
-        ]
-        for r in roots:
-            if os.path.exists(r):
-                root = r
-                break
-        if not root:
-            root = roots[0]
+        return list(DEFAULT_ROOTS_JOIN)
+    if "prud" in code:
+        return list(DEFAULT_ROOTS_PRUD)
+    return []
+
+
+def roots_info(cab: models.Cabinet) -> List[Dict[str, Any]]:
+    """Кандидаты путей с признаком доступности — для селектора в UI."""
+    return [{"path": p, "exists": os.path.exists(p)} for p in default_roots(cab)]
+
+
+def _default_settings_for(cab: models.Cabinet) -> Dict[str, Any]:
+    """Дефолтные настройки связки: первый существующий корень из candidates."""
+    roots = default_roots(cab)
+    root = ""
+    for candidate in roots:
+        if os.path.exists(candidate):
+            root = candidate
+            break
+    if not root and roots:
+        root = roots[0]
     return {
         "root": root,
         "mode": "new",
@@ -69,7 +117,24 @@ def _default_settings_for(cab: models.Cabinet) -> Dict[str, Any]:
     }
 
 
+def settings_payload(db: Session, cabinet_id: int) -> Dict[str, Any]:
+    """Настройки + список кандидатов путей (для GET /warehouse/paths/settings).
+
+    ``roots`` — только для UI: в JSON настроек не сохраняется (см. SETTING_KEYS).
+    ``root_exists`` — доступен ли сохранённый путь прямо сейчас; нужен, чтобы
+    селект мог пометить «свой» путь ✓/✗, не делая отдельный запрос.
+    """
+    cab = cabinet_service.cabinet_by_id(db, cabinet_id)
+    if cab is None:
+        raise ValueError("Кабинет не найден")
+    payload = get_settings(db, cabinet_id)
+    payload["roots"] = roots_info(cab)
+    payload["root_exists"] = bool(payload.get("root")) and os.path.exists(payload["root"])
+    return payload
+
+
 def get_settings(db: Session, cabinet_id: int) -> Dict[str, Any]:
+    """Действующие настройки связки: дефолты по code + сохранённый JSON сверху."""
     cab = cabinet_service.cabinet_by_id(db, cabinet_id)
     if cab is None:
         raise ValueError("Кабинет не найден")
@@ -81,6 +146,7 @@ def get_settings(db: Session, cabinet_id: int) -> Dict[str, Any]:
             if isinstance(data, dict):
                 s.update(data)
         except Exception:
+            # Битый JSON не должен ронять страницу: работаем на дефолтах.
             pass
     if s.get("counterparty_id") is None:
         s["counterparty_id"] = 1
@@ -88,11 +154,16 @@ def get_settings(db: Session, cabinet_id: int) -> Dict[str, Any]:
 
 
 def save_settings(db: Session, cabinet_id: int, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Сохранить настройки связки (merge с текущими, только SETTING_KEYS).
+
+    Доступность пути здесь намеренно не проверяется: путь можно сохранить,
+    даже если диск отключён, — проверка будет при scan/import.
+    """
     cab = cabinet_service.cabinet_by_id(db, cabinet_id)
     if cab is None:
         raise ValueError("Кабинет не найден")
     cur = get_settings(db, cabinet_id)
-    cur.update(settings or {})
+    cur.update({k: v for k, v in (settings or {}).items() if k in SETTING_KEYS})
     cab.warehouse_settings = json.dumps(cur, ensure_ascii=False)
     db.commit()
     db.refresh(cab)
@@ -100,6 +171,11 @@ def save_settings(db: Session, cabinet_id: int, settings: Dict[str, Any]) -> Dic
 
 
 def _parse_folder_name(name: str) -> Tuple[Optional[date], str, str]:
+    """Разобрать имя папки: (дата, примечание, статус ok|bad_name).
+
+    Год из 2 цифр трактуется как 20xx (``1 - 10.01.23`` → 2023-01-10).
+    Трёхзначный год и несуществующая дата (32.01.2026) — ``bad_name``.
+    """
     m = NAME_RE.match(name)
     if not m:
         return None, "", "bad_name"
@@ -120,6 +196,11 @@ def _parse_folder_name(name: str) -> Tuple[Optional[date], str, str]:
 
 
 def _find_db_file(folder: Path) -> Tuple[Optional[Path], Optional[str], List[str]]:
+    """Выбрать файл отправки в папке: самый свежий DB*.xlsm.
+
+    Возвращает (файл, предупреждение, альтернативы). ``~$`` — временные файлы
+    Excel, которые появляются при открытом документе; их не рассматриваем.
+    """
     try:
         entries = list(folder.iterdir())
     except Exception:
@@ -142,6 +223,12 @@ def _find_db_file(folder: Path) -> Tuple[Optional[Path], Optional[str], List[str
 
 
 def scan_folders(db: Session, cabinet_id: int) -> Dict[str, Any]:
+    """Быстрый обход корня: список папок со статусами, без открытия Excel.
+
+    Статусы: new (ещё не импортирована), imported (документ уже есть по
+    source_ref), bad_name, no_file, error. Excel не читается — только имена
+    файлов, поэтому скан десятков папок занимает доли секунды.
+    """
     cab = cabinet_service.cabinet_by_id(db, cabinet_id)
     if cab is None:
         raise ValueError("Кабинет не найден")
@@ -180,6 +267,13 @@ def scan_folders(db: Session, cabinet_id: int) -> Dict[str, Any]:
 
 
 def _read_opredlart(file_path: Path, sheet_name: str = "ОПРЕДЛАРТ") -> pd.DataFrame:
+    """Прочитать лист отправки (по умолчанию «ОПРЕДЛАРТ») в DataFrame.
+
+    Шапка ищется в первых 12 строках по сочетанию «Артикул» + «Кол-во»,
+    поэтому над таблицей могут быть заголовки/служебные строки. Если листа с
+    точным именем нет, берётся первый лист со «опред» в названии. Read-only
+    режим openpyxl: файл не блокируется и не пересчитывает формулы.
+    """
     wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True, keep_links=False)
     target = None
     for s in wb.sheetnames:
@@ -220,6 +314,13 @@ def _read_opredlart(file_path: Path, sheet_name: str = "ОПРЕДЛАРТ") -> 
 
 
 def import_folder(db: Session, cabinet_id: int, folder_name: str, mode: str = "new", dry_run: bool = False) -> Dict[str, Any]:
+    """Импортировать одну папку отправки.
+
+    ``mode="new"`` — папка уже импортирована → ValueError («Уже импортировано»).
+    ``mode="update"`` — существующий документ (по source_ref) перезаписывается.
+    ``dry_run=True`` — только разбор файла: количество позиций, сумма и список
+    артикулов, которых нет в каталоге (без записи в БД).
+    """
     cab = cabinet_service.cabinet_by_id(db, cabinet_id)
     if cab is None:
         raise ValueError("Кабинет не найден")
@@ -250,6 +351,9 @@ def import_folder(db: Session, cabinet_id: int, folder_name: str, mode: str = "n
     barcode_col = cols_map.get("barcode")
     size_col = cols_map.get("size")
     qty_col = cols_map["quantity"]
+    # Строки без артикула и с количеством ≤ 0 пропускаем (пустые хвосты таблицы,
+    # служебные строки). Одинаковые «штрихкод + артикул + размер» складываем:
+    # в ОПРЕДЛАРТ один и тот же размер может встречаться несколькими строками.
     items_map = {}
     for _, row in df.iterrows():
         art = warehouse_service._clean(row.get(art_col))
@@ -267,21 +371,28 @@ def import_folder(db: Session, cabinet_id: int, folder_name: str, mode: str = "n
     items_list = list(items_map.values())
     cp_id = s.get("counterparty_id") or 1
     price_mode = s.get("price_mode") or "cost"
+    # Номер и дата — из имени папки; всё после даты уже в note.
     doc_date = dt or date.today()
     doc_num = folder_name
     arts = {it["article"] for it in items_list}
     prods = {p.article: p for p in db.query(models.Product).filter(models.Product.article.in_(arts)).all()} if arts else {}
     for it in items_list:
         p = prods.get(it["article"])
+        # Цена отправки: себестоимость товара (или 0). Среднюю себестоимость
+        # приходов не пересчитываем — отправка на неё влиять не должна.
         if price_mode == "cost" and p is not None:
             it["price"] = float(p.net_cost or 0)
         else:
             it["price"] = 0.0
         it["amount"] = round(it["quantity"] * it["price"], 2)
     total = round(sum(i["amount"] for i in items_list), 2)
+    # Артикулы, которых нет в каталоге: импортируются с ценой 0, UI показывает
+    # их отдельным счётчиком, чтобы можно было дополнить каталог.
     unmatched = [it["article"] for it in items_list if it["article"] not in prods]
     if dry_run:
         return {"dry_run": True, "doc_date": doc_date.isoformat(), "doc_num": doc_num, "folder": folder_name, "items_count": len(items_list), "total": total, "unmatched": unmatched, "warning": warning}
+    # Идемпотентность: ищем документ по «связка + имя папки»; нашли — обновляем
+    # шапку и полностью заменяем строки, не создавая второй документ.
     doc = db.query(models.WarehouseDoc).filter(models.WarehouseDoc.source_ref == src_ref).first()
     if doc is None:
         doc = models.WarehouseDoc(

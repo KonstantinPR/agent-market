@@ -319,10 +319,10 @@
 | POST | `/api/warehouse/fromdisk` | `api_wh_fromdisk` | Импорт всех .xlsx из папки «Наш склад/Приход или Отгрузка» на Диске. |
 | POST | `/api/warehouse/import/counterparties` | `import_cp` |  |
 | POST | `/api/warehouse/import/docs` | `import_docs` |  |
-| POST | `/api/warehouse/paths/import` | `api_wh_paths_import` |  |
-| POST | `/api/warehouse/paths/scan` | `api_wh_paths_scan` |  |
-| GET | `/api/warehouse/paths/settings` | `api_wh_paths_settings` |  |
-| PUT | `/api/warehouse/paths/settings` | `api_wh_paths_settings_put` |  |
+| POST | `/api/warehouse/paths/import` | `api_wh_paths_import` | Импортировать одну папку отправки. |
+| POST | `/api/warehouse/paths/scan` | `api_wh_paths_scan` | Проверить папки в корне связки (без чтения Excel) и вернуть статусы. |
+| GET | `/api/warehouse/paths/settings` | `api_wh_paths_settings` | Настройки импорта из папок + список дефолтных путей для селектора. |
+| PUT | `/api/warehouse/paths/settings` | `api_wh_paths_settings_put` | Сохранить настройки импорта для связки. |
 | GET | `/api/warehouse/stock` | `api_stock` |  |
 | POST | `/api/warehouse/todisk` | `api_wh_todisk` | Сформировать Excel и загрузить на Яндекс.Диск в папку /agent_market/Наш склад/<kind>. |
 | GET | `/api/warehouse/turnover` | `api_turnover` |  |
