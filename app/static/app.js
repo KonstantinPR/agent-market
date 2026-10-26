@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "176";
+const UI_VERSION = "177";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -4009,8 +4009,14 @@ const WH_SHIP_CABS_KEY = "whShipCabinets";      // "" (текущая) | "all" |
 const WH_SHIP_COLLAPSE_KEY = "whShipCollapse";  // "1" — сводка по артикулам
 
 // Подсказка под тулбаром: что именно сейчас в таблице и что можно сделать.
+// В режиме «Отправки» подсказку не показываем — она дублировала то, что и так
+// видно по колонкам и кнопкам. Текст оставлен здесь как справка: «Документы
+// отправок: одна строка = одна отправка (дата, номер, связка, сумма). Кнопка
+// «Строки» открывает товары документа. По умолчанию видна только текущая
+// связка — другие включите в «Связки ▾».»
+// Пустая строка = элемент подсказки скрыт (см. syncWhShipUi).
 const WH_SHIP_HINTS = {
-  docs: "Документы отправок: одна строка = одна отправка (дата, номер, связка, сумма). Кнопка «Строки» открывает товары документа. По умолчанию видна только текущая связка — другие включите в «Связки ▾».",
+  docs: "",
   items: "Каждая строка — один товар в одной отправке: видно, что и когда уехало. Один и тот же товар повторяется в разных отправках; чтобы получить итоги по товару, переключитесь на «Сводно».",
   sku: "Сводка по артикулу и размеру: количество и сумма сложены по всем отправкам выбранных связок. «Цена ср.» — сумма ÷ количество, «Отправок» — в скольких документах встречался товар.",
   article: "Сводка по артикулу: размеры сложены в одну строку. Снимите «Свернуть по артикулам», если нужен разрез по размерам и штрихкодам.",
@@ -4246,7 +4252,12 @@ function syncWhShipUi() {
   const btn = $("#btnWhShipCab");
   if (btn) btn.textContent = "Связки: " + whShipCabsLabel() + " ▾";
   const hint = $("#whShipModeHint");
-  if (hint) hint.textContent = WH_SHIP_HINTS[mode] || WH_SHIP_HINTS.docs;
+  if (hint) {
+    // Пустая подсказка (режим «Отправки») не должна оставлять пустой отступ.
+    const hintText = WH_SHIP_HINTS[mode] || WH_SHIP_HINTS.docs;
+    hint.textContent = hintText;
+    hint.classList.toggle("hidden", !hintText);
+  }
 }
 
 // Точка входа вкладки (вызывается из loadTab и после импорта).
