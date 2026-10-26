@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "175";
+const UI_VERSION = "176";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -4184,6 +4184,49 @@ function initWhShipCabsMenu() {
     if (cb.checked) ids.add(cb.dataset.whCabId);
     else ids.delete(cb.dataset.whCabId);
     whShipSetIds(Array.from(ids));
+  });
+}
+
+
+// Зона перетаскивания в тулбаре «Отправок»: клик открывает выбор файла,
+// перетаскивание подставляет файл в #whSFile, подпись показывает имя файла.
+// Раньше это был просто пунктирный блок без обработчиков — бросок файла
+// и клик ничего не делали.
+function initWhShipDrop() {
+  const input = $("#whSFile");
+  const drop = $("#whSDrop");
+  if (!input || !drop) return;
+  const label = drop.querySelector(".dz-label");
+  const base = label ? label.textContent : "";
+  const show = () => {
+    const f = input.files && input.files[0];
+    if (label) label.textContent = f ? "Файл: " + f.name : base;
+    drop.classList.toggle("has-file", !!f);
+    drop.title = f
+      ? f.name + " — нажмите «Загрузить отправку», чтобы отправить его на сервер"
+      : "Перетащите сюда Excel-файл отправки или нажмите, чтобы выбрать файл. Дальше — кнопка «Загрузить отправку».";
+  };
+  drop.addEventListener("click", () => input.click());
+  input.addEventListener("change", show);
+  drop.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    drop.classList.add("over");
+  });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return;
+    try {
+      input.files = files;
+    } catch (err) {
+      // Старый браузер не даёт присвоить FileList — подсказываем выбрать вручную.
+      const msg = $("#headerMsg");
+      if (msg) msg.textContent = "Перетаскивание не поддерживается — выберите файл кнопкой";
+      return;
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
 
@@ -12154,6 +12197,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
   initWhShipCabsMenu();
+  initWhShipDrop();
   onTabInput("whSLike", "wh-shipment", null, 350);
   const whSFromPaths = $("#whSFromPaths");
   if (whSFromPaths) whSFromPaths.addEventListener("click", () => busyRun(openWhPathsPanel));

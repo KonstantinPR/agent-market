@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=75">
+<link rel="stylesheet" href="/static/style.css?v=76">
 </head>
 <body>
 <nav class="navbar">
@@ -497,24 +497,11 @@
   </section>
 
   <section id="tab-wh-shipment" class="pane" data-wh-type="shipment">
-    <!-- Импорт: откуда берутся отправки. Отдельная строка, чтобы не мешаться
-         с фильтрами и режимами просмотра ниже. -->
-    <div class="wb-form">
-      <p class="hint">Отправка товара — покупателю или на склад маркетплейса. Данные приходят из Excel-файла, с Яндекс.Диска или из локальных папок WB (кнопка «Из папок WB»). Ниже — три взгляда на одни и те же отправки: документы, товары списком и сводка по товарам.</p>
-      <div class="dz-row">
-        <input type="file" id="whSFile" class="hidden" accept=".xlsx,.xlsm">
-        <div class="dropzone" id="whSDrop"><span class="dz-label">Перетащите сюда Excel-файл отправки или нажмите для выбора</span></div>
-      </div>
-      <div class="wh-ship-actions">
-        <button id="whSImport" class="btn" title="Загрузить Excel-файл отправки: строки с одинаковыми «дата + номер + контрагент» станут одним документом, повторная загрузка обновит его">Загрузить отправку</button>
-        <a class="btn" id="whSTemplate" href="/api/warehouse/export/template-docs?type=shipment" title="Скачать пустой шаблон Excel с нужными колонками: Дата | № документа | Контрагент | Артикул | Кол-во | Цена">Шаблон</a>
-        <button id="whSFromDisk" class="btn" title="Импортировать все .xlsx из папки «/agent_market/Наш склад/Отгрузка» на Яндекс.Диске. Файлы уже загруженных отправок обновляются, а не дублируются">Импорт с Диска</button>
-        <button id="whSFromPaths" class="btn" title="Импорт из локальных папок WB: папка = отправка, внутри — DB*.xlsm, лист ОПРЕДЛАРТ. Открывает панель с путём, проверкой папок и массовым импортом">Из папок WB</button>
-        <a class="btn" id="whSExportRows" href="/api/warehouse/export/docs?type=shipment" title="Полная выгрузка «всё в одном листе»: каждая строка каждой отправки (дата, номер, контрагент, артикул, штрихкод, размер, кол-во, цена). Не зависит от фильтров на экране">Все строки в Excel</a>
-      </div>
-    </div>
-    <!-- Просмотр: поиск, связки, режим, «Вид таблицы» и экспорт того, что видно. -->
-    <div class="toolbar">
+    <p class="hint">Отправка товара — покупателю или на склад маркетплейса. Данные приходят из Excel-файла, с Яндекс.Диска или из локальных папок WB (кнопка «Из папок WB»). Ниже — три взгляда на одни и те же отправки: документы, товары списком и сводка по товарам.</p>
+    <!-- Всё в одном ряду: поиск, связки, режим и «?» слева, импорт и выгрузка
+         справа. Отдельного «этажа» с кнопками импорта больше нет — он
+         разъезжался на две строки и отодвигал таблицу. -->
+    <div class="toolbar wh-ship-toolbar">
       <input id="whSLike" placeholder="Поиск: товар, артикул, штрихкод, № отправки… * = любая часть" title="Поиск по таблице. В документах ищет по дате, номеру, контрагенту, связке, примечанию и папке; в товарном разрезе — по артикулу, названию и штрихкоду. Звёздочка «*» заменяет любую часть текста.">
       <div class="view-menu" id="whShipCabMenu">
         <button type="button" class="btn" id="btnWhShipCab" title="Отправки каких связок показывать. По умолчанию — только текущая связка из шапки; отметьте чекбоксы, чтобы добавить другие, или «Выбрать все связки»">Связки ▾</button>
@@ -527,6 +514,15 @@
       </div>
       <label class="chk hidden" id="whShipCollapseWrap" title="Объединить размеры: одна строка на артикул вместо строки на каждый размер/штрихкод"><input type="checkbox" id="whShipCollapse"> Свернуть по артикулам</label>
       <span class="tip" id="whShipTip" tabindex="0" role="tooltip">?<span class="tip-text">Суммы считаются по цене строки: для импорта из папок WB это себестоимость товара, а не выручка маркетплейса. Документы без связки (ручной импорт) видны при любом фильтре связок.</span></span>
+      <span class="wh-ship-actions">
+        <input type="file" id="whSFile" class="hidden" accept=".xlsx,.xlsm">
+        <div class="dropzone wh-ship-drop" id="whSDrop" title="Перетащите сюда Excel-файл отправки или нажмите, чтобы выбрать файл. Дальше — кнопка «Загрузить отправку»."><span class="dz-label">Файл: перетащите или выберите</span></div>
+        <button id="whSImport" class="btn" title="Загрузить выбранный Excel-файл отправки: строки с одинаковыми «дата + номер + контрагент» станут одним документом, повторная загрузка обновит его">Загрузить отправку</button>
+        <a class="btn" id="whSTemplate" href="/api/warehouse/export/template-docs?type=shipment" title="Скачать пустой шаблон Excel с нужными колонками: Дата | № документа | Контрагент | Артикул | Кол-во | Цена">Шаблон</a>
+        <button id="whSFromDisk" class="btn" title="Импортировать все .xlsx из папки «/agent_market/Наш склад/Отгрузка» на Яндекс.Диске. Файлы уже загруженных отправок обновляются, а не дублируются">Импорт с Диска</button>
+        <button id="whSFromPaths" class="btn" title="Импорт из локальных папок WB: папка = отправка, внутри — DB*.xlsm, лист ОПРЕДЛАРТ. Открывает панель с путём, проверкой папок и массовым импортом">Из папок WB</button>
+        <a class="btn" id="whSExportRows" href="/api/warehouse/export/docs?type=shipment" title="Полная выгрузка «всё в одном листе»: каждая строка каждой отправки (дата, номер, контрагент, артикул, штрихкод, размер, кол-во, цена). Не зависит от фильтров на экране">Все строки в Excel</a>
+      </span>
       <span class="toolbar-right">
         <span id="whSTablePager"></span>
         <div class="view-menu" id="whShipmentViewMenu"><button type="button" class="btn" id="btnwhShipmentView" title="Показать/скрыть и переставить колонки текущего режима. Настройки запоминаются отдельно для документов, списка товаров и сводки">Вид таблицы &#9662;</button><div class="view-menu-panel hidden" id="whShipmentViewPanel"></div></div>
@@ -1277,7 +1273,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=175"></script>
+  <script src="/static/app.js?v=176"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
