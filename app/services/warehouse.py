@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -415,9 +415,16 @@ def cabinet_labels(db: Session, ids: set) -> dict:
             for cid, company, marketplace in rows}
 
 
-def docs_list_dataframe(db: Session, doc_type: str) -> pd.DataFrame:
-    docs = (db.query(models.WarehouseDoc)
-            .filter(models.WarehouseDoc.doc_type == doc_type)
+def docs_list_dataframe(db: Session, doc_type: str, cabinet_ids=None,
+                        search: str = "") -> pd.DataFrame:
+    """Список документов для Excel: те же строки, что видно в таблице.
+
+    ``search`` — тот же поиск «*», что в тулбаре: фильтруем по дате, номеру,
+    контрагенту, связке, примечанию, папке и источнику, чтобы выгрузка
+    совпадала с тем, что пользователь видит на экране.
+    """
+    q = db.query(models.WarehouseDoc).filter(models.WarehouseDoc.doc_type == doc_type)
+    docs = (_cabinet_filter(q, cabinet_ids)
             .order_by(models.WarehouseDoc.doc_date.desc(), models.WarehouseDoc.id.desc())
             .all())
     cp_ids = {d.counterparty_id for d in docs if d.counterparty_id}
@@ -439,12 +446,186 @@ def docs_list_dataframe(db: Session, doc_type: str) -> pd.DataFrame:
             "items_count": len(d.items),
             "source": _SOURCE_LABELS.get(d.source, d.source or ""),
         })
+    if search:
+        keys = ("date", "doc_num", "counterparty", "cabinet", "note", "folder", "source")
+        rows = [r for r in rows if any(like_match(r[k], search) for k in keys)]
+    return _rows_to_export(rows, export_cols("wh_shipment_docs"))
+
+
+# ── «Отправки»: товарный разрез и сводка (T-58) ─────────────────────────────
+#
+# Документ отправки — это «шапка» (дата, №, связка) + строки товаров. Для
+# анализа часто нужен не список документов, а плоский список «отправка × товар»
+# и сводка по товарам. Оба вида считаются из одних и тех же строк БД, поэтому
+# цифры в списке и в сводке всегда сходятся.
+#
+# Связки: пустой список = без фильтра (все). Если связки выбраны, документы
+# без связки (ручной импорт Excel/интерфейс) всё равно показываем — они не
+# принадлежат другой связке и иначе «пропали» бы из учёта.
+
+def _cabinet_filter(q, cabinet_ids):
+    """Ограничить выборку документов выбранными связками (+ документы без связки)."""
+    ids = [int(x) for x in (cabinet_ids or []) if x]
+    if not ids:
+        return q
+    return q.filter(
+        or_(
+            models.WarehouseDoc.cabinet_id.in_(ids),
+            models.WarehouseDoc.cabinet_id.is_(None),
+        )
+    )
+
+
+def _shipment_article_pass(article: str, name: str, barcode: str, article_like: str) -> bool:
+    """Поиск как в остальных разделах: «*» — любая часть, регистр не важен."""
+    if not article_like:
+        return True
+    return (like_match(article, article_like)
+            or like_match(name, article_like)
+            or like_match(barcode, article_like))
+
+
+def shipment_items(db: Session, cabinet_ids=None, article_like: str = "") -> list[dict]:
+    """Плоский список строк отправок: одна строка = документ × товар.
+
+    Сортировка — от свежих отправок к старым, внутри документа — порядок строк
+    из файла. Возвращает все строки (лимит/пагинацию применяет API), чтобы
+    «Загрузить все» в таблице действительно показывало всё.
+    """
+    q = (db.query(models.WarehouseDocItem, models.WarehouseDoc)
+         .join(models.WarehouseDoc, models.WarehouseDoc.id == models.WarehouseDocItem.doc_id)
+         .filter(models.WarehouseDoc.doc_type == "shipment"))
+    q = _cabinet_filter(q, cabinet_ids)
+    q = q.order_by(
+        models.WarehouseDoc.doc_date.desc(),
+        models.WarehouseDoc.id.desc(),
+        models.WarehouseDocItem.id.asc(),
+    )
+    pairs = [
+        (it, d) for it, d in q.all()
+        if _shipment_article_pass(it.article, it.name, it.barcode, article_like)
+    ]
+    labels = cabinet_labels(db, {d.cabinet_id for _, d in pairs if d.cabinet_id})
+    return [
+        {
+            "doc_id": d.id,
+            "date": d.doc_date.isoformat() if d.doc_date else "",
+            "doc_num": d.doc_num,
+            "cabinet_id": d.cabinet_id,
+            "cabinet": labels.get(d.cabinet_id, ""),
+            "article": it.article,
+            "name": it.name or "",
+            "barcode": it.barcode or "",
+            "size": it.size or "",
+            "quantity": float(it.quantity or 0),
+            "price": float(it.price or 0),
+            "amount": float(it.amount or 0),
+        }
+        for it, d in pairs
+    ]
+
+
+def shipment_summary(db: Session, cabinet_ids=None, article_like: str = "",
+                     group: str = "sku") -> list[dict]:
+    """Сводка по товарам: ``group="sku"`` — артикул+штрихкод+размер, ``"article"`` — артикул.
+
+    Суммируются количество и сумма. Цена — средневзвешенная (сумма ÷ количество),
+    а не среднее цен: иначе строка с 1 шт по 10 000 ₽ перевесила бы 100 шт по 100 ₽.
+    Документы не суммируются, а считаются (``docs_count``), потому что один и тот
+    же товар может встречаться в нескольких отправках.
+    """
+    if group not in ("sku", "article"):
+        raise ValueError("group должен быть sku или article")
+    items = shipment_items(db, cabinet_ids=cabinet_ids, article_like=article_like)
+    buckets: dict[tuple, dict] = {}
+    for r in items:
+        key = (r["article"],) if group == "article" else (r["article"], r["barcode"], r["size"])
+        b = buckets.get(key)
+        if b is None:
+            b = buckets[key] = {
+                "article": r["article"],
+                "name": r["name"],
+                "barcode": r["barcode"] if group == "sku" else "",
+                "size": r["size"] if group == "sku" else "",
+                "quantity": 0.0,
+                "amount": 0.0,
+                "docs": set(),
+                "cabinets": set(),
+                "_first": r["date"],
+                "_last": r["date"],
+            }
+        b["quantity"] += r["quantity"]
+        b["amount"] += r["amount"]
+        if not b["name"] and r["name"]:
+            b["name"] = r["name"]
+        if r["doc_id"]:
+            b["docs"].add(r["doc_id"])
+        if r["cabinet"]:
+            b["cabinets"].add(r["cabinet"])
+        if r["date"]:
+            if not b["_first"] or r["date"] < b["_first"]:
+                b["_first"] = r["date"]
+            if not b["_last"] or r["date"] > b["_last"]:
+                b["_last"] = r["date"]
+    rows = []
+    for b in buckets.values():
+        qty = b["quantity"]
+        rows.append({
+            "article": b["article"],
+            "name": b["name"],
+            "barcode": b["barcode"],
+            "size": b["size"],
+            "quantity": qty,
+            "price": (b["amount"] / qty) if qty else 0.0,
+            "amount": b["amount"],
+            "docs_count": len(b["docs"]),
+            "cabinets": ", ".join(sorted(b["cabinets"])),
+            "first_date": b["_first"],
+            "last_date": b["_last"],
+        })
+    # Сначала самые «тяжёлые» по сумме — как в «Детализации продаж WB».
+    rows.sort(key=lambda r: (-r["amount"], r["article"]))
+    return rows
+
+
+def shipment_cabinet_counts(db: Session) -> list[dict]:
+    """Сколько отправок относится к каждой связке — для селектора связок в UI."""
+    pairs = (db.query(models.WarehouseDoc.cabinet_id, func.count(models.WarehouseDoc.id))
+             .filter(models.WarehouseDoc.doc_type == "shipment",
+                     models.WarehouseDoc.cabinet_id.isnot(None))
+             .group_by(models.WarehouseDoc.cabinet_id)
+             .all())
+    labels = cabinet_labels(db, {cid for cid, _ in pairs})
+    return [{"id": cid, "label": labels.get(cid, ""), "count": int(n)}
+            for cid, n in sorted(pairs, key=lambda x: -x[1])]
+
+
+def _rows_to_export(rows: list[dict], cols: dict) -> pd.DataFrame:
+    """DataFrame в порядке и с подписями Excel-словаря ``cols`` ({ключ: подпись})."""
     df = pd.DataFrame(rows)
-    cols = export_cols("wh_shipment_docs")
+    if df.empty:
+        df = pd.DataFrame(columns=list(cols))
     for key in cols:
         if key not in df.columns:
             df[key] = ""
     return df[list(cols)].rename(columns=cols)
+
+
+def shipment_items_dataframe(db: Session, cabinet_ids=None, article_like: str = "") -> pd.DataFrame:
+    """Плоский список «отправка × товар» для Excel."""
+    return _rows_to_export(
+        shipment_items(db, cabinet_ids=cabinet_ids, article_like=article_like),
+        export_cols("wh_shipment_items"),
+    )
+
+
+def shipment_summary_dataframe(db: Session, cabinet_ids=None, article_like: str = "",
+                               group: str = "sku") -> pd.DataFrame:
+    """Сводка по товарам для Excel: ``group="sku"`` — артикул+размер, ``"article"`` — артикул."""
+    rows = shipment_summary(db, cabinet_ids=cabinet_ids, article_like=article_like, group=group)
+    if group == "sku":
+        return _rows_to_export(rows, export_cols("wh_shipment_sku"))
+    return _rows_to_export(rows, export_cols("wh_shipment_article"))
 
 
 def counterparties_dataframe(db: Session) -> pd.DataFrame:
@@ -469,7 +650,8 @@ def counterparties_template_df() -> pd.DataFrame:
     ], columns=["Наименование", "ИНН", "Тип", "Телефон", "Примечание"])
 
 
-def file_for(kind: str, db: Session, doc_type: str = ""):
+def file_for(kind: str, db: Session, doc_type: str = "",
+             cabinet_ids=None, article_like: str = "", group: str = "rows"):
     if kind == "counterparties":
         return df_to_excel_stream(counterparties_dataframe(db), "Контрагенты")
     if kind == "template-counterparties":
@@ -479,7 +661,20 @@ def file_for(kind: str, db: Session, doc_type: str = ""):
     if kind == "docs":
         return df_to_excel_stream(docs_dataframe(db, doc_type), DOC_TYPE_LABELS.get(doc_type, "Документы"))
     if kind == "docs-list":
-        return df_to_excel_stream(docs_list_dataframe(db, doc_type), "Список документов")
+        return df_to_excel_stream(
+            docs_list_dataframe(db, doc_type, cabinet_ids=cabinet_ids, search=article_like),
+            "Список документов")
+    # Товарный разрез отправок: плоские строки и сводка (sku/артикул).
+    if kind == "shipment-items":
+        return df_to_excel_stream(
+            shipment_items_dataframe(db, cabinet_ids=cabinet_ids, article_like=article_like),
+            "Отправки по товарам")
+    if kind in ("shipment-sku", "shipment-article"):
+        grp = "sku" if kind == "shipment-sku" else "article"
+        return df_to_excel_stream(
+            shipment_summary_dataframe(db, cabinet_ids=cabinet_ids,
+                                       article_like=article_like, group=grp),
+            "Сводка по товарам")
     if kind == "stock":
         rows = [[r["article"], r["name"], r["start_qty"], r["received"], r["shipped"], r["balance"], r["avg_cost"], r["stock_value"]]
                 for r in stock_view(db)]

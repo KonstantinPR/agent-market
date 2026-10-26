@@ -2,7 +2,7 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **157**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **159**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
@@ -36,7 +36,7 @@
 - [sync](#sync) — 1 шт.
 - [system](#system) — 1 шт.
 - [tickets](#tickets) — 8 шт.
-- [warehouse](#warehouse) — 18 шт.
+- [warehouse](#warehouse) — 20 шт.
 - [wb](#wb) — 11 шт.
 - [yandex](#yandex) — 4 шт.
 
@@ -323,6 +323,8 @@
 | POST | `/api/warehouse/paths/scan` | `api_wh_paths_scan` | Проверить папки в корне связки (без чтения Excel) и вернуть статусы. |
 | GET | `/api/warehouse/paths/settings` | `api_wh_paths_settings` | Настройки импорта из папок + список дефолтных путей для селектора. |
 | PUT | `/api/warehouse/paths/settings` | `api_wh_paths_settings_put` | Сохранить настройки импорта для связки. |
+| GET | `/api/warehouse/shipment-cabinets` | `api_shipment_cabinets` | Связки, у которых есть отправки, + количество — для чекбокс-селектора. |
+| GET | `/api/warehouse/shipment-items` | `api_shipment_items` | Товарный разрез отправок. |
 | GET | `/api/warehouse/stock` | `api_stock` |  |
 | POST | `/api/warehouse/todisk` | `api_wh_todisk` | Сформировать Excel и загрузить на Яндекс.Диск в папку /agent_market/Наш склад/<kind>. |
 | GET | `/api/warehouse/turnover` | `api_turnover` |  |

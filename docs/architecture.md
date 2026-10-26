@@ -34,26 +34,26 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 11923 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 6570 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/static/columns.json` | 6265 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/static/app.js` | 12402 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 6644 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/columns.json` | 6592 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 2886 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2669 | запись выгрузок WB/Ozon в БД |
 | `tests/api/test_endpoints.py` | 1874 | HTTP-эндпоинты через TestClient |
-| `app/static/style.css` | 1702 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/style.css` | 1732 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `app/services/refresh.py` | 1487 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
+| `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
 | `tests/js/test_js_helpers.py` | 1356 | проверка app.js через Node `vm` |
-| `app/services/replenish.py` | 1334 | подсортировка WB, план дефицита, скорость продаж |
-| `app/static/index.html` | 1298 | разметка: навигация `data-tab` + секции `tab-*` |
+| `app/static/index.html` | 1327 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |
 | `tests/unit/test_margin.py` | 1105 | юнит-тесты маржинальности |
 | `app/services/margin.py` | 1105 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/providers/ozon.py` | 1039 | HTTP к Ozon |
 | `app/models.py` | 812 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
+| `app/services/warehouse.py` | 729 | складские документы (приход/отгрузка, обороты) |
 | `app/services/dashboard.py` | 692 | сводные панели дашборда |
 | `app/services/tickets.py` | 558 | реестр тикетов `TICKETS.md` (create/validate/report) |
-| `app/services/warehouse.py` | 534 | складские документы (приход/отгрузка, обороты) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 255 | индекс фото на диске, выбор папки, fallback по префиксу |
 | `app/database.py` | 240 | engine/session PostgreSQL |

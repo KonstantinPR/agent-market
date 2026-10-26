@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "170";
+const UI_VERSION = "175";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -212,6 +212,9 @@ const LS_KEYS = {
   "cab-compare-links": "связки, выбранные для сравнения продаж (id через запятую)",
   "cab-hide-nokeys": "скрывать в списке связки без ключей",
   "cab-sync-pricing": "настройки автопилота цен хранятся на каждый кабинет (синхронизация включена)",
+  "whShipView": "«Отправки»: режим просмотра (docs — документы, items — товары списком, summary — сводно)",
+  "whShipCabinets": "«Отправки»: выбранные связки — \"\" (текущая), \"all\" (все) или id через запятую",
+  "whShipCollapse": "«Отправки»: сводка свёрнута по артикулам (1) или в разрезе артикул+размер (0)",
 };
 // «Вид таблицы»: storageKey каждой вкладки из registerColView (плюс "_<mode>"
 // у режимных, например wbDetailCols_rows) — видимость, порядок, закрепление
@@ -1312,7 +1315,7 @@ async function loadTabInner(name, f) {
     else if (name === "products") await renderProducts();
     else if (name === "wh-cp") await renderWhCp();
     else if (name === "wh-receipt") await renderWhDocs("receipt", "whRTable", "headerMsg", "whRDetail");
-    else if (name === "wh-shipment") await renderWhDocs("shipment", "whSTable", "headerMsg", "whSDetail");
+    else if (name === "wh-shipment") await renderWhShipments();
     else if (name === "replenish") await renderReplenish();
     else if (name === "pricing") await renderPricing(false);
     else if (name === "wb-cards" || name === "oz-cards") await renderCards(name);
@@ -3851,11 +3854,17 @@ const whDocBaseHeaders = [
   { k: "items_count", label: "Позиций", num: true, render: cellFmts.int , tip: "Сколько товарных позиций в документе. Строки с пустым артикулом и количеством ≤ 0 при импорте из папок пропускаются."},
   { k: "source", label: "Источник", render: whSourceCell , tip: "Откуда документ: Excel-файл, интерфейс, Яндекс.Диск или локальные папки WB."},
 ];
-const whDocHeaders = whDocBaseHeaders.concat([
-  { k: "_d", label: "", render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "" , tip: "Кнопка открывает товарные позиции документа. Изменение строк здесь меняет остатки."},
-]);
+// Кнопка «Строки» — не колонка данных, поэтому её нет в columns.json:
+// добавляем к заголовкам после «Вида таблицы» (как колонки сравнения в
+// «Детализации продаж WB»), иначе пользователь мог бы её скрыть/переставить,
+// а панель разошлась бы с манифестом.
+const whDocActionHeader = {
+  k: "_d", label: "",
+  render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "",
+  tip: "Кнопка открывает товарные позиции документа. Изменение строк здесь меняет остатки.",
+};
 const whReceiptHeaders = whDocBaseHeaders.filter((h) => ["date", "doc_num", "counterparty", "note", "total", "items_count", "source"].includes(h.k)).concat([
-  whDocHeaders[whDocHeaders.length - 1],
+  whDocActionHeader,
 ]);
 
 function whSourceCell(v) {
@@ -3863,6 +3872,8 @@ function whSourceCell(v) {
   return labels[v] || v || "—";
 }
 
+// Строки документа (открываются кнопкой «Строки»): колонки используются и в
+// приходе, и в отправке — расшифровка цен/количеств одинаковая.
 const whDocItemHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул товара. Именно по нему накапливаются приходы и отгрузки, от него считается себестоимость."},
   { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование подставляется из каталога товаров на момент импорта. Если товара нет в каталоге — остаётся пустым."},
@@ -3872,6 +3883,42 @@ const whDocItemHeaders = [
   { k: "price", label: "Цена", num: true, render: cellFmts.money2 , tip: "Цена за единицу из документа. Приход — закупочная, отгрузка — заложенная в расчёт себестоимости."},
   { k: "amount", label: "Сумма", num: true, render: cellFmts.money2 , tip: "Количество × цена, ₽. Суммы строк дают итог документа в колонке «Сумма»."},
 ];
+
+// ── Товарный разрез отправок ────────────────────────────────────────────────
+// Режим «Товары списком» — та же таблица, что и в исходных файлах, только
+// склеенная из всех отправок: одна строка = документ × товар. Режим «Сводно» —
+// те же данные, но сгруппированные по товару (см. whShipSummaryFooters).
+const whShipItemHeaders = [
+  { k: "date", label: "Дата", render: cellFmts.text, tip: "Дата отправки: из имени папки WB (ДД.ММ.ГГГГ) или из шапки Excel-файла." },
+  { k: "doc_num", label: "Номер", render: cellFmts.text, tip: "Номер документа. Для импорта из папок WB — полное имя папки; по нему же повторный импорт находит документ." },
+  { k: "cabinet", label: "Связка", render: cellFmts.text, tip: "Связка (фирма × маркетплейс), из папок которой пришла отправка. Пусто у ручных документов и Excel-импорта." },
+  { k: "article", label: "Артикул", render: cellFmts.text, tip: "Артикул продавца из файла отправки. Именно по артикулу товар сопоставляется с каталогом и остатками." },
+  { k: "name", label: "Наименование", render: cellFmts.text, tip: "Название из каталога на момент импорта. Пусто, если артикула нет в каталоге — такой товар импортируется с ценой 0." },
+  { k: "barcode", label: "Штрихкод", render: cellFmts.text, tip: "Штрихкод из файла (если колонка была). Вместе с размером отличает одинаковые артикулы разных размеров." },
+  { k: "size", label: "Размер", render: cellFmts.text, tip: "Размер из файла (если был). В сводке «по артикулам» размеры складываются." },
+  { k: "quantity", label: "Кол-во", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0), tip: "Сколько единиц этого товара уехало в этой отправке." },
+  { k: "price", label: "Цена", num: true, render: cellFmts.money2, tip: "Цена за единицу из документа. Для папок WB — себестоимость товара (или 0, если выбрано «Цена: ноль»)." },
+  { k: "amount", label: "Сумма", num: true, render: cellFmts.money2, tip: "Количество × цена, ₽. Это стоимость отправки по учётным ценам, а не выручка маркетплейса." },
+];
+
+const whShipSkuHeaders = [
+  { k: "article", label: "Артикул", render: cellFmts.text, tip: "Артикул товара. Строка сводки = артикул + штрихкод + размер (или только артикул при «Свернуть по артикулам»)." },
+  { k: "name", label: "Наименование", render: cellFmts.text, tip: "Название из каталога. Если товара нет в каталоге — пусто, но количество и сумма всё равно учтены." },
+  { k: "barcode", label: "Штрихкод", render: cellFmts.text, tip: "Штрихкод размера. В сводке по артикулам скрыт: там размеры уже сложены." },
+  { k: "size", label: "Размер", render: cellFmts.text, tip: "Размер товара. Пусто, если в файле отправки размер не указан." },
+  { k: "quantity", label: "Отправлено, шт", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0), tip: "Сумма количеств по всем отправкам выбранных связок за всё время." },
+  { k: "price", label: "Цена ср.", num: true, render: cellFmts.money2, tip: "Средневзвешенная цена: сумма ÷ количество. Не среднее цен — крупная отправка влияет сильнее мелкой." },
+  { k: "amount", label: "Сумма", num: true, render: cellFmts.money2, tip: "Сумма стоимостей строк по всем отправкам, ₽." },
+  { k: "docs_count", label: "Отправок", num: true, render: cellFmts.int, tip: "В скольких документах встречался товар. Один документ считается один раз, даже если товар попал в него двумя строками." },
+  { k: "cabinets", label: "Связки", render: cellFmts.text, tip: "Связки, из отправок которых собрана строка. Если товар уезжал из разных связок — они перечислены через запятую." },
+  { k: "first_date", label: "Первая", render: cellFmts.text, tip: "Дата самой ранней отправки этого товара в выборке." },
+  { k: "last_date", label: "Последняя", render: cellFmts.text, tip: "Дата самой поздней отправки — по ней видно, когда товар уезжал в последний раз." },
+];
+
+// Сводка по артикулу: из набора выше убираем размерные колонки — их значения
+// уже сложены, показывать пустые «Штрихкод/Размер» было бы обманом.
+const whShipArticleHeaders = whShipSkuHeaders.filter(
+  (h) => !["barcode", "size"].includes(h.k));
 
 function whDocFooters(rows) {
   if (!rows || !rows.length) return null;
@@ -3890,6 +3937,43 @@ function whDocItemFooters(rows) {
   };
 }
 
+// Итог товарного списка: количество и сумма складываются, цена — средняя
+// (взвешенная по количеству, чтобы «итоговая цена» имела смысл).
+// totals с сервера считаются по всей выборке; без них — по показанным строкам.
+function whShipItemFooters(rows, totals) {
+  if (totals) {
+    return {
+      quantity: totals.quantity,
+      price: totals.quantity ? { avg: totals.price, dp: 2 } : null,
+      amount: totals.amount,
+    };
+  }
+  if (!rows || !rows.length) return null;
+  return {
+    quantity: _footSum(rows, "quantity"),
+    price: _footAvg(rows, "price"),
+    amount: _footSum(rows, "amount"),
+  };
+}
+
+function whShipSummaryFooters(rows, totals) {
+  if (totals) {
+    return {
+      quantity: totals.quantity,
+      price: totals.quantity ? { avg: totals.price, dp: 2 } : null,
+      amount: totals.amount,
+    };
+  }
+  if (!rows || !rows.length) return null;
+  const qty = rows.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+  const amount = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  return {
+    quantity: qty,
+    price: qty ? { avg: amount / qty, dp: 2 } : null,
+    amount: amount,
+  };
+}
+
 async function renderWhDocs(type, boxId, msgId, detailId) {
   const box = $("#" + boxId);
   const detail = $("#" + detailId);
@@ -3904,12 +3988,356 @@ async function renderWhDocs(type, boxId, msgId, detailId) {
   if (msg) msg.textContent = "Документов: " + fmt(data.count);
   detail.innerHTML = "";
   if (type === "shipment") {
-    pagedTable(box, whDocHeaders, data.rows || [], whDocFooters(data.rows || []),
+    pagedTable(box, whDocBaseHeaders, data.rows || [], whDocFooters(data.rows || []),
       null, null, { colviewTab: "wh-shipment" });
   } else {
     pagedTable(box, whReceiptHeaders, data.rows || [], whDocFooters(data.rows || []));
   }
 }
+
+// ── «Отправки»: режим просмотра, связки, товарный разрез (T-58) ─────────────
+//
+// Одна вкладка — три взгляда на одни и те же данные:
+//   docs    — документы отправок (как раньше);
+//   items   — плоский список «отправка × товар»;
+//   summary — сводка по товару (артикул+размер, либо только артикул).
+// Режим и набор связок храним в localStorage: при возврате на вкладку
+// пользователь видит тот же срез, что оставил.
+
+const WH_SHIP_VIEW_KEY = "whShipView";
+const WH_SHIP_CABS_KEY = "whShipCabinets";      // "" (текущая) | "all" | "3,5"
+const WH_SHIP_COLLAPSE_KEY = "whShipCollapse";  // "1" — сводка по артикулам
+
+// Подсказка под тулбаром: что именно сейчас в таблице и что можно сделать.
+const WH_SHIP_HINTS = {
+  docs: "Документы отправок: одна строка = одна отправка (дата, номер, связка, сумма). Кнопка «Строки» открывает товары документа. По умолчанию видна только текущая связка — другие включите в «Связки ▾».",
+  items: "Каждая строка — один товар в одной отправке: видно, что и когда уехало. Один и тот же товар повторяется в разных отправках; чтобы получить итоги по товару, переключитесь на «Сводно».",
+  sku: "Сводка по артикулу и размеру: количество и сумма сложены по всем отправкам выбранных связок. «Цена ср.» — сумма ÷ количество, «Отправок» — в скольких документах встречался товар.",
+  article: "Сводка по артикулу: размеры сложены в одну строку. Снимите «Свернуть по артикулам», если нужен разрез по размерам и штрихкодам.",
+};
+
+function whShipView() {
+  const v = localStorage.getItem(WH_SHIP_VIEW_KEY);
+  return (v === "items" || v === "summary") ? v : "docs";
+}
+
+function whShipCollapse() {
+  return localStorage.getItem(WH_SHIP_COLLAPSE_KEY) === "1";
+}
+
+// Режим для «Вида таблицы»: он же ключ набора колонок в columns.json.
+function whShipMode() {
+  const v = whShipView();
+  if (v === "docs") return "docs";
+  if (v === "items") return "items";
+  return whShipCollapse() ? "article" : "sku";
+}
+
+// Количество отправок по связкам приходит с сервера — в селекторе сразу видно,
+// где есть данные, а где пока пусто (например, у Ozon-связки отправок нет).
+let whShipCabCounts = null;
+
+async function loadWhShipCabinets(force) {
+  if (whShipCabCounts && !force) return whShipCabCounts;
+  try {
+    const d = await api("/warehouse/shipment-cabinets");
+    whShipCabCounts = d.rows || [];
+  } catch (e) {
+    whShipCabCounts = [];
+  }
+  return whShipCabCounts;
+}
+
+// Связки из шапки (id + понятная подпись + количество отправок).
+function whShipLinkages() {
+  const counts = {};
+  for (const r of (whShipCabCounts || [])) counts[String(r.id)] = r.count || 0;
+  const out = [];
+  for (const comp of (cabState.companies || [])) {
+    for (const lk of (comp.links || [])) {
+      out.push({
+        id: String(lk.id),
+        label: lk.owner || lk.name || ("Связка " + lk.id),
+        company: comp.name || "",
+        count: counts[String(lk.id)] || 0,
+      });
+    }
+  }
+  return out;
+}
+
+// Какие связки показываем сейчас. По умолчанию — текущая связка из шапки;
+// явный выбор хранится списком id, «все» — отдельным значением "all".
+function whShipSelectedIds() {
+  const links = whShipLinkages();
+  const allIds = links.map((l) => l.id);
+  const raw = localStorage.getItem(WH_SHIP_CABS_KEY) || "";
+  if (raw === "all") return allIds;
+  if (raw) {
+    const ids = raw.split(",").filter((x) => allIds.includes(x));
+    if (ids.length) return ids;
+  }
+  const cur = cabState.current && String(cabState.current.id);
+  if (cur && allIds.includes(cur)) return [cur];
+  // Активной связки нет (или она не в списке) — не фильтруем вовсе,
+  // иначе таблица молча оказалась бы пустой.
+  return cur ? [cur] : [];
+}
+
+function whShipCabsLabel() {
+  const links = whShipLinkages();
+  const raw = localStorage.getItem(WH_SHIP_CABS_KEY) || "";
+  if (raw === "all") return "все связки";
+  const ids = whShipSelectedIds();
+  const names = ids.map((id) => (links.find((l) => l.id === id) || {}).label || ("#" + id));
+  if (!names.length) return "все связки";
+  if (names.length === 1) return names[0];
+  return names.length + " из " + links.length;
+}
+
+// Сохранить выбор связок. Пустой выбор возвращает «текущую связку» — так
+// таблица никогда не остаётся пустой из-за случайно снятых галочек.
+function whShipSetIds(ids) {
+  const all = whShipLinkages().map((l) => l.id);
+  const picked = ids.filter((x) => all.includes(x));
+  if (!picked.length) {
+    localStorage.removeItem(WH_SHIP_CABS_KEY);
+  } else if (all.length && picked.length === all.length) {
+    localStorage.setItem(WH_SHIP_CABS_KEY, "all");
+  } else {
+    localStorage.setItem(WH_SHIP_CABS_KEY, picked.join(","));
+  }
+  buildWhShipCabPanel();
+  syncWhShipUi();
+  if (currentTab === "wh-shipment") renderWhShipments();
+}
+
+// Панель «Связки ▾»: «Выбрать все» + чекбоксы по фирмам. Пересобирается при
+// каждом изменении, поэтому счётчики и состояния всегда актуальны.
+function buildWhShipCabPanel() {
+  const panel = $("#whShipCabPanel");
+  if (!panel) return;
+  const links = whShipLinkages();
+  const picked = new Set(whShipSelectedIds());
+  const raw = localStorage.getItem(WH_SHIP_CABS_KEY) || "";
+  let h = '<div class="wh-cabs-note">Отправки каких связок показывать. По умолчанию — только текущая связка из шапки. Документы без связки (ручной импорт) видны всегда.</div>';
+  h += '<label class="chk wh-cabs-all"><input type="checkbox" data-wh-cab-all="1"' +
+    (raw === "all" ? " checked" : "") + "> <b>Выбрать все связки</b></label>";
+  h += '<div class="wh-cabs-list">';
+  let lastComp = null;
+  for (const lk of links) {
+    if (lk.company !== lastComp) {
+      if (lastComp !== null) h += "</div>";
+      h += '<div class="wh-cabs-group"><div class="wh-cabs-group-title">' +
+        escapeHtml(lk.company || "Без фирмы") + "</div>";
+      lastComp = lk.company;
+    }
+    h += '<label class="chk"><input type="checkbox" data-wh-cab-id="' +
+      escapeHtml(lk.id) + '"' + (picked.has(lk.id) ? " checked" : "") + "> " +
+      escapeHtml(lk.label) +
+      ' <span class="wh-cabs-count">' + fmt(lk.count) + " отпр.</span></label>";
+  }
+  if (lastComp !== null) h += "</div>";
+  h += "</div>";
+  if (!links.length) {
+    h += '<div class="wh-cabs-note">Связки ещё не загружены — обновите страницу.</div>';
+  }
+  h += '<div class="wh-cabs-actions"><button type="button" class="btn small" data-wh-cab-reset title="Вернуть фильтр к текущей связке из шапки">Только текущая</button></div>';
+  panel.innerHTML = h;
+}
+
+// Открытие/закрытие «Связки ▾»: та же механика, что у «Вид таблицы».
+// Клики внутри панели не закрывают её, чекбоксы перерисовывают таблицу.
+function initWhShipCabsMenu() {
+  const btn = $("#btnWhShipCab");
+  const panel = $("#whShipCabPanel");
+  const menu = $("#whShipCabMenu");
+  if (!btn || !panel || !menu) return;
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasHidden = panel.classList.contains("hidden");
+    document.querySelectorAll(".view-menu-panel").forEach((p) => p.classList.add("hidden"));
+    if (wasHidden) {
+      buildWhShipCabPanel();
+      panel.classList.remove("hidden");
+    }
+  });
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+  panel.addEventListener("click", (ev) => {
+    const reset = ev.target.closest("[data-wh-cab-reset]");
+    if (reset) {
+      localStorage.removeItem(WH_SHIP_CABS_KEY);
+      buildWhShipCabPanel();
+      syncWhShipUi();
+      if (currentTab === "wh-shipment") renderWhShipments();
+      return;
+    }
+    const all = ev.target.closest("[data-wh-cab-all]");
+    if (all) {
+      whShipSetIds(all.checked ? whShipLinkages().map((l) => l.id) : []);
+      return;
+    }
+    const cb = ev.target.closest("[data-wh-cab-id]");
+    if (!cb) return;
+    const ids = new Set(whShipSelectedIds());
+    if (cb.checked) ids.add(cb.dataset.whCabId);
+    else ids.delete(cb.dataset.whCabId);
+    whShipSetIds(Array.from(ids));
+  });
+}
+
+
+function syncWhShipUi() {
+  const view = whShipView();
+  const mode = whShipMode();
+  document.querySelectorAll("[data-wh-ship-view]").forEach((b) => {
+    const on = b.dataset.whShipView === view;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  const wrap = $("#whShipCollapseWrap");
+  if (wrap) wrap.classList.toggle("hidden", view !== "summary");
+  const collapse = $("#whShipCollapse");
+  if (collapse) collapse.checked = whShipCollapse();
+  const btn = $("#btnWhShipCab");
+  if (btn) btn.textContent = "Связки: " + whShipCabsLabel() + " ▾";
+  const hint = $("#whShipModeHint");
+  if (hint) hint.textContent = WH_SHIP_HINTS[mode] || WH_SHIP_HINTS.docs;
+}
+
+// Точка входа вкладки (вызывается из loadTab и после импорта).
+async function renderWhShipments() {
+  if (!cabState.companies || !cabState.companies.length) await loadCabinets();
+  await loadWhShipCabinets();
+  syncWhShipUi();
+  const mode = whShipMode();
+  if (mode === "docs") return renderWhShipDocs();
+  return renderWhShipItems(mode);
+}
+
+async function renderWhShipDocs() {
+  const box = $("#whSTable");
+  const detail = $("#whSDetail");
+  if (detail) detail.innerHTML = "";
+  let data;
+  try {
+    data = await api("/warehouse/docs" + qs({
+      type: "shipment",
+      cabinet_ids: whShipSelectedIds().join(","),
+      limit: 500,
+    }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить отправки: ' + escapeHtml(err.message) + "</div>";
+    return;
+  }
+  let rows = data.rows || [];
+  // Поиск по документам делаем на клиенте: список отправок небольшой,
+  // зато не нужно ждать сервер на каждую букву.
+  const q = (($("#whSLike") || {}).value || "").trim();
+  if (q) {
+    rows = rows.filter((r) => likeMatch(
+      [r.date, r.doc_num, r.counterparty, r.cabinet, r.note, r.folder,
+       whSourceCell(r.source)].join(" "), q));
+  }
+  const msg = statusEl();
+  if (msg) {
+    msg.textContent = "Отправок: " + fmt(rows.length) +
+      (q && rows.length !== data.count ? " (из " + fmt(data.count) + ")" : "");
+  }
+  const headers = colViewHeaders("wh-shipment", whDocBaseHeaders).concat([whDocActionHeader]);
+  pagedTable(box, headers, rows, whDocFooters(rows),
+    "#whSTablePager", colViewPinKeys("wh-shipment"), { colviewTab: "wh-shipment" });
+}
+
+// Товарный разрез: строки (mode="items") или сводка (mode="sku"|"article").
+// Фильтр по товару уходит на сервер — иначе поиск работал бы только по
+// загруженной части строк.
+async function renderWhShipItems(mode) {
+  const box = $("#whSTable");
+  const detail = $("#whSDetail");
+  if (detail) detail.innerHTML = "";
+  const q = (($("#whSLike") || {}).value || "").trim();
+  let data;
+  try {
+    data = await api("/warehouse/shipment-items" + qs({
+      cabinet_ids: whShipSelectedIds().join(","),
+      article_like: q || undefined,
+      group: mode === "items" ? "rows" : mode,
+      limit: 5000,
+    }));
+  } catch (err) {
+    box.innerHTML = '<div class="empty">Не удалось загрузить товары отправок: ' +
+      escapeHtml(err.message) + "</div>";
+    return;
+  }
+  const rows = data.rows || [];
+  const sets = {
+    items: whShipItemHeaders,
+    sku: whShipSkuHeaders,
+    article: whShipArticleHeaders,
+  };
+  const headers = colViewHeaders("wh-shipment", sets[mode] || whShipItemHeaders);
+  // Итоги берём с сервера: они посчитаны по всей выборке, а в таблицу отданы
+  // только первые 5000 строк — иначе «ИТОГО» молча занижалось бы.
+  const totals = data.totals || null;
+  const footers = mode === "items" ? whShipItemFooters(rows, totals) : whShipSummaryFooters(rows, totals);
+  const msg = statusEl();
+  if (msg) {
+    let s = (mode === "items" ? "Строк: " : "Товаров: ") + fmt(data.total);
+    if (data.truncated) s += " · показаны первые " + fmt(rows.length) +
+      " (по сумме) — уточните поиск или связки";
+    if (q) s += " · поиск: " + q;
+    msg.textContent = s;
+  }
+  pagedTable(box, headers, rows, footers,
+    "#whSTablePager", colViewPinKeys("wh-shipment"), { colviewTab: "wh-shipment" });
+}
+
+// Экспорт «того, что видно»: в режиме документов — список отправок, в товарном
+// списке — строки, в сводке — сводка (с учётом «Свернуть по артикулам»).
+function whShipExportTarget() {
+  const mode = whShipMode();
+  const cabinets = whShipSelectedIds().join(",");
+  const q = (($("#whSLike") || {}).value || "").trim();
+  if (mode === "docs") {
+    const p = { type: "shipment", cabinet_ids: cabinets };
+    if (q) p.article_like = q;  // для списка документов это общий поиск по строке
+    return { kind: "docs-list", params: p };
+  }
+  const p = { cabinet_ids: cabinets, group: mode === "items" ? "rows" : mode };
+  if (q) p.article_like = q;
+  const kind = mode === "items" ? "shipment-items"
+    : (mode === "sku" ? "shipment-sku" : "shipment-article");
+  return { kind, params: p };
+}
+
+async function downloadWhShipExcel() {
+  const t = whShipExportTarget();
+  const msg = statusEl();
+  if (msg) msg.textContent = "Формирую Excel…";
+  try {
+    const resp = await fetch("/api/warehouse/export/" + t.kind + qs(t.params));
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    await downloadResponse(resp, t.kind + ".xlsx");
+    if (msg) msg.textContent = "Excel готов: " + t.kind + ".xlsx";
+  } catch (err) {
+    if (msg) msg.textContent = "Ошибка экспорта: " + err.message;
+  }
+}
+
+async function uploadWhShipToDisk() {
+  const t = whShipExportTarget();
+  const msg = statusEl();
+  if (msg) msg.textContent = "Формирую и загружаю на Диск…";
+  try {
+    const r = await apiPost("/warehouse/todisk" + qs({ ...t.params, kind: t.kind }), {});
+    if (msg) msg.textContent = "На Диске: " + (r.path || "ok");
+  } catch (err) {
+    if (msg) msg.textContent = "Ошибка: " + err.message;
+  }
+}
+
 
 // ---- Импорт отправок из локальных папок WB (T-57) ----
 const WH_PATHS_STATUS = {
@@ -4320,7 +4748,8 @@ async function importAllWhPaths() {
   // После импорта обновляем список отправок, чтобы новые документы были видны
   // сразу, без перезагрузки страницы.
   if (ok && currentTab === "wh-shipment") {
-    await renderWhDocs("shipment", "whSTable", "headerMsg", "whSDetail");
+    await loadWhShipCabinets(true);
+    await renderWhShipments();
   }
 }
 
@@ -4355,13 +4784,15 @@ const replenishHeaders = [
   { k: "wb_sells", label: "Продано WB, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Сколько штук продано на WB за выбранное окно, шт, нетто (продажи − возвраты). Продано WB ÷ дни окна = «WB, шт/д»." },
   { k: "return_rate", label: "Возвраты, %", num: true, render: (v) => v == null ? "—" : fmtPct(v), tip: "Доля возвратов: возвраты ÷ (продажи + возвраты) за окно, %." },
   { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе: начальный + приход − отгрузка по документам." },
+  { k: "supplier_in_way", label: "В пути от поставщиков", num: true, render: cellFmts.intZero, tip: "Товар едет от поставщика на наш склад и ещё не принят. Уменьшает «Купить у поставщика» — повторно его не заказываем. В доступное для отгрузки не входит, пока не принят на склад." },
+  { k: "mp_in_way", label: "В пути на маркетплейсы", num: true, render: cellFmts.intZero, tip: "Наш товар отгружен на WB/Ozon, но склад маркетплейса его ещё не принял. Уменьшает дефицит и «Дослать» этого МП, поэтому повторно туда не отгружается. Не путать с «WB в пути» / «Ozon в пути» — это данные маркетплейса о его перемещениях." },
   { k: "our_cost", label: "Себест-ть", num: true, render: cellFmts.money, tip: "Себестоимость из каталога товаров; если не задана — оценка по умолчанию." },
-  { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB: остатки на складах (quantity_full) + в пути." },
+  { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB: остатки на складах (quantity_full) + в пути по данным WB + наши поставки в пути на WB, ещё не принятые складом." },
   { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады WB (уже отгружен со склада WB-поставщика или в поставке)." },
   { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на WB в днях: доступно ÷ спрос в день. Идеал — целевой запас (по умолчанию 30 дн)." },
   { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит WB до целевого запаса. Считается как «Дослать» из плана подсортировки (как PDF: скорость 180 дн, +1 шт в пустой размер карточки, учёт прибыльности) — чтобы в окне без WB-продаж не было 0 при пустой карточке. Что нужно довезти на WB." },
   { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB, как в PDF: итог по карточке = скорость продаж 180 дн за вычетом доступного, +1 шт в пустой размер, с учётом прибыльности. То же значение, что «WB дефицит» (для артикулов с WB). При заданном «Пожелании» — ручной итог: N шт раскидываются по размерам по выгоде товара, шаг размера — из тулбара." },
-  { k: "oz_avail", label: "Ozon доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на Ozon: остатки на складах + в пути." },
+  { k: "oz_avail", label: "Ozon доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на Ozon: остатки на складах + в пути по данным Ozon + наши поставки в пути на Ozon, ещё не принятые складом." },
   { k: "oz_in_way", label: "Ozon в пути", num: true, render: cellFmts.intZero, tip: "Товар в пути на склады Ozon." },
   { k: "oz_doc", label: "Ozon, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас на Ozon в днях: доступно ÷ спрос в день. Идеал — целевой запас." },
   { k: "oz_def", label: "Ozon дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит Ozon до целевого запаса: целевые дни × спрос в день − доступно." },
@@ -4389,8 +4820,10 @@ const replenishSizeHeaders = [
   { k: "status_label", label: "Статус", render: (v, r) => `<span class="tag st-${r.status}">${v}</span>`, tip: "Статус по размеру (по WB-спросу и остаткам размера; «Нет нигде» — продажи есть, остатков по размеру и на нашем складе нет)." },
   { k: "wb_sells", label: "Продано WB", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Продано на WB по этому размеру за окно, шт (нетто: продажи − возвраты)." },
   { k: "wb_vel", label: "Спрос WB, шт/д", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 2), tip: "Спрос по размеру на WB: продажи (без возвратов) за окно ÷ дни, шт/день." },
-  { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB по этому размеру: остаток (quantity_full) + в пути." },
-  { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "В пути на склады WB по этому размеру." },
+  { k: "wb_avail", label: "WB доступно", num: true, render: cellFmts.intZero, tip: "Доступно к продаже на WB по этому размеру: остаток (quantity_full) + в пути по данным WB + наши поставки в пути на WB, ещё не принятые складом." },
+  { k: "wb_in_way", label: "WB в пути", num: true, render: cellFmts.intZero, tip: "В пути на склады WB по этому размеру (данные WB)." },
+  { k: "supplier_in_way", label: "В пути от поставщиков", num: true, render: cellFmts.intZero, tip: "Этот размер едет от поставщика на наш склад и ещё не принят. Уменьшает закупку, но не считается доступным для отгрузки, пока не принят на склад." },
+  { k: "mp_in_way", label: "В пути на маркетплейсы", num: true, render: cellFmts.intZero, tip: "Этот размер отгружен на WB/Ozon, но склад маркетплейса его ещё не принял. Уменьшает дефицит и «Дослать» этого МП." },
   { k: "wb_doc", label: "WB, дн", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 1), tip: "Запас этого размера на WB в днях: доступно ÷ спрос в день." },
   { k: "wb_def", label: "WB дефицит", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "Дефицит размера на WB до целевого запаса. Считается как «Дослать» из плана подсортировки (как PDF: скорость 180 дн, +1 шт в пустой размер карточки, учёт прибыльности) — чтобы пустой живой размер не показывал 0." },
   { k: "to_sort", label: "Дослать", num: true, render: (v) => (v || 0) > 0 ? `<span class="pos">+${fmt(v)}</span>` : "—", tip: "План подсортировки на WB по этому размеру, как в PDF: скорость 180 дн за вычетом доступного, +1 шт в пустой размер карточки, с учётом прибыльности. То же значение, что «WB дефицит». При «Пожелании» размер входит в план по шагу лесенки (см. тулбар)." },
@@ -4492,6 +4925,8 @@ function replenishFooters(rows) {
     our_stock: _footSum(rows, "our_stock"),
     our_cost: _footAvg(rows, "our_cost", 2),
     wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
+    supplier_in_way: _footSum(rows, "supplier_in_way"),
+    mp_in_way: _footSum(rows, "mp_in_way"),
     wb_def: _footSum(rows, "wb_def"), to_sort: _footSum(rows, "to_sort"),
     oz_avail: _footSum(rows, "oz_avail"), oz_in_way: _footSum(rows, "oz_in_way"),
     oz_def: _footSum(rows, "oz_def"),
@@ -4520,6 +4955,8 @@ function replenishSizeFooters(rows) {
     wb_sells: _footSum(rows, "wb_sells"),
     wb_net: _footSum(rows, "wb_net"), wb_ret: _footSum(rows, "wb_ret"),
     wb_avail: _footSum(rows, "wb_avail"), wb_in_way: _footSum(rows, "wb_in_way"),
+    supplier_in_way: _footSum(rows, "supplier_in_way"),
+    mp_in_way: _footSum(rows, "mp_in_way"),
     wb_def: _footSum(rows, "wb_def"), to_sort: _footSum(rows, "to_sort"),
     ship_wb: _footSum(rows, "ship_wb"), wb_qty: _footSum(rows, "wb_qty"),
     our_stock: _footSumByArticle(rows, "our_stock"),
@@ -4633,6 +5070,11 @@ async function renderReplenish() {
       parts.push("Докупить: " + fmt(m.need_total) + " шт");
     }
     parts.push(isSize ? "Отгрузить на WB: " + fmt(m.ship_total) + " шт" : "Отгрузить: " + fmt(m.ship_total) + " шт");
+    const supT = Number(m.supplier_in_way_total) || 0;
+    const mpT = Number(m.mp_in_way_total) || 0;
+    if (supT || mpT) {
+      parts.push("В пути: от поставщиков " + fmt(supT) + " · на МП " + fmt(mpT) + " шт");
+    }
     const wsh = m.wish;
     if (wsh && wsh.total > 0) {
       parts.push(wsh.reason === ""
@@ -9675,8 +10117,18 @@ const ozPricingHeaders = [
 ];
 
 // ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
+// «Отправки»: три режима одной вкладки. `mode()` читает тулбар, поэтому
+// «Вид таблицы» автоматически показывает набор колонок текущего режима,
+// а настройки видимости хранятся отдельно на каждый режим (whShipmentCols_<mode>).
 registerColView("wh-shipment", {
-  storageKey: "whShipmentCols", pinnable: true, headers: whDocBaseHeaders,
+  storageKey: "whShipmentCols", pinnable: true,
+  mode: () => whShipMode(),
+  sets: {
+    docs: { headers: whDocBaseHeaders },
+    items: { headers: whShipItemHeaders },
+    sku: { headers: whShipSkuHeaders },
+    article: { headers: whShipArticleHeaders },
+  },
 });
 registerColView("wb-detail", {
   storageKey: "wbDetailCols", pinnable: true,
@@ -11674,8 +12126,35 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireWhDisk("#whCpFromDisk", { type: "counterparties" }, "#headerMsg", "wh-cp", true);
   wireWhDisk("#whRToDisk", { kind: "docs", type: "receipt" }, "#headerMsg", "wh-receipt", false);
   wireWhDisk("#whRFromDisk", { type: "receipt" }, "#headerMsg", "wh-receipt", true);
-  wireWhDisk("#whSToDisk", { kind: "docs", type: "shipment" }, "#headerMsg", "wh-shipment", false);
   wireWhDisk("#whSFromDisk", { type: "shipment" }, "#headerMsg", "wh-shipment", true);
+  // «На диск» в отправках выгружает текущий режим (документы/товары/сводку),
+  // а не всегда полный список строк, — поэтому свой обработчик, не wireWhDisk.
+  const whSToDisk = $("#whSToDisk");
+  if (whSToDisk) whSToDisk.addEventListener("click", () => busyRun(uploadWhShipToDisk));
+  const whSExport = $("#whSExport");
+  if (whSExport) whSExport.addEventListener("click", () => busyRun(downloadWhShipExcel));
+  // Переключатель режимов: кнопки-сегменты в тулбаре.
+  document.querySelectorAll("[data-wh-ship-view]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const v = btn.dataset.whShipView;
+      if (!v) return;
+      localStorage.setItem(WH_SHIP_VIEW_KEY, v);
+      syncWhShipUi();
+      buildColViewMenu("wh-shipment");
+      if (currentTab === "wh-shipment") renderWhShipments();
+    });
+  });
+  const whShipCollapseEl = $("#whShipCollapse");
+  if (whShipCollapseEl) {
+    whShipCollapseEl.addEventListener("change", () => {
+      localStorage.setItem(WH_SHIP_COLLAPSE_KEY, whShipCollapseEl.checked ? "1" : "0");
+      syncWhShipUi();
+      buildColViewMenu("wh-shipment");
+      if (currentTab === "wh-shipment") renderWhShipments();
+    });
+  }
+  initWhShipCabsMenu();
+  onTabInput("whSLike", "wh-shipment", null, 350);
   const whSFromPaths = $("#whSFromPaths");
   if (whSFromPaths) whSFromPaths.addEventListener("click", () => busyRun(openWhPathsPanel));
   const whPathsCabinet = $("#whPathsCabinet");

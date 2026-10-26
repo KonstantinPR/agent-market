@@ -8,7 +8,7 @@
    "storageKey": "whShipmentCols",
    "pinnable": true,
    "modes": {
-    "default": {
+    "docs": {
      "columns": [
       {
        "k": "date",
@@ -56,10 +56,175 @@
        "def": true
       }
      ]
+    },
+    "items": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "doc_num",
+       "label": "Номер",
+       "def": true
+      },
+      {
+       "k": "cabinet",
+       "label": "Связка",
+       "def": true
+      },
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Штрихкод",
+       "def": false
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Кол-во",
+       "def": true
+      },
+      {
+       "k": "price",
+       "label": "Цена",
+       "def": false
+      },
+      {
+       "k": "amount",
+       "label": "Сумма",
+       "def": true
+      }
+     ]
+    },
+    "sku": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "barcode",
+       "label": "Штрихкод",
+       "def": false
+      },
+      {
+       "k": "size",
+       "label": "Размер",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Отправлено, шт",
+       "def": true
+      },
+      {
+       "k": "price",
+       "label": "Цена ср.",
+       "def": false
+      },
+      {
+       "k": "amount",
+       "label": "Сумма",
+       "def": true
+      },
+      {
+       "k": "docs_count",
+       "label": "Отправок",
+       "def": true
+      },
+      {
+       "k": "cabinets",
+       "label": "Связки",
+       "def": true
+      },
+      {
+       "k": "first_date",
+       "label": "Первая",
+       "def": false
+      },
+      {
+       "k": "last_date",
+       "label": "Последняя",
+       "def": false
+      }
+     ]
+    },
+    "article": {
+     "columns": [
+      {
+       "k": "article",
+       "label": "Артикул",
+       "def": true
+      },
+      {
+       "k": "name",
+       "label": "Наименование",
+       "def": true
+      },
+      {
+       "k": "quantity",
+       "label": "Отправлено, шт",
+       "def": true
+      },
+      {
+       "k": "price",
+       "label": "Цена ср.",
+       "def": false
+      },
+      {
+       "k": "amount",
+       "label": "Сумма",
+       "def": true
+      },
+      {
+       "k": "docs_count",
+       "label": "Отправок",
+       "def": true
+      },
+      {
+       "k": "cabinets",
+       "label": "Связки",
+       "def": true
+      },
+      {
+       "k": "first_date",
+       "label": "Первая",
+       "def": false
+      },
+      {
+       "k": "last_date",
+       "label": "Последняя",
+       "def": false
+      }
+     ]
     }
    },
    "exportDicts": [
-    "wh_shipment_docs"
+    "wh_shipment_docs",
+    "wh_shipment_items",
+    "wh_shipment_sku",
+    "wh_shipment_article"
    ]
   },
   "wb-detail": {
@@ -3118,6 +3283,16 @@
        "def": true
       },
       {
+       "k": "supplier_in_way",
+       "label": "В пути от поставщиков",
+       "def": true
+      },
+      {
+       "k": "mp_in_way",
+       "label": "В пути на маркетплейсы",
+       "def": true
+      },
+      {
        "k": "our_cost",
        "label": "Себест-ть",
        "def": true
@@ -3279,6 +3454,16 @@
       {
        "k": "wb_in_way",
        "label": "WB в пути",
+       "def": true
+      },
+      {
+       "k": "supplier_in_way",
+       "label": "В пути от поставщиков",
+       "def": true
+      },
+      {
+       "k": "mp_in_way",
+       "label": "В пути на маркетплейсы",
        "def": true
       },
       {
@@ -4005,6 +4190,132 @@
    {
     "k": "source",
     "label": "Источник"
+   }
+  ],
+  "wh_shipment_items": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "doc_num",
+    "label": "Номер"
+   },
+   {
+    "k": "cabinet",
+    "label": "Связка"
+   },
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "barcode",
+    "label": "Штрихкод"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "quantity",
+    "label": "Кол-во"
+   },
+   {
+    "k": "price",
+    "label": "Цена"
+   },
+   {
+    "k": "amount",
+    "label": "Сумма"
+   }
+  ],
+  "wh_shipment_sku": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "barcode",
+    "label": "Штрихкод"
+   },
+   {
+    "k": "size",
+    "label": "Размер"
+   },
+   {
+    "k": "quantity",
+    "label": "Отправлено, шт"
+   },
+   {
+    "k": "price",
+    "label": "Цена ср."
+   },
+   {
+    "k": "amount",
+    "label": "Сумма"
+   },
+   {
+    "k": "docs_count",
+    "label": "Отправок"
+   },
+   {
+    "k": "cabinets",
+    "label": "Связки"
+   },
+   {
+    "k": "first_date",
+    "label": "Первая"
+   },
+   {
+    "k": "last_date",
+    "label": "Последняя"
+   }
+  ],
+  "wh_shipment_article": [
+   {
+    "k": "article",
+    "label": "Артикул"
+   },
+   {
+    "k": "name",
+    "label": "Наименование"
+   },
+   {
+    "k": "quantity",
+    "label": "Отправлено, шт"
+   },
+   {
+    "k": "price",
+    "label": "Цена ср."
+   },
+   {
+    "k": "amount",
+    "label": "Сумма"
+   },
+   {
+    "k": "docs_count",
+    "label": "Отправок"
+   },
+   {
+    "k": "cabinets",
+    "label": "Связки"
+   },
+   {
+    "k": "first_date",
+    "label": "Первая"
+   },
+   {
+    "k": "last_date",
+    "label": "Последняя"
    }
   ],
   "export_margin_detail": [
@@ -5965,6 +6276,14 @@
     "label": "У нас, шт"
    },
    {
+    "k": "supplier_in_way",
+    "label": "В пути от поставщиков"
+   },
+   {
+    "k": "mp_in_way",
+    "label": "В пути на маркетплейсы"
+   },
+   {
     "k": "our_cost",
     "label": "Себест-ть"
    },
@@ -6097,6 +6416,14 @@
    {
     "k": "wb_in_way",
     "label": "WB в пути"
+   },
+   {
+    "k": "supplier_in_way",
+    "label": "В пути от поставщиков"
+   },
+   {
+    "k": "mp_in_way",
+    "label": "В пути на маркетплейсы"
    },
    {
     "k": "wb_doc",

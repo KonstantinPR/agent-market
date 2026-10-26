@@ -1,9 +1,16 @@
 # -*- coding: utf-8 -*-
 """«Наш склад»: /api/warehouse/*."""
 from app.api._common import *  # noqa: F401,F403
+from sqlalchemy import or_
+
 from app.services import warehouse_paths as warehouse_paths_service
 
 router = APIRouter()
+
+
+def _parse_cabinet_ids(raw: Optional[str]) -> list[int]:
+    """«3,5» → [3, 5]. Пусто/мусор = без фильтра (все связки)."""
+    return [int(x) for x in (raw or "").replace(" ", "").split(",") if x.isdigit()]
 
 
 
@@ -86,12 +93,19 @@ def api_docs_list(
     type: str = "receipt",
     from_: Optional[str] = None,
     to: Optional[str] = None,
+    cabinet_ids: Optional[str] = None,
     limit: int = 200,
     db: Session = Depends(get_db),
 ):
     if type not in ("receipt", "shipment"):
         raise HTTPException(400, "type должен быть receipt или shipment")
     q = db.query(models.WarehouseDoc).filter(models.WarehouseDoc.doc_type == type)
+    ids = _parse_cabinet_ids(cabinet_ids)
+    if ids:
+        # Документы без связки (ручной импорт) не скрываем: они не принадлежат
+        # другой связке, иначе такие отправки молча выпадали бы из таблицы.
+        q = q.filter(or_(models.WarehouseDoc.cabinet_id.in_(ids),
+                         models.WarehouseDoc.cabinet_id.is_(None)))
     if from_:
         q = q.filter(models.WarehouseDoc.doc_date >= from_)
     if to:
@@ -115,6 +129,58 @@ def api_docs_list(
             "folder": folder,
         })
     return {"rows": rows, "count": len(rows), "type": type}
+
+
+@router.get("/warehouse/shipment-cabinets")
+def api_shipment_cabinets(db: Session = Depends(get_db)):
+    """Связки, у которых есть отправки, + количество — для чекбокс-селектора."""
+    return {"rows": warehouse_service.shipment_cabinet_counts(db)}
+
+
+@router.get("/warehouse/shipment-items")
+def api_shipment_items(
+    cabinet_ids: Optional[str] = None,
+    article_like: str = "",
+    group: str = "rows",
+    limit: int = 5000,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Товарный разрез отправок.
+
+    ``group="rows"`` — плоский список «отправка × товар» (как в исходных
+    файлах); ``"sku"`` — сводка по артикулу+размеру; ``"article"`` — сводка по
+    артикулу. Фильтр ``cabinet_ids`` — id связок через запятую.
+    """
+    if group not in ("rows", "sku", "article"):
+        raise HTTPException(400, "group должен быть rows, sku или article")
+    ids = _parse_cabinet_ids(cabinet_ids)
+    if group == "rows":
+        all_rows = warehouse_service.shipment_items(
+            db, cabinet_ids=ids, article_like=article_like or "")
+    else:
+        all_rows = warehouse_service.shipment_summary(
+            db, cabinet_ids=ids, article_like=article_like or "", group=group)
+    total = len(all_rows)
+    start = max(0, int(offset or 0))
+    lim = int(limit or 0)
+    rows = all_rows[start:start + lim] if lim > 0 else all_rows[start:]
+    # Итоги считаем по всей выборке, а не по отданной порции: таблица показывает
+    # «ИТОГО» в шапке, и при обрезке до 5000 строк оно не должно «врать».
+    qty = sum(float(r.get("quantity") or 0) for r in all_rows)
+    amount = sum(float(r.get("amount") or 0) for r in all_rows)
+    totals = {
+        "quantity": qty,
+        "amount": amount,
+        "price": (amount / qty) if qty else 0.0,
+        "rows": total,
+        "docs": len({r["doc_id"] for r in all_rows}) if group == "rows" else None,
+    }
+    return {
+        "rows": rows, "total": total, "count": len(rows), "group": group,
+        "offset": start, "limit": lim, "truncated": start + len(rows) < total,
+        "totals": totals,
+    }
 
 
 @router.get("/warehouse/docs/{doc_id}/items")
@@ -234,9 +300,13 @@ def api_turnover(db: Session = Depends(get_db)):
 
 
 @router.get("/warehouse/export/{kind}")
-def api_wh_export(kind: str, type: str = "receipt", db: Session = Depends(get_db)):
+def api_wh_export(kind: str, type: str = "receipt", cabinet_ids: Optional[str] = None,
+                  article_like: str = "", group: str = "rows",
+                  db: Session = Depends(get_db)):
     try:
-        buf = warehouse_service.file_for(kind, db, doc_type=type)
+        buf = warehouse_service.file_for(
+            kind, db, doc_type=type, cabinet_ids=_parse_cabinet_ids(cabinet_ids),
+            article_like=article_like or "", group=group)
     except ValueError as e:
         raise HTTPException(400, str(e))
     filename = f"{kind}_{type}.xlsx" if "docs" in kind else f"{kind}.xlsx"
@@ -248,13 +318,17 @@ def api_wh_export(kind: str, type: str = "receipt", db: Session = Depends(get_db
 
 
 @router.post("/warehouse/todisk")
-async def api_wh_todisk(kind: str = "docs", type: str = "receipt", db: Session = Depends(get_db)):
+async def api_wh_todisk(kind: str = "docs", type: str = "receipt",
+                        cabinet_ids: Optional[str] = None, article_like: str = "",
+                        group: str = "rows", db: Session = Depends(get_db)):
     """Сформировать Excel и загрузить на Яндекс.Диск в папку /agent_market/Наш склад/<kind>."""
     if kind == "docs" and type not in ("receipt", "shipment"):
         raise HTTPException(400, "type должен быть receipt или shipment")
     try:
         token = yandex_service.require_token()
-        buf = warehouse_service.file_for(kind, db, doc_type=type)
+        buf = warehouse_service.file_for(
+            kind, db, doc_type=type, cabinet_ids=_parse_cabinet_ids(cabinet_ids),
+            article_like=article_like or "", group=group)
         filename = f"{kind}_{type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx" if kind == "docs" else f"{kind}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         folder = "/agent_market/Наш склад"
         r = yandex_service.upload_bytes(token, folder, filename, buf.read())
