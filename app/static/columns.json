@@ -4,6 +4,64 @@
   "panelSource": "app/static/app.js registerColView (бутстрап-скрипт)"
  },
  "tabs": {
+  "wh-shipment": {
+   "storageKey": "whShipmentCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "doc_num",
+       "label": "Номер",
+       "def": true
+      },
+      {
+       "k": "counterparty",
+       "label": "Контрагент",
+       "def": true
+      },
+      {
+       "k": "cabinet",
+       "label": "Связка",
+       "def": true
+      },
+      {
+       "k": "note",
+       "label": "Примечание",
+       "def": true
+      },
+      {
+       "k": "folder",
+       "label": "Папка",
+       "def": true
+      },
+      {
+       "k": "total",
+       "label": "Сумма",
+       "def": true
+      },
+      {
+       "k": "items_count",
+       "label": "Позиций",
+       "def": true
+      },
+      {
+       "k": "source",
+       "label": "Источник",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "wh_shipment_docs"
+   ]
+  },
   "wb-detail": {
    "storageKey": "wbDetailCols",
    "pinnable": true,
@@ -3911,6 +3969,44 @@
   }
  },
  "dicts": {
+  "wh_shipment_docs": [
+   {
+    "k": "date",
+    "label": "Дата"
+   },
+   {
+    "k": "doc_num",
+    "label": "Номер"
+   },
+   {
+    "k": "counterparty",
+    "label": "Контрагент"
+   },
+   {
+    "k": "cabinet",
+    "label": "Связка"
+   },
+   {
+    "k": "note",
+    "label": "Примечание"
+   },
+   {
+    "k": "folder",
+    "label": "Папка"
+   },
+   {
+    "k": "total",
+    "label": "Сумма"
+   },
+   {
+    "k": "items_count",
+    "label": "Позиций"
+   },
+   {
+    "k": "source",
+    "label": "Источник"
+   }
+  ],
   "export_margin_detail": [
    {
     "k": "article",

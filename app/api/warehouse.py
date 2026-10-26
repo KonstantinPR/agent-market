@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """«Наш склад»: /api/warehouse/*."""
 from app.api._common import *  # noqa: F401,F403
+from app.services import warehouse_paths as warehouse_paths_service
 
 router = APIRouter()
 
@@ -100,14 +101,19 @@ def api_docs_list(
     names = {}
     if cp_ids:
         names = {c.id: c.name for c in db.query(models.Counterparty).filter(models.Counterparty.id.in_(cp_ids)).all()}
-    rows = [
-        {
+    cab_names = warehouse_service.cabinet_labels(db, {d.cabinet_id for d in docs if d.cabinet_id})
+    rows = []
+    for d in docs:
+        folder = ""
+        if d.source == "paths" and ":" in (d.source_ref or ""):
+            folder = d.source_ref.split(":", 1)[1]
+        rows.append({
             "id": d.id, "doc_num": d.doc_num, "date": d.doc_date.isoformat() if d.doc_date else "",
             "counterparty": names.get(d.counterparty_id, ""), "total": float(d.total or 0),
             "items_count": len(d.items), "source": d.source,
-        }
-        for d in docs
-    ]
+            "cabinet": cab_names.get(d.cabinet_id, ""), "note": d.note or "",
+            "folder": folder,
+        })
     return {"rows": rows, "count": len(rows), "type": type}
 
 
@@ -117,7 +123,8 @@ def api_doc_items(doc_id: int, db: Session = Depends(get_db)):
     if not d:
         raise HTTPException(404)
     rows = [
-        {"article": it.article, "name": it.name, "quantity": float(it.quantity), "price": float(it.price), "amount": float(it.amount)}
+        {"article": it.article, "name": it.name, "barcode": it.barcode, "size": it.size,
+         "quantity": float(it.quantity), "price": float(it.price), "amount": float(it.amount)}
         for it in d.items
     ]
     return {"doc_id": doc_id, "doc_num": d.doc_num, "date": d.doc_date.isoformat() if d.doc_date else "", "type": d.doc_type, "rows": rows}
@@ -152,6 +159,50 @@ def api_doc_delete(doc_id: int, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(404, str(e))
     return {"ok": True}
+
+
+@router.get("/warehouse/paths/settings")
+def api_wh_paths_settings(cabinet_id: int, db: Session = Depends(get_db)):
+    try:
+        return warehouse_paths_service.get_settings(db, cabinet_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/warehouse/paths/settings")
+def api_wh_paths_settings_put(payload: dict = Body(...), db: Session = Depends(get_db)):
+    cabinet_id = payload.get("cabinet_id")
+    if cabinet_id is None:
+        raise HTTPException(400, "cabinet_id обязателен")
+    try:
+        return warehouse_paths_service.save_settings(db, int(cabinet_id), payload.get("settings") or {})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/warehouse/paths/scan")
+def api_wh_paths_scan(payload: dict = Body(...), db: Session = Depends(get_db)):
+    cabinet_id = payload.get("cabinet_id")
+    if cabinet_id is None:
+        raise HTTPException(400, "cabinet_id обязателен")
+    try:
+        return warehouse_paths_service.scan_folders(db, int(cabinet_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/warehouse/paths/import")
+def api_wh_paths_import(payload: dict = Body(...), db: Session = Depends(get_db)):
+    cabinet_id = payload.get("cabinet_id")
+    folder = payload.get("folder") or ""
+    if cabinet_id is None or not folder:
+        raise HTTPException(400, "cabinet_id и folder обязательны")
+    mode = payload.get("mode") or "new"
+    dry_run = bool(payload.get("dry_run"))
+    try:
+        return warehouse_paths_service.import_folder(db, int(cabinet_id), folder, mode=mode, dry_run=dry_run)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/warehouse/stock")

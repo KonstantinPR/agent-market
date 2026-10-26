@@ -94,6 +94,7 @@ GET /api/warehouse/counterparties
 GET /api/warehouse/docs
 GET /api/warehouse/docs/{doc_id}/items
 GET /api/warehouse/export/{kind}
+GET /api/warehouse/paths/settings
 GET /api/warehouse/stock
 GET /api/warehouse/turnover
 GET /api/wb/detail-gaps
@@ -155,6 +156,8 @@ POST /api/warehouse/docs
 POST /api/warehouse/fromdisk
 POST /api/warehouse/import/counterparties
 POST /api/warehouse/import/docs
+POST /api/warehouse/paths/import
+POST /api/warehouse/paths/scan
 POST /api/warehouse/todisk
 POST /api/wb/cards
 POST /api/wb/detail
@@ -167,6 +170,7 @@ POST /api/wb/storage
 POST /api/yandex/upload
 PUT /api/cabinet/pricing-settings
 PUT /api/cabinet/{cabinet_id}/settings
+PUT /api/warehouse/paths/settings
 """
 
 

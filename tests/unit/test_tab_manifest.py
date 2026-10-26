@@ -20,7 +20,7 @@ INDEX_HTML = ROOT / "app" / "static" / "index.html"
 ORPHAN_TABS = {"sales", "stocks"}
 # Вкладки без «Вида таблицы»: списки/формы, а не табличные разделы.
 NO_COLVIEW_TABS = {
-    "dashboard", "wh-cp", "wh-receipt", "wh-shipment",
+    "dashboard", "wh-cp", "wh-receipt",
     "yandex", "tickets",
     "automation-foldering", "automation-names", "automation-crop",
     "automation-barcodes",

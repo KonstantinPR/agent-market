@@ -465,9 +465,10 @@ class WarehouseDoc(Base):
 
     __tablename__ = "warehouse_docs"
     __table_args__ = (
-        UniqueConstraint(
-            "doc_type", "doc_num", "doc_date", "counterparty_id",
-            name="uq_wh_doc_type_num_date_cp",
+        Index(
+            "uq_wh_doc_src",
+            "doc_type", "doc_num", "doc_date", "counterparty_id", "source_ref",
+            unique=True,
         ),
         Index("ix_wh_docs_type_date", "doc_type", "doc_date"),
     )
@@ -477,8 +478,12 @@ class WarehouseDoc(Base):
     doc_num: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     doc_date: Mapped[date_type] = mapped_column(Date, nullable=False)
     counterparty_id: Mapped[int] = mapped_column(ForeignKey("counterparties.id"), nullable=True)
+    # Связка, из папки которой импортирован документ (склад общий, поэтому без FK).
+    cabinet_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # Стабильный ключ источника: "<code кабинета>:<имя папки>" для импорта с диска.
+    source_ref: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     note: Mapped[str] = mapped_column(String(1000), default="")
-    source: Mapped[str] = mapped_column(String(20), default="excel")  # excel | ui | disk
+    source: Mapped[str] = mapped_column(String(20), default="excel")  # excel | ui | disk | paths
     total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -498,6 +503,8 @@ class WarehouseDocItem(Base):
     doc_id: Mapped[int] = mapped_column(ForeignKey("warehouse_docs.id", ondelete="CASCADE"), nullable=False)
     article: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(500), default="")
+    barcode: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    size: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     quantity: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
@@ -761,6 +768,9 @@ class Cabinet(Base):
     # Настройки автопилота цен (JSON) в разрезе этой связки — включаются галкой
     # «Синхронизация автопилота цен» в панели кабинетов; пусто = не заданы.
     pricing_settings: Mapped[str] = mapped_column(Text, default="")
+    # Настройки импорта отправок из папок WB (JSON): root, mode, price_mode,
+    # counterparty_id, sheet, skip_archive. Пусто = дефолты по code.
+    warehouse_settings: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     position: Mapped[int] = mapped_column(Integer, default=0)
 

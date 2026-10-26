@@ -76,10 +76,71 @@ def test_doc_crud_json_api(api_client):
 
 
 def test_exports_return_xlsx(api_client):
-    for kind in ["counterparties", "template-counterparties", "template-docs", "stock", "turnover", "docs"]:
+    for kind in ["counterparties", "template-counterparties", "template-docs", "stock", "turnover", "docs", "docs-list"]:
         url = f"/api/warehouse/export/{kind}"
-        if kind == "docs":
+        if kind in ("docs", "docs-list"):
             url += "?type=receipt"
         r = api_client.get(url)
         assert r.status_code == 200, kind
         assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
+
+
+def test_paths_settings_scan_and_import(api_client, db, tmp_path):
+    import openpyxl
+
+    from app import models
+
+    user = models.User(username="wh-paths-user")
+    db.add(user)
+    db.flush()
+    company = models.Company(user_id=user.id, name="ООО Пути")
+    db.add(company)
+    db.flush()
+    cab = models.Cabinet(
+        user_id=user.id, company_id=company.id, code="oo_joinco", name="Джойнс WB",
+        schema="cab_paths", marketplace="wb", creds="", enabled=True, position=0,
+    )
+    db.add(cab)
+    db.add(models.Counterparty(id=1, name="Wildberries", ctype="marketplace"))
+    db.commit()
+
+    folder = tmp_path / "440 - 26.05.2026 - Рязань"
+    folder.mkdir()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "ОПРЕДЛАРТ"
+    for row in [["Артикул", "Кол-во"], ["A1", 2], ["A1", 3]]:
+        ws.append(row)
+    wb.save(folder / "DB.xlsm")
+
+    r = api_client.put("/api/warehouse/paths/settings", json={
+        "cabinet_id": cab.id,
+        "settings": {"root": str(tmp_path), "sheet": "ОПРЕДЛАРТ", "price_mode": "zero"},
+    })
+    assert r.status_code == 200
+    assert api_client.get(f"/api/warehouse/paths/settings?cabinet_id={cab.id}").json()["root"] == str(tmp_path)
+
+    scan = api_client.post("/api/warehouse/paths/scan", json={"cabinet_id": cab.id}).json()
+    assert scan["summary"]["new"] == 1
+    assert scan["items"][0]["folder"] == folder.name
+
+    imp = api_client.post("/api/warehouse/paths/import", json={
+        "cabinet_id": cab.id, "folder": folder.name,
+    })
+    assert imp.status_code == 200, imp.text
+    assert imp.json()["items_count"] == 1
+    assert imp.json()["total"] == 0
+
+    rows = api_client.get("/api/warehouse/docs?type=shipment").json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["folder"] == folder.name
+    assert rows[0]["note"] == "Рязань"
+    assert rows[0]["source"] == "paths"
+
+    items = api_client.get(f"/api/warehouse/docs/{rows[0]['id']}/items").json()["rows"]
+    assert len(items) == 1
+    assert items[0]["barcode"] == ""
+    assert items[0]["size"] == ""
+    assert items[0]["quantity"] == 5
+
+    assert api_client.get("/api/warehouse/export/docs-list?type=shipment").status_code == 200

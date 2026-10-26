@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
+from app.services.columns import export_cols
 from app.services.common import like_match
 from app.services.excel_io import df_to_excel_stream
 
@@ -40,6 +41,8 @@ _DOC_COLS = {
     "doc_num": ["номер документа", "№ документа", "номер", "№", "документ", "накладная", "номер накладной", "doc_num"],
     "counterparty": ["контрагент", "поставщик", "покупатель", "counterparty", "supplier", "buyer"],
     "article": ["артикул", "article", "articul", "sku", "артикул товара"],
+    "barcode": ["штрихкод", "баркод", "barcode"],
+    "size": ["размер", "size"],
     "quantity": ["кол-во", "количество", "кол", "qty", "quantity", "кол."],
     "price": ["цена", "цена закупки", "закупочная цена", "цена продажи", "продажная цена", "price", "стоимость за ед."],
 }
@@ -125,6 +128,8 @@ def _normalize_ctype(raw) -> str:
 def _row_to_item(row_values: dict) -> dict:
     return {
         "article": _clean(row_values.get("article", "")),
+        "barcode": _clean(row_values.get("barcode", "")),
+        "size": _clean(row_values.get("size", "")),
         "quantity": _clean_num(row_values.get("quantity", 0)),
         "price": _clean_num(row_values.get("price", 0)),
     }
@@ -179,6 +184,8 @@ def import_docs(db: Session, df: pd.DataFrame, doc_type: str, source: str = "exc
     doc_col = cols["doc_num"] if "doc_num" in cols else None
     cp_col = cols.get("counterparty")
     art_col = cols["article"]
+    barcode_col = cols.get("barcode")
+    size_col = cols.get("size")
     qty_col = cols["quantity"]
     price_col = cols["price"]
 
@@ -186,7 +193,13 @@ def import_docs(db: Session, df: pd.DataFrame, doc_type: str, source: str = "exc
         date = _parse_date(row.get(date_col))
         doc_num = _clean(row.get(doc_col)) if doc_col else ""
         cp_name = _clean(row.get(cp_col)) if cp_col else ""
-        item = {"article": _clean(row.get(art_col)), "quantity": _clean_num(row.get(qty_col)), "price": _clean_num(row.get(price_col))}
+        item = {
+            "article": _clean(row.get(art_col)),
+            "barcode": _clean(row.get(barcode_col)) if barcode_col else "",
+            "size": _clean(row.get(size_col)) if size_col else "",
+            "quantity": _clean_num(row.get(qty_col)),
+            "price": _clean_num(row.get(price_col)),
+        }
         if not item["article"] or item["quantity"] == 0:
             continue
         key = (date, doc_num, cp_name)
@@ -213,6 +226,7 @@ def import_docs(db: Session, df: pd.DataFrame, doc_type: str, source: str = "exc
                 models.WarehouseDoc.doc_num == doc_num,
                 models.WarehouseDoc.doc_date == date,
                 models.WarehouseDoc.counterparty_id == cp_id,
+                models.WarehouseDoc.source_ref == "",
             )
             .first()
         )
@@ -235,6 +249,7 @@ def import_docs(db: Session, df: pd.DataFrame, doc_type: str, source: str = "exc
         for it in items:
             doc.items.append(models.WarehouseDocItem(
                 article=it["article"], name=names.get(it["article"], ""),
+                barcode=it["barcode"], size=it["size"],
                 quantity=it["quantity"], price=it["price"],
                 amount=round(it["quantity"] * it["price"], 2),
             ))
@@ -368,7 +383,7 @@ def turnover_view(db: Session) -> list[dict]:
 
 # ---------- Excel: импорт/экспорт/шаблоны ----------
 
-DOC_EXPORT_HEADERS = ["Дата", "№ документа", "Контрагент", "Артикул", "Кол-во", "Цена"]
+DOC_EXPORT_HEADERS = ["Дата", "№ документа", "Контрагент", "Артикул", "Штрихкод", "Размер", "Кол-во", "Цена"]
 
 
 def docs_dataframe(db: Session, doc_type: str) -> pd.DataFrame:
@@ -379,8 +394,57 @@ def docs_dataframe(db: Session, doc_type: str) -> pd.DataFrame:
             cp = db.get(models.Counterparty, d.counterparty_id)
             cp_name = cp.name if cp else ""
         for it in d.items:
-            rows.append([d.doc_date, d.doc_num, cp_name, it.article, float(it.quantity), float(it.price)])
+            rows.append([d.doc_date, d.doc_num, cp_name, it.article, it.barcode, it.size,
+                         float(it.quantity), float(it.price)])
     return pd.DataFrame(rows, columns=DOC_EXPORT_HEADERS)
+
+
+_SOURCE_LABELS = {"excel": "Excel", "ui": "Интерфейс", "disk": "Яндекс.Диск", "paths": "Папки WB"}
+
+
+def cabinet_labels(db: Session, ids: set) -> dict:
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(models.Cabinet.id, models.Company.name, models.Marketplace.name)
+        .join(models.Company, models.Company.id == models.Cabinet.company_id)
+        .outerjoin(models.Marketplace, models.Marketplace.code == models.Cabinet.marketplace)
+        .where(models.Cabinet.id.in_(ids))
+    ).all()
+    return {cid: " · ".join(x for x in (company, marketplace) if x)
+            for cid, company, marketplace in rows}
+
+
+def docs_list_dataframe(db: Session, doc_type: str) -> pd.DataFrame:
+    docs = (db.query(models.WarehouseDoc)
+            .filter(models.WarehouseDoc.doc_type == doc_type)
+            .order_by(models.WarehouseDoc.doc_date.desc(), models.WarehouseDoc.id.desc())
+            .all())
+    cp_ids = {d.counterparty_id for d in docs if d.counterparty_id}
+    cp_names = {c.id: c.name for c in db.query(models.Counterparty).filter(models.Counterparty.id.in_(cp_ids)).all()} if cp_ids else {}
+    labels = cabinet_labels(db, {d.cabinet_id for d in docs if d.cabinet_id})
+    rows = []
+    for d in docs:
+        folder = ""
+        if d.source == "paths" and ":" in (d.source_ref or ""):
+            folder = d.source_ref.split(":", 1)[1]
+        rows.append({
+            "date": d.doc_date.isoformat() if d.doc_date else "",
+            "doc_num": d.doc_num,
+            "counterparty": cp_names.get(d.counterparty_id, ""),
+            "cabinet": labels.get(d.cabinet_id, ""),
+            "note": d.note or "",
+            "folder": folder,
+            "total": float(d.total or 0),
+            "items_count": len(d.items),
+            "source": _SOURCE_LABELS.get(d.source, d.source or ""),
+        })
+    df = pd.DataFrame(rows)
+    cols = export_cols("wh_shipment_docs")
+    for key in cols:
+        if key not in df.columns:
+            df[key] = ""
+    return df[list(cols)].rename(columns=cols)
 
 
 def counterparties_dataframe(db: Session) -> pd.DataFrame:
@@ -391,9 +455,9 @@ def counterparties_dataframe(db: Session) -> pd.DataFrame:
 
 def docs_template_df() -> pd.DataFrame:
     return pd.DataFrame([
-        ["2026-09-01", "ТН-001", "Поставщик ООО «Ромашка»", "1005", 10, 350.00],
-        ["2026-09-01", "ТН-001", "Поставщик ООО «Ромашка»", "2007", 5, 720.50],
-        ["2026-09-05", "ТН-014", "Wildberries", "1005", 8, 599.00],
+        ["2026-09-01", "ТН-001", "Поставщик ООО «Ромашка»", "1005", "4600000000011", "42", 10, 350.00],
+        ["2026-09-01", "ТН-001", "Поставщик ООО «Ромашка»", "2007", "4600000000028", "M", 5, 720.50],
+        ["2026-09-05", "ТН-014", "Wildberries", "1005", "4600000000011", "42", 8, 599.00],
     ], columns=DOC_EXPORT_HEADERS)
 
 
@@ -414,6 +478,8 @@ def file_for(kind: str, db: Session, doc_type: str = ""):
         return df_to_excel_stream(docs_template_df(), doc_type or "Документы")
     if kind == "docs":
         return df_to_excel_stream(docs_dataframe(db, doc_type), DOC_TYPE_LABELS.get(doc_type, "Документы"))
+    if kind == "docs-list":
+        return df_to_excel_stream(docs_list_dataframe(db, doc_type), "Список документов")
     if kind == "stock":
         rows = [[r["article"], r["name"], r["start_qty"], r["received"], r["shipped"], r["balance"], r["avg_cost"], r["stock_value"]]
                 for r in stock_view(db)]
@@ -459,6 +525,7 @@ def create_doc(db: Session, doc_type: str, doc_num: str, doc_date, counterparty_
         total += qty * price
         db.add(models.WarehouseDocItem(
             doc_id=doc.id, article=i["article"], name=names.get(i["article"], ""),
+            barcode=str(i.get("barcode", "") or ""), size=str(i.get("size", "") or ""),
             quantity=qty, price=price, amount=round(qty * price, 2),
         ))
     doc.total = round(total, 2)

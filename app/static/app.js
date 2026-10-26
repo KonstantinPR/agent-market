@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "168";
+const UI_VERSION = "169";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -221,7 +221,7 @@ const LS_COLVIEW_KEYS = [
   "marginDetailCols", "marginFunnelCols", "marginOzonDetailCols",
   "ozAccrualCols", "ozCardsCols", "ozCashflowCols", "ozDetailCols",
   "ozPlacementCols", "ozPricesCols", "ozRealCols", "ozStockCols",
-  "pricingCols", "productsCols", "replenishCols",
+  "pricingCols", "productsCols", "replenishCols", "whShipmentCols",
   "wbCardsCols", "wbDetailCols", "wbFunnelCols", "wbPricesCols",
   "wbSalesCols", "wbStockCols", "wbStorageCols",
 ];
@@ -817,6 +817,7 @@ function _colviewTabForContainer(container) {
     if (id === "productsTable") return "products";
     if (id === "replenishTable") return "replenish";
     if (id === "pricingTable") return "pricing";
+    if (id === "whSTable") return "wh-shipment";
     if (id === "wbFunnelTable") return "wb-funnel";
     if (id === "wbStockTable") return "wb-stock";
     if (id === "wbPricesTable") return "wb-prices";
@@ -3839,20 +3840,35 @@ async function renderWhCp() {
   pagedTable(box, whCpHeaders, data.rows || []);
 }
 
-const whDocHeaders = [
-  { k: "date", label: "Дата", render: cellFmts.text , tip: "Дата документа из шапки Excel-файла (при отсутствии — дата импорта). Документы сортируются по дате по убыванию."},
-  { k: "doc_num", label: "№ документа", render: cellFmts.text , tip: "Номер документа. Строки Excel группируются в один документ по связке «дата + № + контрагент»."},
-  { k: "counterparty", label: "Контрагент", render: cellFmts.text , tip: "Название контрагента из справочника. Пусто, если в файле колонка контрагента не заполнена (для отгрузок это допустимо)."},
-  { k: "total", label: "Сумма", num: true, render: cellFmts.money , tip: "Сумма документа = Σ (количество × цена) по его строкам. Пересчитывается при каждом импорте и редактировании."},
-  { k: "items_count", label: "Строк", num: true, render: cellFmts.int , tip: "Сколько товарных позиций в документе. При повторном импорте строки заменяются целиком."},
-  { k: "source", label: "Источник", render: cellFmts.text , tip: "Откуда создан документ: excel (импорт файла), ui (создан в интерфейсе), disk (с Яндекс.Диска)."},
-  { k: "_d", label: "", render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "" , tip: "Кнопка открывает товарные позиции документа. Изменение строк здесь меняет остатки и пересчитывает себестоимость."},
+const whDocBaseHeaders = [
+  { k: "date", label: "Дата", render: cellFmts.text , tip: "Дата документа: для импорта из папок — дата из имени папки, для Excel — из шапки файла."},
+  { k: "doc_num", label: "Номер", render: cellFmts.text , tip: "Номер документа. Для импорта из папок — полное имя папки (оно же уникальный ключ повторного импорта)."},
+  { k: "counterparty", label: "Контрагент", render: cellFmts.text , tip: "Контрагент документа. Для отправок из папок по умолчанию Wildberries; можно выбрать в настройках импорта."},
+  { k: "cabinet", label: "Связка", render: cellFmts.text , tip: "Связка (фирма × маркетплейс), из папок которой пришла отправка. Для ручных и Excel-документов пусто."},
+  { k: "note", label: "Примечание", render: cellFmts.text , tip: "Остаток имени папки после даты — например, город или комментарий отправки."},
+  { k: "folder", label: "Папка", render: cellFmts.text , tip: "Имя папки-источника. Повторный импорт этой папки обновляет тот же документ, а не создаёт дубль."},
+  { k: "total", label: "Сумма", num: true, render: cellFmts.money , tip: "Сумма документа = Σ (количество × цена) по строкам. Для импорта из папок цена — себестоимость товара или 0, если выбрано «Цена: ноль»."},
+  { k: "items_count", label: "Позиций", num: true, render: cellFmts.int , tip: "Сколько товарных позиций в документе. Строки с пустым артикулом и количеством ≤ 0 при импорте из папок пропускаются."},
+  { k: "source", label: "Источник", render: whSourceCell , tip: "Откуда документ: Excel-файл, интерфейс, Яндекс.Диск или локальные папки WB."},
 ];
+const whDocHeaders = whDocBaseHeaders.concat([
+  { k: "_d", label: "", render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "" , tip: "Кнопка открывает товарные позиции документа. Изменение строк здесь меняет остатки."},
+]);
+const whReceiptHeaders = whDocBaseHeaders.filter((h) => ["date", "doc_num", "counterparty", "note", "total", "items_count", "source"].includes(h.k)).concat([
+  whDocHeaders[whDocHeaders.length - 1],
+]);
+
+function whSourceCell(v) {
+  const labels = { excel: "Excel", ui: "Интерфейс", disk: "Яндекс.Диск", paths: "Папки WB" };
+  return labels[v] || v || "—";
+}
 
 const whDocItemHeaders = [
   { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул товара. Именно по нему накапливаются приходы и отгрузки, от него считается себестоимость."},
   { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование подставляется из каталога товаров на момент импорта. Если товара нет в каталоге — остаётся пустым."},
-  { k: "quantity", label: "Кол-во", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Количество единиц в строке. Может быть дробным (например, для сборных комплектов); строки с нулевым количеством при импорте отбрасываются."},
+  { k: "barcode", label: "Штрихкод", render: cellFmts.text , tip: "Штрихкод из файла (если был). Повторный импорт той же папки обновляет строки по артикулу, штрихкоду и размеру."},
+  { k: "size", label: "Размер", render: cellFmts.text , tip: "Размер из файла (если был). Вместе со штрихкодом помогает отличить одинаковые артикулы разных размеров."},
+  { k: "quantity", label: "Кол-во", num: true, render: (v) => v == null ? "—" : fmtFloat(v, 0) , tip: "Количество единиц в строке. Строки с нулевым количеством при импорте отбрасываются."},
   { k: "price", label: "Цена", num: true, render: cellFmts.money2 , tip: "Цена за единицу из документа. Приход — закупочная, отгрузка — заложенная в расчёт себестоимости."},
   { k: "amount", label: "Сумма", num: true, render: cellFmts.money2 , tip: "Количество × цена, ₽. Суммы строк дают итог документа в колонке «Сумма»."},
 ];
@@ -3887,7 +3903,269 @@ async function renderWhDocs(type, boxId, msgId, detailId) {
   const msg = $("#" + msgId);
   if (msg) msg.textContent = "Документов: " + fmt(data.count);
   detail.innerHTML = "";
-  pagedTable(box, whDocHeaders, data.rows || [], whDocFooters(data.rows || []));
+  if (type === "shipment") {
+    pagedTable(box, whDocHeaders, data.rows || [], whDocFooters(data.rows || []),
+      null, null, { colviewTab: "wh-shipment" });
+  } else {
+    pagedTable(box, whReceiptHeaders, data.rows || [], whDocFooters(data.rows || []));
+  }
+}
+
+// ---- Импорт отправок из локальных папок WB (T-57) ----
+const WH_PATHS_STATUS = {
+  new: "Новая",
+  imported: "Импортирована",
+  bad_name: "Плохое имя",
+  no_file: "Нет DB*.xlsm",
+  error: "Ошибка",
+};
+const whPathsHeaders = [
+  { k: "folder", label: "Папка", render: cellFmts.text, tip: "Имя папки внутри выбранного корня. Именно оно вместе со связкой образует ключ, по которому повторный импорт обновляет документ." },
+  { k: "status_label", label: "Статус", render: (v, r) => `<span class="tag paths-${r.status}">${escapeHtml(v)}</span>`, tip: "Новая — ещё не импортирована. Импортирована — документ уже есть. Плохое имя — не разобрана дата. Нет DB*.xlsm — в папке нет файла. Ошибка — не удалось прочитать файл." },
+  { k: "date", label: "Дата", render: cellFmts.text, tip: "Дата из имени папки. Двузначный год читается как 20xx." },
+  { k: "note", label: "Примечание", render: cellFmts.text, tip: "Остаток имени папки после даты." },
+  { k: "file", label: "Файл", render: cellFmts.text, tip: "Какой DB*.xlsm выбран. Если файлов несколько, берётся самый свежий по времени изменения, а альтернативы перечислены в предупреждении." },
+  { k: "warning", label: "Предупреждение", render: cellFmts.text, tip: "Например, несколько файлов DB*.xlsm в папке. Импорт при этом не блокируется." },
+  { k: "_a", label: "", render: (v, r) => r._canImport ? '<button class="btn small" data-paths-idx="' + r._idx + '">Импорт</button>' : "", tip: "Импортировать только эту папку. Остатки меняются сразу; повторный импорт в режиме «Обновлять существующие» перезапишет документ." },
+];
+let whPathsRows = [];
+let whPathsBusy = false;
+let whPathsCpLoaded = false;
+
+function whPathsSetMsg(text) {
+  const el = $("#whPathsMsg");
+  if (el) el.textContent = text || "";
+}
+
+function whPathsSetBusy(busy) {
+  whPathsBusy = !!busy;
+  for (const id of ["whPathsSave", "whPathsScan", "whPathsImport", "whPathsCabinet"]) {
+    const el = $("#" + id);
+    if (el) el.disabled = whPathsBusy;
+  }
+  const p = $("#whPathsProgress");
+  if (p && !whPathsBusy) { p.max = 1; p.value = 0; }
+}
+
+function whPathsCabinetId() {
+  const el = $("#whPathsCabinet");
+  return el && el.value ? Number(el.value) : null;
+}
+
+function fillWhPathsCabinets() {
+  const sel = $("#whPathsCabinet");
+  if (!sel) return;
+  const prev = sel.value;
+  let h = "";
+  for (const comp of (cabState.companies || [])) {
+    for (const lk of (comp.links || [])) {
+      if (lk.marketplace !== "wb") continue;
+      h += '<option value="' + lk.id + '">' + escapeHtml(lk.owner || lk.name || ("Связка " + lk.id)) + "</option>";
+    }
+  }
+  if (!h) h = '<option value="">Нет WB-связок</option>';
+  sel.innerHTML = h;
+  const cur = cabState.current;
+  const wanted = prev || (cur && cur.marketplace === "wb" ? String(cur.id) : "");
+  if (wanted && sel.querySelector('option[value="' + wanted + '"]')) sel.value = wanted;
+}
+
+async function loadWhPathsCounterparties() {
+  if (whPathsCpLoaded) return;
+  const sel = $("#whPathsCounterparty");
+  if (!sel) return;
+  try {
+    const data = await api("/warehouse/counterparties");
+    sel.innerHTML = (data.rows || []).map((cp) =>
+      '<option value="' + cp.id + '">' + escapeHtml(cp.name) + "</option>").join("");
+    whPathsCpLoaded = true;
+  } catch (err) {
+    whPathsSetMsg("Не удалось загрузить контрагентов: " + err.message);
+  }
+}
+
+async function loadWhPathsSettings() {
+  const id = whPathsCabinetId();
+  if (!id) return;
+  try {
+    const s = await api("/warehouse/paths/settings?cabinet_id=" + id);
+    const rootEl = $("#whPathsRoot");
+    if (rootEl) rootEl.value = s.root || "";
+    const modeEl = $("#whPathsMode");
+    if (modeEl) modeEl.value = s.mode === "update" ? "update" : "new";
+    const priceEl = $("#whPathsPriceMode");
+    if (priceEl) priceEl.value = s.price_mode === "zero" ? "zero" : "cost";
+    const sheetEl = $("#whPathsSheet");
+    if (sheetEl) sheetEl.value = s.sheet || "ОПРЕДЛАРТ";
+    const archEl = $("#whPathsSkipArchive");
+    if (archEl) archEl.checked = s.skip_archive !== false;
+    const cpEl = $("#whPathsCounterparty");
+    if (cpEl && s.counterparty_id != null) {
+      const val = String(s.counterparty_id);
+      if (!cpEl.querySelector('option[value="' + val + '"]')) {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = "Контрагент #" + val;
+        cpEl.appendChild(opt);
+      }
+      cpEl.value = val;
+    }
+  } catch (err) {
+    whPathsSetMsg("Не удалось загрузить настройки: " + err.message);
+  }
+}
+
+function collectWhPathsSettings() {
+  return {
+    root: ($("#whPathsRoot")?.value || "").trim(),
+    mode: $("#whPathsMode")?.value === "update" ? "update" : "new",
+    price_mode: $("#whPathsPriceMode")?.value === "zero" ? "zero" : "cost",
+    counterparty_id: Number($("#whPathsCounterparty")?.value || 1),
+    sheet: ($("#whPathsSheet")?.value || "ОПРЕДЛАРТ").trim() || "ОПРЕДЛАРТ",
+    skip_archive: !!$("#whPathsSkipArchive")?.checked,
+  };
+}
+
+async function saveWhPathsSettings(silent) {
+  const id = whPathsCabinetId();
+  if (!id) {
+    if (!silent) whPathsSetMsg("Выберите WB-связку");
+    return false;
+  }
+  try {
+    await apiPut("/warehouse/paths/settings", { cabinet_id: id, settings: collectWhPathsSettings() });
+    if (!silent) whPathsSetMsg("Настройки сохранены");
+    return true;
+  } catch (err) {
+    whPathsSetMsg("Не удалось сохранить: " + err.message);
+    return false;
+  }
+}
+
+function renderWhPathsResults() {
+  const box = $("#whPathsResultsTable");
+  if (!box) return;
+  const mode = $("#whPathsMode")?.value || "new";
+  const rows = whPathsRows.map((r, idx) => ({
+    ...r,
+    _idx: idx,
+    status_label: WH_PATHS_STATUS[r.status] || r.status || "",
+    _canImport: r.status === "new" || (r.status === "imported" && mode === "update"),
+  }));
+  pagedTable(box, whPathsHeaders, rows);
+}
+
+async function scanWhPaths() {
+  if (whPathsBusy) return;
+  if (!(await saveWhPathsSettings(true))) return;
+  whPathsSetBusy(true);
+  whPathsSetMsg("Проверяю папки…");
+  try {
+    const data = await apiPost("/warehouse/paths/scan", { cabinet_id: whPathsCabinetId() });
+    whPathsRows = data.items || [];
+    renderWhPathsResults();
+    const s = data.summary || {};
+    whPathsSetMsg("Папок: " + fmt((data.items || []).length) +
+      " · новых: " + fmt(s.new || 0) + " · уже импортировано: " + fmt(s.imported || 0) +
+      " · без файла: " + fmt(s.no_file || 0) + " · плохое имя: " + fmt(s.bad_name || 0));
+  } catch (err) {
+    whPathsSetMsg("Ошибка проверки: " + err.message);
+  } finally {
+    whPathsSetBusy(false);
+  }
+}
+
+async function importWhPathsRow(idx) {
+  const row = whPathsRows[idx];
+  if (!row || whPathsBusy) return false;
+  whPathsSetBusy(true);
+  whPathsSetMsg("Импортирую «" + row.folder + "»…");
+  try {
+    const r = await apiPost("/warehouse/paths/import", {
+      cabinet_id: whPathsCabinetId(),
+      folder: row.folder,
+      mode: $("#whPathsMode")?.value === "update" ? "update" : "new",
+      dry_run: false,
+    });
+    row.status = "imported";
+    if (r.warning) row.warning = r.warning;
+    whPathsSetMsg("Импортировано: позиций " + fmt(r.items_count || 0) +
+      ", сумма " + fmtMoney(r.total || 0) +
+      (r.unmatched && r.unmatched.length ? " · нет в каталоге: " + fmt(r.unmatched.length) : ""));
+    renderWhPathsResults();
+    return true;
+  } catch (err) {
+    row.status = "error";
+    row.warning = err.message;
+    renderWhPathsResults();
+    whPathsSetMsg("Ошибка импорта «" + row.folder + "»: " + err.message);
+    return false;
+  } finally {
+    whPathsSetBusy(false);
+  }
+}
+
+async function importAllWhPaths() {
+  if (whPathsBusy) return;
+  if (!whPathsRows.length) {
+    whPathsSetMsg("Сначала нажмите «Проверить папки»");
+    return;
+  }
+  const mode = $("#whPathsMode")?.value || "new";
+  const idxs = whPathsRows
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.status === "new" || (r.status === "imported" && mode === "update"))
+    .map(({ i }) => i);
+  if (!idxs.length) {
+    whPathsSetMsg("Нет папок для импорта в выбранном режиме");
+    return;
+  }
+  const p = $("#whPathsProgress");
+  if (p) { p.max = idxs.length; p.value = 0; }
+  let ok = 0, failed = 0;
+  for (let n = 0; n < idxs.length; n++) {
+    const idx = idxs[n];
+    const row = whPathsRows[idx];
+    whPathsSetBusy(true);
+    whPathsSetMsg("Импорт " + (n + 1) + " из " + idxs.length + ": «" + row.folder + "»…");
+    try {
+      const r = await apiPost("/warehouse/paths/import", {
+        cabinet_id: whPathsCabinetId(),
+        folder: row.folder,
+        mode,
+        dry_run: false,
+      });
+      row.status = "imported";
+      if (r.warning) row.warning = r.warning;
+      ok++;
+    } catch (err) {
+      row.status = "error";
+      row.warning = err.message;
+      failed++;
+    }
+    if (p) p.value = n + 1;
+    renderWhPathsResults();
+  }
+  whPathsSetBusy(false);
+  whPathsSetMsg("Импорт завершён: успешно " + ok + ", ошибок " + failed);
+  if (ok && currentTab === "wh-shipment") {
+    await renderWhDocs("shipment", "whSTable", "headerMsg", "whSDetail");
+  }
+}
+
+async function openWhPathsPanel() {
+  const panel = $("#whShipmentPathsPanel");
+  if (!panel) return;
+  if (!panel.classList.contains("hidden")) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  if (!cabState.companies || !cabState.companies.length) await loadCabinets();
+  fillWhPathsCabinets();
+  await loadWhPathsCounterparties();
+  await loadWhPathsSettings();
+  whPathsSetMsg("");
 }
 
 const replenishHeaders = [
@@ -9223,6 +9501,9 @@ const ozPricingHeaders = [
 ];
 
 // ----------------------------------------------------- Регистрация «Вида таблицы» по разделам
+registerColView("wh-shipment", {
+  storageKey: "whShipmentCols", pinnable: true, headers: whDocBaseHeaders,
+});
 registerColView("wb-detail", {
   storageKey: "wbDetailCols", pinnable: true,
   mode: () => { const rawEl = document.getElementById("wbDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
@@ -11221,6 +11502,27 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireWhDisk("#whRFromDisk", { type: "receipt" }, "#headerMsg", "wh-receipt", true);
   wireWhDisk("#whSToDisk", { kind: "docs", type: "shipment" }, "#headerMsg", "wh-shipment", false);
   wireWhDisk("#whSFromDisk", { type: "shipment" }, "#headerMsg", "wh-shipment", true);
+  const whSFromPaths = $("#whSFromPaths");
+  if (whSFromPaths) whSFromPaths.addEventListener("click", () => busyRun(openWhPathsPanel));
+  const whPathsCabinet = $("#whPathsCabinet");
+  if (whPathsCabinet) whPathsCabinet.addEventListener("change", () => busyRun(loadWhPathsSettings));
+  const whPathsSave = $("#whPathsSave");
+  if (whPathsSave) whPathsSave.addEventListener("click", () => busyRun(() => saveWhPathsSettings(false)));
+  const whPathsScan = $("#whPathsScan");
+  if (whPathsScan) whPathsScan.addEventListener("click", () => busyRun(scanWhPaths));
+  const whPathsImport = $("#whPathsImport");
+  if (whPathsImport) whPathsImport.addEventListener("click", () => busyRun(importAllWhPaths));
+  const whPathsCancel = $("#whPathsCancel");
+  if (whPathsCancel) whPathsCancel.addEventListener("click", () => {
+    const panel = $("#whShipmentPathsPanel");
+    if (panel) panel.classList.add("hidden");
+  });
+  const whPathsResults = $("#whPathsResultsTable");
+  if (whPathsResults) whPathsResults.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-paths-idx]");
+    if (!btn) return;
+    busyRun(() => importWhPathsRow(Number(btn.dataset.pathsIdx)));
+  });
   [["whRTable", "whRDetail"], ["whSTable", "whSDetail"]].forEach(([t, d]) => {
     const box = $("#" + t);
     const detail = $("#" + d);

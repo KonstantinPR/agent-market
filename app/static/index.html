@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=69">
+<link rel="stylesheet" href="/static/style.css?v=72">
 </head>
 <body>
 <nav class="navbar">
@@ -501,12 +501,65 @@
       <div class="dz-row"><input type="file" id="whSFile" class="hidden" accept=".xlsx,.xlsm"><div class="dropzone" id="whSDrop"><span class="dz-label">Перетащите сюда Excel-файл или нажмите для выбора</span></div></div>
       <button id="whSImport" class="btn">Загрузить Отправку</button>
       <a class="btn" id="whSExport" href="/api/warehouse/export/docs?type=shipment">Выгрузить в Excel</a>
+      <a class="btn" id="whSListExport" href="/api/warehouse/export/docs-list?type=shipment" title="Список отправок: дата, номер, контрагент, связка, примечание, папка, сумма, позиций, источник">Список</a>
       <a class="btn" id="whSTemplate" href="/api/warehouse/export/template-docs?type=shipment">Шаблон</a>
       <button id="whSToDisk" class="btn">На диск</button>
-      <button id="whSFromDisk" class="btn">Импорт с диска</button><button id="whSFromPaths" class="btn" title="Импорт отправок из локальных путей по правилу">Из путей</button>
+      <button id="whSFromDisk" class="btn">Импорт с диска</button><button id="whSFromPaths" class="btn" title="Импорт отправок из локальных папок WB по имени папки и листу ОПРЕДЛАРТ">Из папок</button>
       <span class="toolbar-right"><span id="whSTablePager"></span><div class="view-menu" id="whShipmentViewMenu"><button type="button" class="btn" id="btnwhShipmentView">Вид таблицы &#9662;</button><div class="view-menu-panel hidden" id="whShipmentViewPanel"></div></div></span>
     </div>
     <p class="hint">Отправка товара (покупателю или на склад маркетплейса — контрагент WB/Ozon). Тот же формат, что и Приход.</p>
+    <div class="paths-panel hidden" id="whShipmentPathsPanel">
+      <div class="paths-title">Импорт отправок из локальных папок WB</div>
+      <div class="paths-grid">
+        <label>Связка WB
+          <select id="whPathsCabinet" title="Кабинет (фирма × маркетплейс), к которому относятся папки отправок. Настройки пути хранятся отдельно для каждой связки."></select>
+        </label>
+        <label class="wide">Путь к корню папок отправок
+          <input id="whPathsRoot" list="whPathsRootList" placeholder="C:\...\ОТПРАВКИ" title="Корневая папка, внутри которой лежат папки вида «440 - 26.05.2026 - Рязань». Путь можно сохранить, даже если диск сейчас недоступен — проверка будет при сканировании.">
+          <datalist id="whPathsRootList">
+            <option value="C:\YandexDisk\СЕТЕВЫЕ МАГАЗИНЫ\WILDBERRIES\ДЖОИНС\ОТПРАВКИ"></option>
+            <option value="E:\Мой диск\ООО ДЖОИНС\ОТПРАВКИ"></option>
+            <option value="C:\YandexDisk\СЕТЕВЫЕ МАГАЗИНЫ\WILDBERRIES\ИП ПРУДНИКОВ\ОТПРАВКИ"></option>
+            <option value="E:\Мой диск\ИП ПРУДНИКОВ\ОТПРАВКИ"></option>
+          </datalist>
+        </label>
+        <label>Режим
+          <select id="whPathsMode" title="«Только новые» пропускает уже импортированные папки. «Обновлять существующие» перезаписывает документ и его строки при повторном импорте.">
+            <option value="new">Только новые</option>
+            <option value="update">Обновлять существующие</option>
+          </select>
+        </label>
+        <label>Цена
+          <select id="whPathsPriceMode" title="«Себестоимость» ставит цену строки = products.net_cost. «Ноль» импортирует количества без суммы. Себестоимость приходов при этом не пересчитывается.">
+            <option value="cost">Себестоимость</option>
+            <option value="zero">Ноль</option>
+          </select>
+        </label>
+        <label>Контрагент
+          <select id="whPathsCounterparty" title="Контрагент, который проставляется в документах отправок. По умолчанию Wildberries."></select>
+        </label>
+        <label>Лист
+          <input id="whPathsSheet" value="ОПРЕДЛАРТ" title="Имя листа Excel внутри DB*.xlsm. По умолчанию ОПРЕДЛАРТ; регистр и лишние пробелы не важны.">
+        </label>
+        <label class="chk"><input type="checkbox" id="whPathsSkipArchive" checked title="Пропускать папки, в имени которых есть «АРХИВ»"> Пропускать «АРХИВ»</label>
+      </div>
+      <div class="paths-actions">
+        <button id="whPathsSave" class="btn" title="Сохранить путь и параметры для выбранной связки. Сохранение не проверяет доступность диска.">Сохранить</button>
+        <button id="whPathsScan" class="btn" title="Прочитать имена папок, найти в каждой DB*.xlsm и отметить, что уже импортировано. Excel не открывается — быстро.">Проверить папки</button>
+        <button id="whPathsImport" class="btn" title="Импортировать все подходящие папки по одной. Можно также импортировать отдельную папку кнопкой в таблице результатов.">Импортировать</button>
+        <button id="whPathsCancel" class="btn" title="Закрыть панель без изменений на экране. Уже сохранённые настройки останутся.">Отмена</button>
+        <progress id="whPathsProgress" max="1" value="0"></progress>
+        <span class="paths-note" id="whPathsMsg"></span>
+      </div>
+      <details class="paths-help">
+        <summary>Как читаются папки и что попадёт в документ</summary>
+        <p>Папка должна называться <b>«номер - ДД.ММ.ГГГГ - примечание»</b>; примечание необязательно. Двузначный год считается 20xx, трёхзначный или несуществующая дата — ошибкой имени. Внутри папки берётся самый свежий файл <b>DB*.xlsm</b> (файлы «~$» игнорируются); если их несколько, в результате будет предупреждение со списком альтернатив.</p>
+        <p>Из листа <b>ОПРЕДЛАРТ</b> читаются колонки <b>Артикул</b> и <b>Кол-во</b>; <b>Штрихкод</b> и <b>Размер</b> — если есть. Колонка «Куда» игнорируется. Строки с пустым артикулом или количеством ≤ 0 пропускаются, одинаковые сочетания «штрихкод + артикул + размер» складываются. Товары, которых нет в каталоге, импортируются с ценой 0 и попадают в список несопоставленных.</p>
+        <p><b>Повторный импорт</b> ищет документ по ключу «связка + имя папки», поэтому обновляет его, а не создаёт дубль. Папки 354 и 358 могут содержать одинаковые номера — это разные отправки, импортируются обе. Остатки меняются сразу после импорта; средняя себестоимость приходов не пересчитывается.</p>
+      </details>
+      <div class="table-wrap" id="whPathsResultsTable"></div>
+      <div class="paths-pager"><span id="whPathsResultsTablePager"></span></div>
+    </div>
     <div class="table-wrap" id="whSTable"></div>
     <div class="table-wrap" id="whSDetail"></div>
   </section>
@@ -1193,7 +1246,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=168"></script>
+  <script src="/static/app.js?v=169"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

@@ -123,7 +123,7 @@ def test_docs_export_columns(db):
         doc_type="receipt",
     )
     df = warehouse.docs_dataframe(db, "receipt")
-    assert list(df.columns) == ["Дата", "№ документа", "Контрагент", "Артикул", "Кол-во", "Цена"]
+    assert list(df.columns) == ["Дата", "№ документа", "Контрагент", "Артикул", "Штрихкод", "Размер", "Кол-во", "Цена"]
     assert len(df) == 1
     assert df.iloc[0]["Контрагент"] == "ООО Поставщик"
 

@@ -2,7 +2,7 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **153**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **157**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
@@ -36,7 +36,7 @@
 - [sync](#sync) — 1 шт.
 - [system](#system) — 1 шт.
 - [tickets](#tickets) — 8 шт.
-- [warehouse](#warehouse) — 14 шт.
+- [warehouse](#warehouse) — 18 шт.
 - [wb](#wb) — 11 шт.
 - [yandex](#yandex) — 4 шт.
 
@@ -319,6 +319,10 @@
 | POST | `/api/warehouse/fromdisk` | `api_wh_fromdisk` | Импорт всех .xlsx из папки «Наш склад/Приход или Отгрузка» на Диске. |
 | POST | `/api/warehouse/import/counterparties` | `import_cp` |  |
 | POST | `/api/warehouse/import/docs` | `import_docs` |  |
+| POST | `/api/warehouse/paths/import` | `api_wh_paths_import` |  |
+| POST | `/api/warehouse/paths/scan` | `api_wh_paths_scan` |  |
+| GET | `/api/warehouse/paths/settings` | `api_wh_paths_settings` |  |
+| PUT | `/api/warehouse/paths/settings` | `api_wh_paths_settings_put` |  |
 | GET | `/api/warehouse/stock` | `api_stock` |  |
 | POST | `/api/warehouse/todisk` | `api_wh_todisk` | Сформировать Excel и загрузить на Яндекс.Диск в папку /agent_market/Наш склад/<kind>. |
 | GET | `/api/warehouse/turnover` | `api_turnover` |  |

@@ -87,6 +87,34 @@ def create_tables():
         conn.execute(text("ALTER TABLE funnel_metric ADD COLUMN IF NOT EXISTS comparison_json text"))
         # Настройки автопилота цен в разрезе связки (галкой «Синхронизация автопилота цен»)
         conn.execute(text("ALTER TABLE cabinets ADD COLUMN IF NOT EXISTS pricing_settings text DEFAULT ''"))
+        # T-57: настройки импорта отправок из папок WB в разрезе связки.
+        conn.execute(text("ALTER TABLE cabinets ADD COLUMN IF NOT EXISTS warehouse_settings text DEFAULT ''"))
+        conn.execute(text("ALTER TABLE warehouse_docs ADD COLUMN IF NOT EXISTS source_ref varchar(300) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE warehouse_docs ALTER COLUMN source_ref SET NOT NULL"))
+        conn.execute(text("ALTER TABLE warehouse_docs ADD COLUMN IF NOT EXISTS cabinet_id integer"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_warehouse_docs_cabinet_id "
+            "ON warehouse_docs (cabinet_id)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE warehouse_docs DROP CONSTRAINT IF EXISTS uq_wh_doc_type_num_date_cp"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_wh_doc_src ON warehouse_docs "
+            "(doc_type, doc_num, doc_date, counterparty_id, source_ref)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE warehouse_doc_items ADD COLUMN IF NOT EXISTS barcode varchar(100) DEFAULT ''"
+        ))
+        conn.execute(text(
+            "ALTER TABLE warehouse_doc_items ALTER COLUMN barcode SET NOT NULL"
+        ))
+        conn.execute(text(
+            "ALTER TABLE warehouse_doc_items ADD COLUMN IF NOT EXISTS size varchar(50) DEFAULT ''"
+        ))
+        conn.execute(text(
+            "ALTER TABLE warehouse_doc_items ALTER COLUMN size SET NOT NULL"
+        ))
         # T-33: главная связка пользователя (межсвязочное влияние автопилота цен).
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS main_cabinet_id integer"))
         conn.execute(text("ALTER TABLE stocks DROP CONSTRAINT IF EXISTS uq_stocks_market_date_article_wh"))
