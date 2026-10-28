@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.providers import factory as provider_factory
 from app.services import excel_io
-from app.services.cabinets import active_credentials, db_active_info, run_per_link
+from app.services.cabinets import provider_credentials, run_per_link
 
 
 def _cab_provider(db=None):
@@ -29,12 +29,9 @@ def _cab_provider(db=None):
 
     Contextvar активной связки виден не всегда (эндпоинт в другом треде
     threadpool, чем get_db) — тогда читаем связку из сессии, чтобы не уйти
-    молча на .env-ключ другого продавца.
+    молча на .env-ключ другого продавца (см. `cabinets.provider_credentials`).
     """
-    creds = active_credentials("wb")
-    if not creds and db is not None:
-        info = db_active_info(db)
-        creds = info.creds_for("wb") if info else {}
+    creds = provider_credentials(db, "wb")
     return provider_factory.get_wb_provider(credentials=creds or None)
 
 PRICING_DEFAULTS = {

@@ -2,6 +2,7 @@
 """Личные кабинеты-связки: схемы, миграция, поиск по схеме, эндпоинты, refresh по связке."""
 import time
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -451,6 +452,44 @@ def test_wb_oz_creds_fall_back_to_session_active_cabinet(db):
     # без сессии (contextvar пуст) — None: провайдер ушёл бы на .env
     assert _wb_creds() is None
     assert _oz_creds() is None
+
+
+def test_provider_credentials_never_fall_back_to_env_inside_cabinet(db):
+    """У связки без ключей МП — ошибка, а не .env-ключи другого продавца (T-63)."""
+    from app.services.cabinets import provider_credentials
+
+    creds = secrets.encrypt({"ozon": {"client_id": "cid", "api_key": "oz-key"}})
+    c = _mk_cab(db, code="no-wb-keys", marketplace="ozon", creds=creds)
+    db._active_info = cabinet_service.resolve_active(db, str(c.id))
+
+    assert provider_credentials(db, "ozon") == {"client_id": "cid", "api_key": "oz-key"}
+    with pytest.raises(RuntimeError, match="не заполнены WB-ключи"):
+        provider_credentials(db, "wb")
+
+
+def test_api_wb_prices_uses_active_cabinet_creds(api_client, db, monkeypatch):
+    """«Обновить цены WB» тянет цены ключами активной связки (T-63).
+
+    Регресс: pull_wb_prices звал _wb_provider() без сессии, contextvar активной
+    связки в треде эндпоинта пуст → провайдер молча уходил на .env-ключи
+    кабинета 3, и в price_snapshots связки писались цены чужого магазина
+    (все рекомендации «нет nmID в списке цен», таблица автопилота пустая).
+    """
+    from app.providers import factory as provider_factory
+
+    _drop_cab_schemas()
+    creds = secrets.encrypt({"wb": {"standard": "cab-wb-token"}})
+    _mk_cab(db, code="prices1", marketplace="wb", creds=creds)
+    seen = {}
+
+    def spy(with_fail_fast=False, credentials=None, **kw):
+        seen["creds"] = credentials
+        raise RuntimeError("stop before network")
+
+    monkeypatch.setattr(provider_factory, "get_wb_provider", spy)
+    r = api_client.post("/api/wb/prices", params={"excel": 0, "write_db": 0})
+    assert r.status_code == 502
+    assert seen["creds"] == {"standard": "cab-wb-token"}
 
 
 def test_api_pricing_settings_roundtrip_and_copy(api_client, db):

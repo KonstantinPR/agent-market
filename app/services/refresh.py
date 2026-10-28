@@ -30,7 +30,6 @@ from app.providers.wb import WbProvider
 from app.services import sync as sync_service
 from app.services import progress as progress_service
 from app.services import cabinets
-from app.services.cabinets import active_credentials
 from app.services.window import parse_window
 
 
@@ -309,13 +308,12 @@ def _raw_json(df: pd.DataFrame) -> pd.Series:
 def _wb_provider(with_fail_fast: bool = False, db=None) -> WbProvider:
     """Провайдер WB активного кабинета (по creds кабинета, иначе из .env).
 
-    creds берём из contextvar активной связки; если он не виден (эндпоинт
-    выполняется в другом треде threadpool, чем get_db) — из Базы через db.
+    creds берём из активной связки сессии (db) — contextvar в треде эндпоинта
+    не виден. `.env`-ключи используются только когда связки нет вовсе:
+    подставлять их активной связке нельзя (это чужой продавец, см.
+    `cabinets.provider_credentials` и T-63).
     """
-    creds = active_credentials("wb")
-    if not creds and db is not None:
-        info = cabinets.db_active_info(db)
-        creds = info.creds_for("wb") if info else {}
+    creds = cabinets.provider_credentials(db, "wb")
     return provider_factory.get_wb_provider(
         with_fail_fast=with_fail_fast, credentials=creds or None
     )
@@ -397,8 +395,9 @@ def expand_wb_card_export(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _oz_provider(with_fail_fast: bool = False) -> OzonProvider:
-    creds = active_credentials("ozon")
+def _oz_provider(with_fail_fast: bool = False, db=None) -> OzonProvider:
+    """Провайдер Ozon активной связки; см. `_wb_provider` про фолбэк на .env."""
+    creds = cabinets.provider_credentials(db, "ozon")
     return provider_factory.get_oz_provider(
         with_fail_fast=with_fail_fast, credentials=creds or None
     )
@@ -442,7 +441,7 @@ def oz_error(e: Exception):
 
 # ------------------------------------------------------------- pull_* (общий слой)
 def pull_wb_cards(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     df = prov.get_cards()
     n = 0
     n_nm = 0
@@ -462,7 +461,7 @@ def pull_wb_cards(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
 
 
 def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     raw = prov.get_stock_report()
     n = 0
     if not raw.empty:
@@ -514,7 +513,7 @@ def pull_wb_stock(db, provider: Optional[WbProvider] = None, write_db: bool = Tr
 
 def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None,
                    write_db: bool = True) -> dict:
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     df = prov.get_sales_funnel(from_, to_)
     n = 0
     if write_db and not df.empty:
@@ -527,7 +526,7 @@ def pull_wb_funnel(db, from_, to_, provider: Optional[WbProvider] = None,
 
 
 def pull_wb_prices(db, provider: Optional[WbProvider] = None, write_db: bool = True) -> dict:
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     df = prov.get_prices()
     n = 0
     if write_db and not df.empty:
@@ -540,7 +539,7 @@ def pull_wb_prices(db, provider: Optional[WbProvider] = None, write_db: bool = T
 
 def pull_wb_storage(db, days: int = 7, provider: Optional[WbProvider] = None,
                     write_db: bool = True) -> dict:
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     df = prov.get_storage_cost(number_last_days=days)
     n = 0
     if write_db and not df.empty:
@@ -557,7 +556,7 @@ def pull_wb_storage_charges(db, from_, to_, provider: Optional[WbProvider] = Non
     Точные суммы по артикулам (paid_storage, nm×дата), которыми заменяется
     эвристическое распределение «Хранения» в детализации за это окно.
     """
-    prov = provider or _wb_provider()
+    prov = provider or _wb_provider(db=db)
     df = prov.get_storage_charges(from_, to_)
     n = 0
     if write_db and not df.empty:
@@ -799,7 +798,7 @@ def wb_detail_gaps(db, date_from=None, date_to=None, period: str = "weekly",
 
 
 def pull_oz_cards(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_cards()
     n = 0
     n_sk = 0
@@ -864,8 +863,8 @@ def pull_catalog(db, overwrite: bool = False, write_db: bool = True,
     сливает карточки в общий каталог (products + product_sizes +
     product_aliases) через sync_catalog_from_cards.
     """
-    prov_wb = provider_wb or _wb_provider()
-    prov_oz = provider_oz or _oz_provider()
+    prov_wb = provider_wb or _wb_provider(db=db)
+    prov_oz = provider_oz or _oz_provider(db=db)
     wb_df = prov_wb.get_cards()
     oz_df = prov_oz.get_cards()
     wb_rows = 0 if wb_df is None else int(len(wb_df))
@@ -928,7 +927,7 @@ def _enrich_oz_stock_barcode(db, sdf: pd.DataFrame):
 
 
 def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_stock()
     n = 0
     if write_db and not df.empty:
@@ -956,7 +955,7 @@ def pull_oz_stock(db, provider: Optional[OzonProvider] = None, write_db: bool = 
 
 
 def pull_oz_prices(db, provider: Optional[OzonProvider] = None, write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_prices()
     n = 0
     if write_db and not df.empty:
@@ -969,7 +968,7 @@ def pull_oz_prices(db, provider: Optional[OzonProvider] = None, write_db: bool =
 
 def pull_oz_realization(db, month: int, year: int, provider: Optional[OzonProvider] = None,
                         write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_realization(month, year)
     n = 0
     if write_db:
@@ -999,7 +998,7 @@ def pull_oz_realizations(db, from_, to_, provider: Optional[OzonProvider] = None
     Отчёт реализации датирован концом месяца, поэтому строки не фильтруются
     по дням окна — окно выбирает набор месяцев.
     """
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     frames = []
     for yy, mm in _month_range(from_, to_):
         df = prov.get_realization(mm, yy)
@@ -1017,7 +1016,7 @@ def pull_oz_realizations(db, from_, to_, provider: Optional[OzonProvider] = None
 
 def pull_oz_cashflow(db, from_, to_, provider: Optional[OzonProvider] = None,
                      write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_cash_flow(from_, to_)
     n = 0
     if write_db and not df.empty:
@@ -1031,7 +1030,7 @@ def pull_oz_cashflow(db, from_, to_, provider: Optional[OzonProvider] = None,
 
 def pull_oz_detail(db, from_, to_, provider: Optional[OzonProvider] = None,
                    write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_sales_detail(from_, to_)
     n = 0
     if write_db and not df.empty:
@@ -1047,7 +1046,7 @@ def pull_oz_detail(db, from_, to_, provider: Optional[OzonProvider] = None,
 
 def pull_oz_buyout(db, from_, to_, provider: Optional[OzonProvider] = None,
                    write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_buyout(from_, to_)
     n = 0
     if write_db and not df.empty:
@@ -1062,7 +1061,7 @@ def pull_oz_buyout(db, from_, to_, provider: Optional[OzonProvider] = None,
 
 def pull_oz_placements(db, from_, to_, provider: Optional[OzonProvider] = None,
                        write_db: bool = True) -> dict:
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_placement(from_, to_)
     n = 0
     if write_db and not df.empty:
@@ -1083,7 +1082,7 @@ def pull_oz_accrual(db, from_, to_, provider: Optional[OzonProvider] = None,
     затем для оставшихся SKU — картой SKU → Offer ID из /v3/product/info/list
     (нужна для начислений по товарам без продаж в загруженной детализации).
     """
-    prov = provider or _oz_provider()
+    prov = provider or _oz_provider(db=db)
     df = prov.get_accrual(from_, to_)
     n = 0
     if write_db and not df.empty:

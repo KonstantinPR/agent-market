@@ -31,7 +31,8 @@ from sqlalchemy.orm import Session
 from app import models
 from app.providers import factory as provider_factory
 from app.services import margin as margin_service
-from app.services.cabinets import active_credentials, db_active_info, resolve_main, run_per_link
+from app.services.cabinets import (provider_credentials, resolve_main,
+                                   run_per_link)
 from app.services.pricing import (
     PRICING_DEFAULTS,
     _bias_shift,
@@ -107,10 +108,7 @@ def _oz_provider(db=None):
     См. `pricing._cab_provider`: при пустом contextvar (эндпоинт в другом треде
     threadpool, чем get_db) читаем связку из сессии, чтобы не уйти на .env.
     """
-    creds = active_credentials("ozon")
-    if not creds and db is not None:
-        info = db_active_info(db)
-        creds = info.creds_for("ozon") if info else {}
+    creds = provider_credentials(db, "ozon")
     return provider_factory.get_oz_provider(credentials=creds or None)
 
 

@@ -461,6 +461,31 @@ def active_credentials(api: str) -> dict:
     return info.creds_for(api)
 
 
+def provider_credentials(db: Optional[Session], api: str) -> dict:
+    """Ключи провайдера активной связки для реальных вызовов API.
+
+    Пустой результат ({}) допустим ТОЛЬКО когда активной связки нет вовсе —
+    тогда провайдер берёт ключи из .env (тесты, скрипты, однокабинетная
+    установка). Если связка есть, но ключей нужного маркетплейса в ней нет,
+    подставлять .env нельзя: там ключи ДРУГОГО продавца. Молчаливый фолбэк
+    уже приводил к тому, что в схему связки писались цены/карточки чужого
+    магазина (пустой «Автопилот цен», T-63), поэтому здесь ошибка.
+    """
+    if db is not None:
+        info = db_active_info(db)
+    else:
+        info = _active.get()
+    creds = info.creds_for(api) if info else {}
+    if not creds and info is not None:
+        mp = {"wb": "WB", "ozon": "Ozon"}.get(api, api)
+        raise RuntimeError(
+            f"У связки «{info.name or info.code}» не заполнены {mp}-ключи "
+            "(Настройки → Связки). Подставлять ключи из .env нельзя: "
+            "они принадлежат другому продавцу."
+        )
+    return creds
+
+
 def db_active_info(db: Session) -> Optional["CabinetInfo"]:
     """Инфо активной связки сессии db: как разрешил get_db (кука), иначе дефолт.
 

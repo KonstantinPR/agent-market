@@ -45,7 +45,6 @@ from app.services import (
     xyz as xyz_service,
     yandex_disk as yandex_service,
 )
-from app.services.cabinets import active_credentials
 from app.services.window import parse_window
 from app.services.columns import export_cols
 
@@ -57,25 +56,15 @@ def _wb_creds(db=None):
     другом треде threadpool, чем get_db, и тогда `active_credentials` пуст.
     Раньше это молча уводило провайдер на .env-ключ (другой продавец) — при
     смене связки задачи уходили не тому продавцу. При пустом contextvar берём
-    активную связку из сессии.
+    активную связку из сессии; если связка есть, а ключей в ней нет — ошибка,
+    а не чужие ключи из .env (см. `cabinets.provider_credentials`).
     """
-    creds = active_credentials("wb")
-    if not creds and db is not None:
-        info = cabinet_service.db_active_info(db)
-        creds = info.creds_for("wb") if info else {}
-    return creds or None
+    return cabinet_service.provider_credentials(db, "wb") or None
 
 
 def _oz_creds(db=None):
-    """Ozon-ключи активного кабинета для провайдера (None — фолбэк на .env).
-
-    См. `_wb_creds`: при пустом contextvar читаем активную связку из сессии.
-    """
-    creds = active_credentials("ozon")
-    if not creds and db is not None:
-        info = cabinet_service.db_active_info(db)
-        creds = info.creds_for("ozon") if info else {}
-    return creds or None
+    """Ozon-ключи активного кабинета для провайдера (None — фолбэк на .env)."""
+    return cabinet_service.provider_credentials(db, "ozon") or None
 
 
 router = APIRouter()

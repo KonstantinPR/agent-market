@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "180";
+const UI_VERSION = "181";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -585,6 +585,9 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
   st.pinned = pinned || null;
   st.footersFn = opts.footersFn || null;
   st.onFilter = opts.onFilter || null;
+  // Текст пустого состояния: раздел может объяснить, почему строк нет
+  // (например, «все строки скрыты фильтром»), вместо общего «нет данных».
+  st.emptyText = opts.emptyText || "";
   if (opts.colviewTab) st.colviewTab = opts.colviewTab;
   if (!pagerSel && container.id) {
     const auto = document.getElementById(container.id + "Pager");
@@ -656,7 +659,11 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
     if (pagerHost) pagerHost.innerHTML = "";
     if (!st.rows || !st.rows.length) {
       setPagerInfo("");
-      container.innerHTML = '<div class="empty">Нет данных за выбранный период</div>';
+      const div = document.createElement("div");
+      div.className = "empty";
+      div.textContent = st.emptyText || "Нет данных за выбранный период";
+      container.innerHTML = "";
+      container.appendChild(div);
       return;
     }
     const list = computeList();
@@ -11489,6 +11496,18 @@ async function refreshPricingPrices() {
   }
 }
 
+// Пустое состояние таблицы автопилота: «нет данных» и «все строки скрыл
+// фильтр» — разные вещи. Второе раньше выглядело как «Нет данных за выбранный
+// период», хотя данные есть: 305 строк с причиной «держать/пропустить».
+function pricingEmptyText(rows, hiddenPassive, hidePassive) {
+  if (rows.length) return "";
+  if (hidePassive && hiddenPassive > 0) {
+    return "Все " + fmt(hiddenPassive) + " строк скрыты фильтром «Скрыть " +
+      "держать/пропустить» — снимите галочку в тулбаре, чтобы увидеть " +
+      "причины решений.";
+  }
+  return "Нет данных за выбранный период";
+}
 async function renderPricing(apply) {
   if (pricingMpCurrent() === "oz") return renderPricingOzon(apply);
   await buildPricingSettings();
@@ -11515,8 +11534,10 @@ async function renderPricing(apply) {
         likeMatch(String(r.article || "") + " " + (r.name || ""), q)
       );
     }
-    const hiddenPassive = hidePassive ? pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length : 0;
-    const rows = pre.filter((r) => !hidePassive || (r.action !== "SKIP" && r.action !== "HOLD"));
+    const hiddenPassive = pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length;
+    const rows = hidePassive
+      ? pre.filter((r) => r.action !== "SKIP" && r.action !== "HOLD")
+      : pre;
     // Сводка пересчитывается по видимым (отфильтрованным по колонкам) строкам —
     // onFilter в pagedTable вызывает её при каждой фильтрации.
     const updateSummary = (visible) => {
@@ -11525,7 +11546,7 @@ async function renderPricing(apply) {
       let summary = "Товаров: " + fmt(visible.length);
       if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
       summary += ", решений: " + fmt(actionable);
-      if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
       // Последнее применение — сразу после счётчиков: в строке состояния текст
       // обрезается по HEADER_MSG_MAX, и в хвосте его было бы не видно.
       summary += " · " + lastApplyStatusText();
@@ -11559,6 +11580,7 @@ async function renderPricing(apply) {
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,
+      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive),
       onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
     });
     await renderPricingHistory();
@@ -11595,15 +11617,17 @@ async function renderPricingOzon(apply) {
         likeMatch(String(r.article || "") + " " + (r.name || ""), q)
       );
     }
-    const hiddenPassive = hidePassive ? pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length : 0;
-    const rows = pre.filter((r) => !hidePassive || (r.action !== "SKIP" && r.action !== "HOLD"));
+    const hiddenPassive = pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length;
+    const rows = hidePassive
+      ? pre.filter((r) => r.action !== "SKIP" && r.action !== "HOLD")
+      : pre;
     const updateSummary = (visible) => {
       const actionable = visible.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
       const underCooldown = visible.filter((r) => r.status === "skipped_cooldown").length;
       let summary = "Ozon · товаров: " + fmt(visible.length);
       if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
       summary += ", решений: " + fmt(actionable);
-      if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
       summary += " · " + lastApplyStatusText();
       if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
@@ -11615,6 +11639,7 @@ async function renderPricingOzon(apply) {
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", ozPricingHeaders), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,
+      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive),
       onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
     });
     await renderPricingHistory();

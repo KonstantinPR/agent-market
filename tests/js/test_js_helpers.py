@@ -820,6 +820,16 @@ assert.ok(/refreshPricingLastApply\("wb"\)/.test(jsSrc) &&
 assert.strictEqual((jsSrc.match(/summary \+= " · " \+ lastApplyStatusText\(\);/g) || []).length, 2,
   "последнее применение добавляется в сводку WB и Ozon");
 
+// Пустое состояние автопилота: «все строки скрыл фильтр» ≠ «нет данных».
+assert.ok(/function pricingEmptyText\(/.test(jsSrc),
+  "есть helper pricingEmptyText для пустого состояния автопилота");
+assert.ok(jsSrc.includes("скрыты фильтром «Скрыть"),
+  "пустая таблица объясняет, что строки скрыл фильтр «Скрыть держать/пропустить»");
+assert.strictEqual((jsSrc.match(/emptyText: pricingEmptyText\(/g) || []).length, 2,
+  "пустое состояние передаётся в таблицу автопилота WB и Ozon");
+assert.ok(/st\.emptyText = opts\.emptyText/.test(jsSrc),
+  "pagedTable умеет кастомный текст пустого состояния");
+
 // Обзор: сравнение за периоды на графиках «Динамика» и «Доход по МП».
 assert.ok(htmlSrc.includes('id="btnDashCompare"') && htmlSrc.includes('id="dashComparePanel"'),
   "в фильтрах Обзора есть меню «Сравнить ▾» для периодов");
