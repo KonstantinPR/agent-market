@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "178";
+const UI_VERSION = "180";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -11294,20 +11294,17 @@ const HIST_PAGE = 10;
 let _histRows = null;
 let _histShown = HIST_PAGE;
 
-// Последнее применение автопилота по активной связке: плашка в тулбаре +
-// короткий суффикс для зелёной строки состояния («что и когда применили»).
+// Последнее применение автопилота по активной связке: пишется в зелёную строку
+// состояния (там же, где сводка расчёта), а не в тулбар — иначе длинный текст
+// раздвигает кнопки.
 let _pricingLastApply = null;
-
-function fmtLastApplyShort(la) {
-  if (!la) return "";
-  const t = String(la.applied_at || "").slice(11, 16);
-  return "посл. прим. " + (t ? t + " " : "") + la.count + " арт.";
-}
 
 function fmtLastApplyFull(la) {
   if (!la) return "";
   const mp = MP_LABELS[la.marketplace] || (la.marketplace === "mixed" ? "WB+Ozon" : (la.marketplace || ""));
-  let s = "Последнее применение" + (mp ? " " + mp : "") + ": " + (la.applied_at || "");
+  // Секунды/микросекунды в строке состояния только съедают место — до минут.
+  const t = String(la.applied_at || "").slice(0, 16);
+  let s = "Последнее применение" + (mp ? " " + mp : "") + ": " + t;
   s += " · применено: " + la.count;
   const a = la.actions || {};
   const parts = [];
@@ -11326,23 +11323,19 @@ function fmtLastApplyFull(la) {
 }
 
 async function refreshPricingLastApply(mp) {
-  const el = $("#pricingLastApply");
   try {
     _pricingLastApply = await api("/pricing/last-apply?mp=" + (mp || ""));
   } catch (err) {
     _pricingLastApply = null;
   }
-  if (el) {
-    const la = _pricingLastApply && _pricingLastApply.last_apply;
-    if (la) {
-      el.textContent = fmtLastApplyFull(la);
-      el.classList.remove("empty");
-    } else {
-      el.textContent = "Применений ещё не было";
-      el.classList.add("empty");
-    }
-  }
   return _pricingLastApply;
+}
+
+// Текст о последнем применении для строки состояния: полный (дата, что и где
+// применили), «применений ещё не было» — пока журнал пуст.
+function lastApplyStatusText() {
+  const la = _pricingLastApply && _pricingLastApply.last_apply;
+  return la ? fmtLastApplyFull(la) : "применений ещё не было";
 }
 
 async function renderPricingHistory() {
@@ -11533,6 +11526,9 @@ async function renderPricing(apply) {
       if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
       summary += ", решений: " + fmt(actionable);
       if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      // Последнее применение — сразу после счётчиков: в строке состояния текст
+      // обрезается по HEADER_MSG_MAX, и в хвосте его было бы не видно.
+      summary += " · " + lastApplyStatusText();
       const hiddenDead = Number(data.hidden_dead || 0);
       if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
       const nonWb = Number(data.non_wb || 0);
@@ -11556,10 +11552,7 @@ async function renderPricing(apply) {
           summary += " · цены WB: из API";
         }
       } catch (e) { /* ignore */ }
-      // Сводка — в общую зелёную строку состояния шапки (как везде); полный
-      // текст длиннее HEADER_MSG_MAX — уходит в тултип через normalizeStatus.
-      const laSuffix = fmtLastApplyShort(_pricingLastApply && _pricingLastApply.last_apply);
-      if (laSuffix) summary += " · " + laSuffix;
+      // Длиннее HEADER_MSG_MAX — хвост уходит в тултип через normalizeStatus.
       msg.textContent = summary;
     };
     await refreshPricingLastApply("wb");
@@ -11611,12 +11604,11 @@ async function renderPricingOzon(apply) {
       if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
       summary += ", решений: " + fmt(actionable);
       if (hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      summary += " · " + lastApplyStatusText();
       if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
       if (data.as_of) summary += " · на " + data.as_of;
       if (data.note) summary += " · " + data.note;
-      const laSuffix = fmtLastApplyShort(_pricingLastApply && _pricingLastApply.last_apply);
-      if (laSuffix) summary += " · " + laSuffix;
       msg.textContent = summary;
     };
     await refreshPricingLastApply("ozon");

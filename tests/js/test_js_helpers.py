@@ -803,19 +803,22 @@ assert.ok(/refresh-step\s*' \+ s\.status/.test(jsSrc) ||
 assert.ok(htmlSrc.includes('id="refreshBar"'),
   "в модалке есть полоса прогресса refreshBar");
 
-// Автопилот: плашка «последнее применение» + суффикс в зелёной строке.
-assert.ok(htmlSrc.includes('id="pricingLastApply"'),
-  "в тулбаре автопилота есть плашка pricingLastApply");
+// Автопилот: последнее применение — в зелёной строке состояния, а не плашкой
+// в тулбаре (длинный текст раздвигал кнопки).
+assert.ok(!htmlSrc.includes('id="pricingLastApply"'),
+  "в тулбаре автопилота нет плашки последнего применения");
 assert.ok(jsSrc.includes("refreshPricingLastApply") &&
   jsSrc.includes('"/pricing/last-apply?mp="'),
   "app.js грузит /pricing/last-apply по активному маркетплейсу");
-assert.ok(jsSrc.includes("fmtLastApplyShort") && jsSrc.includes("fmtLastApplyFull"),
-  "есть короткий и полный форматы последнего применения");
+assert.ok(jsSrc.includes("fmtLastApplyFull") && jsSrc.includes("lastApplyStatusText"),
+  "есть полный формат последнего применения для строки состояния");
+assert.ok(jsSrc.includes('"применений ещё не было"'),
+  "пустой журнал применения сообщается в строке состояния");
 assert.ok(/refreshPricingLastApply\("wb"\)/.test(jsSrc) &&
   /refreshPricingLastApply\("ozon"\)/.test(jsSrc),
-  "renderPricing и renderPricingOzon обновляют плашку своего МП");
-assert.ok(jsSrc.includes('summary += " · " + laSuffix'),
-  "суффикс последнего применения добавляется в зелёную строку");
+  "renderPricing и renderPricingOzon обновляют последнее применение своего МП");
+assert.strictEqual((jsSrc.match(/summary \+= " · " \+ lastApplyStatusText\(\);/g) || []).length, 2,
+  "последнее применение добавляется в сводку WB и Ozon");
 
 // Обзор: сравнение за периоды на графиках «Динамика» и «Доход по МП».
 assert.ok(htmlSrc.includes('id="btnDashCompare"') && htmlSrc.includes('id="dashComparePanel"'),
