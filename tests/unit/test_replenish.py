@@ -88,6 +88,74 @@ def test_replenish_wb_ship_and_buy(db):
     assert r["meta"]["ship_total"] == 20
 
 
+def test_supplier_transit_reduces_buy_but_not_sort(db, monkeypatch):
+    """Товар от поставщика уменьшает закупку, но не отгрузку со склада."""
+    from app.services import transit
+
+    monkeypatch.setattr(
+        transit, "supplier_in_transit",
+        lambda db_, as_of=None: {("WB-1", ""): 10},
+    )
+    db.add(models.Product(article="WB-1", name="ВБ", net_cost=100.0, replenishable=True))
+    db.add(models.CustomStock(article="WB-1", quantity=50, net_cost=100))
+    _card(db, "wb", vendor="WB-1")
+    db.add(_wb_row("w1", "WB-1", TODAY, qty=60, income=54000.0, amount=60000.0))
+    db.commit()
+
+    row = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)["rows"][0]
+    assert row["supplier_in_way"] == 10
+    assert row["mp_in_way"] == 0
+    assert row["need_buy"] == 0             # 30 дн × 2/дн − (50 + 10), не 10
+    assert row["to_sort"] == 20             # план WB не зависит от поставщика
+    assert row["ship_wb"] == 20             # отгружаем из того, что уже на складе
+
+
+def test_mp_transit_reduces_wb_deficit_and_buy(db, monkeypatch):
+    """Наш товар в пути на WB закрывает дефицит МП — повторно не докупаем."""
+    from app.services import transit
+
+    monkeypatch.setattr(
+        transit, "marketplace_in_transit",
+        lambda db_, as_of=None: {"wb": {("WB-1", ""): 20}, "ozon": {}},
+    )
+    db.add(models.Product(article="WB-1", name="ВБ", net_cost=100.0, replenishable=True))
+    db.add(models.CustomStock(article="WB-1", quantity=50, net_cost=100))
+    _card(db, "wb", vendor="WB-1")
+    db.add(_wb_row("w1", "WB-1", TODAY, qty=60, income=54000.0, amount=60000.0))
+    db.commit()
+
+    row = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)["rows"][0]
+    assert row["wb_mp_in_way"] == 20
+    assert row["mp_in_way"] == 20
+    assert row["wb_avail"] == 20            # к продаже: остаток + наши поставки в пути
+    assert row["wb_def"] == 0               # дефицит уже закрыт тем, что едет
+    assert row["to_sort"] == 0
+    assert row["need_buy"] == 0             # 60 − (50 нашего + 20 в пути)
+    assert row["ship_wb"] == 0              # повторно на WB не отгружаем
+
+
+def test_mp_transit_is_separate_from_marketplace_in_way(db, monkeypatch):
+    """Данные МП «в пути» и наши поставки в пути — разные слагаемые, без двойного счёта."""
+    from app.services import transit
+
+    monkeypatch.setattr(
+        transit, "marketplace_in_transit",
+        lambda db_, as_of=None: {"wb": {("WB-1", ""): 5}, "ozon": {}},
+    )
+    db.add(models.Product(article="WB-1", name="ВБ", net_cost=100.0, replenishable=True))
+    _card(db, "wb", vendor="WB-1")
+    _stock(db, "wb", "WB-1", TODAY, qty=0, qf=0, way=5)
+    db.add(_wb_row("w1", "WB-1", TODAY, qty=60, income=54000.0, amount=60000.0))
+    db.commit()
+
+    row = replenish_rows(db, D0, TODAY, target_days=30, span_days=30)["rows"][0]
+    assert row["wb_in_way"] == 5            # данные МП
+    assert row["wb_mp_in_way"] == 5         # наша поставка на МП
+    assert row["mp_in_way"] == 5
+    assert row["wb_avail"] == 10            # 5 + 5, а не 5 или 20
+    assert row["need_buy"] == 50            # 60 − (5 + 5)
+
+
 def test_replenish_ship_shows_mp_when_buy_needed(db):
     """Свой склад пуст: «Отгрузить WB» — адрес докупки, а не 0.
 
@@ -559,6 +627,43 @@ def test_size_view_floor_gives_one_to_empty_card_size(db):
         assert by_size[s]["ship_wb"] == 1   # пол обоих размеров покрыт (склад 3)
 
 
+def test_size_view_transit_by_size(db, monkeypatch):
+    """Транзит в размерном режиме: по своему размеру, без размазывания пустого."""
+    from app.services import transit
+
+    monkeypatch.setattr(
+        transit, "supplier_in_transit",
+        lambda db_, as_of=None: {("TZ", "S"): 3, ("TZ", ""): 99},
+    )
+    monkeypatch.setattr(
+        transit, "marketplace_in_transit",
+        lambda db_, as_of=None: {"wb": {("TZ", "S"): 20}, "ozon": {}},
+    )
+    db.add(models.Product(article="TZ", name="Транзит", net_cost=100.0))
+    _card(db, "wb", vendor="TZ", size="S", barcode="B-TS")
+    _card(db, "wb", vendor="TZ", size="L", barcode="B-TL")
+    db.add(_wb_row_size("tz1", "TZ", TODAY, qty=60, tech_size="S",
+                        income=54000.0, amount=60000.0))
+    db.commit()
+
+    r = replenish_rows(db, D0, TODAY, target_days=30, span_days=30, view="sizes")
+    by_size = {x["size"]: x for x in r["rows"]}
+    s = by_size["S"]
+    assert s["supplier_in_way"] == 3
+    assert s["wb_mp_in_way"] == 20
+    assert s["mp_in_way"] == 20
+    assert s["wb_avail"] == 20
+    assert s["to_sort"] == 0
+    assert s["wb_def"] == 0
+    sz_l = by_size["L"]
+    # ключ с пустым размером не размазывается по всем размерам артикула
+    assert sz_l["supplier_in_way"] == 0
+    assert sz_l["mp_in_way"] == 0
+    assert sz_l["to_sort"] == 1             # пол пустого размера остаётся
+    assert r["meta"]["supplier_in_way_total"] == 3
+    assert r["meta"]["mp_in_way_total"] == 20
+
+
 def test_size_view_hide_zero_keeps_sizes_with_stock(db):
     """hide_zero_sizes убирает «везде 0», но держит размер с остатком на складе."""
     db.add(models.Product(article="STK", name="С остатком", net_cost=100.0))
@@ -687,6 +792,52 @@ def test_api_replenish_export(db, api_client):
     assert resp.headers["content-type"] == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+def test_api_replenish_transit_fields_and_excel(db, api_client, monkeypatch):
+    """Новые поля «в пути» есть в API и в Excel-выгрузке (с подписями)."""
+    from app.services import transit
+
+    monkeypatch.setattr(
+        transit, "supplier_in_transit",
+        lambda db_, as_of=None: {("TXP", ""): 4},
+    )
+    monkeypatch.setattr(
+        transit, "marketplace_in_transit",
+        lambda db_, as_of=None: {"wb": {("TXP", ""): 6}, "ozon": {}},
+    )
+    db.add(models.Product(article="TXP", name="Транзит", net_cost=100.0))
+    db.add(models.CustomStock(article="TXP", quantity=50, net_cost=100))
+    _card(db, "wb", vendor="TXP")
+    db.add(_wb_row("tx1", "TXP", TODAY, qty=60, income=54000.0, amount=60000.0))
+    db.commit()
+
+    resp = api_client.get("/api/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+        "target_days": 30, "window_days": 30,
+    })
+    assert resp.status_code == 200
+    row = resp.json()["rows"][0]
+    assert row["supplier_in_way"] == 4
+    assert row["mp_in_way"] == 6
+    assert row["wb_mp_in_way"] == 6
+    assert row["oz_mp_in_way"] == 0
+    meta = resp.json()["meta"]
+    assert meta["supplier_in_way_total"] == 4
+    assert meta["mp_in_way_total"] == 6
+
+    xp = api_client.get("/api/export/replenish", params={
+        "date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+    })
+    assert xp.status_code == 200
+    ws = load_workbook(io.BytesIO(xp.content)).active
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    assert "В пути от поставщиков" in headers
+    assert "В пути на маркетплейсы" in headers
+    col = headers.index("В пути от поставщиков") + 1
+    assert ws.cell(2, col).value == 4
+    col = headers.index("В пути на маркетплейсы") + 1
+    assert ws.cell(2, col).value == 6
 
 
 def test_api_replenish_to_sort_column(db, api_client):

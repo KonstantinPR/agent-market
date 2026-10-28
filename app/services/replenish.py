@@ -9,6 +9,10 @@
    остатка и докупки, по дефициту конкретного МП: если своего товара не
    хватает, недостающее всё равно адресовано МП и уедет туда после закупки.
 
+«В пути» учитывается отдельно (см. `app/services/transit.py`): товар от
+поставщиков уменьшает докупку, товар в пути на МП — дефицит и «Дослать»
+соответствующего маркетплейса, чтобы не заказывать/не отгружать дважды.
+
 Спрос = продажи − возвраты за окно (нетто), в штуках в день. Товар без
 карточки на WB/Ozon (сверка по артикулу и штрихкоду) помечается
 неактуальным и из основной выдачи исключается.
@@ -26,6 +30,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.services import margin as margin_service
+from app.services import transit as transit_service
 from app.services.common import like_match
 from app.services.sync import _is_goods_row
 from app.services.warehouse import stock_view
@@ -314,11 +319,17 @@ def wb_sorting_plan(
     min_size_stock: int = WB_SORT_MIN_SIZE_STOCK,
     coverage_days: Optional[float] = None,
     profit_factor: Optional[dict] = None,
+    in_transit: Optional[dict] = None,
 ) -> dict:
     """План подсортировки на WB: сколько дослать в каждый размер карточки.
 
     По каждому размеру: остаток на WB (включая наш товар в пути), скорость
     продаж за окно скорости и сколько не хватает до целевого запаса.
+
+    ``in_transit`` — ``{(UPPER(article), UPPER(size)): qty}``: наш товар уже
+    едет на склад WB, но ещё не принят. Он уменьшает «дослать», иначе экран и
+    PDF отправляли бы туда же товар повторно. ``None`` — взять карту из
+    ``app.services.transit`` (общий источник для экрана, Excel и PDF).
 
     ``velocity_days`` = 0 означает «всю историю продаж» — полезно, когда товар
     продаётся сезонно и за 180 дней просто пусто. Размер, который есть в
@@ -344,6 +355,8 @@ def wb_sorting_plan(
     coverage = float(coverage_days) if coverage_days else float(target_days)
     coverage = max(0.25, coverage)
     factors = profit_factor or None
+    if in_transit is None:
+        in_transit = transit_service.marketplace_in_transit(db, date_to).get("wb") or {}
     days = int(velocity_days or 0)
     if days > 0:
         since = date_to - timedelta(days=days - 1)
@@ -380,7 +393,8 @@ def wb_sorting_plan(
             vel = net / span
             target = coverage * vel * k
             st = stocks.get((art, s), [0, 0, 0, ""])
-            avail = int(st[0] or 0) + int(st[2] or 0)
+            tr = int((in_transit or {}).get((art, s)) or 0)
+            avail = int(st[0] or 0) + int(st[2] or 0) + tr
             to_sort = max(0, _ceil(target) - avail)
             if to_sort == 0 and avail == 0 and min_size_stock > 0 and k > 0:
                 to_sort = int(min_size_stock)
@@ -392,6 +406,7 @@ def wb_sorting_plan(
                             or st[3] or ""),
                 "stock": int(st[0] or 0),
                 "in_way": int(st[2] or 0),
+                "in_transit": tr,
                 "avail": avail,
                 "net": net,
                 "vel": round(vel, 3),
@@ -815,6 +830,13 @@ def replenish_rows(
         stock_maps[c] = by_art if c in codes else {}
     cards = _cards_maps(db)
     nm_map = _nm_by_art(db)
+    supplier_way = transit_service.by_article(
+        transit_service.supplier_in_transit(db, date_to))
+    mp_way_raw = transit_service.marketplace_in_transit(db, date_to)
+    mp_way = {
+        code: transit_service.by_article(mp_way_raw.get(code) or {})
+        for code in ("wb", "ozon")
+    }
 
     keys = set(originals)
     keys |= set(our_map)
@@ -875,12 +897,17 @@ def replenish_rows(
         vel = net / span
 
         our = int(_num(our_map.get(key)))
+        sup = int(supplier_way.get(key, 0))
+        wb_t = int(mp_way["wb"].get(key, 0)) if "wb" in codes else 0
+        oz_t = int(mp_way["ozon"].get(key, 0)) if "ozon" in codes else 0
         wb_qf, wb_q, wb_w = wb_s[0], wb_s[1], wb_s[2]
         oz_qf, oz_q, oz_w = oz_s[0], oz_s[1], oz_s[2]
-        wb_avail = wb_qf + wb_w
-        oz_avail = oz_qf + oz_w
-        wb_all = wb_q + wb_w
-        oz_all = oz_q + oz_w
+        # Наши поставки в пути на МП ещё не приняты складом, но уже адресованы
+        # этому МП: уменьшают его дефицит и «Дослать». Это не то же самое, что
+        # wb_w/oz_w (данные МП о собственных перемещениях) — источники разные,
+        # поэтому слагаемые не пересекаются.
+        wb_avail = wb_qf + wb_w + wb_t
+        oz_avail = oz_qf + oz_w + oz_t
 
         wb_doc = round(wb_avail / vel_wb, 1) if vel_wb > 0 else None
         oz_doc = round(oz_avail / vel_oz, 1) if vel_oz > 0 else None
@@ -917,7 +944,10 @@ def replenish_rows(
         # после закупки. Иначе при нулевом своём остатке обе отгрузки были бы
         # 0, хотя «Купить у поставщика» > 0 — а значит товар кому-то адресован.
         # Приоритет — МП с худшим DOC, при равенстве — более маржинальному.
-        sys_stock = our + wb_all + oz_all
+        # Общий запас: склад + поставки от поставщиков + всё, что уже на МП или
+        # едет туда. Поставщицкий транзит уменьшает докупку, но в `ship_*` не
+        # попадает: пока товар не принят на наш склад, отгружать нечего.
+        sys_stock = our + sup + wb_q + wb_w + wb_t + oz_q + oz_w + oz_t
         need_buy = _ceil(target_days * vel - sys_stock)
 
         defs = []
@@ -961,7 +991,7 @@ def replenish_rows(
             status = "inactive"
         elif net <= 0:
             status = "normal"
-        elif our <= 0 and wb_all + oz_all <= 0:
+        elif sys_stock <= 0:
             status = "nostock"
         elif need_buy > 0 or ship["wb"] > 0 or ship["ozon"] > 0:
             status = "urgent"
@@ -985,6 +1015,9 @@ def replenish_rows(
             # (возвраты вычтены), net_wb дополнительно отсекает возвратные минусы.
             "wb_sells": int(net_wb),
             "our_stock": our,
+            "supplier_in_way": sup,
+            "mp_in_way": wb_t + oz_t,
+            "wb_mp_in_way": wb_t, "oz_mp_in_way": oz_t,
             "our_cost": round(_num(prod.net_cost if prod else 0), 2),
             "wb_qty": wb_q, "wb_avail": wb_avail, "wb_in_way": wb_w,
             "wb_doc": wb_doc, "wb_def": wb_def, "to_sort": to_sort,
@@ -1078,6 +1111,17 @@ def _size_view(
     wbsizes = _wb_sizes(db, date_from, date_to) if "wb" in codes else {}
     card_sizes = _wb_card_sizes(db) if "wb" in codes else {}
     card_pairs = [(a, s) for a, ss in card_sizes.items() for s in ss]
+    supplier_way = transit_service.supplier_in_transit(db, date_to)
+    mp_way = transit_service.marketplace_in_transit(db, date_to)
+
+    def _transit(article_: str, size_: str) -> tuple[int, int, int]:
+        """(от поставщиков, едет на WB, едет на Ozon) по размеру."""
+        sup_ = int(supplier_way.get((article_, size_)) or 0)
+        wb_ = (int((mp_way.get("wb") or {}).get((article_, size_)) or 0)
+               if "wb" in codes else 0)
+        oz_ = (int((mp_way.get("ozon") or {}).get((article_, size_)) or 0)
+               if "ozon" in codes else 0)
+        return sup_, wb_, oz_
 
     keys = set()
     for a, _s in prodsizes:
@@ -1119,14 +1163,15 @@ def _size_view(
     wish_rows: list = []
 
     def _zero_size(s: str, wbs: dict) -> bool:
-        """Размер «везде 0»: без продаж за окно и без остатков/в пути на МП."""
+        """Размер «везде 0»: без продаж, остатков и транзита на МП/от поставщика."""
         if int(wbs.get("sells") or 0) > 0:
             return False
         for c in codes:
             st = sz_stocks[c].get((key, s))
             if st and (int(st[0] or 0) or int(st[1] or 0) or int(st[2] or 0)):
                 return False
-        return True
+        sup_, wb_, oz_ = _transit(key, s)
+        return not (sup_ or wb_ or oz_)
 
     prods = db.execute(
         select(models.Product).where(models.Product.article.in_(sorted(keys)))
@@ -1183,7 +1228,8 @@ def _size_view(
         for s in sorted(sizes, key=lambda x: (x == "", x)):
             wbs = wbsizes.get((key, s), {"net": 0, "sells": 0, "ret": 0, "barcode": ""})
             wb_s = sz_stocks.get("wb", {}).get((key, s), [0, 0, 0, ""])
-            wb_avail = wb_s[0] + wb_s[2]
+            _sup, wb_t, _oz_t = _transit(key, s)
+            wb_avail = wb_s[0] + wb_s[2] + wb_t
             vel = wbs["net"] / span if span > 0 else 0.0
             doc = round(wb_avail / vel, 1) if vel > 0 else None
             df_ = _ceil(target_days * vel - wb_avail)
@@ -1226,11 +1272,12 @@ def _size_view(
 
         for s, wbs, wb_s, wb_avail, vel, doc, df_, to_sort in size_defs:
             zero = _zero_size(s, wbs)
+            sup, wb_t, oz_t = _transit(key, s)
             if not actual:
                 status = "inactive"
             elif wbs["net"] <= 0:
                 status = "normal"
-            elif wb_avail <= 0 and our <= 0:
+            elif wb_avail <= 0 and our <= 0 and sup <= 0:
                 status = "nostock"
             elif df_ > 0 or ship[s] > 0:
                 status = "urgent"
@@ -1253,6 +1300,9 @@ def _size_view(
                 "wb_qty": wb_s[1], "wb_avail": wb_avail, "wb_in_way": wb_s[2],
                 "wb_doc": doc, "wb_def": df_, "to_sort": to_sort, "ship_wb": ship[s],
                 "our_stock": our,
+                "supplier_in_way": sup,
+                "mp_in_way": wb_t + oz_t,
+                "wb_mp_in_way": wb_t, "oz_mp_in_way": oz_t,
                 "margin_per_one": margin_per_one, "margin_pct": margin_pct,
                 "margin": round(margin_total, 2),
                 "~zero": zero,
@@ -1330,5 +1380,9 @@ def _meta(count: int, rows=None, target_days: int = 30, span: int = 1, codes=Non
         "ship_total": sum(r.get("ship_wb", 0) + r.get("ship_oz", 0) for r in rows),
         "demand_total": round(sum(r.get("demand", 0) for r in rows), 2),
         "our_stock_total": sum(r.get("our_stock", 0) for r in rows),
+        "supplier_in_way_total": sum(r.get("supplier_in_way", 0) for r in rows),
+        "mp_in_way_total": sum(r.get("mp_in_way", 0) for r in rows),
+        "wb_mp_in_way_total": sum(r.get("wb_mp_in_way", 0) for r in rows),
+        "oz_mp_in_way_total": sum(r.get("oz_mp_in_way", 0) for r in rows),
         "margin_total": round(sum(r.get("margin", 0) for r in rows), 2),
     }
