@@ -780,6 +780,16 @@ assert.ok(apiSrc.includes("date_from=payload.get(\"date_from\")"),
 assert.ok(jsSrc.includes("Файлы аналитики будут перезаписаны"),
   "подсказка про перезапись файлов аналитики");
 
+// «Массовые действия»: строка «Последняя загрузка» и история прогонов.
+assert.ok(htmlSrc.includes('id="batchLast"') && htmlSrc.includes('id="batchLastVal"'),
+  "в меню массовых действий есть строка «Последняя загрузка»");
+assert.ok(jsSrc.includes('api("/batch/history?limit=1")'),
+  "loadBatchLast берёт последний прогон из /batch/history");
+assert.ok(jsSrc.includes("function openBatchRun(") && jsSrc.includes("batchViewOnly"),
+  "клик по «Последней загрузке» открывает подробности без опроса");
+assert.ok(apiSrc.includes('@router.get("/batch/history")'),
+  "есть эндпоинт GET /batch/history");
+
 // Массовые действия: полный план виден сразу + прогресс-полоса.
 assert.ok(/CAB_STATUS = \{ pending:/.test(jsSrc),
   "CAB_STATUS знает статус pending («ожидание»)");

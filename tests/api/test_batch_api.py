@@ -186,3 +186,64 @@ def test_batch_run_refresh_completes(db_engine, api_client, db, patch_factory):
     # соединения возвращаются в пул со схемой связки. Сброс пула не даёт
     # «протечь» search_path в последующие тесты того же процесса.
     engine.dispose()
+
+
+def test_batch_history_empty(api_client):
+    r = api_client.get("/api/batch/history")
+    assert r.status_code == 200
+    assert r.json()["runs"] == []
+
+
+def test_batch_run_is_persisted_and_survives_memory_loss(
+        db_engine, api_client, db, patch_factory):
+    """Прогон пишется в public.batch_runs: подробности доступны без _JOBS."""
+    _drop_schema()
+    c = _mk_cab(db, "b-hist", marketplace="wb",
+                creds=secrets.encrypt({"wb": {"standard": "x", "finance": "y"}}))
+    cabinet_migrate.ensure_cabinet_schemas(engine, [c])
+
+    r = api_client.post("/api/batch/run", json={"actions": ["refresh"], "scope": "all"})
+    assert r.status_code == 200, r.text
+    job_id = r.json()["job_id"]
+    st = _wait_batch(job_id)
+    assert st["status"] == "done"
+
+    runs = api_client.get("/api/batch/history?limit=5").json()["runs"]
+    assert runs and runs[0]["id"] == job_id
+    assert runs[0]["status"] == "done"
+    assert runs[0]["ok"] == 1 and runs[0]["failed"] == 0
+    assert runs[0]["actions"] == ["refresh"]
+    assert runs[0]["total"] >= 1
+    assert runs[0]["finished_at"]
+
+    # имитируем перезапуск сервера: задания в памяти больше нет, а подробности
+    # и шаги (включая под-этапы обновления) должны остаться
+    with batch_service._LOCK:
+        batch_service._JOBS.pop(job_id, None)
+    hist = api_client.get(f"/api/batch/{job_id}")
+    assert hist.status_code == 200
+    body = hist.json()
+    assert body["status"] == "done"
+    assert [s["action"] for s in body["steps"]] == ["refresh"]
+    assert body["steps"][0]["status"] == "ok"
+    assert body["steps"][0]["substeps"], "под-этапы не сохранились в снимок"
+
+    db.rollback()
+    _drop_schema()
+    engine.dispose()
+
+
+def test_batch_history_interrupted_run(api_client, db):
+    """Строка осталась в running (сервер упал) — показываем как прерванную."""
+    row = models.BatchRun(status="running", scope="all",
+                          actions='["refresh"]', ok=0, failed=0, payload="{}")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    st = api_client.get(f"/api/batch/{row.id}").json()
+    assert st["status"] == "interrupted"
+    assert st["steps"][0]["label"] == "Прогон прерван"
+
+    runs = api_client.get("/api/batch/history").json()["runs"]
+    assert runs[0]["id"] == row.id and runs[0]["status"] == "running"

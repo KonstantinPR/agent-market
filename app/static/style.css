@@ -198,6 +198,15 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 .batch-go:hover { background: #333; }
 .batch-hint { font-size: 12px; color: #8a6d3b; padding: 2px 8px 4px; }
 .batch-hint:empty { display: none; }
+.batch-last { margin: 2px 4px 6px; padding: 6px 8px; border: 1px solid #e3e3e3; border-radius: 6px; background: #fafafa; cursor: pointer; }
+.batch-last:hover { background: #f1f5fb; border-color: #c9d7ea; }
+.batch-last .bl-cap { display: block; font-size: 11px; color: #777; }
+.batch-last .bl-val { display: block; font-size: 12px; color: #333; margin-top: 2px; }
+.batch-last.is-ok .bl-val { color: #2e7d32; }
+.batch-last.is-fail .bl-val { color: #a40e26; }
+.batch-last.is-empty { cursor: default; background: #fff; }
+.batch-last.is-empty:hover { background: #fff; border-color: #e3e3e3; }
+.batch-last.is-empty .bl-val { color: #999; }
 .refresh-step .rs-link { margin-left: 8px; font-size: 12px; color: #0a58ca; }
 
 /* «Массовые действия»: группа кабинета и вложенные под-этапы обновления. */

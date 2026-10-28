@@ -2,14 +2,14 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **159**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **160**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
 - [automation](#automation) — 11 шт.
-- [batch](#batch) — 6 шт.
+- [batch](#batch) — 7 шт.
 - [cabinet](#cabinet) — 8 шт.
 - [cabinets](#cabinets) — 1 шт.
 - [cards](#cards) — 1 шт.
@@ -62,6 +62,7 @@
 |---|---|---|---|
 | GET | `/api/batch` | `api_batch_active` |  |
 | GET | `/api/batch/actions` | `api_batch_actions` | Реестр массовых действий для меню (порядок, подписи, необратимость). |
+| GET | `/api/batch/history` | `api_batch_history` | Последние прогоны «Массовых действий»: сводка для строки «Последняя загрузка». |
 | POST | `/api/batch/preview` | `api_batch_preview` | Предпросмотр: сколько изменений уйдёт по каждой связке (без записи). |
 | POST | `/api/batch/run` | `api_batch_run` | Запускает массовый прогон. Коррекция цен требует confirmed=true. |
 | GET | `/api/batch/{job_id}` | `api_batch_state` |  |

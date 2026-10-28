@@ -364,6 +364,31 @@ class RefreshRun(Base):
     results: Mapped[str] = mapped_column(Text, default="[]")
 
 
+class BatchRun(Base):
+    """История прогонов «Массовых действий» (меню в шапке).
+
+    В отличие от refresh_runs, прогон батча не привязан к одной связке: он
+    проходит по нескольким, поэтому таблица живёт только в public (явная
+    схема) — воркер батча переключает search_path на схему связки, и без
+    квалификатора запись ушла бы не туда. payload — снимок состояния прогона
+    (шаги и связки) на момент завершения, чтобы подробности переживали
+    перезапуск сервера.
+    """
+
+    __tablename__ = "batch_runs"
+    __table_args__ = {"schema": "public"}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    scope: Mapped[str] = mapped_column(String(20), default="all")
+    actions: Mapped[str] = mapped_column(Text, default="[]")
+    ok: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class PriceSnapshot(Base):
     """Снимок текущих цен/скидок WB|Ozon по размеру (срез последней загрузки)."""
 

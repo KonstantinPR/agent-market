@@ -34,22 +34,22 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 12402 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 6644 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/app.js` | 12612 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 6655 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/static/columns.json` | 6592 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 2886 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2669 | запись выгрузок WB/Ozon в БД |
 | `tests/api/test_endpoints.py` | 1874 | HTTP-эндпоинты через TestClient |
-| `app/static/style.css` | 1732 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/style.css` | 1776 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `app/services/refresh.py` | 1487 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
-| `tests/js/test_js_helpers.py` | 1356 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1366 | проверка app.js через Node `vm` |
 | `app/static/index.html` | 1327 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |
 | `tests/unit/test_margin.py` | 1105 | юнит-тесты маржинальности |
 | `app/services/margin.py` | 1105 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/providers/ozon.py` | 1039 | HTTP к Ozon |
-| `app/models.py` | 812 | SQLAlchemy-модели (схема БД) |
+| `app/models.py` | 837 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
 | `app/services/warehouse.py` | 729 | складские документы (приход/отгрузка, обороты) |
 | `app/services/dashboard.py` | 692 | сводные панели дашборда |
@@ -121,7 +121,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 - **Деньги** — `OzonCashFlow`, `OzonAccrual`, `OzonBuyout`.
 - **Цены** — `PriceSnapshot` (`price_snapshots`), `PriceChange` (журнал
   решений), `BasePrice`-логика в `app/services/base_price.py`.
-- **Служебное** — `RefreshRun`, `ApiPull`.
+- **Служебное** — `RefreshRun`, `ApiPull`, `BatchRun`.
 
 ### Цены читаются из снимка БД, а не из API
 
@@ -136,6 +136,13 @@ multiprocessing сознательно не оптимизировались.
 используют и хендлеры панелей, и кнопки «Обновить WB / Ozon». Фоновые
 задания идут через `threading` последовательно по видам: ошибка одного вида
 не блокирует остальные. История запусков — `refresh_runs`.
+
+Прогоны «Массовых действий» (`app/services/batch.py`) живут в памяти только
+пока идёт запуск; итог и снимок шагов пишутся в `public.batch_runs` (модель
+`BatchRun` с явной схемой — воркер переключает `search_path` на схему связки).
+По этой таблице меню показывает «Последнюю загрузку», а `GET /api/batch/{id}`
+отдаёт подробности и после перезапуска сервера (незавершённая строка
+`running` трактуется как «прервано»).
 
 ## Тикеты как реестр
 

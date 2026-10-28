@@ -16,17 +16,22 @@
 по умолчанию; /api/batch/preview показывает, сколько изменений уйдёт по каждой
 связке, до подтверждения.
 
-Задания живут в памяти процесса (как refresh-задания): фоновая нить пишет
-job_state, UI опрашивает GET /api/batch/{job_id}.
+Живой прогресс задания держится в памяти процесса (как refresh-задания):
+фоновая нить пишет job_state, UI опрашивает GET /api/batch/{job_id}. Сводка
+каждого прогона и снимок его шагов пишутся в public.batch_runs — по ним меню
+«Массовые действия» показывает «Последнюю загрузку», и её подробности
+переживают перезапуск сервера.
 """
+import json
 import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app import models
 from app.config import BASE_DIR
 from app.database import SessionLocal
 from app.providers import factory as provider_factory
@@ -54,21 +59,138 @@ _ACTION_BY_ID = {a["id"]: a for a in ACTIONS}
 SCOPES = ("all", "active", "main")
 
 _LOCK = threading.Lock()
-_SEQ = 0
 _JOBS: dict = {}
 
 #: Сгенерированные шаблоны мин. цены: job_id -> {cab_id: путь к .xlsx}
 _MINPROMO_DIR = BASE_DIR / "data" / "batch"
 
 
-def _next_id() -> int:
-    global _SEQ
-    _SEQ += 1
-    return _SEQ
-
-
 def _now() -> str:
     return datetime.now().isoformat(sep=" ", timespec="seconds")
+
+
+# ------------------------------------------------------------ история в БД
+# Строки прогонов лежат в public.batch_runs (модель BatchRun объявлена со
+# schema="public"): воркер батча переключает search_path на схему связки,
+# поэтому неквалифицированная запись могла бы уйти в чужую схему.
+
+def _json_list(raw: Optional[str]) -> list:
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat(sep=" ", timespec="seconds") if dt else None
+
+
+def _create_run(job: dict) -> int:
+    """Заводит строку прогона в public.batch_runs и возвращает её id.
+
+    id выдаёт sequence БД: он не сбрасывается при перезапуске сервера, в
+    отличие от прежнего счётчика в памяти, и не сталкивается с историей.
+    """
+    db = SessionLocal()
+    try:
+        row = models.BatchRun(
+            status="running", scope=job["scope"],
+            actions=json.dumps(job["actions"], ensure_ascii=False))
+        db.add(row)
+        db.commit()
+        return int(row.id)
+    finally:
+        db.close()
+
+
+def _prune_runs(db: Session, keep: int = 200) -> None:
+    db.execute(text(
+        "DELETE FROM public.batch_runs WHERE id NOT IN ("
+        "SELECT id FROM public.batch_runs ORDER BY id DESC LIMIT :n)"), {"n": keep})
+
+
+def _persist_finish(job: dict, status: str, finished_at: str,
+                    snapshot: dict) -> None:
+    """Сохраняет итог прогона. Сбой истории не должен ронять сам прогон."""
+    db = SessionLocal()
+    try:
+        row = db.get(models.BatchRun, job["id"])
+        if row is None:
+            return
+        row.status = status
+        row.finished_at = datetime.fromisoformat(finished_at)
+        row.ok = int(job["ok"])
+        row.failed = int(job["failed"])
+        row.payload = json.dumps(snapshot, ensure_ascii=False)
+        _prune_runs(db)
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _load_run(job_id: int) -> Optional[dict]:
+    """Снимок прогона из БД (None, если строки нет)."""
+    db = SessionLocal()
+    try:
+        row = db.get(models.BatchRun, job_id)
+        if row is None:
+            return None
+        try:
+            data = json.loads(row.payload or "{}")
+        except (TypeError, json.JSONDecodeError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data.setdefault("id", row.id)
+        data.setdefault("scope", row.scope)
+        data.setdefault("actions", _json_list(row.actions))
+        data.setdefault("started_at", _iso(row.started_at))
+        data.setdefault("finished_at", _iso(row.finished_at))
+        data.setdefault("ok", int(row.ok or 0))
+        data.setdefault("failed", int(row.failed or 0))
+        data.setdefault("steps", [])
+        data.setdefault("cabs", [])
+        if row.status == "running":
+            # Строка осталась в running — сервер перезапустили до финиша.
+            data["status"] = "interrupted"
+            if not data["steps"]:
+                data["steps"] = [{
+                    "action": "", "label": "Прогон прерван", "cab_id": None,
+                    "status": "failed", "rows": 0, "note": "",
+                    "error": "Сервер был перезапущен до завершения прогона",
+                }]
+                data["failed"] = 1
+        else:
+            data["status"] = row.status
+        return data
+    finally:
+        db.close()
+
+
+def history(db: Session, limit: int = 5) -> list:
+    """Последние прогоны для меню «Массовые действия» (сводка без payload)."""
+    rows = db.execute(
+        select(models.BatchRun).order_by(models.BatchRun.id.desc()).limit(limit)
+    ).scalars().all()
+    out = []
+    for r in rows:
+        try:
+            data = json.loads(r.payload or "{}")
+        except (TypeError, json.JSONDecodeError):
+            data = {}
+        steps = data.get("steps") if isinstance(data, dict) else None
+        out.append({
+            "id": r.id, "status": r.status, "scope": r.scope,
+            "actions": _json_list(r.actions),
+            "started_at": _iso(r.started_at),
+            "finished_at": _iso(r.finished_at),
+            "ok": int(r.ok or 0), "failed": int(r.failed or 0),
+            "total": len(steps) if isinstance(steps, list) else 0,
+        })
+    return out
 
 
 # --------------------------------------------------------------- реестр/скоп
@@ -245,10 +367,7 @@ def _step_out(step: dict) -> dict:
     return out
 
 
-def job_state(job_id: int) -> Optional[dict]:
-    job = _JOBS.get(job_id)
-    if job is None:
-        return None
+def _state(job: dict) -> dict:
     return {
         "id": job["id"], "status": job["status"], "scope": job["scope"],
         "actions": job["actions"], "started_at": job["started_at"],
@@ -259,6 +378,14 @@ def job_state(job_id: int) -> Optional[dict]:
                   "error": c.get("error", ""),
                   "steps": [_step_out(s) for s in c["steps"]]} for c in job["cabs"]],
     }
+
+
+def job_state(job_id: int) -> Optional[dict]:
+    job = _JOBS.get(job_id)
+    if job is not None:
+        return _state(job)
+    # Прогон мог завершиться до перезапуска сервера — отдаём снимок из БД.
+    return _load_run(job_id)
 
 
 def active_jobs() -> list:
@@ -281,15 +408,20 @@ def run(actions, scope: str = "all", include_detail: bool = False,
     if "apply" in acts and not confirmed:
         return {"job_id": None, "needs_confirm": True,
                 "rejected": "коррекция цен требует подтверждения"}
+    job = {
+        "id": None, "status": "running", "scope": scope, "actions": acts,
+        "include_detail": bool(include_detail),
+        "date_from": date_from, "date_to": date_to,
+        "started_at": _now(), "finished_at": None, "ok": 0, "failed": 0,
+        "steps": [], "cabs": [],
+    }
+    try:
+        job["id"] = _create_run(job)
+    except Exception as e:  # noqa: BLE001 — без строки истории прогон не начинаем
+        return {"job_id": None,
+                "rejected": f"не удалось сохранить прогон: {str(e)[:200]}"}
+    job_id = job["id"]
     with _LOCK:
-        job_id = _next_id()
-        job = {
-            "id": job_id, "status": "running", "scope": scope, "actions": acts,
-            "include_detail": bool(include_detail),
-            "date_from": date_from, "date_to": date_to,
-            "started_at": _now(), "finished_at": None, "ok": 0, "failed": 0,
-            "steps": [], "cabs": [],
-        }
         _JOBS[job_id] = job
     threading.Thread(
         target=_worker,
@@ -419,12 +551,13 @@ def _do_detail_check(db: Session, info, date_from, date_to, step: dict) -> tuple
 
 def minpromo_path(job_id: int, cab_id: int) -> Optional[Path]:
     job = _JOBS.get(job_id)
-    if job is None:
-        return None
-    for c in job["cabs"]:
-        if c["id"] == cab_id:
-            return c.get("minpromo_path")
-    return None
+    if job is not None:
+        for c in job["cabs"]:
+            if c["id"] == cab_id:
+                return c.get("minpromo_path")
+    # Прогон уже не в памяти (сервер перезапускали) — шаблон мог остаться на диске.
+    path = _MINPROMO_DIR / f"job{job_id}" / f"minpromo_{cab_id}.xlsx"
+    return path if path.exists() else None
 
 
 def _reset_search_path(db: Session) -> None:
@@ -558,5 +691,12 @@ def _worker(job_id: int, acts: list, scope: str, include_detail: bool,
     finally:
         _reset_search_path(db)
         db.close()
+        # Снимок фиксируем ДО смены статуса в памяти: опрос увидит «done»
+        # только когда подробности уже лежат в БД (важно для истории).
+        finished_at = _now()
+        snapshot = _state(job)
+        snapshot["status"] = "done"
+        snapshot["finished_at"] = finished_at
+        _persist_finish(job, "done", finished_at, snapshot)
         job["status"] = "done"
-        job["finished_at"] = _now()
+        job["finished_at"] = finished_at

@@ -28,6 +28,7 @@ GET /api/automation/foldering/build/{job_id}/download
 GET /api/automation/template
 GET /api/batch
 GET /api/batch/actions
+GET /api/batch/history
 GET /api/batch/{job_id}
 GET /api/batch/{job_id}/minpromo/{cab_id}
 GET /api/cabinet/current

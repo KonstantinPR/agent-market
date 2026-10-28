@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=76">
+<link rel="stylesheet" href="/static/style.css?v=77">
 </head>
 <body>
 <nav class="navbar">
@@ -104,6 +104,10 @@
         <label class="nav-link chk" title="Вкл. детализацию продаж: при обновлении данных дополнительно тянуть детализацию (WB: finance, лимит 1 запрос / 12 ч; Ozon: детализация реализаций + выкупы). Даёт больше данных, но заметно удлиняет обновление."><input type="checkbox" id="batchDetail"> Вкл. детализацию продаж</label>
         <button class="batch-go" id="batchGo" title="Запустить выбранные действия по выбранным связкам и периоду (по умолчанию — период из шапки). Точные даты показаны под кнопкой. Порядок: обновление → пересчёт → коррекция цен → шаблон минцены">Запустить</button>
         <div class="batch-hint" id="batchHint"></div>
+        <div class="batch-last" id="batchLast" role="button" tabindex="0" title="Последняя загрузка: открыть подробности прогона (все ли шаги прошли, что не загрузилось и когда это было)">
+          <span class="bl-cap">Последняя загрузка</span>
+          <span class="bl-val" id="batchLastVal">…</span>
+        </div>
       </div>
     </div>
     <button class="dropbtn cab-btn" id="cabBtn" aria-label="Личные кабинеты" title="Личные кабинеты">
@@ -1273,7 +1277,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=177"></script>
+  <script src="/static/app.js?v=178"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

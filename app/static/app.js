@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "177";
+const UI_VERSION = "178";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -8862,6 +8862,7 @@ let refreshJobs = [];   // [{api, jobId, rejected, msg, state, done}]
 let refreshCabId = null;      // кабинет, который обновляет модалка (иначе активный)
 let refreshAllMode = false;   // «Обновить всё» (все кабинеты, /api/refresh-all)
 let batchMode = false;        // «Массовые действия» — прогон разных действий по связкам
+let batchViewOnly = false;    // модалка показывает историю прогона, а не живой опрос
 let cabState = { companies: [], current: null, user: null };
 const CABINET_COOKIE = "agent_cabinet";
 
@@ -9343,12 +9344,88 @@ function initBatchMenu() {
   const period = $("#batchPeriod");
   if (period) period.addEventListener("change", updateBatchHint);
   const menuBtn = $("#batchMenuBtn");
-  if (menuBtn) menuBtn.addEventListener("click", updateBatchHint);
+  if (menuBtn) menuBtn.addEventListener("click", () => { updateBatchHint(); loadBatchLast(); });
   const go = $("#batchGo");
   if (go) go.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); startBatch(); });
   const menu = $("#batchMenu");
   if (menu) menu.addEventListener("click", (e) => e.stopPropagation());
+  const last = $("#batchLast");
+  if (last) {
+    last.addEventListener("click", () => {
+      const id = last.dataset.jobId;
+      if (id) openBatchRun(Number(id));
+    });
+    last.addEventListener("keydown", (e) => {
+      if ((e.key === "Enter" || e.key === " ") && last.dataset.jobId) {
+        e.preventDefault();
+        last.click();
+      }
+    });
+  }
   updateBatchHint();
+  loadBatchLast();
+}
+
+// «Последняя загрузка» в меню: сводка по последнему прогону «Массовых действий».
+// Данные — GET /api/batch/history (public.batch_runs), поэтому видны и после
+// перезапуска сервера. Клик по строке открывает подробности прогона.
+function batchLastWhen(run) {
+  const raw = run.finished_at || run.started_at;
+  if (!raw) return "";
+  const t = new Date(String(raw).replace(" ", "T"));
+  if (isNaN(t.getTime())) return String(raw);
+  return t.toLocaleString("ru-RU", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function loadBatchLast() {
+  const box = $("#batchLast");
+  const val = $("#batchLastVal");
+  if (!box || !val) return;
+  let run = null;
+  try {
+    const data = await api("/batch/history?limit=1");
+    run = (data.runs || [])[0] || null;
+  } catch (err) {
+    box.classList.remove("is-ok", "is-fail");
+    box.classList.add("is-empty");
+    delete box.dataset.jobId;
+    val.textContent = "не удалось получить";
+    return;
+  }
+  box.classList.remove("is-ok", "is-fail", "is-empty");
+  if (!run) {
+    box.classList.add("is-empty");
+    delete box.dataset.jobId;
+    val.textContent = "пока не запускалось";
+    box.title = "Здесь появится сводка последнего прогона «Массовых действий»";
+    return;
+  }
+  box.dataset.jobId = String(run.id);
+  const when = batchLastWhen(run);
+  const total = Number(run.total || 0);
+  const failed = Number(run.failed || 0);
+  let tail;
+  let bad = false;
+  if (run.status === "running") {
+    tail = "идёт сейчас";
+  } else if (run.status === "interrupted") {
+    tail = "прерван: сервер перезапускался";
+    bad = true;
+  } else if (failed) {
+    tail = "ошибок: " + failed + " из " + total;
+    bad = true;
+  } else if (total) {
+    tail = "все шаги ок (" + Number(run.ok || 0) + "/" + total + ")";
+  } else {
+    tail = "без шагов";
+  }
+  const text = (when ? when + " · " : "") + tail;
+  val.textContent = text;
+  box.classList.add(bad ? "is-fail" : "is-ok");
+  box.title = "Последняя загрузка: " + text
+    + ". Нажмите, чтобы открыть подробности (шаги по связкам, что не загрузилось)";
 }
 
 function updateBatchHint() {
@@ -9427,6 +9504,7 @@ async function startBatch() {
 
 function openBatchModal(jobId) {
   batchMode = true;
+  batchViewOnly = false;
   refreshCabId = null;
   refreshAllMode = false;
   const modal = $("#refreshModal");
@@ -9443,9 +9521,68 @@ function openBatchModal(jobId) {
   $("#refreshSummary").textContent = "Запуск…";
   $("#refreshList").innerHTML = "";
   setRefreshBadge(true);
+  setRefreshHistoryVisible(true);
   renderRefresh();
   loadRefreshHistory();
   pollRefresh();
+}
+
+// Блок «Последние запуски» (история refresh) в модалке: в подробностях
+// прогона «Массовых действий» он не нужен — там свои шаги.
+function setRefreshHistoryVisible(show) {
+  const hist = $("#refreshHistory");
+  if (!hist) return;
+  const body = hist.closest(".modal-body");
+  if (body) body.classList.toggle("hidden", !show);
+  const head = body && body.previousElementSibling;
+  if (head && head.classList && head.classList.contains("modal-head")) {
+    head.classList.toggle("hidden", !show);
+  }
+}
+
+// Подробности уже завершённого прогона (или прерванного): тот же список шагов,
+// что в модалке запуска, но без опроса и без кнопок «Запустить»/«Дозагрузить».
+async function openBatchRun(jobId) {
+  batchMode = true;
+  batchViewOnly = true;
+  refreshCabId = null;
+  refreshAllMode = false;
+  const dd = $("#batchDropdown");
+  if (dd) dd.classList.remove("open");
+  const modal = $("#refreshModal");
+  modal.classList.remove("hidden");
+  if (refreshPoll) { clearInterval(refreshPoll); refreshPoll = null; }
+  refreshApis = [];
+  refreshJobs = [{ api: "", jobId, state: null, done: true, batch: true,
+                   label: "Массовые действия", url: "/batch/" + jobId }];
+  $("#refreshTitle").textContent = "Массовые действия · подробности";
+  const actions = $("#refreshStart") && $("#refreshStart").closest(".modal-actions");
+  if (actions) actions.style.display = "none";
+  const detail = $("#refreshDetail");
+  if (detail) detail.parentElement.style.display = "none";
+  setRefreshBadge(false);
+  setRefreshHistoryVisible(false);
+  $("#refreshSummary").textContent = "Загрузка…";
+  $("#refreshList").innerHTML = "";
+  try {
+    refreshJobs[0].state = await api("/batch/" + jobId);
+  } catch (err) {
+    $("#refreshSummary").textContent =
+      "Не удалось загрузить прогон: " + apiErrorMessage(err);
+    return;
+  }
+  renderRefresh();
+  const st = refreshJobs[0].state || {};
+  const steps = st.steps || [];
+  const ok = steps.filter((s) => s.status === "ok").length;
+  const failed = steps.filter((s) => s.status === "failed").length;
+  const when = batchLastWhen(st);
+  const parts = [];
+  if (when) parts.push("Прогон от " + when);
+  if (st.status === "interrupted") parts.push("прерван: сервер перезапускался");
+  else if (failed) parts.push("ошибок: " + failed + " из " + steps.length);
+  else parts.push("все шаги ок (" + ok + "/" + steps.length + ")");
+  $("#refreshSummary").textContent = parts.join(" · ");
 }
 
 let refreshApis = [];
@@ -9458,9 +9595,22 @@ function setRefreshBadge(on) {
 }
 
 function showRefreshModal() {
+  batchViewOnly = false;
   $("#refreshModal").classList.remove("hidden");
   const title = $("#refreshTitle");
   if (title) title.textContent = "Обновление (все кабинеты)";
+  // Подробности прогона «Массовых действий» прячут кнопки и чекбокс детализации —
+  // при возврате к обычному обновлению их надо вернуть.
+  const actions = $("#refreshStart") && $("#refreshStart").closest(".modal-actions");
+  if (actions) actions.style.display = "";
+  const detail = $("#refreshDetail");
+  if (detail) {
+    // Пустой список API — обычный режим «все кабинеты»: чекбокс показываем.
+    const hide = refreshApis.length > 0
+      && !refreshApis.includes("wb") && !refreshApis.includes("ozon");
+    detail.parentElement.style.display = hide ? "none" : "";
+  }
+  setRefreshHistoryVisible(true);
   renderRefresh();
   loadRefreshHistory();
 }
@@ -9611,8 +9761,10 @@ function renderRefresh() {
   $("#refreshList").innerHTML = h;
   if (summary) $("#refreshSummary").textContent = summary;
   renderRefreshBar(done, total);
-  const hdr = refreshHeaderText();
-  if (hdr.text) setStatus(hdr.text, { error: hdr.error });
+  if (!batchViewOnly) {
+    const hdr = refreshHeaderText();
+    if (hdr.text) setStatus(hdr.text, { error: hdr.error });
+  }
 }
 
 // Полоса общего прогресса под сводкой: доля завершённых шагов (ок/ошибка/пропуск).
@@ -9653,6 +9805,7 @@ async function openRefresh(apis) {
   refreshCabId = null;
   refreshAllMode = false;
   batchMode = false;
+  batchViewOnly = false;
   const modal = $("#refreshModal");
   modal.classList.remove("hidden");
   const actions = $("#refreshStart") && $("#refreshStart").closest(".modal-actions");
@@ -9672,6 +9825,7 @@ async function openRefresh(apis) {
   if (retry) retry.disabled = false;
   $("#refreshSummary").textContent = "";
   $("#refreshList").innerHTML = "";
+  setRefreshHistoryVisible(true);
   loadRefreshHistory();
 }
 
@@ -9740,6 +9894,7 @@ function pollRefresh() {
       pullsCache = null;
       updateLastPull(currentTab);
       loadRefreshHistory();
+      loadBatchLast();
       setRefreshBadge(false);
       $("#refreshStart").disabled = false;
       $("#refreshDetail").disabled = false;

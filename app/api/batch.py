@@ -63,6 +63,17 @@ def api_batch_active():
     return {"jobs": batch_service.active_jobs()}
 
 
+@router.get("/batch/history")
+def api_batch_history(limit: int = 5, db: Session = Depends(get_db)):
+    """Последние прогоны «Массовых действий»: сводка для строки «Последняя загрузка».
+
+    Подробности по конкретному прогону — GET /api/batch/{job_id} (живое
+    состояние из памяти или снимок из public.batch_runs после перезапуска).
+    """
+    limit = max(1, min(int(limit or 5), 50))
+    return {"runs": batch_service.history(db, limit)}
+
+
 @router.get("/batch/{job_id}")
 def api_batch_state(job_id: int):
     state = batch_service.job_state(job_id)
