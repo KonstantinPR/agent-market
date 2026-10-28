@@ -8,6 +8,9 @@
 Конвенции имён:
 
 - **WB** — папка ``<nm_id>/`` (nmID из ``nm_articles``), файлы ``<артикул>-<n>.JPG``.
+  Если на диске нет ``-1.JPG``, нумерация сдвигается вниз: ближайший
+  существующий номер становится ``-1`` (``-2`` → ``-1``, ``-3`` → ``-2`` и т.д.),
+  чтобы у маркетплейса первая позиция не оказалась пустой.
 - **OZON** — папка ``<артикул>/``, файлы ``<артикул>.JPG`` (позиция 1),
   ``<артикул>_<n>.JPG`` (n ≥ 2).
 
@@ -63,6 +66,31 @@ def _leading_nulls(name: str) -> str:
     if not m:
         return name
     return f"{m.group(1)}{m.group(2)}{m.group(3).zfill(3)}{ext}"
+
+
+def _num_shift(nums) -> int:
+    """Сдвиг нумерации фото: ``[2, 3]`` → ``1`` (первая позиция станет ``-1``)."""
+    vals = [n for n in nums if isinstance(n, int) and not isinstance(n, bool) and n > 0]
+    if not vals:
+        return 0
+    return max(min(vals) - 1, 0)
+
+
+def _shift_name(name: str, shift: int) -> str:
+    """Уменьшить хвостовой номер имени на ``shift``: ``a1-2.JPG`` → ``a1-1.JPG``.
+
+    Имя без числового хвоста возвращается как есть: позиция берётся из индекса,
+    а не из строки, — такие файлы и так считаются первой фотографией.
+    """
+    if shift <= 0:
+        return name
+    stem, ext = _split_ext(name)
+    m = _SUFFIX_RE.match(stem)
+    if not m:
+        return name
+    head, sep, digits = m.group(1), m.group(2), m.group(3)
+    num = max(int(digits) - shift, 1)
+    return f"{head}{sep}{str(num).zfill(len(digits))}{ext}"
 
 
 def _dedupe_names(files: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
@@ -159,10 +187,13 @@ def plan(
             folder = art
 
         files: list[tuple[str, Path]] = []
+        # WB: если первой фото на диске нет (нумерация начинается с 2, 3, ...),
+        # сдвигаем номера, чтобы ближайшее фото заняло позицию ``-1``.
+        shift = _num_shift([num for num, _path in items]) if mp == "WB" else 0
         for pos, (_num, path) in enumerate(items, start=1):
             ext = path.suffix or ".JPG"
             if mp == "WB":
-                name = path.name
+                name = _shift_name(path.name, shift)
             else:
                 name = f"{art}{ext}" if pos == 1 else f"{art}_{pos}{ext}"
             files.append((name, path))

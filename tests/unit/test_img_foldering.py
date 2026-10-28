@@ -84,6 +84,75 @@ def test_plan_descending_order(tmp_path):
     assert [n for n, _ in entries[0].files] == ["a1-2.jpg", "a1-1.jpg"]
 
 
+def test_plan_wb_missing_first_photo_shifts_numbers(tmp_path):
+    """Нет ``-1``: ближайшее фото (``-2``) получает позицию ``-1``."""
+    idx = FakeIndex({
+        "A1": _Entry([(2, _mk(tmp_path, "a1-2.jpg", b"second")),
+                      (3, _mk(tmp_path, "a1-3.jpg", b"third"))]),
+    })
+    entries, _ = f.plan(["a1"], {"A1": "1"}, "WB", "ONLY_NEW", index=idx)
+    files = entries[0].files
+    assert [n for n, _ in files] == ["a1-1.jpg", "a1-2.jpg"]
+    assert files[0][1].read_bytes() == b"second"
+    assert files[1][1].read_bytes() == b"third"
+
+
+def test_plan_wb_missing_first_photo_shift_by_three(tmp_path):
+    idx = FakeIndex({"A1": _Entry([(3, _mk(tmp_path, "a1-3.jpg"))])})
+    entries, _ = f.plan(["a1"], {"A1": "1"}, "WB", index=idx)
+    assert [n for n, _ in entries[0].files] == ["a1-1.jpg"]
+
+
+def test_plan_wb_existing_first_photo_keeps_gap(tmp_path):
+    """``-1`` на месте — номера не сдвигаем, дырка в нумерации остаётся."""
+    idx = FakeIndex({
+        "A1": _Entry([(1, _mk(tmp_path, "a1-1.jpg")),
+                      (3, _mk(tmp_path, "a1-3.jpg"))]),
+    })
+    entries, _ = f.plan(["a1"], {"A1": "1"}, "WB", "ONLY_NEW", index=idx)
+    assert [n for n, _ in entries[0].files] == ["a1-1.jpg", "a1-3.jpg"]
+
+
+def test_plan_wb_shift_all_mode_and_unumbered_name(tmp_path):
+    idx = FakeIndex({
+        "A1": _Entry([
+            (2, _mk(tmp_path, "a1-2.jpg", b"a")),
+            (2, _mk(tmp_path, "a1-2-extra.jpg", b"b")),
+            (4, _mk(tmp_path, "a1-4.jpg", b"c")),
+        ]),
+    })
+    entries, _ = f.plan(["a1"], {"A1": "1"}, "WB", "ALL", index=idx)
+    # имя без числового хвоста остаётся как есть — позицию задаёт индекс
+    assert [n for n, _ in entries[0].files] == ["a1-2-extra.jpg", "a1-1.jpg", "a1-3.jpg"]
+
+
+def test_plan_wb_shift_keeps_desc_and_padding(tmp_path):
+    idx = FakeIndex({
+        "A1": _Entry([(2, _mk(tmp_path, "a1-002.JPG", b"x")),
+                      (3, _mk(tmp_path, "a1-003.JPG", b"y"))]),
+    })
+    entries, _ = f.plan(["a1"], {"A1": "1"}, "WB", "ONLY_NEW", "DESCENDING", index=idx)
+    files = entries[0].files
+    assert [n for n, _ in files] == ["a1-002.JPG", "a1-001.JPG"]
+    assert files[0][1].read_bytes() == b"y"
+    assert files[1][1].read_bytes() == b"x"
+
+
+def test_plan_ozon_ignores_shift(tmp_path):
+    idx = FakeIndex({
+        "A1": _Entry([(2, _mk(tmp_path, "a1-2.jpg")),
+                      (3, _mk(tmp_path, "a1-3.jpg"))]),
+    })
+    entries, _ = f.plan(["a1"], {}, "OZON", index=idx)
+    assert [n for n, _ in entries[0].files] == ["a1.jpg", "a1_2.jpg"]
+
+
+def test_shift_name_without_number(tmp_path):
+    assert f._shift_name("NO8B7861.JPG", 2) == "NO8B7861.JPG"
+    assert f._shift_name("a1-5.jpg", 0) == "a1-5.jpg"
+    assert f._shift_name("a1_5.jpg", 2) == "a1_3.jpg"
+
+
 def test_build_zip_names(tmp_path):
     e = f.ArticleEntry(
         article="a1", folder="a1",
