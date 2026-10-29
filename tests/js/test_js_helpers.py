@@ -830,6 +830,22 @@ assert.strictEqual((jsSrc.match(/emptyText: pricingEmptyText\(/g) || []).length,
 assert.ok(/st\.emptyText = opts\.emptyText/.test(jsSrc),
   "pagedTable умеет кастомный текст пустого состояния");
 
+// T-64: кулдаун виден в таблице, «решений» не считает строки в кулдауне,
+// а результат применения не теряется при перерисовке.
+assert.ok(/function pricingApplyable\(/.test(jsSrc),
+  "есть helper pricingApplyable: решение + не кулдаун");
+assert.ok((jsSrc.match(/filter\(pricingApplyable\)/g) || []).length >= 4,
+  "счётчик «решений», кнопка и apply-функции фильтруют по pricingApplyable");
+assert.ok((jsSrc.match(/\(applyNote \? applyNote \+ " · " : ""\)/g) || []).length === 2,
+  "результат применения выводится первым в сводке WB и Ozon");
+assert.ok(/async function renderPricing\(apply, applyNote\)/.test(jsSrc) &&
+  /async function renderPricingOzon\(apply, applyNote\)/.test(jsSrc),
+  "renderPricing/renderPricingOzon принимают текст применения");
+assert.strictEqual((jsSrc.match(/renderPricing\(false, j\.note \|\| ""\)/g) || []).length, 2,
+  "applyPricing/applyPricingOzon передают note в перерисовку");
+assert.ok(jsSrc.includes("Все рекомендации в кулдауне"),
+  "кнопка «Применить» объясняет, что все строки в кулдауне");
+
 // Обзор: сравнение за периоды на графиках «Динамика» и «Доход по МП».
 assert.ok(htmlSrc.includes('id="btnDashCompare"') && htmlSrc.includes('id="dashComparePanel"'),
   "в фильтрах Обзора есть меню «Сравнить ▾» для периодов");

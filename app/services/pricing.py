@@ -1042,12 +1042,20 @@ def recommendations(
     for r in out_rows:
         r["minpromo_price"] = minpromo_price(r, s)
 
+    # T-64: кулдаун показываем сразу в таблице, а не только при применении —
+    # иначе «решений: 89», а «Применить» отправляет 0 строк.
+    cooldown_n = mark_cooldown(
+        out_rows, _recent_applied(db, int(_num(s["cooldown_days"])), today),
+        s["cooldown_days"])
+
     return {
         "rows": out_rows,
         "settings": s,
         "note": "",
         "total": len(out_rows),
-        "actionable": sum(1 for r in out_rows if r["action"] in ("RAISE", "LOWER", "HALVE")),
+        "actionable": sum(1 for r in out_rows if r["action"] in ("RAISE", "LOWER", "HALVE")
+                          and r["status"] == "suggested"),
+        "cooldown": cooldown_n,
         "hidden_dead": hidden_dead,
         "non_wb": non_wb,
         "as_of": str(today),
@@ -2613,6 +2621,60 @@ def _margin_pct(target_vis: float, f: dict) -> Optional[float]:
     return round(unit / target_vis * 100, 1)
 
 
+def _recent_applied(db: Session, cooldown_days: int,
+                    today: Optional[date] = None) -> set:
+    """Статьи, которые менялись в последние cooldown_days (журнал status=applied).
+
+    RAISE/LOWER/HALVE — те же действия, что участвуют в кулдауне при применении.
+    MIN (минимальные цены) не блокирует следующие шаги автопилота (T-33).
+    """
+    today = today or date.today()
+    cooldown_from = today - timedelta(days=int(cooldown_days))
+    return set(db.scalars(
+        select(models.PriceChange.article).where(
+            models.PriceChange.status == "applied",
+            models.PriceChange.action.in_(("RAISE", "LOWER", "HALVE")),
+            models.PriceChange.applied_at >= cooldown_from,
+        )
+    ).all())
+
+
+def mark_cooldown(rows: list, applied_past: set, cooldown_days: int) -> int:
+    """Помечает строки, которые «Применить» всё равно пропустит по кулдауну.
+
+    Кулдаун раньше проверялся только на применении: таблица показывала
+    «решений: 89», а нажатие «Применить в WB» отправляло 0 строк — все статьи
+    уже менялись в последние cooldown_days (T-64). Теперь статус и причина
+    видны сразу в таблице, а счётчик решений их не учитывает.
+
+    HALVE (деление скидки у мёртвых) в кулдауне не тонет — как в _pushed_items.
+    """
+    n = 0
+    days = int(_num(cooldown_days, PRICING_DEFAULTS["cooldown_days"]))
+    for r in rows:
+        if r.get("status") != "suggested":
+            continue
+        if r.get("action") not in ("RAISE", "LOWER"):
+            continue
+        if r.get("article") in applied_past:
+            r["status"] = "skipped_cooldown"
+            r["reason"] = (r.get("reason") or "") + (
+                f" — кулдаун {days} дн. после предыдущего изменения")
+            n += 1
+    return n
+
+
+def _nothing_applied_note(rows: list, s: dict) -> str:
+    """Текст «ничего не применено» с причиной: кулдаун / hold-skip (T-64)."""
+    days = int(_num(s.get("cooldown_days"), PRICING_DEFAULTS["cooldown_days"]))
+    cd = sum(1 for r in rows if r.get("status") == "skipped_cooldown")
+    if cd:
+        return (f"Ничего не применено: {cd} строк в кулдауне {days} дн. "
+                "(повторное изменение цены — после его окончания; кулдаун "
+                "настраивается в параметрах автопилота).")
+    return "Ничего не применено: среди строк нет изменений (hold/skip или в кулдауне)."
+
+
 def _pushed_items(rows: list, s: dict, applied_past: set) -> list:
     items = []
     for r in rows:
@@ -2621,8 +2683,12 @@ def _pushed_items(rows: list, s: dict, applied_past: set) -> list:
         # HALVE (мёртвые товары) не тонет в кулдауне: делим скидку на каждом
         # прогоне «Применить», пока есть шаг.
         if r["action"] != "HALVE" and r["article"] in applied_past:
-            r["status"] = "skipped_cooldown"
-            r["reason"] += f" — кулдаун {int(s['cooldown_days'])} дн. после предыдущего изменения"
+            # recommendations() уже мог пометить строку — не дублируем причину.
+            if r.get("status") != "skipped_cooldown":
+                r["status"] = "skipped_cooldown"
+                r["reason"] = (r.get("reason") or "") + (
+                    f" — кулдаун {int(s['cooldown_days'])} дн. "
+                    "после предыдущего изменения")
             continue
         try:
             nm = int(r["nm_id"])
@@ -2689,17 +2755,10 @@ def apply_recommendations(
                           today=today, main_map=main_map)
     rows = rec["rows"]
     today = today or date.today()
-    cooldown_from = today - timedelta(days=int(s["cooldown_days"]))
 
     # Кулдаун — только по изменениям скидки (RAISE/LOWER/HALVE). MIN (минимальные
     # цены, T-33) не должен блокировать последующие шаги автопилота.
-    applied_past = set(db.scalars(
-        select(models.PriceChange.article).where(
-            models.PriceChange.status == "applied",
-            models.PriceChange.action.in_(("RAISE", "LOWER", "HALVE")),
-            models.PriceChange.applied_at >= cooldown_from,
-        )
-    ).all())
+    applied_past = _recent_applied(db, int(s["cooldown_days"]), today)
 
     items = _pushed_items(rows, s, applied_past)
     now = datetime.now()
@@ -2708,7 +2767,7 @@ def apply_recommendations(
     if not items:
         _record(db, rows, applied_at=now)
         return {"applied": [], "rows": rows, "pushed": 0,
-                "note": "Нет кандидатов на изменение (все hold/skip или в кулдауне)."}
+                "note": _nothing_applied_note(rows, s)}
 
     try:
         result = prov.update_prices(items)
@@ -2751,22 +2810,15 @@ def apply_rows(
     today = today or date.today()
     rows = [dict(r) for r in rows]
     now = datetime.now()
-    cooldown_from = today - timedelta(days=int(s["cooldown_days"]))
 
-    applied_past = set(db.scalars(
-        select(models.PriceChange.article).where(
-            models.PriceChange.status == "applied",
-            models.PriceChange.action.in_(("RAISE", "LOWER", "HALVE")),
-            models.PriceChange.applied_at >= cooldown_from,
-        )
-    ).all())
+    applied_past = _recent_applied(db, int(s["cooldown_days"]), today)
     items = _pushed_items(rows, s, applied_past)
     prov = provider or _cab_provider(db)
 
     if not items:
         _record(db, rows, applied_at=now)
         return {"applied": [], "rows": rows, "pushed": 0,
-                "note": "Нет кандидатов на изменение (все hold/skip или в кулдауне)."}
+                "note": _nothing_applied_note(rows, s)}
 
     try:
         result = prov.update_prices(items)

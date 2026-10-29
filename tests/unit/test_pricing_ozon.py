@@ -216,8 +216,11 @@ def test_apply_cooldown_skips(db, stub_oz):
                               applied_at=date.today(), action="LOWER", status="applied"))
     db.commit()
     rec = oz.recommendations_ozon(db)
+    # T-64: кулдаун виден ещё в рекомендациях, а не только при применении.
+    assert _row(rec, "OZ-1")["status"] == "skipped_cooldown"
     res = oz.apply_rows_ozon(db, rec["rows"], provider=stub_oz)
     assert res["pushed"] == 0
+    assert "кулдаун" in res["note"]
 
 
 def test_apply_min_prices_raises_to_floor(db, stub_oz):

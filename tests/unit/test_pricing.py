@@ -662,6 +662,27 @@ def test_apply_cooldown_blocks_reapply(db):
     assert res["pushed"] == 0
     assert all(r["status"] == "skipped_cooldown"
                for r in res["rows"] if r["action"] in ("RAISE", "LOWER"))
+    # T-64: причина видна в ответе, а не только в журнале.
+    assert "Ничего не применено" in res["note"]
+    assert "кулдаун" in res["note"]
+
+
+def test_recommendations_marks_cooldown_after_apply(db):
+    """T-64: кулдаун виден в таблице, счётчик «решений» его не учитывает."""
+    _seed(db, "R8", "881234", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    pricing_service.apply_recommendations(
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+    )
+    rec = recommendations(
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+    )
+    changing = [r for r in rec["rows"] if r["action"] in ("RAISE", "LOWER")]
+    assert changing, "ожидалась хотя бы одна рекомендация на изменение"
+    assert all(r["status"] == "skipped_cooldown" for r in changing)
+    assert all("кулдаун" in (r["reason"] or "") for r in changing)
+    assert rec["cooldown"] == len(changing)
+    assert rec["actionable"] == 0
 
 
 class _FakeProvider:
@@ -729,6 +750,8 @@ def test_apply_rows_cooldown_blocks_reapply(db):
     res = pricing_service.apply_rows(db, [_ui_row()], provider=_FakeProvider(), today=TODAY)
     assert res["pushed"] == 0
     assert res["rows"][0]["status"] == "skipped_cooldown"
+    assert "кулдаун" in res["note"]
+    assert res["rows"][0]["reason"].count("кулдаун") == 1
 
 
 def test_apply_rows_error_records_error_and_raises(db):

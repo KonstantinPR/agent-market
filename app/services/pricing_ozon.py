@@ -40,8 +40,10 @@ from app.services.pricing import (
     _cash_flow_bias,
     _clamp,
     _damp_raise_settings,
+    _nothing_applied_note,
     _num,
     _reason_add,
+    mark_cooldown,
     project_velocity,
 )
 
@@ -800,6 +802,9 @@ def recommendations_ozon(
         apply_main_influence_ozon(rows, main_map, s)
 
     rows.sort(key=lambda r: (-_num(r.get("stock_value")), r["article"]))
+    # T-64: кулдаун — сразу в таблице (см. pricing.recommendations).
+    mark_cooldown(rows, _recent_applied(db, int(s["cooldown_days"]), today),
+                  s["cooldown_days"])
     return {
         "rows": rows, "count": len(rows),
         "date_from": str(date_from), "date_to": str(date_to),
@@ -829,8 +834,10 @@ def _expand_offers(r: dict) -> list:
     return pushed
 
 
-def _recent_applied(db: Session, cooldown_days: int) -> set:
-    cooldown_from = date.today() - timedelta(days=int(cooldown_days))
+def _recent_applied(db: Session, cooldown_days: int,
+                    today: Optional[date] = None) -> set:
+    today = today or date.today()
+    cooldown_from = today - timedelta(days=int(cooldown_days))
     return set(db.scalars(
         select(models.PriceChange.article).where(
             models.PriceChange.status == "applied",
@@ -851,8 +858,11 @@ def _pushed_items_ozon(rows: list, s: dict, applied_past: set) -> list:
         if r["action"] not in ("RAISE", "LOWER"):
             continue
         if r["article"] in applied_past:
-            r["status"] = "skipped_cooldown"
-            _reason_add(r, f"кулдаун {int(s['cooldown_days'])} дн. после предыдущего изменения")
+            # recommendations_ozon() уже мог пометить строку — не дублируем причину.
+            if r.get("status") != "skipped_cooldown":
+                r["status"] = "skipped_cooldown"
+                _reason_add(r, f"кулдаун {int(s['cooldown_days'])} дн. "
+                               "после предыдущего изменения")
             continue
         pushed = _expand_offers(r)
         if not pushed:
@@ -936,13 +946,13 @@ def apply_rows_ozon(
     s = merge_settings(settings or {})
     rows = [dict(r) for r in rows]
     now = datetime.now()
-    applied_past = _recent_applied(db, int(s["cooldown_days"]))
+    applied_past = _recent_applied(db, int(s["cooldown_days"]), today)
     items = _pushed_items_ozon(rows, s, applied_past)
     prov = provider or _oz_provider(db)
     if not items:
         _record_ozon(db, rows, applied_at=now)
         return {"applied": [], "rows": rows, "pushed": 0,
-                "note": "Нет кандидатов на изменение (все hold/skip или в кулдауне)."}
+                "note": _nothing_applied_note(rows, s)}
     try:
         result = prov.update_prices(items)
     except Exception as exc:  # noqa: BLE001

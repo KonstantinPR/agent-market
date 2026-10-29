@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "181";
+const UI_VERSION = "182";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -11399,15 +11399,29 @@ let _pricingRows = [];
 let _pricingResp = null;
 let pricingModeCurrent = null;
 
+// Строка реально уйдёт в API: решение есть (RAISE/LOWER/HALVE) и сервер не
+// пропустит её по кулдауну. T-64: раньше кулдаун проверялся только на
+// применении — таблица показывала десятки «решений», а отправлялось 0 строк.
+function pricingApplyable(r) {
+  if ((r.status || "suggested") !== "suggested") return false;
+  if (pricingMpCurrent() === "oz") return r.action === "RAISE" || r.action === "LOWER";
+  return r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE";
+}
+
 function refreshApplyButton() {
   const btn = $("#pricingApply");
   if (!btn) return;
   const oz = pricingMpCurrent() === "oz";
-  const actives = oz
-    ? _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER")
-    : _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
+  const actives = _pricingRows.filter(pricingApplyable);
+  const inCooldown = _pricingRows.filter((r) => r.status === "skipped_cooldown").length;
   const canApply = actives.length > 0;
   btn.disabled = !canApply;
+  if (!canApply && inCooldown) {
+    btn.title = "Все рекомендации в кулдауне (" + fmt(inCooldown) +
+      ") — повторное изменение цены после его окончания; кулдаун настраивается " +
+      "в параметрах автопилота";
+    return;
+  }
   btn.title = oz
     ? (canApply ? "Применить цены витрины Ozon для видимых строк" : "Нет видимых рекомендаций Ozon для применения")
     : (canApply ? "Применить через WB API только видимые в таблице строки (с учётом фильтров)" : "Нет видимых рекомендаций на изменение — применить больше нечего");
@@ -11508,8 +11522,8 @@ function pricingEmptyText(rows, hiddenPassive, hidePassive) {
   }
   return "Нет данных за выбранный период";
 }
-async function renderPricing(apply) {
-  if (pricingMpCurrent() === "oz") return renderPricingOzon(apply);
+async function renderPricing(apply, applyNote) {
+  if (pricingMpCurrent() === "oz") return renderPricingOzon(apply, applyNote);
   await buildPricingSettings();
   syncPricingMpUi();
   const s = pricingWithDates(collectPricingSettings());
@@ -11541,11 +11555,16 @@ async function renderPricing(apply) {
     // Сводка пересчитывается по видимым (отфильтрованным по колонкам) строкам —
     // onFilter в pagedTable вызывает её при каждой фильтрации.
     const updateSummary = (visible) => {
-      const actionable = visible.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE").length;
+      // «Решений» = строки, которые действительно уйдут в WB (не кулдаун).
+      const actionable = visible.filter(pricingApplyable).length;
       const underCooldown = visible.filter((r) => r.status === "skipped_cooldown").length;
-      let summary = "Товаров: " + fmt(visible.length);
+      // Результат только что выполненного применения — первым: в хвосте строки
+      // состояния его обрезает HEADER_MSG_MAX (T-64).
+      let summary = (applyNote ? applyNote + " · " : "") + "Товаров: " + fmt(visible.length);
       if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
       summary += ", решений: " + fmt(actionable);
+      // Кулдаун — сразу после «решений»: в хвосте строки его обрезает HEADER_MSG_MAX.
+      if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
       // Последнее применение — сразу после счётчиков: в строке состояния текст
       // обрезается по HEADER_MSG_MAX, и в хвосте его было бы не видно.
@@ -11554,7 +11573,6 @@ async function renderPricing(apply) {
       if (hiddenDead > 0) summary += ", скрыто нулевых: " + fmt(hiddenDead) + " (вкл. «С нулевыми товарами»)";
       const nonWb = Number(data.non_wb || 0);
       if (nonWb > 0) summary += ", артикулов не из WB-карточек: " + fmt(nonWb) + " (исключены)";
-      if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (data.settings && data.settings.mode === "old") summary += " · старая модель (не рекомендуется)";
       if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
       if (data.as_of) summary += " · на " + data.as_of;
@@ -11592,7 +11610,7 @@ async function renderPricing(apply) {
 
 // Автопилот цен Ozon (price-based). Считает по базовым артикулам, меняет цену
 // витрины напрямую. Журнал решений — общий (/pricing/history).
-async function renderPricingOzon(apply) {
+async function renderPricingOzon(apply, applyNote) {
   await buildPricingSettings();
   syncPricingMpUi();
   const s = pricingWithDates(collectPricingSettings());
@@ -11622,14 +11640,16 @@ async function renderPricingOzon(apply) {
       ? pre.filter((r) => r.action !== "SKIP" && r.action !== "HOLD")
       : pre;
     const updateSummary = (visible) => {
-      const actionable = visible.filter((r) => r.action === "RAISE" || r.action === "LOWER").length;
+      // «Решений» = строки, которые действительно уйдут в Ozon (не кулдаун).
+      const actionable = visible.filter(pricingApplyable).length;
       const underCooldown = visible.filter((r) => r.status === "skipped_cooldown").length;
-      let summary = "Ozon · товаров: " + fmt(visible.length);
+      let summary = (applyNote ? applyNote + " · " : "") + "Ozon · товаров: " + fmt(visible.length);
       if (allRows.length !== visible.length) summary += " из " + fmt(allRows.length);
       summary += ", решений: " + fmt(actionable);
+      // Кулдаун — сразу после «решений»: в хвосте строки его обрезает HEADER_MSG_MAX.
+      if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
       summary += " · " + lastApplyStatusText();
-      if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
       if (data.as_of) summary += " · на " + data.as_of;
       if (data.note) summary += " · " + data.note;
@@ -11658,7 +11678,8 @@ async function applyPricing() {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   // Отправляем ровно то, что видно в таблице: _pricingRows уже отфильтрован
   // по строке поиска, фильтрам колонок, «С нулевыми товарами» и «Скрыть держать/пропустить» — сервер НЕ пересчитывает.
-  const toApply = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE");
+  // Строки в кулдауне не отправляем: сервер их всё равно пропустит (T-64).
+  const toApply = _pricingRows.filter(pricingApplyable);
   const lowers = toApply.filter((r) => r.action === "LOWER");
   const halve = toApply.filter((r) => r.action === "HALVE");
   const parts = [];
@@ -11674,7 +11695,11 @@ async function applyPricing() {
   const finalConfirm = (oldMode ? "ВНИМАНИЕ — включена старая модель расчёта (не рекомендуется)!\n\n" : "") + confirmText;
   if (!confirm(finalConfirm)) return;
   if (!toApply.length) {
-    msg.textContent = "Нет видимых товаров для применения";
+    const cd = _pricingRows.filter((r) => r.status === "skipped_cooldown").length;
+    msg.textContent = cd
+      ? "Нет видимых товаров для применения: " + fmt(cd) + " строк в кулдауне " +
+        "после предыдущего изменения цены (настраивается в параметрах автопилота)"
+      : "Нет видимых товаров для применения";
     return;
   }
   msg.textContent = "Отправляю скидки в WB API…";
@@ -11688,7 +11713,7 @@ async function applyPricing() {
     const j = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error((j.detail || resp.status) || "WB API не принял изменения");
     msg.textContent = j.note || ("Применено: " + (j.applied || []).length + " артикулов");
-    await renderPricing(false);
+    await renderPricing(false, j.note || "");
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -11702,9 +11727,13 @@ async function applyPricingOzon() {
   const s = pricingWithDates(collectPricingSettings());
   const showZeroEl = $("#pricingShowZero");
   if (showZeroEl) s.show_zero = showZeroEl.checked;
-  const toApply = _pricingRows.filter((r) => r.action === "RAISE" || r.action === "LOWER");
+  const toApply = _pricingRows.filter(pricingApplyable);
   if (!toApply.length) {
-    msg.textContent = "Нет видимых товаров Ozon для применения";
+    const cd = _pricingRows.filter((r) => r.status === "skipped_cooldown").length;
+    msg.textContent = cd
+      ? "Нет видимых товаров Ozon для применения: " + fmt(cd) + " строк в кулдауне " +
+        "после предыдущего изменения цены (настраивается в параметрах автопилота)"
+      : "Нет видимых товаров Ozon для применения";
     return;
   }
   const lowers = toApply.filter((r) => r.action === "LOWER");
@@ -11728,7 +11757,7 @@ async function applyPricingOzon() {
     const j = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error((j.detail || resp.status) || "Ozon API не принял изменения");
     msg.textContent = j.note || ("Ozon: применено " + (j.applied || []).length + " артикулов");
-    await renderPricing(false);
+    await renderPricing(false, j.note || "");
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   } finally {
