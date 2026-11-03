@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "182";
+const UI_VERSION = "185";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -215,6 +215,7 @@ const LS_KEYS = {
   "whShipView": "«Отправки»: режим просмотра (docs — документы, items — товары списком, summary — сводно)",
   "whShipCabinets": "«Отправки»: выбранные связки — \"\" (текущая), \"all\" (все) или id через запятую",
   "whShipCollapse": "«Отправки»: сводка свёрнута по артикулам (1) или в разрезе артикул+размер (0)",
+  "agent-fold-num": "«Фото для маркетплейса»: как менять номера фото (JSON: mode/swapN/pairs)",
 };
 // «Вид таблицы»: storageKey каждой вкладки из registerColView (плюс "_<mode>"
 // у режимных, например wbDetailCols_rows) — видимость, порядок, закрепление
@@ -6830,9 +6831,147 @@ function _autoFoldFormData() {
   fd.append("is_replace", document.getElementById("autoFoldAll").checked ? "ALL" : "ONLY_NEW");
   fd.append("order", (document.getElementById("autoFoldOrder") || {}).value || "ASCENDING");
   fd.append("leading_nulls", document.getElementById("autoFoldNulls").checked ? "true" : "false");
-  const co = document.getElementById("autoFoldChangeOrder").value;
-  if (co) fd.append("change_order", co);
+  const pairs = _foldNumPairs();
+  if (pairs.length) fd.append("photo_pairs", JSON.stringify(pairs));
   return fd;
+}
+
+// --------------------------------------------------- фолдеринг: замены номеров
+// Пара N ↔ M меняет местами содержимое позиций N и M (номера — позиции в
+// архиве после сортировки). Настройки живут в одном ключе localStorage:
+// { mode: "none" | "swap1" | "custom", swapN: "3", pairs: [[1,2], …] }.
+const FOLD_NUM_KEY = "agent-fold-num";
+const FOLD_PAIRS_MAX = 20;
+
+function _foldNumState() {
+  let j = {};
+  try { j = JSON.parse(localStorage.getItem(FOLD_NUM_KEY) || "{}") || {}; } catch (e) { j = {}; }
+  return {
+    mode: j.mode === "swap1" || j.mode === "custom" ? j.mode : "none",
+    swapN: String(j.swapN || 2),
+    pairs: Array.isArray(j.pairs) ? j.pairs : [],
+  };
+}
+
+function _foldMode() {
+  const el = document.getElementById("autoFoldNumMode");
+  return (el && el.value) || "none";
+}
+
+function _foldPairRows() {
+  return Array.from(document.querySelectorAll("#autoFoldPairs .fold-pair"));
+}
+
+function _foldPairsRaw() {
+  return _foldPairRows().map((row) => {
+    const ins = row.querySelectorAll("input");
+    return [ins[0] ? ins[0].value.trim() : "", ins[1] ? ins[1].value.trim() : ""];
+  });
+}
+
+function _foldNumPairs() {
+  const mode = _foldMode();
+  if (mode === "swap1") {
+    const n = parseInt((document.getElementById("autoFoldSwapN") || {}).value, 10);
+    return n >= 2 ? [[1, n]] : [];
+  }
+  if (mode !== "custom") return [];
+  const out = [];
+  for (const [a, b] of _foldPairsRaw()) {
+    const n = parseInt(a, 10);
+    const m = parseInt(b, 10);
+    if (!(n >= 1 && m >= 1) || n === m) continue;
+    if (out.some((p) => (p[0] === n && p[1] === m) || (p[0] === m && p[1] === n))) continue;
+    out.push([n, m]);
+    if (out.length >= FOLD_PAIRS_MAX) break;
+  }
+  return out;
+}
+
+function _foldAddPairRow(a, b) {
+  const box = document.getElementById("autoFoldPairs");
+  if (!box || _foldPairRows().length >= FOLD_PAIRS_MAX) return;
+  const row = document.createElement("div");
+  row.className = "fold-pair";
+  row.innerHTML = '<input type="number" min="1" step="1" value="' + escapeHtml(a == null ? "" : String(a))
+    + '" placeholder="N" title="Позиция, которую меняем">'
+    + '<span class="fold-pair-sep">\u2194</span>'
+    + '<input type="number" min="1" step="1" value="' + escapeHtml(b == null ? "" : String(b))
+    + '" placeholder="M" title="Позиция, на которую меняем">'
+    + '<button type="button" class="btn fold-pair-del" title="Убрать замену">\u00d7</button>';
+  box.appendChild(row);
+}
+
+function _foldSyncPairsUi() {
+  const rows = _foldPairRows();
+  rows.forEach((row) => {
+    const del = row.querySelector(".fold-pair-del");
+    if (del) del.disabled = rows.length <= 1;
+  });
+  const add = document.getElementById("autoFoldPairAdd");
+  if (add) add.disabled = rows.length >= FOLD_PAIRS_MAX;
+}
+
+function _foldSaveNumState() {
+  const st = {
+    mode: _foldMode(),
+    swapN: String((document.getElementById("autoFoldSwapN") || {}).value || "2"),
+    pairs: _foldPairsRaw(),
+  };
+  try { localStorage.setItem(FOLD_NUM_KEY, JSON.stringify(st)); } catch (e) { /* нет места — не критично */ }
+}
+
+function _foldApplyMode() {
+  const mode = _foldMode();
+  const swap = document.getElementById("autoFoldSwapN");
+  if (swap) swap.classList.toggle("hidden", mode !== "swap1");
+  const box = document.getElementById("autoFoldPairsBox");
+  if (box) box.classList.toggle("hidden", mode !== "custom");
+  _foldSyncPairsUi();
+  _foldSaveNumState();
+}
+
+function initAutoFoldNum() {
+  const mode = document.getElementById("autoFoldNumMode");
+  const st = _foldNumState();
+  if (mode) {
+    mode.value = st.mode;
+    if (mode._menuSync) mode._menuSync();
+    mode.addEventListener("change", _foldApplyMode);
+  }
+  const swap = document.getElementById("autoFoldSwapN");
+  if (swap) {
+    swap.value = st.swapN;
+    swap.addEventListener("input", _foldSaveNumState);
+  }
+  const box = document.getElementById("autoFoldPairs");
+  if (box) box.innerHTML = "";
+  const saved = (st.pairs || []).slice(0, FOLD_PAIRS_MAX);
+  if (!saved.length) _foldAddPairRow("1", "2");
+  else saved.forEach((p) => _foldAddPairRow(Array.isArray(p) ? p[0] : "", Array.isArray(p) ? p[1] : ""));
+  if (box) {
+    box.addEventListener("input", _foldSaveNumState);
+    box.addEventListener("click", (ev) => {
+      const del = ev.target.closest(".fold-pair-del");
+      if (!del || _foldPairRows().length <= 1) return;
+      del.closest(".fold-pair").remove();
+      _foldSyncPairsUi();
+      _foldSaveNumState();
+    });
+  }
+  const add = document.getElementById("autoFoldPairAdd");
+  if (add) {
+    add.addEventListener("click", () => {
+      const rows = _foldPairsRaw();
+      const last = rows.length ? rows[rows.length - 1] : ["1", "2"];
+      const a = parseInt(last[0], 10) || 1;
+      const b = parseInt(last[1], 10) || 2;
+      _foldAddPairRow(String(a + 2), String(b + 2));
+      _foldSyncPairsUi();
+      _foldSaveNumState();
+    });
+  }
+  _foldApplyMode();
 }
 
 function _autoNamesFormData() {
@@ -6875,10 +7014,20 @@ function _renderFoldReport(rep, box) {
   let html = "";
   const rows = rep.with_photos || [];
   if (rows.length) {
-    html += '<table><thead><tr><th>Артикул</th><th>Папка</th><th>Фото</th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Артикул</th><th>Папка</th><th>Фото</th>'
+      + '<th title="Итоговый порядок: позиция в архиве ← исходный файл">Порядок</th></tr></thead><tbody>';
     for (const r of rows) {
+      const order = (r.order || []).map((o) => {
+        const same = !o.src || o.src === o.name;
+        return same ? escapeHtml(o.name) : escapeHtml(o.name) + ' <span class="fold-src">\u2190 ' + escapeHtml(o.src) + "</span>";
+      }).join(", ");
+      const more = r.more ? ' <span class="fold-src">… +' + fmt(r.more) + "</span>" : "";
+      const skipped = (r.skipped || []).length
+        ? '<div class="fold-skip">не применено (мало фото): ' + escapeHtml(r.skipped.join(", ")) + "</div>"
+        : "";
       html += "<tr><td>" + escapeHtml(r.article) + "</td><td>" + escapeHtml(r.folder)
-        + "</td><td>" + fmt(r.photos) + "</td></tr>";
+        + "</td><td>" + fmt(r.photos) + "</td><td class=\"fold-order\">"
+        + (order || "—") + more + skipped + "</td></tr>";
     }
     html += "</tbody></table>";
   } else {
@@ -7179,6 +7328,8 @@ function initAutomationTabs() {
   }
   initMenuSelect("autoFoldMarket");
   initMenuSelect("autoFoldOrder");
+  initMenuSelect("autoFoldNumMode");
+  initAutoFoldNum();
   initMenuSelect("autoCropType");
   initMenuSelect("autoBarType");
   initAutoDropzone("autoFoldFile", "autoFoldDrop");

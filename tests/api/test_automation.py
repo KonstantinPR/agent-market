@@ -154,6 +154,58 @@ def test_foldering_build_no_photos(client):
     assert st["error"]
 
 
+def test_foldering_preview_photo_pairs(client, db, tmp_path, monkeypatch):
+    db.add(models.NmArticle(nm_id="333", article="C3"))
+    db.commit()
+    fake = FakeIndex({"C3": _Entry([
+        (1, _mk(tmp_path, "c3-1.jpg", b"one")),
+        (2, _mk(tmp_path, "c3-2.jpg", b"two")),
+    ])})
+    monkeypatch.setattr(photos, "get_index", lambda: fake)
+
+    r = client.post("/api/automation/foldering/preview", data={
+        "articles": "c3", "marketplace": "WB", "photo_pairs": "[[1, 2]]",
+    })
+    assert r.status_code == 200
+    row = r.json()["with_photos"][0]
+    assert row["order"] == [
+        {"pos": 1, "name": "c3-1.jpg", "src": "c3-2.jpg"},
+        {"pos": 2, "name": "c3-2.jpg", "src": "c3-1.jpg"},
+    ]
+    assert row["skipped"] == []
+
+
+def test_foldering_preview_photo_pairs_bad_json(client):
+    r = client.post("/api/automation/foldering/preview", data={
+        "articles": "a1", "photo_pairs": "[[1,",
+    })
+    assert r.status_code == 400
+    assert "photo_pairs" in r.json()["detail"]
+
+
+def test_foldering_build_photo_pairs(client, db, tmp_path, monkeypatch):
+    db.add(models.NmArticle(nm_id="444", article="D4"))
+    db.commit()
+    fake = FakeIndex({"D4": _Entry([
+        (1, _mk(tmp_path, "d4-1.jpg", b"one")),
+        (2, _mk(tmp_path, "d4-2.jpg", b"two")),
+    ])})
+    monkeypatch.setattr(photos, "get_index", lambda: fake)
+
+    r = client.post("/api/automation/foldering/build", data={
+        "articles": "d4", "marketplace": "WB", "photo_pairs": "[[1, 2]]",
+    })
+    job_id = r.json()["job_id"]
+    st = _wait_job(client, job_id)
+    assert st["status"] == "done", st
+
+    r = client.get(f"/api/automation/foldering/build/{job_id}/download")
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    assert sorted(z.namelist()) == ["444/d4-1.jpg", "444/d4-2.jpg"]
+    assert z.read("444/d4-1.jpg") == b"two"
+    assert z.read("444/d4-2.jpg") == b"one"
+
+
 # ------------------------------------------------------------------ кроп
 
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=78">
+<link rel="stylesheet" href="/static/style.css?v=79">
 </head>
 <body>
 <nav class="navbar">
@@ -1073,7 +1073,19 @@
         </select>
         <label class="chk"><input type="checkbox" id="autoFoldAll"> взять все фото (ALL), иначе только новые</label>
         <label class="chk"><input type="checkbox" id="autoFoldNulls"> ведущие нули (&minus;2 → &minus;002)</label>
-        <input id="autoFoldChangeOrder" type="number" min="2" placeholder="Поменять 1 и N" style="width:160px">
+        <select id="autoFoldNumMode" title="Как менять порядок фото: номера как есть, поменять 1 и N, или свои замены N ↔ M">
+          <option value="none" selected>Номера как есть</option>
+          <option value="swap1">Поменять 1 и N</option>
+          <option value="custom">Свои замены N ↔ M</option>
+        </select>
+        <input id="autoFoldSwapN" type="number" min="2" value="2" placeholder="N" title="Фото с позиции 1 и N меняются местами" style="width:90px" class="hidden">
+      </div>
+      <div class="fold-pairs hidden" id="autoFoldPairsBox">
+        <div class="fold-pairs-head">
+          <span class="hint">Замены позиций: фото с позиции N встаёт на M, а с M — на N. Номера — позиции в архиве (1 = первое фото в выбранном порядке); лишние пары для артикула с меньшим числом фото пропускаются.</span>
+          <button type="button" class="btn fold-pair-add" id="autoFoldPairAdd">+ Добавить замену</button>
+        </div>
+        <div class="fold-pairs-list" id="autoFoldPairs"></div>
       </div>
       <div class="toolbar">
         <textarea id="autoFoldArticles" rows="5" placeholder="Артикулы копипастом (по одному в строке); можно пары: артикул<TAB>nmID" style="width:100%"></textarea>
@@ -1276,7 +1288,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=182"></script>
+  <script src="/static/app.js?v=185"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

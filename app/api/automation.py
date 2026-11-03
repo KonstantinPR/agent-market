@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Раздел «Автоматизация»: фолдеринг фото, размножение имён, кроп, штрихкоды."""
 
+import json
+
 from fastapi import Form
 from fastapi.responses import FileResponse
 
@@ -155,6 +157,30 @@ def automation_template():
 # ------------------------------------------------------------------ фолдеринг
 
 
+def _parse_photo_pairs(raw: str):
+    """``photo_pairs`` из формы: JSON-массив пар ``[[N, M], …]``.
+
+    Пустая строка — замен нет. Мусор в элементах отбрасывает
+    ``img_foldering.normalize_pairs``; невалидный JSON — 400.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        data = json.loads(s)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="photo_pairs: ожидается JSON-массив пар вида [[1, 3], [2, 4]]",
+        )
+    if not isinstance(data, list):
+        raise HTTPException(
+            status_code=400,
+            detail="photo_pairs: ожидается JSON-массив пар вида [[1, 3], [2, 4]]",
+        )
+    return data
+
+
 @router.post("/automation/foldering/preview")
 async def automation_foldering_preview(
     articles: str = Form(""),
@@ -162,6 +188,8 @@ async def automation_foldering_preview(
     marketplace: str = Form("WB"),
     is_replace: str = Form("ONLY_NEW"),
     order: str = Form("ASCENDING"),
+    change_order: Optional[int] = Form(None),
+    photo_pairs: str = Form(""),
     db: Session = Depends(get_db),
 ):
     arts, nm_extra = await _load_inputs(articles, file)
@@ -172,7 +200,9 @@ async def automation_foldering_preview(
     nm_map = {} if mp == "OZON" else _db_nm_map(db)
     nm_map.update(nm_extra)
 
-    _entries, report = foldering_service.plan(arts, nm_map, mp, is_replace, order)
+    _entries, report = foldering_service.plan(
+        arts, nm_map, mp, is_replace, order,
+        photo_pairs=_parse_photo_pairs(photo_pairs), change_order=change_order)
     return report
 
 
@@ -185,6 +215,7 @@ async def automation_foldering_build(
     order: str = Form("ASCENDING"),
     leading_nulls: bool = Form(False),
     change_order: Optional[int] = Form(None),
+    photo_pairs: str = Form(""),
     db: Session = Depends(get_db),
 ):
     """Ставит сборку архива в фон. Возвращает {job_id} — опрашивать
@@ -200,7 +231,8 @@ async def automation_foldering_build(
 
     return foldering_service.start_build_job(
         arts, nm_map, mp, is_replace, order,
-        leading_nulls=leading_nulls, change_order=change_order)
+        leading_nulls=leading_nulls, change_order=change_order,
+        photo_pairs=_parse_photo_pairs(photo_pairs))
 
 
 @router.get("/automation/foldering/build/{job_id}")

@@ -1286,6 +1286,24 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 }
 .dropzone .dz-label { pointer-events: none; }
 
+/* --------------- «Фото для маркетплейса»: замены номеров фото -------------- */
+.fold-pairs { margin: 0 0 12px; }
+.fold-pairs-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.fold-pairs-head .hint { flex: 1 1 auto; margin-bottom: 0; }
+.fold-pairs-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.fold-pair { display: flex; align-items: center; gap: 8px; }
+.fold-pair input[type="number"] { width: 80px; }
+.fold-pair-sep { color: #6b7a90; }
+.fold-pair-del { padding: 2px 9px; line-height: 1.2; }
+.fold-order { font-size: 12px; color: #444; }
+.fold-src { color: #8892a0; font-size: 11px; }
+.fold-skip { color: #b45309; font-size: 11px; margin-top: 2px; }
+
 /* --------------------------- T-49: штрихкоды --------------------------- */
 .auto-bar-grid {
   display: flex;

@@ -36,6 +36,12 @@ from app.services import photos as photos_service
 #: Порог, после которого архив разбивается на части (МБ).
 MAX_PART_MB = 500
 
+#: Сколько позиций показывать в предпросмотре порядка фото.
+ORDER_PREVIEW = 8
+
+#: Максимум пар «фото N ↔ M» в одном запросе.
+MAX_PAIRS = 20
+
 #: Хвост ``-<цифры>`` или ``_<цифры>`` — позиция фото (для ведущих нулей).
 _SUFFIX_RE = re.compile(r"^(.*?)([-_])(\d+)$")
 
@@ -112,21 +118,77 @@ def _dedupe_names(files: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
     return out
 
 
-def _swap_positions(files: list[tuple[str, Path]], change_order) -> list[tuple[str, Path]]:
-    """Поменять содержимое позиций 1 и N (имена остаются на местах)."""
-    if not change_order:
+def normalize_pairs(raw=None, change_order=None) -> list[tuple[int, int]]:
+    """Привести замены к списку пар позиций ``[(N, M), …]`` (1-based).
+
+    Принимает список пар (``[[1, 3], …]``), строки вида ``"1↔3"`` / ``"1:3"`` /
+    ``"1 3"``, одиночные числа и legacy ``change_order`` (обмен 1 и N). Мусор,
+    неположительные позиции, ``N == M`` и повторы (в т.ч. обратные) отбрасываются,
+    длина ограничена ``MAX_PAIRS``.
+    """
+    pairs: list[tuple[int, int]] = []
+
+    def add(a, b) -> None:
+        if isinstance(a, bool) or isinstance(b, bool):
+            return
+        try:
+            n, m = int(a), int(b)
+        except (TypeError, ValueError):
+            return
+        if n < 1 or m < 1 or n == m:
+            return
+        if (n, m) in pairs or (m, n) in pairs:
+            return
+        pairs.append((n, m))
+
+    entries = raw if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
+    for item in entries:
+        if isinstance(item, (list, tuple)):
+            if len(item) == 2:
+                add(item[0], item[1])
+            continue
+        if isinstance(item, str):
+            nums = re.findall(r"\d+", item)
+            if len(nums) == 2:
+                add(nums[0], nums[1])
+            continue
+        if isinstance(item, int) and not isinstance(item, bool):
+            add(1, item)
+
+    if not pairs and change_order is not None:
+        add(1, change_order)
+    return pairs[:MAX_PAIRS]
+
+
+def _apply_pairs(
+    files: list[tuple[str, Path]], pairs: list[tuple[int, int]]
+) -> list[tuple[str, Path]]:
+    """Обменять содержимое позиций по парам (последовательно, 1-based).
+
+    Имена остаются на своих позициях, меняются только файлы под ними. Пара с
+    номером больше числа фото у артикула пропускается — остальные применяются.
+    """
+    if not pairs:
         return files
+    out = list(files)
+    total = len(out)
+    for a, b in pairs:
+        if a < 1 or b < 1 or a == b or a > total or b > total:
+            continue
+        name_a, path_a = out[a - 1]
+        name_b, path_b = out[b - 1]
+        out[a - 1] = (name_a, path_b)
+        out[b - 1] = (name_b, path_a)
+    return out
+
+
+def _swap_positions(files: list[tuple[str, Path]], change_order) -> list[tuple[str, Path]]:
+    """Legacy «поменять 1 и N»: то же, что одна пара ``1 ↔ N``."""
     try:
         n = int(change_order)
     except (TypeError, ValueError):
         return files
-    if n < 2 or len(files) < n:
-        return files
-    files = list(files)
-    first, last = files[0], files[n - 1]
-    files[0] = (first[0], last[1])
-    files[n - 1] = (last[0], first[1])
-    return files
+    return _apply_pairs(files, normalize_pairs(None, n))
 
 
 # ------------------------------------------------------------------ план
@@ -143,6 +205,8 @@ def plan(
     is_replace: str = "ONLY_NEW",
     order: str = "ASCENDING",
     index=None,
+    photo_pairs=None,
+    change_order=None,
 ) -> tuple[list[ArticleEntry], dict]:
     """Сопоставить артикулы с фото и именем папки. Возвращает (entries, отчёт)."""
     idx = index if index is not None else photos_service.get_index()
@@ -150,6 +214,7 @@ def plan(
     nm_map = {_nm_key(k): str(v) for k, v in (nm_map or {}).items() if v}
     only_new = (is_replace or "").strip().upper() != "ALL"
     desc = str(order or "").strip().upper().startswith("DESC")
+    pairs = normalize_pairs(photo_pairs, change_order)
 
     entries: list[ArticleEntry] = []
     missing: list[str] = []
@@ -198,9 +263,24 @@ def plan(
                 name = f"{art}{ext}" if pos == 1 else f"{art}_{pos}{ext}"
             files.append((name, path))
         files = _dedupe_names(files)
+        if pairs:
+            files = _apply_pairs(files, pairs)
+
+        order_preview = [
+            {"pos": pos, "name": name, "src": path.name}
+            for pos, (name, path) in enumerate(files[:ORDER_PREVIEW], start=1)
+        ]
+        skipped = [f"{a}\u2194{b}" for a, b in pairs if a > len(files) or b > len(files)]
 
         entries.append(ArticleEntry(article=art, folder=folder, files=files))
-        with_photos.append({"article": art, "folder": folder, "photos": len(files)})
+        with_photos.append({
+            "article": art,
+            "folder": folder,
+            "photos": len(files),
+            "order": order_preview,
+            "more": max(len(files) - ORDER_PREVIEW, 0),
+            "skipped": skipped,
+        })
 
     report = {
         "total": total,
@@ -334,9 +414,11 @@ def start_build_job(
     order: str = "ASCENDING",
     leading_nulls: bool = False,
     change_order=None,
+    photo_pairs=None,
 ) -> dict:
     """Ставит сборку архива в фоновую нить. Возвращает {job_id} или {rejected}."""
     mp = (marketplace or "WB").strip().upper()
+    pairs = normalize_pairs(photo_pairs, change_order)
     with _LOCK:
         job_id = _next_id()
         job = {
@@ -350,17 +432,18 @@ def start_build_job(
     threading.Thread(
         target=_build_worker,
         args=(job_id, list(articles or []), dict(nm_map or {}), mp,
-              is_replace, order, bool(leading_nulls), change_order),
+              is_replace, order, bool(leading_nulls), pairs),
         daemon=True,
     ).start()
     return {"job_id": job_id}
 
 
 def _build_worker(job_id, articles, nm_map, mp, is_replace, order,
-                  leading_nulls, change_order) -> None:
+                  leading_nulls, photo_pairs) -> None:
     job = _JOBS[job_id]
     try:
-        entries, report = plan(articles, nm_map, mp, is_replace, order)
+        entries, report = plan(articles, nm_map, mp, is_replace, order,
+                               photo_pairs=photo_pairs)
         job["found"] = report["found"]
         job["photos"] = report["photos"]
         job["missing"] = report["missing"]
@@ -370,7 +453,8 @@ def _build_worker(job_id, articles, nm_map, mp, is_replace, order,
             job["error"] = (f"Нет фото для сборки: не найдено {len(report['missing'])}, "
                             f"без nmID {len(report['no_nm'])}")
             return
-        buf = build_zip(entries, leading_nulls=leading_nulls, change_order=change_order)
+        # Замены позиций уже применены в plan(); build_zip получает готовый порядок.
+        buf = build_zip(entries, leading_nulls=leading_nulls)
         out_dir = _BUILD_DIR / f"job{job_id}"
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / job["filename"]
