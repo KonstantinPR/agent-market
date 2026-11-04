@@ -20,9 +20,13 @@ ROOT = Path(__file__).resolve().parents[2]
 # Снимок: "METHOD /path" (порядок методов алфавитный). Менять осознанно.
 # ---------------------------------------------------------------------------
 SNAPSHOT = """
+DELETE /api/automation/face/etalons/{etalon_id}
 DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
+GET /api/automation/face/options
+GET /api/automation/face/state/{job_id}
+GET /api/automation/face/zip/{job_id}
 GET /api/automation/foldering/build/{job_id}
 GET /api/automation/foldering/build/{job_id}/download
 GET /api/automation/template
@@ -104,6 +108,10 @@ GET /api/wb/detail-summary
 GET /api/yandex/download
 GET /api/yandex/list
 POST /api/automation/crop/build
+POST /api/automation/face/etalons
+POST /api/automation/face/open/{job_id}
+POST /api/automation/face/start
+POST /api/automation/face/stop/{job_id}
 POST /api/automation/foldering/build
 POST /api/automation/foldering/preview
 POST /api/automation/names/download

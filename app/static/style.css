@@ -1304,6 +1304,51 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .fold-src { color: #8892a0; font-size: 11px; }
 .fold-skip { color: #b45309; font-size: 11px; margin-top: 2px; }
 
+/* --------------------- «Обработка лиц»: прогресс задания ------------------ */
+.auto-face-progress {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #d5deeb;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 13px;
+  color: #33475f;
+}
+.auto-face-progress .afp-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.auto-face-progress .afp-bar {
+  height: 8px;
+  margin: 7px 0 4px;
+  border-radius: 4px;
+  background: #e3e8ef;
+  overflow: hidden;
+}
+.auto-face-progress .afp-fill {
+  height: 100%;
+  background: #3574b2;
+  transition: width .3s;
+}
+.auto-face-progress .afp-current {
+  color: #6b7a90;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.auto-face-progress.error {
+  border-color: #e0b4b4;
+  background: #fdf2f2;
+  color: #9b2c2c;
+}
+.auto-face-progress.done {
+  border-color: #b7d8bd;
+  background: #f2faf3;
+  color: #24663a;
+}
+
 /* --------------------------- T-49: штрихкоды --------------------------- */
 .auto-bar-grid {
   display: flex;

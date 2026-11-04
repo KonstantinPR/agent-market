@@ -46,6 +46,14 @@ class Settings(BaseSettings):
 
     photos_root: str = r"C:\YandexDisk\ФОТОГРАФИИ"
     thumbs_dir: str = "data/thumbs"
+
+    #: «Автоматизация → Обработка лиц»: отдельный проект с onnxruntime,
+    #: mediapipe и GFPGAN. Оттуда берутся brand_batch.py, его venv-питон и
+    #: модели (models/*.onnx, models/*.npz).
+    face_retouch_dir: str = r"C:\Users\1\Documents\Default Project\face-retouch"
+    #: Папка-исходник по умолчанию, пока пользователь не выбрал свою
+    #: (последняя выбранная запоминается в data/faces/last_source.txt).
+    face_source_default: str = ""
     thumb_max_px: int = 800
     thumb_quality: int = 82
 

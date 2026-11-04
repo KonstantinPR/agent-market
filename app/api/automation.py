@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Раздел «Автоматизация»: фолдеринг фото, размножение имён, кроп, штрихкоды."""
+"""Раздел «Автоматизация»: фолдеринг фото, размножение имён, кроп, лица, штрихкоды."""
 
 import json
 
@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from app.api._common import *  # noqa: F401,F403
 from app.services import barcodes as barcode_service
+from app.services import face_retouch as face_service
 from app.services import img_cropper as crop_service
 from app.services import img_foldering as foldering_service
 from app.services import names_multiply as names_service
@@ -331,6 +332,99 @@ async def automation_crop_build(
         raise HTTPException(status_code=400, detail="Нет изображений для обработки")
     buf = crop_service.crop_images(items, type_clothes)
     return _zip_response(buf, "crop.zip")
+
+
+# ------------------------------------------------------------------ обработка лиц
+
+
+@router.get("/automation/face/options")
+def automation_face_options():
+    """Варианты обработки, эталоны и настройки по умолчанию для вкладки."""
+    return face_service.options()
+
+
+@router.post("/automation/face/start")
+async def automation_face_start(
+    source_dir: str = Form(""),
+    variant: str = Form(face_service.DEFAULT_VARIANT),
+    reference: str = Form(""),
+    files: List[UploadFile] = File(default=[]),
+):
+    """Запускает обработку: папка с исходниками и/или загруженные фото."""
+    uploads: list[tuple[str, bytes]] = []
+    for upf in files or []:
+        data = await upf.read()
+        if data:
+            uploads.append((upf.filename or "image.jpg", data))
+    try:
+        return face_service.start_job(
+            source_dir=source_dir, variant=variant, reference=reference,
+            uploads=uploads)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/automation/face/state/{job_id}")
+def automation_face_state(job_id: int):
+    st = face_service.job_state(job_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    return st
+
+
+@router.get("/automation/face/zip/{job_id}")
+def automation_face_zip(job_id: int):
+    st = face_service.job_state(job_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    if st.get("status") != "done":
+        raise HTTPException(status_code=409,
+                            detail=st.get("error") or "Архив ещё не готов")
+    path = face_service.zip_path(job_id)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=410, detail="Файл архива недоступен")
+    return FileResponse(path, media_type="application/zip",
+                        filename=st["filename"])
+
+
+@router.post("/automation/face/stop/{job_id}")
+def automation_face_stop(job_id: int):
+    if face_service.job_state(job_id) is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    return {"stopped": face_service.stop_job(job_id)}
+
+
+@router.post("/automation/face/open/{job_id}")
+def automation_face_open(job_id: int):
+    """Открыть папку с результатом (режим «папка с исходниками»)."""
+    if face_service.job_state(job_id) is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    if not face_service.open_folder(job_id):
+        raise HTTPException(status_code=409, detail="Папка с результатом недоступна")
+    return {"opened": True}
+
+
+@router.post("/automation/face/etalons")
+async def automation_face_etalon_add(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+):
+    """Готовит свой эталон из загруженного фото (``etalon_prep.py``)."""
+    data = await file.read()
+    try:
+        return face_service.create_etalon(file.filename or "", data, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/automation/face/etalons/{etalon_id}")
+def automation_face_etalon_delete(etalon_id: str):
+    """Удаляет свой эталон (встроенные неудаляемы)."""
+    try:
+        face_service.delete_etalon(etalon_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"deleted": True}
 
 
 # ------------------------------------------------------------------ штрихкоды

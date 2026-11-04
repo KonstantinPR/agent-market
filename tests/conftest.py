@@ -29,7 +29,7 @@ from app.services import refresh as refresh_service
 
 from tests.fakes import FakeOz, FakeWb
 
-TABLES = ", ".join([
+TABLES = ", ".join("public." + t for t in [
     "marketplaces", "products", "sales", "stocks", "custom_stock",
     "funnel_metric", "nm_articles", "api_pulls", "refresh_runs", "batch_runs",
     "price_changes", "marketplace_cards", "price_snapshots", "storage_costs",
@@ -75,12 +75,25 @@ def db_engine():
     yield engine
 
 
+def _reset_search_path(conn) -> None:
+    """Возвращает соединение в public.
+
+    Воркеры обновления/батча пиннят ``search_path`` на схему связки; когда
+    такое соединение попадает обратно в пул, очистка таблиц и вставка
+    маркетплейсов уходят в ``cab_*`` — и получается duplicate key на
+    ``marketplaces`` (или очищается не та схема). Сбрасываем явно.
+    """
+    conn.execute(text("set search_path to public"))
+
+
 @pytest.fixture()
 def db(db_engine):
     with engine.begin() as conn:
+        _reset_search_path(conn)
         conn.execute(text(f"truncate {TABLES} restart identity cascade"))
     session = SessionLocal()
     try:
+        _reset_search_path(session)
         session.add_all([
             models.Marketplace(code="wb", name="Wildberries"),
             models.Marketplace(code="ozon", name="Ozon"),

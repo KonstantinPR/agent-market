@@ -34,17 +34,17 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 12656 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 6644 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/app.js` | 13131 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 6789 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/static/columns.json` | 6592 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 2935 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2669 | запись выгрузок WB/Ozon в БД |
 | `tests/api/test_endpoints.py` | 1874 | HTTP-эндпоинты через TestClient |
-| `app/static/style.css` | 1762 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/style.css` | 1825 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `tests/js/test_js_helpers.py` | 1395 | проверка app.js через Node `vm` |
 | `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
-| `app/static/index.html` | 1326 | разметка: навигация `data-tab` + секции `tab-*` |
+| `app/static/index.html` | 1371 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |
 | `tests/unit/test_margin.py` | 1105 | юнит-тесты маржинальности |
 | `app/services/margin.py` | 1105 | маржинальность по детализациям, группировка артикулоразмеров |
@@ -67,9 +67,9 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/yandex_disk.py` | 108 | загрузка отчётов на Яндекс.Диск |
 | `app/providers/errors.py` | 100 | нормализованные ошибки апстримов |
 | `app/main.py` | 86 | сборка FastAPI-приложения, `/`, статика |
+| `app/config.py` | 79 | `Settings`, читается из `.env` |
 | `app/services/common.py` | 76 | общие хелперы (wildcard-фильтр `like_*`, окна) |
 | `app/services/excel_io.py` | 73 | чтение/запись Excel |
-| `app/config.py` | 71 | `Settings`, читается из `.env` |
 | `app/services/columns.py` | 42 | loader columns.json (`export_cols` для Python) |
 | `app/providers/base.py` | 33 | базовый провайдер |
 | `app/providers/factory.py` | 22 | точка подмены провайдеров в тестах |

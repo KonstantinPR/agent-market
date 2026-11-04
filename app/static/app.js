@@ -1345,6 +1345,7 @@ async function loadTabInner(name, f) {
     else if (name === "automation-foldering") await renderAutomationFoldering();
     else if (name === "automation-names") await renderAutomationNames();
     else if (name === "automation-crop") await renderAutomationCrop();
+    else if (name === "automation-faces") await renderAutomationFaces();
     else if (name === "automation-barcodes") await renderAutomationBarcodes();
   } catch (err) {
     console.error("loadTab error:", err);
@@ -7179,6 +7180,308 @@ async function onAutoCropBuild() {
   }
 }
 
+// ------------------------------------------------------- обработка лиц
+// Обработка идёт в подпроцессе face-retouch (12–18 с на фото), поэтому
+// задание фоновое: UI опрашивает состояние и показывает прогресс.
+let _faceJobId = null;
+//: Есть ли etalon_prep.py (иначе кнопку «Загрузить свой эталон» не включаем).
+let _faceCanAddEtalon = true;
+
+async function renderAutomationFaces() {
+  const res = document.getElementById("autoFaceResult");
+  if (res) res.innerHTML = "";
+  await loadFaceOptions();
+}
+
+async function loadFaceOptions() {
+  const vSel = document.getElementById("autoFaceVariant");
+  const rSel = document.getElementById("autoFaceReference");
+  const src = document.getElementById("autoFaceSource");
+  if (!vSel || !rSel) return;
+  try {
+    const opt = await api("/automation/face/options");
+    const keepV = vSel.value;
+    const keepR = rSel.value;
+    vSel.innerHTML = "";
+    for (const v of opt.variants || []) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = v.label;
+      if (v.hint) o.title = v.hint;
+      vSel.appendChild(o);
+    }
+    const hasV = (opt.variants || []).some((v) => v.id === keepV);
+    vSel.value = hasV ? keepV : (opt.default_variant || "v1");
+    if (vSel._menuSync) vSel._menuSync();
+    rSel.innerHTML = "";
+    for (const r of opt.references || []) {
+      const o = document.createElement("option");
+      o.value = r.id;
+      o.textContent = r.custom ? r.label + " (свой)" : r.label;
+      if (r.custom) o.dataset.custom = "1";
+      rSel.appendChild(o);
+    }
+    const hasR = (opt.references || []).some((r) => r.id === keepR);
+    if (hasR) rSel.value = keepR;
+    else if (opt.default_reference) rSel.value = opt.default_reference;
+    if (rSel._menuSync) rSel._menuSync();
+    const addBtn = document.getElementById("autoFaceEtalonAdd");
+    _faceCanAddEtalon = !!opt.can_add_etalon;
+    if (addBtn) {
+      addBtn.disabled = !_faceCanAddEtalon;
+      addBtn.title = _faceCanAddEtalon
+        ? "Портрет анфас: JPG, PNG или WEBP. Эталон сохранится в " + (opt.custom_dir || "models\\custom")
+        : "Нет etalon_prep.py в " + (opt.face_dir || "");
+    }
+    _faceSyncEtalonButtons();
+    if (src && !src.value && opt.default_source) src.value = opt.default_source;
+    if (!opt.ready) {
+      _faceProgress("Пайплайн не найден: " + (opt.face_dir || "") +
+        ". Нужны .venv\\Scripts\\python.exe, brand_batch.py и models\\*.npz.", true);
+    }
+  } catch (err) {
+    _faceProgress("Не удалось загрузить настройки: " + apiErrorMessage(err), true);
+  }
+}
+
+function _faceProgress(text, isError) {
+  const box = document.getElementById("autoFaceProgress");
+  if (!box) return;
+  box.classList.remove("hidden", "error", "done");
+  if (isError) box.classList.add("error");
+  box.innerHTML = '<div class="afp-line"><span>' + escapeHtml(text) + "</span></div>";
+}
+
+function _faceProgressState(st) {
+  const box = document.getElementById("autoFaceProgress");
+  if (!box) return;
+  box.classList.remove("hidden", "error", "done");
+  const total = st.total || 0;
+  const done = st.done || 0;
+  const pct = Math.max(0, Math.min(100, st.percent || 0));
+  let title = "Обрабатываю…";
+  if (st.status === "done") title = "Готово";
+  else if (st.status === "failed") title = "Ошибка";
+  else if (st.status === "cancelled") title = "Остановлено";
+  if (st.status === "failed") box.classList.add("error");
+  else if (st.status === "done") box.classList.add("done");
+  let html = '<div class="afp-line"><span>' + escapeHtml(title) + "</span><span>"
+    + (total ? fmt(done) + " / " + fmt(total) : "") + "</span></div>"
+    + '<div class="afp-bar"><div class="afp-fill" style="width:' + pct + '%"></div></div>';
+  if (st.current) {
+    html += '<div class="afp-current" title="' + escapeHtml(st.current) + '">'
+      + escapeHtml(st.current) + "</div>";
+  }
+  if (st.error) {
+    html += '<div class="afp-current">' + escapeHtml(st.error) + "</div>";
+  }
+  box.innerHTML = html;
+}
+
+function _faceSelectedRef() {
+  const rSel = document.getElementById("autoFaceReference");
+  if (!rSel) return { id: "", custom: false, label: "" };
+  const opt = rSel.options[rSel.selectedIndex];
+  return {
+    id: rSel.value || "",
+    custom: !!(opt && opt.dataset && opt.dataset.custom === "1"),
+    label: opt ? opt.textContent.replace(/\s*\(свой\)$/, "") : "",
+  };
+}
+
+// «Удалить эталон» показываем только для своего: встроенные неудаляемы.
+function _faceSyncEtalonButtons() {
+  const del = document.getElementById("autoFaceEtalonDelete");
+  if (!del) return;
+  const ref = _faceSelectedRef();
+  del.classList.toggle("hidden", !ref.custom);
+}
+
+function _faceSetBusy(busy) {
+  for (const id of ["autoFaceRunFolder", "autoFaceRunFiles"]) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = busy;
+  }
+  const add = document.getElementById("autoFaceEtalonAdd");
+  if (add) add.disabled = busy || !_faceCanAddEtalon;
+  const stop = document.getElementById("autoFaceStop");
+  if (stop) stop.classList.toggle("hidden", !busy);
+  if (busy) {
+    const open = document.getElementById("autoFaceOpen");
+    if (open) open.classList.add("hidden");
+    const del = document.getElementById("autoFaceEtalonDelete");
+    if (del) del.classList.add("hidden");
+  } else {
+    _faceSyncEtalonButtons();
+  }
+}
+
+async function _facePoll(jobId) {
+  const deadline = Date.now() + 3 * 60 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const st = await api("/automation/face/state/" + jobId);
+    _faceProgressState(st);
+    if (st.status !== "running") return st;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error("Обработка не завершилась за 3 часа");
+}
+
+async function onAutoFaceStart(useFiles) {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Запускаю обработку…"; msg.classList.remove("error"); }
+  const res = document.getElementById("autoFaceResult");
+  if (res) res.innerHTML = "";
+  try {
+    const fd = new FormData();
+    fd.append("variant", (document.getElementById("autoFaceVariant") || {}).value || "v1");
+    fd.append("reference", (document.getElementById("autoFaceReference") || {}).value || "");
+    if (useFiles) {
+      const fileEl = document.getElementById("autoFaceFiles");
+      if (!fileEl || !fileEl.files.length) throw new Error("Перетащите фото в зону или выберите файлы");
+      for (const f of fileEl.files) fd.append("files", f);
+    } else {
+      const src = ((document.getElementById("autoFaceSource") || {}).value || "").trim();
+      if (!src) throw new Error("Укажите папку с исходниками");
+      fd.append("source_dir", src);
+    }
+    const start = await _autoPostJson("/api/automation/face/start", fd, apiSignalLong());
+    _faceJobId = start.job_id;
+    _faceSetBusy(true);
+    _faceProgress("Обрабатываю…");
+    const st = await _facePoll(_faceJobId);
+    _faceSetBusy(false);
+    if (st.status === "failed") throw new Error(st.error || "Обработка не удалась");
+    if (st.status === "cancelled") {
+      if (msg) msg.textContent = "Остановлено";
+      return;
+    }
+    if (st.mode === "upload") {
+      await _faceDownload(st.id, st.filename);
+      if (msg) msg.textContent = "Готово: " + fmt(st.done) + " фото, архив скачан";
+    } else {
+      if (msg) msg.textContent = "Готово: " + fmt(st.done) + " фото → " + st.out_dir;
+      const open = document.getElementById("autoFaceOpen");
+      if (open) open.classList.remove("hidden");
+    }
+    if (res) {
+      let html = '<p class="hint">Обработано: <b>' + fmt(st.done) + "</b>"
+        + (st.total && st.done !== st.total ? " из " + fmt(st.total) : "");
+      if (st.no_face) html += "; без лица (скопированы как есть): " + fmt(st.no_face);
+      if (st.failed_files) html += "; ошибок: " + fmt(st.failed_files);
+      html += "</p>";
+      if (st.mode === "folder") {
+        html += '<p class="hint">Результат: <code>' + escapeHtml(st.out_dir) + "</code></p>";
+      }
+      if ((st.log || []).length && (st.no_face || st.failed_files)) {
+        html += '<p class="hint">' + escapeHtml((st.log || []).join(" · ")) + "</p>";
+      }
+      res.innerHTML = html;
+    }
+  } catch (err) {
+    _faceSetBusy(false);
+    const text = apiErrorMessage(err);
+    _faceProgress(text, true);
+    if (msg) { msg.textContent = "Ошибка: " + text; msg.classList.add("error"); }
+  }
+}
+
+async function _faceDownload(jobId, filename) {
+  const resp = await fetch("/api/automation/face/zip/" + jobId, { signal: apiSignal() });
+  if (!resp.ok) {
+    let m = String(resp.status);
+    try { const j = await resp.json(); m = j.detail || m; } catch (e) { /* not json */ }
+    throw new Error(m);
+  }
+  const blob = await resp.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename || "faces.zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+async function onAutoFaceStop() {
+  if (!_faceJobId) return;
+  const msg = statusEl();
+  try {
+    await _autoPostJson("/api/automation/face/stop/" + _faceJobId, new FormData());
+    if (msg) msg.textContent = "Останавливаю…";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + apiErrorMessage(err); msg.classList.add("error"); }
+  }
+}
+
+async function onAutoFaceOpen() {
+  if (!_faceJobId) return;
+  const msg = statusEl();
+  try {
+    await _autoPostJson("/api/automation/face/open/" + _faceJobId, new FormData());
+    if (msg) msg.textContent = "Папка открыта";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + apiErrorMessage(err); msg.classList.add("error"); }
+  }
+}
+
+// Свой эталон: фото → etalon_prep.py на сервере → models\custom\<имя>.npz.
+async function onAutoFaceEtalonFile() {
+  const input = document.getElementById("autoFaceEtalonFile");
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  const msg = statusEl();
+  const addBtn = document.getElementById("autoFaceEtalonAdd");
+  if (msg) { msg.textContent = "Готовлю эталон…"; msg.classList.remove("error"); }
+  _faceProgress("Готовлю эталон из «" + file.name + "»…");
+  if (addBtn) addBtn.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", file.name.replace(/\.[^.]+$/, ""));
+    const res = await _autoPostJson("/api/automation/face/etalons", fd, apiSignalLong());
+    await loadFaceOptions();
+    const rSel = document.getElementById("autoFaceReference");
+    if (rSel && res.id) {
+      rSel.value = res.id;
+      if (rSel._menuSync) rSel._menuSync();
+    }
+    _faceSyncEtalonButtons();
+    _faceProgress("Эталон добавлен: " + (res.label || ""));
+    if (msg) msg.textContent = "Эталон добавлен: " + (res.label || "");
+  } catch (err) {
+    const text = apiErrorMessage(err);
+    _faceProgress(text, true);
+    if (msg) { msg.textContent = "Ошибка: " + text; msg.classList.add("error"); }
+  } finally {
+    input.value = "";
+    if (addBtn) addBtn.disabled = !_faceCanAddEtalon;
+  }
+}
+
+async function onAutoFaceEtalonDelete() {
+  const ref = _faceSelectedRef();
+  if (!ref.custom) return;
+  if (!confirm("Удалить эталон «" + ref.label + "»? Файл будет удалён с диска.")) return;
+  const msg = statusEl();
+  try {
+    const resp = await fetch("/api/automation/face/etalons/" + encodeURIComponent(ref.id),
+      { method: "DELETE" });
+    if (!resp.ok) {
+      let m = String(resp.status);
+      try { const j = await resp.json(); m = j.detail || m; } catch (e) { /* not json */ }
+      throw new Error(m);
+    }
+    await loadFaceOptions();
+    _faceProgress("Эталон удалён: " + ref.label);
+    if (msg) msg.textContent = "Эталон удалён: " + ref.label;
+  } catch (err) {
+    const text = apiErrorMessage(err);
+    _faceProgress(text, true);
+    if (msg) { msg.textContent = "Ошибка: " + text; msg.classList.add("error"); }
+  }
+}
+
 function initAutoDropzone(inputId, dropId) {
   const input = document.getElementById(inputId);
   const drop = document.getElementById(dropId);
@@ -7322,6 +7625,22 @@ function initAutomationTabs() {
   if (nd) nd.addEventListener("click", onAutoNamesDownload);
   const cb = document.getElementById("autoCropBuild");
   if (cb) cb.addEventListener("click", onAutoCropBuild);
+  const fr = document.getElementById("autoFaceRunFolder");
+  if (fr) fr.addEventListener("click", () => onAutoFaceStart(false));
+  const ff = document.getElementById("autoFaceRunFiles");
+  if (ff) ff.addEventListener("click", () => onAutoFaceStart(true));
+  const fstop = document.getElementById("autoFaceStop");
+  if (fstop) fstop.addEventListener("click", onAutoFaceStop);
+  const fopen = document.getElementById("autoFaceOpen");
+  if (fopen) fopen.addEventListener("click", onAutoFaceOpen);
+  const feAdd = document.getElementById("autoFaceEtalonAdd");
+  const feFile = document.getElementById("autoFaceEtalonFile");
+  if (feAdd && feFile) feAdd.addEventListener("click", () => feFile.click());
+  if (feFile) feFile.addEventListener("change", onAutoFaceEtalonFile);
+  const feDel = document.getElementById("autoFaceEtalonDelete");
+  if (feDel) feDel.addEventListener("click", onAutoFaceEtalonDelete);
+  const feRef = document.getElementById("autoFaceReference");
+  if (feRef) feRef.addEventListener("change", _faceSyncEtalonButtons);
   for (const id of ["autoFoldTemplate", "autoNamesTemplate"]) {
     const t = document.getElementById(id);
     if (t) t.addEventListener("click", onAutoTemplate);
@@ -7332,10 +7651,13 @@ function initAutomationTabs() {
   initAutoFoldNum();
   initMenuSelect("autoCropType");
   initMenuSelect("autoBarType");
+  initMenuSelect("autoFaceVariant");
+  initMenuSelect("autoFaceReference");
   initAutoDropzone("autoFoldFile", "autoFoldDrop");
   initAutoDropzone("autoNamesFile", "autoNamesDrop");
   initAutoDropzone("autoCropFiles", "autoCropDrop");
   initAutoDropzone("autoBarFile", "autoBarDrop");
+  initAutoDropzone("autoFaceFiles", "autoFaceDrop");
   const bPreview = document.getElementById("autoBarPreview");
   if (bPreview) bPreview.addEventListener("click", onAutoBarPreview);
   const bBuild = document.getElementById("autoBarBuild");

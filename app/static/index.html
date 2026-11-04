@@ -68,6 +68,7 @@
         <a class="nav-link" data-tab="automation-foldering" href="#">Фото для маркетплейса</a>
         <a class="nav-link" data-tab="automation-names" href="#">Размножить имена</a>
         <a class="nav-link" data-tab="automation-crop" href="#">Кроп изображений</a>
+        <a class="nav-link" data-tab="automation-faces" href="#">Обработка лиц</a>
         <a class="nav-link" data-tab="automation-barcodes" href="#">Генерация штрихкодов</a>
       </div>
     </div>
@@ -1153,6 +1154,38 @@
         <textarea id="autoCropArticles" rows="3" placeholder="Артикулы с Яндекс.Диска (по одному в строке)" style="width:100%"></textarea>
       </div>
     </div>
+  </section>
+
+  <section id="tab-automation-faces" class="pane">
+    <div class="wb-form">
+      <p class="hint">Замена лица на эталонное: inswapper 128 (boost 512) + GFPGAN сразу после свапа, без ретуши кожи. Варианты отличаются только силой GFPGAN: <b>1</b> — 0.85 (принятый), <b>2</b> — 0.55 (натуральнее кожа), <b>3</b> — 1.0 (максимум детализации). Разрешение, EXIF и всё вне овала лица (фон, одежда, волосы, уши, шея) не меняются. Укажите папку с исходниками — готовые фото лягут в подпапку <code>Готовые</code> рядом с ними. Или перетащите фото в зону ниже — результат скачается ZIP.</p>
+      <div class="toolbar">
+        <select id="autoFaceVariant" title="Вариант обработки: сила GFPGAN после свапа"></select>
+        <select id="autoFaceReference" title="Эталонное лицо: встроенные models\*.npz и свои"></select>
+      </div>
+      <div class="toolbar">
+        <input type="file" id="autoFaceEtalonFile" class="hidden" accept="image/jpeg,image/png,image/webp,.jfif">
+        <button id="autoFaceEtalonAdd" class="btn" title="Портрет анфас: JPG, PNG или WEBP. Эталон сохранится в models\custom и появится в списке">Загрузить свой эталон…</button>
+        <button id="autoFaceEtalonDelete" class="btn hidden" title="Удалить выбранный свой эталон">Удалить эталон</button>
+      </div>
+      <div class="toolbar">
+        <input id="autoFaceSource" type="text" placeholder="Путь к папке с исходниками" style="flex:1;min-width:280px">
+        <button id="autoFaceRunFolder" class="btn btn-primary">Обработать папку</button>
+      </div>
+      <div class="dz-row">
+        <div class="dropzone" id="autoFaceDrop">
+          <span class="dz-label">Перетащите сюда изображения (JPG, PNG, WEBP) — или нажмите для выбора файлов. Они обработаются по одному, готовые файлы скачаются ZIP.</span>
+        </div>
+        <input type="file" id="autoFaceFiles" class="hidden" multiple accept="image/*">
+      </div>
+      <div class="toolbar">
+        <button id="autoFaceRunFiles" class="btn btn-primary">Обработать файлы</button>
+        <button id="autoFaceOpen" class="btn hidden">Открыть папку</button>
+        <button id="autoFaceStop" class="btn hidden">Остановить</button>
+      </div>
+      <div id="autoFaceProgress" class="auto-face-progress hidden"></div>
+    </div>
+    <div class="table-wrap" id="autoFaceResult"></div>
   </section>
 
   <section id="tab-automation-barcodes" class="pane">

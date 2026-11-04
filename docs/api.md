@@ -2,13 +2,13 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **160**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **168**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
-- [automation](#automation) — 11 шт.
+- [automation](#automation) — 19 шт.
 - [batch](#batch) — 7 шт.
 - [cabinet](#cabinet) — 8 шт.
 - [cabinets](#cabinets) — 1 шт.
@@ -48,6 +48,14 @@
 | GET | `/api/automation/barcodes/catalog` | `automation_barcodes_catalog` | Штрихкоды из каталога: product_sizes.barcode; у товара без размеров — |
 | POST | `/api/automation/barcodes/preview` | `automation_barcodes_preview` | Предпросмотр: первые MAX_PREVIEW кодов рендерятся в data-url PNG. |
 | POST | `/api/automation/crop/build` | `automation_crop_build` |  |
+| POST | `/api/automation/face/etalons` | `automation_face_etalon_add` | Готовит свой эталон из загруженного фото (``etalon_prep.py``). |
+| DELETE | `/api/automation/face/etalons/{etalon_id}` | `automation_face_etalon_delete` | Удаляет свой эталон (встроенные неудаляемы). |
+| POST | `/api/automation/face/open/{job_id}` | `automation_face_open` | Открыть папку с результатом (режим «папка с исходниками»). |
+| GET | `/api/automation/face/options` | `automation_face_options` | Варианты обработки, эталоны и настройки по умолчанию для вкладки. |
+| POST | `/api/automation/face/start` | `automation_face_start` | Запускает обработку: папка с исходниками и/или загруженные фото. |
+| GET | `/api/automation/face/state/{job_id}` | `automation_face_state` |  |
+| POST | `/api/automation/face/stop/{job_id}` | `automation_face_stop` |  |
+| GET | `/api/automation/face/zip/{job_id}` | `automation_face_zip` |  |
 | POST | `/api/automation/foldering/build` | `automation_foldering_build` | Ставит сборку архива в фон. Возвращает {job_id} — опрашивать |
 | GET | `/api/automation/foldering/build/{job_id}` | `automation_foldering_build_state` |  |
 | GET | `/api/automation/foldering/build/{job_id}/download` | `automation_foldering_build_download` |  |
@@ -122,7 +130,7 @@
 | GET | `/api/export/ozon/placement-rows` | `export_ozon_placement_rows` |  |
 | GET | `/api/export/ozon/placement-summary` | `export_ozon_placement_summary` |  |
 | GET | `/api/export/products` | `export_products` | Экспорт каталога «Наш склад → Товары» в Excel по видимым колонкам. |
-| GET | `/api/export/replenish` | `export_replenish` |  |
+| GET | `/api/export/replenish` | `export_replenish` | Excel-выгрузка «Потребности»: те же фильтры, что у таблицы. |
 | GET | `/api/export/replenish/pdf` | `export_replenish_pdf` | Карточки потребности в PDF из строк таблицы (базовый режим). |
 | POST | `/api/export/replenish/pdf` | `export_replenish_pdf_from_excel` | PDF из строк Excel-файла (дропзона в меню PDF). |
 | GET | `/api/export/sales` | `export_sales` |  |

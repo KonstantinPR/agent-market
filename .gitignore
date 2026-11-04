@@ -4,6 +4,10 @@ __pycache__/
 .env
 data/mock/
 data/thumbs/
+# Рабочие папки фоновых заданий «Автоматизации» (результаты прогонов, не исходники)
+data/faces/
+data/batch/
+data/foldering/
 *.xlsx
 *.xls
 .DS_Store

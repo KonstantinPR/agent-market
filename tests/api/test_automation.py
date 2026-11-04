@@ -3,11 +3,15 @@
 
 import io
 import time
+import urllib.parse
 import zipfile
 
+import pytest
 from PIL import Image
 
 from app import models
+from app.config import settings
+from app.services import face_retouch as face_service
 from app.services import photos
 
 
@@ -377,3 +381,107 @@ def test_barcodes_catalog_limit(client, db):
     r = client.get("/api/automation/barcodes/catalog", params={"limit": 2})
     j = r.json()
     assert j["count"] == 2 and j["truncated"] is True
+
+
+# ------------------------------------------------------------------ обработка лиц
+
+
+def test_face_options(client):
+    r = client.get("/api/automation/face/options")
+    assert r.status_code == 200
+    j = r.json()
+    assert [v["id"] for v in j["variants"]] == ["v1", "v2", "v3"]
+    assert j["default_variant"] == "v1"
+    assert j["out_name"] == "Готовые"
+    assert ".jpg" in j["extensions"]
+    assert isinstance(j["ready"], bool)
+
+
+def test_face_start_requires_source(client):
+    r = client.post("/api/automation/face/start", data={"variant": "v1"})
+    assert r.status_code == 400
+    assert r.json()["detail"]
+
+
+def test_face_start_unknown_variant(client):
+    r = client.post("/api/automation/face/start",
+                    data={"variant": "v99", "source_dir": "C:\\photos"})
+    assert r.status_code == 400
+    assert "вариант" in r.json()["detail"].lower()
+
+
+def test_face_start_missing_folder(client):
+    r = client.post("/api/automation/face/start",
+                    data={"variant": "v1", "source_dir": "C:\\no-such-folder-xyz"})
+    assert r.status_code == 400
+
+
+def test_face_state_unknown(client):
+    assert client.get("/api/automation/face/state/999999").status_code == 404
+
+
+def test_face_zip_unknown(client):
+    assert client.get("/api/automation/face/zip/999999").status_code == 404
+
+
+# ------------------------------------------------------- свои эталоны (API)
+
+
+@pytest.fixture()
+def face_pipeline(tmp_path, monkeypatch):
+    """Мини-пайплайн: models + venv-питон + скрипты; etalon_prep подменён."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "etalon_180a.npz").write_bytes(b"npz")
+    venv = tmp_path / ".venv" / "Scripts"
+    venv.mkdir(parents=True)
+    (venv / "python.exe").write_bytes(b"")
+    (tmp_path / "brand_batch.py").write_text("# fake", encoding="utf-8")
+    (tmp_path / "etalon_prep.py").write_text("# fake", encoding="utf-8")
+    monkeypatch.setattr(settings, "face_retouch_dir", str(tmp_path))
+    monkeypatch.setattr(face_service, "_JOB_DIR", tmp_path / "jobs")
+    monkeypatch.setattr(face_service, "_LAST_SOURCE_FILE",
+                        tmp_path / "jobs" / "last.txt")
+    monkeypatch.setattr(face_service, "_run_etalon_prep",
+                        lambda image, out: out.write_bytes(b"npz"))
+    face_service._JOBS.clear()
+    return tmp_path
+
+
+def _etalon_url(etalon_id):
+    return "/api/automation/face/etalons/" + urllib.parse.quote(etalon_id, safe="")
+
+
+def test_face_etalon_add_and_delete(client, face_pipeline):
+    r = client.post(
+        "/api/automation/face/etalons",
+        data={"name": "Маша"},
+        files=[("file", ("masha.jpg", b"jpeg-bytes", "image/jpeg"))],
+    )
+    assert r.status_code == 200
+    j = r.json()
+    assert j == {"id": "custom:Маша", "label": "Маша", "custom": True}
+    assert (face_pipeline / "models" / "custom" / "Маша.npz").is_file()
+
+    opt = client.get("/api/automation/face/options").json()
+    assert opt["references"][-1]["id"] == "custom:Маша"
+
+    d = client.delete(_etalon_url("custom:Маша"))
+    assert d.status_code == 200 and d.json() == {"deleted": True}
+    assert not (face_pipeline / "models" / "custom" / "Маша.npz").exists()
+
+
+def test_face_etalon_add_bad_file(client, face_pipeline):
+    r = client.post(
+        "/api/automation/face/etalons",
+        files=[("file", ("masha.gif", b"gif", "image/gif"))],
+    )
+    assert r.status_code == 400
+    assert "JPG" in r.json()["detail"]
+
+
+def test_face_etalon_delete_builtin(client, face_pipeline):
+    r = client.delete(_etalon_url("etalon_180a.npz"))
+    assert r.status_code == 400
+    assert "Встроенный" in r.json()["detail"]
+
