@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "185";
+const UI_VERSION = "186";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -290,25 +290,45 @@ function filters() {
 
 // Расширенный поиск: «*» — любая последовательность символов (в т.ч. пустая),
 // всё остальное — буквально, регистр не важен. «abc*12*xyz» ищет именно в этом
-// порядке. Семантика совпадает с серверной (app/services/common.py).
+// порядке. «^» в начале привязывает к началу строки, «$» в конце — к концу;
+// внутри строки это обычные символы. Семантика совпадает с серверной
+// (app/services/common.py).
 const _LIKE_RE_CACHE = new Map();
+function likeAnchors(query) {
+  let body = String(query || "").trim();
+  const start = body.startsWith("^");
+  if (start) body = body.slice(1);
+  const end = body.endsWith("$");
+  if (end) body = body.slice(0, -1);
+  return { body, start, end };
+}
 function likeRe(query) {
   const q = String(query || "").trim().toLowerCase();
   if (_LIKE_RE_CACHE.has(q)) return _LIKE_RE_CACHE.get(q);
+  const { body, start, end } = likeAnchors(q);
   // экранируем всё (включая «*»), затем возвращаем «*» к любой последовательности
-  const src = q
+  const src = body
     .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     .replace(/\\\*/g, ".*");
-  const re = new RegExp(src);
+  const re = new RegExp((start ? "^" : "") + src + (end ? "$" : ""));
   if (_LIKE_RE_CACHE.size > 200) _LIKE_RE_CACHE.clear();
   _LIKE_RE_CACHE.set(q, re);
   return re;
 }
 
 function likeMatch(haystack, query) {
-  const q = String(query || "").trim();
-  if (!q) return true;
-  return likeRe(q).test(String(haystack == null ? "" : haystack).toLowerCase());
+  if (!likeAnchors(query).body) return true;
+  return likeRe(query).test(String(haystack == null ? "" : haystack).toLowerCase());
+}
+
+// Поиск по нескольким полям. Без якорей поля склеиваются, как раньше (запрос
+// может пересекать границу «артикул + название»); с якорями каждое поле
+// проверяется отдельно, иначе «$» упирался бы в конец склейки.
+function likeMatchFields(query, fields) {
+  const list = (fields || []).map((f) => String(f == null ? "" : f));
+  const { start, end } = likeAnchors(query);
+  if (!start && !end) return likeMatch(list.join(" "), query);
+  return list.some((f) => likeMatch(f, query));
 }
 
 function qs(params) {
@@ -3808,7 +3828,7 @@ async function renderSales(p) {
   draw(data.rows);
   $("#salesSearch").oninput = (e) => {
     const q = e.target.value;
-    draw(data.rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), q)));
+    draw(data.rows.filter((r) => likeMatchFields(q, [r.article, r.name])));
   };
   $("#exportSales").href = "/api/export/sales" + p;
 }
@@ -4299,9 +4319,9 @@ async function renderWhShipDocs() {
   // зато не нужно ждать сервер на каждую букву.
   const q = (($("#whSLike") || {}).value || "").trim();
   if (q) {
-    rows = rows.filter((r) => likeMatch(
-      [r.date, r.doc_num, r.counterparty, r.cabinet, r.note, r.folder,
-       whSourceCell(r.source)].join(" "), q));
+    rows = rows.filter((r) => likeMatchFields(q, [
+      r.date, r.doc_num, r.counterparty, r.cabinet, r.note, r.folder,
+      whSourceCell(r.source)]));
   }
   const msg = statusEl();
   if (msg) {
@@ -8202,7 +8222,7 @@ async function renderWbStocks() {
     rows = aggregateStocks(rows);
   }
   if (q) {
-    rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || "") + " " + (r.size || ""), q));
+    rows = rows.filter((r) => likeMatchFields(q, [r.article, r.name, r.size]));
   }
   const head = colViewHeaders("wb-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = statusEl();
@@ -8309,7 +8329,7 @@ async function renderOzStocks() {
     rows = aggregateStocks(rows);
   }
   if (q) {
-    rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || "") + " " + (r.size || ""), q));
+    rows = rows.filter((r) => likeMatchFields(q, [r.article, r.name, r.size]));
   }
 const head = colViewHeaders("oz-stock", agg && agg.checked ? wbStockAggHeaders : wbStockHeaders);
   const msg = statusEl();
@@ -8357,7 +8377,7 @@ async function renderOzSales() {
   let rows = data.rows || [];
   if (likeEl) {
     const s = likeEl.value.trim().toLowerCase();
-    if (s) rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), s));
+    if (s) rows = rows.filter((r) => likeMatchFields(s, [r.article, r.name]));
   }
   const win = (p.date_from && p.date_to) ? p.date_from + " … " + p.date_to : "";
   if (!rows.length && !data.count) {
@@ -8437,7 +8457,7 @@ async function renderWbSales() {
   let rows = data.rows || [];
   if (likeEl) {
     const q = likeEl.value.trim().toLowerCase();
-    if (q) rows = rows.filter((r) => likeMatch(r.article + " " + (r.name || ""), q));
+    if (q) rows = rows.filter((r) => likeMatchFields(q, [r.article, r.name]));
   }
   const msg = statusEl();
   if (msg) msg.textContent = data.count ? "Строк: " + fmt(data.count) : "Нет данных за период";
@@ -12018,7 +12038,7 @@ async function renderPricing(apply, applyNote) {
     if (arts.size) pre = pre.filter((r) => arts.has(String(r.article || "").trim().toUpperCase()));
     if (q) {
       pre = pre.filter((r) =>
-        likeMatch(String(r.article || "") + " " + (r.name || ""), q)
+        likeMatchFields(q, [r.article, r.name])
       );
     }
     const hiddenPassive = pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length;
@@ -12105,7 +12125,7 @@ async function renderPricingOzon(apply, applyNote) {
     if (arts.size) pre = pre.filter((r) => arts.has(String(r.article || "").trim().toUpperCase()));
     if (q) {
       pre = pre.filter((r) =>
-        likeMatch(String(r.article || "") + " " + (r.name || ""), q)
+        likeMatchFields(q, [r.article, r.name])
       );
     }
     const hiddenPassive = pre.filter((r) => r.action === "SKIP" || r.action === "HOLD").length;

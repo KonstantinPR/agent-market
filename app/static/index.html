@@ -328,7 +328,7 @@
   <section id="tab-margin-funnel" class="pane">
     <div class="toolbar">
       <span class="tip" id="marginFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Оценка прибыльности по срезу воронки за период (до комиссий WB). Обновите: WB API ▸ Воронка продаж.</span></span>
-      <input id="marginFunnelLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть">
+      <input id="marginFunnelLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="marginFunnelArtsMenu">
         <button type="button" class="btn" id="btnMarginFunnelArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="marginFunnelArtsPanel"></div>
@@ -354,7 +354,7 @@
   <section id="tab-margin-ozon-detail" class="pane">
     <div class="toolbar">
       <span class="tip" id="marginOzonDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из детализации реализаций OZON. Прибыль = "К перечислению" − себестоимость×продано. Фактические комиссия/услуги OZON уже вычтены из "К перечислению" (они показаны справочными колонками). <b>Точные начисления</b> («Начисл.: продажа/комиссия/логистика/услуги», «На р/с (нач.)») загружаются из OZON API (OZON API ▸ Начисления) и дают реальную сумму к зачислению по каждому артикулу — это и есть ответ на вопрос «сколько Ozon перечислит за товар». «Прибыль (нач.)» = «На р/с (нач.)» − себестоимость×продано; пусто, если начислений по артикулу нет. «Δ нач. vs дет.» — расхождение начислений с детализацией: бывает при неполной детализации или возвратах. «На р/с (оценка)» — оценка по движению средств пропорционально доходу; точнее начисления, но начисления зачисляются с задержкой, поэтому за один и тот же месяц суммы отличаются. «Нераспределено» в статусе — начисления без артикула (страховка/размещение и товары без продаж в детализации). Рассчитано на ~2 недели ретроспективы, пока детализация не натянута за больший период.</span></span>
-      <input id="marginOzonDetailLike" placeholder="Артикул содержит… (напр. BAND) * = любая часть">
+      <input id="marginOzonDetailLike" placeholder="Артикул содержит… (напр. BAND) * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="marginOzonArtsMenu">
         <button type="button" class="btn" id="btnMarginOzonArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="marginOzonArtsPanel"></div>
@@ -380,7 +380,7 @@
   <section id="tab-margin-detail" class="pane">
     <div class="toolbar">
       <span class="tip" id="marginDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из финансового отчёта WB (детализация продаж). Маржа = "К перечислению" − себестоимость. "Прочее" — разница (возвраты/корректировки).</span></span>
-      <input id="marginDetailLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть">
+      <input id="marginDetailLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="marginDetailArtsMenu">
         <button type="button" class="btn" id="btnMarginDetailArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="marginDetailArtsPanel"></div>
@@ -411,7 +411,7 @@
       </div>
       <button id="pricingApply" class="btn" disabled title="Применение изменений через API — доступно, когда есть рекомендации на изменение в видимой таблице">Применить</button>
       <span class="tip" id="pricingTip" tabindex="0" role="tooltip">?<span class="tip-text">WB: меняет скидку через API. Ozon: меняет цену витрины напрямую (/v1/product/import/prices). Расчёт Ozon — price-based, по базовым артикулам, пол безубыточности из margin-детализации Ozon.</span></span>
-      <input id="pricingLike" placeholder="Артикул или название содержит… * = любая часть">
+      <input id="pricingLike" placeholder="Артикул или название содержит… * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="pricingArtsMenu">
         <button type="button" class="btn" id="btnPricingArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="pricingArtsPanel"></div>
@@ -456,7 +456,7 @@
 
   <section id="tab-sales" class="pane">
     <div class="toolbar">
-      <input id="salesSearch" placeholder="Поиск… * = любая часть">
+      <input id="salesSearch" placeholder="Поиск… * = любая часть, ^ = начало, $ = конец">
       <span class="toolbar-right">
         <span id="salesTablePager"></span>
         <a id="exportSales" class="btn" href="#" target="_blank">Экспорт в Excel</a>
@@ -506,7 +506,7 @@
          справа. Отдельного «этажа» с кнопками импорта больше нет — он
          разъезжался на две строки и отодвигал таблицу. -->
     <div class="toolbar wh-ship-toolbar">
-      <input id="whSLike" placeholder="Поиск: товар, артикул, штрихкод, № отправки… * = любая часть" title="Поиск по таблице. В документах ищет по дате, номеру, контрагенту, связке, примечанию и папке; в товарном разрезе — по артикулу, названию и штрихкоду. Звёздочка «*» заменяет любую часть текста.">
+      <input id="whSLike" placeholder="Поиск: товар, артикул, штрихкод, № отправки… * = любая часть, ^ = начало, $ = конец" title="Поиск по таблице. В документах ищет по дате, номеру, контрагенту, связке, примечанию и папке; в товарном разрезе — по артикулу, названию и штрихкоду. Звёздочка «*» заменяет любую часть текста, «^» в начале привязывает к началу артикула, «$» в конце — к концу.">
       <div class="view-menu" id="whShipCabMenu">
         <button type="button" class="btn" id="btnWhShipCab" title="Отправки каких связок показывать. По умолчанию — только текущая связка из шапки; отметьте чекбоксы, чтобы добавить другие, или «Выбрать все связки»">Связки ▾</button>
         <div class="view-menu-panel hidden" id="whShipCabPanel"></div>
@@ -597,7 +597,7 @@
 
   <section id="tab-replenish" class="pane">
     <div class="toolbar">
-      <input id="replenishLike" placeholder="Артикул содержит… * = любая часть">
+      <input id="replenishLike" placeholder="Артикул содержит… * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="replenishArtsMenu">
         <button type="button" class="btn" id="btnReplenishArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="replenishArtsPanel"></div>
@@ -673,7 +673,7 @@
       </div>
       <input type="file" id="oursFile" class="hidden" accept=".xlsx">
       <button id="oursImport" class="btn">Загрузить начальные остатки</button>
-      <input id="productsLike" placeholder="Артикул содержит… * = любая часть">
+      <input id="productsLike" placeholder="Артикул содержит… * = любая часть, ^ = начало, $ = конец">
       <label class="chk"><input type="checkbox" id="productsSizes"> С размерами</label>
       <label class="chk"><input type="checkbox" id="productsStocks"> Показывать остатки</label>
       <span class="hint">При обновлении из карточек WB/Ozon перезапись включена → поля товара и размеры перезапишутся, цена/себестоимость не трогаются</span>
@@ -717,7 +717,7 @@
       </div>
     </div>
     <div class="toolbar">
-      <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд… * = любая часть">
+      <input id="wbCardsLike" placeholder="Поиск: артикул, баркод, бренд… * = любая часть, ^ = начало, $ = конец">
       <span class="tip hidden" id="wbCardsTip" tabindex="0" role="tooltip">?<span class="tip-text">Одна строка = размер/SKU товара из базы. Обновите через «Обновить базу» в шапке или загрузите файл, чтобы получить свежие карточки.</span></span>
       <span class="toolbar-right">
         <span id="wbCardsTablePager"></span>
@@ -737,7 +737,7 @@
       <p class="hint">Остатки на складах Wildberries с записью в базу (остатки за сегодня, по размерам). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие остатки из WB API.</p>
     </div>
     <div class="toolbar">
-      <input id="wbStockLike" placeholder="Поиск: артикул, название, размер… * = любая часть">
+      <input id="wbStockLike" placeholder="Поиск: артикул, название, размер… * = любая часть, ^ = начало, $ = конец">
       <label class="chk"><input type="checkbox" id="wbStockAgg"> свернуть по размерам</label>
       <span class="tip hidden" id="wbStockTip" tabindex="0" role="tooltip">?<span class="tip-text">Последний срез остатков по артикулам и складам из базы. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» группирует суммы по артикулу+склад.</span></span>
       <span class="toolbar-right">
@@ -758,7 +758,7 @@
       <p class="hint">Воронка продаж: просмотры, добавления в корзину, заказы по товарам. Период задаётся фильтром в шапке. «Применить» перечитывает таблицу из базы; «Обновить базу» в шапке вытягивает данные периода из WB API (Успешное скачивание записывает в базу автоматически).</p>
     </div>
     <div class="toolbar">
-      <input id="wbFunnelLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="wbFunnelLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <label class="chk"><input type="checkbox" id="wbFunnelExpanded"> Расширенный вид</label>
       <span class="tip hidden" id="wbFunnelTip" tabindex="0" role="tooltip">?<span class="tip-text">Срез воронки из базы за выбранный период. «Расширенный вид» включает все поля отчёта WB: предмет, бренд, название (API), теги, рейтинги, остатки, конверсии, WB Клуб, время доставки, а также предыдущий период (…пред. период) и динамику к нему (Динамика …, %).<span class="tip-note hidden" id="wbFunnelTipNote"></span></span></span>
       <span class="toolbar-right">
@@ -781,7 +781,7 @@
       <p class="hint">Отчёт о реализации Wildberries (записывается в продажи). Период задаётся фильтром в шапке; «Обновить базу» вытягивает данные периода из WB API.</p>
     </div>
     <div class="toolbar">
-      <input id="wbSalesLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="wbSalesLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <span class="tip hidden" id="wbSalesTip" tabindex="0" role="tooltip">?<span class="tip-text">Отчёт о реализации из базы за выбранный период (строки без «Детализации»). Обновите через «Обновить базу» в шапке.</span></span>
       <span class="toolbar-right">
         <span id="wbSalesTablePager"></span>
@@ -812,7 +812,7 @@
       <div id="wbGapsBox" class="table-wrap hidden"></div>
     </div>
     <div class="toolbar">
-      <input id="wbDetailLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="wbDetailLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="wbDetailArtsMenu">
         <button type="button" class="btn" id="btnWbDetailArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="wbDetailArtsPanel"></div>
@@ -841,7 +841,7 @@
       <p class="hint">Текущие цены и скидки Wildberries по карточкам (записываются в базу). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие цены из WB API.</p>
     </div>
     <div class="toolbar">
-      <input id="wbPricesLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="wbPricesLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <label class="chk"><input type="checkbox" id="wbPriceAgg"> свернуть по размерам</label>
       <span class="tip hidden" id="wbPricesTip" tabindex="0" role="tooltip">?<span class="tip-text">Текущие цены и скидки из последнего снимка в базе. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» показывает одну строку на артикул.</span></span>
       <span class="toolbar-right">
@@ -862,7 +862,7 @@
       <p class="hint">Стоимость хранения на складах Wildberries за последние 7 дней (записывается в базу). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие данные из WB API.</p>
     </div>
     <div class="toolbar">
-      <input id="wbStorageLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="wbStorageLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <span class="tip hidden" id="wbStorageTip" tabindex="0" role="tooltip">?<span class="tip-text">Стоимость хранения на складах WB за последние 7 дней из базы (метрики «Склад WB»). Обновите через «Обновить базу» в шапке.</span></span>
       <span class="toolbar-right">
         <span id="wbStorageTablePager"></span>
@@ -882,7 +882,7 @@
       <p class="hint">Карточки товаров Ozon (отчёт) с записью в базу (товары). Нажмите «Обновить базу» в шапке, чтобы вытянуть свежие карточки из Ozon API, затем «Применить» — перечитает таблицу из базы.</p>
     </div>
     <div class="toolbar">
-      <input id="ozCardsLike" placeholder="Поиск: артикул, баркод, бренд… * = любая часть">
+      <input id="ozCardsLike" placeholder="Поиск: артикул, баркод, бренд… * = любая часть, ^ = начало, $ = конец">
       <span class="tip hidden" id="ozCardsTip" tabindex="0" role="tooltip">?<span class="tip-text">Одна строка = SKU/карточка из базы. Обновите через «Обновить базу» в шапке, чтобы получить свежие карточки Ozon.</span></span>
       <span class="toolbar-right">
         <span id="ozCardsTablePager"></span>
@@ -902,7 +902,7 @@
       <p class="hint">Остатки Ozon на складах FBO/FBS с записью в базу (остатки за сегодня). Нажмите «Обновить базу» в шапке, затем «Применить» — перечитает таблицу из базы.</p>
     </div>
     <div class="toolbar">
-      <input id="ozStockLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="ozStockLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <label class="chk"><input type="checkbox" id="ozStockAgg"> свернуть по размерам</label>
       <span class="tip hidden" id="ozStockTip" tabindex="0" role="tooltip">?<span class="tip-text">Последний срез остатков Ozon по артикулам и складам из базы. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» группирует суммы по артикулу+склад.</span></span>
       <span class="toolbar-right">
@@ -923,7 +923,7 @@
       <p class="hint">Снимок текущих цен и скидок Ozon (сохраняется в базу). Нажмите «Обновить базу» в шапке, затем «Применить» — перечитает таблицу из базы.</p>
     </div>
     <div class="toolbar">
-      <input id="ozPricesLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="ozPricesLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <label class="chk"><input type="checkbox" id="ozPriceAgg"> свернуть по размерам</label>
       <span class="tip hidden" id="ozPricesTip" tabindex="0" role="tooltip">?<span class="tip-text">Текущие цены и скидки Ozon из последнего снимка в базе. Обновите через «Обновить базу» в шапке. «Свернуть по размерам» показывает одну строку на артикул.</span></span>
       <span class="toolbar-right">
@@ -944,7 +944,7 @@
       <p class="hint">Реализация Ozon за месяцы периода из шапки (если период пуст — прошлый месяц); строки отчёта записываются в продажи. «Обновить базу» тянет помесячно, «Применить» — перечитает таблицу из базы.</p>
     </div>
     <div class="toolbar">
-      <input id="ozRealLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="ozRealLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <span class="tip hidden" id="ozRealTip" tabindex="0" role="tooltip">?<span class="tip-text">Продажи Ozon из базы за выбранный период (по дням и артикулам). Период задаётся фильтром дат в шапке; «Обновить базу» тянет реализацию помесячно за месяцы периода.</span></span>
       <span class="toolbar-right">
         <span id="ozRealTablePager"></span>
@@ -964,7 +964,7 @@
       <p class="hint">Детализация реализаций Ozon по постингам: продажи, комиссия, услуги («стандартные»), сумма к перечислению и возвраты; отдельно — выкупы по артикулам (сумма и % выкупа в своде). Нажмите «Обновить базу» в шапке, чтобы вытянуть данные из Ozon API (/v1/finance/realization/posting; при большом объёме — через отчёт), затем «Применить» — перечитает таблицу из базы. Свод по умолчанию — по товарам: артикулы разных размеров свёрнуты в строку с колонками «Размеров»/«Артикулов»; режим «в разрезе размеров» включается галочкой «в разрезе размеров» в панели фильтров этого отчёта (состояние своё у каждого отчёта). Поиск работает и по базовому артикулу товара.</p>
     </div>
     <div class="toolbar">
-      <input id="ozDetailLike" placeholder="Поиск: артикул, название… * = любая часть">
+      <input id="ozDetailLike" placeholder="Поиск: артикул, название… * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="ozDetailArtsMenu">
         <button type="button" class="btn" id="btnOzDetailArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
         <div class="view-menu-panel hidden" id="ozDetailArtsPanel"></div>
@@ -1321,7 +1321,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=185"></script>
+  <script src="/static/app.js?v=186"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

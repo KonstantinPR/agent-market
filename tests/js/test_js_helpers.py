@@ -61,7 +61,7 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(APP_PATH, "utf8"), sandbox);
 
 const { fmt, fmtMoney, fmtFloat, fmtPct, cls, qs, writeDbStorage, setWriteDbStorage,
-        pricingAgeText, likeMatch } = sandbox;
+        pricingAgeText, likeMatch, likeMatchFields } = sandbox;
 
 const norm = (s) => s.replace(/[\u202F\u00A0]/g, " ");
 assert.strictEqual(norm(fmt(1234)), "1 234", "fmt thousand separator");
@@ -989,6 +989,26 @@ const LIKE_CASES = [
   // пустой запрос = всё подходит
   ["что угодно", "", true],
   ["что угодно", "   ", true],
+  // якоря: «^» в начале, «$» в конце (T-67)
+  ["SK-MI-N30", "^S*N30$", true],
+  ["SK-MI-N30-2", "^S*N30$", false],
+  ["SK-MI-N30", "^s", true],
+  ["XSK-MI-N30", "^s", false],
+  ["SK-MI-N30", "n30$", true],
+  ["SK-MI-N30-2", "n30$", false],
+  ["abc", "^abc$", true],
+  ["abcd", "^abc$", false],
+  // без якорей — прежняя подстрока
+  ["SK-MI-N30-2", "N30", true],
+  ["sk035-n30-mink-white", "S*N30*MINK", true],
+  ["sk035-n30-mink-white", "^s*N30*mink$", false],
+  // «$» внутри строки — литерал (это не хвостовой якорь)
+  ["цена $5", "$5", true],
+  ["цена 5", "$5", false],
+  // пустое тело после снятия якорей = без фильтра
+  ["что угодно", "^", true],
+  ["что угодно", "$", true],
+  ["что угодно", "^$", true],
 ];
 
 let likeFail = 0;
@@ -1018,6 +1038,36 @@ if (likeMatch("артикул-12", "арт*0")) {
 }
 if (likeFail) throw new Error(`${likeFail} ошибок likeMatch`);
 
+// T-67: якоря проверяются по каждому полю отдельно, а не по склейке
+// «артикул + название» (иначе «$» упирался бы в конец названия).
+const FIELDS_CASES = [
+  [["SK-MI-N30", "Товар N30"], "^sk*", true],
+  [["SK-MI-N30", "Товар N30"], "^Товар", true],
+  [["SK-MI-N30", "Товар N30"], "^N30", false],
+  [["SK-MI-N30", "Товар N3"], "n30$", true],
+  [["SK-MI", "N30"], "MI N30$", false],
+  [["SK-MI", "N30"], "^SK-MI$", true],
+  [["SK-MI", "N30"], "^N30$", true],
+  [["SK-MI", "N30"], "^SK-MI N30$", false],
+  [[null, "N30"], "^n30$", true],
+  [[null, null], "^$", true],
+  // без якорей — прежняя склейка (запрос может пересекать границу полей)
+  [["SK-MI", "N30"], "MI N30", true],
+];
+let fieldsFail = 0;
+for (const [fields, query, want] of FIELDS_CASES) {
+  const got = likeMatchFields(query, fields);
+  if (got !== want) {
+    fieldsFail++;
+    console.error(`  likeMatchFields FAIL: ${JSON.stringify(fields)} ~ ${JSON.stringify(query)} => ${got}, ожидалось ${want}`);
+  }
+}
+if (!likeMatchFields("", ["SK-MI", "N30"])) {
+  fieldsFail++;
+  console.error("  likeMatchFields FAIL: пустой запрос");
+}
+if (fieldsFail) throw new Error(`${fieldsFail} ошибок likeMatchFields`);
+
 // серверные плейсхолдеры подсказывают про «*»
 const SEARCH_INPUTS = [
   "salesSearch",
@@ -1033,6 +1083,10 @@ for (const id of SEARCH_INPUTS) {
   if (!m) { console.error(`  placeholder FAIL: нет поля ${id}`); continue; }
   if (!m[1].includes("* = любая часть")) {
     console.error(`  placeholder FAIL: ${id} => ${JSON.stringify(m[1])}`);
+  }
+  // T-67: подсказка про якоря начала/конца
+  if (!m[1].includes("^ = начало") || !m[1].includes("$ = конец")) {
+    console.error(`  placeholder anchors FAIL: ${id} => ${JSON.stringify(m[1])}`);
   }
 }
 

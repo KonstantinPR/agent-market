@@ -37,6 +37,54 @@ class TestLikeToSql:
         assert common.LIKE_ESCAPE == "\\"
 
 
+class TestLikeToSqlAnchors:
+    def test_both_anchors(self):
+        assert like_to_sql("^S*N30$") == "S%N30"
+
+    def test_leading_anchor_only(self):
+        # хвост не заякорен — обрамляющий «%» остаётся (двойной «%» безвреден)
+        assert like_to_sql("^S*") == "S%%"
+
+    def test_trailing_anchor_only(self):
+        assert like_to_sql("*N30$") == "%%N30"
+
+    def test_no_anchors_unchanged(self):
+        assert like_to_sql("S*N30") == "%S%N30%"
+
+    def test_dollar_inside_is_literal(self):
+        assert like_to_sql("$5") == "%$5%"
+
+    def test_caret_inside_is_literal(self):
+        assert like_to_sql("a^b") == "%a^b%"
+
+    def test_anchor_only_query_is_match_all(self):
+        assert like_to_sql("^") == "%%"
+        assert like_to_sql("$") == "%%"
+        assert like_to_sql("^$") == "%%"
+
+    def test_anchors_with_specials(self):
+        assert like_to_sql("^100%$") == "100\\%"
+        assert like_to_sql("^а_б$") == "а\\_б"
+
+
+class TestLikeToRegexAnchors:
+    def test_both_anchors(self):
+        assert like_to_regex("^S*N30$") == "\\As.*n30\\Z"
+
+    def test_leading_anchor_only(self):
+        assert like_to_regex("^S*") == "\\As.*"
+
+    def test_trailing_anchor_only(self):
+        assert like_to_regex("*N30$") == ".*n30\\Z"
+
+    def test_anchor_only_query(self):
+        assert like_to_regex("^") == ""
+        assert like_to_regex("^$") == ""
+
+    def test_dollar_inside_is_literal(self):
+        assert like_to_regex("$5") == "\\$5"
+
+
 class TestLikeToRegex:
     def test_star_becomes_dotstar(self):
         assert like_to_regex("abc*12") == "abc.*12"
@@ -118,6 +166,33 @@ class TestLikeMatch:
     def test_falsy_inputs_do_not_raise(self):
         assert not like_match(None, "abc")
         assert not like_match("", "abc")
+
+
+class TestLikeMatchAnchors:
+    def test_anchor_user_example(self):
+        assert like_match("SK-MI-N30", "^S*N30$")
+        assert not like_match("SK-MI-N30-2", "^S*N30$")
+        assert like_match("SK-MI-N30-2", "N30")
+
+    def test_start_anchor(self):
+        assert like_match("SK-MI-N30", "^s")
+        assert not like_match("XSK-MI-N30", "^s")
+
+    def test_end_anchor(self):
+        assert like_match("SK-MI-N30", "n30$")
+        assert not like_match("SK-MI-N30-2", "n30$")
+
+    def test_star_inside_anchors(self):
+        assert like_match("sk035-n30-mink-white", "S*N30*MINK")
+        assert not like_match("sk035-n30-mink-white", "^s*N30*mink$")
+
+    def test_anchors_survive_specials(self):
+        assert like_match("100%", "^100%$")
+        assert like_match("юбка_шорты", "^юбка_шорты$")
+
+    def test_empty_body_is_no_filter(self):
+        for q in ("^", "$", "^$"):
+            assert like_match("что угодно", q)
 
 
 class TestLikeCol:

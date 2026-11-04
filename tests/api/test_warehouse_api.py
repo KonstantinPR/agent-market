@@ -288,6 +288,16 @@ def test_shipment_items_rows_filter_and_search(api_client, db):
     by_barcode = api_client.get("/api/warehouse/shipment-items?article_like=333").json()
     assert [r["article"] for r in by_barcode["rows"]] == ["B1"]
 
+    # T-67: якоря «^…$» работают и на серверном фильтре — точное совпадение,
+    # а не подстрока.
+    anchored = api_client.get(
+        "/api/warehouse/shipment-items?article_like=^A1$").json()
+    assert anchored["total"] == 3
+    assert {r["article"] for r in anchored["rows"]} == {"A1"}
+    prefix_only = api_client.get(
+        "/api/warehouse/shipment-items?article_like=^B").json()
+    assert [r["article"] for r in prefix_only["rows"]] == ["B1"]
+
     assert api_client.get(
         "/api/warehouse/shipment-items?group=nope").status_code == 400
 
