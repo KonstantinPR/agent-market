@@ -120,7 +120,10 @@
 
 ## В работе
 
-_(пусто)_
+- [T-68] (low) Git-гигиена: правила веток/worktree и скрипт уборки влитых веток
+  > где: AGENTS.md («Git: ветки, worktree, уборка»), scripts/git_cleanup.py,
+  > tests/unit/test_git_cleanup.py
+  > состояние: сделано, прогон и коммит
 
 ## Заблокированные
 

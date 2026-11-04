@@ -36,7 +36,8 @@ agent_market/
 │   ├── services/           бизнес-логика — ЕДИНСТВЕННОЕ место расчётов
 │   └── static/             фронтенд: index.html, app.js, style.css
 ├── scripts/                init_db.py (схема+миграции), load_sample.py,
-│                           gen_api_map.py (docs/api.md + таблица размеров)
+│                           gen_api_map.py (docs/api.md + таблица размеров),
+│                           git_cleanup.py (удаление влитых веток)
 ├── tests/                  unit/ · api/ · e2e/ · js/ (+ fakes.py, conftest.py)
 ├── docs/                   architecture.md, api.md, autopilot.md, research-*.md
 ├── data/                   thumbs/, кэш — в git не коммитится
@@ -113,6 +114,35 @@ agent_market/
   не переиспользуется никогда.
 - Если задача поступила устно («добавь тикет: …») — оформить её в файл
   и работать по нему же.
+
+## Git: ветки, worktree, уборка
+
+Правила ниже — чтобы «хвосты» (влитые, но не удалённые ветки, чужие WIP в
+рабочем дереве, untracked-скрипты) не копились. Разовая уборка:
+`python scripts/git_cleanup.py` (план) и `python scripts/git_cleanup.py --apply --fetch`
+(удалить влитые). Скрипт сам не трогает `main`, текущую ветку, ветки из других
+worktree и stash-подобный чужой WIP.
+
+- **Ветка = тикет.** `git switch -c t-<N>-<слаг> main`; сразу после первого
+  коммита `git push -u origin t-<N>-<слаг>` — работа должна быть на GitHub, даже
+  если тикет ещё не закрыт.
+- **Мерж в main — только fast-forward** (`git switch main && git merge --ff-only
+  t-<N>-<слаг>`). Если ff невозможен — сначала `git rebase main` в ветке, не
+  merge-коммит.
+- **Закрыл тикет — удалил ветку** (локально и на GitHub):
+  `git branch -d t-<N>-<слаг>` + `git push origin --delete t-<N>-<слаг>`.
+  Ветка, которая «висит» после закрытия, — это и есть будущий мусор.
+- **Долгий WIP — в worktree, не в stash.** `git worktree add ../agent_market_t<N>
+  -b t-<N>-<слаг> main`; по завершении `git worktree remove ../agent_market_t<N>`
+  (только на чистом дереве) и удалить ветку. `git stash` — только на минуты,
+  не как хранилище чужой работы.
+- **Чужой WIP не трогать.** Stash-подобные ветки (`On main: …`) и пометки
+  «NE TRONAT / НЕ ТРОНАТЬ» не пушить, не мержить, не ребейзить.
+- **Одноразовые патч-скрипты — в `%TEMP%`**, не в корне репо. Если правка нужна
+  повторно — она идёт в `app/` через обычный коммит, а не скриптом-однодневкой.
+  Результаты прогонов — только в игнорируемые `data/*` (см. `.gitignore`).
+- **Параллельные тесты** из двух worktree одновременно нельзя: общая БД
+  `agent_market_test`. Либо по очереди, либо `PG_DATABASE=agent_market_test_t<N>`.
 
 ## Запуск
 
@@ -488,6 +518,7 @@ venv\Scripts\python.exe scripts\gen_api_map.py --check
 ### Параллельная работа
 
 В репо может идти чужая работа (`git status` проверяется не зря): не коммитить
-чужие файлы, не трогать `stash@{0}` (чужой WIP помечен «НЕ ТРОНАТЬ, НЕ
-КОММИТАТЬ»), после правки длинных файлов (`app/api/*.py`, `app/static/app.js`)
+чужие файлы, не трогать `stash@{0}` и stash-подобные ветки (`On main: …`, см.
+«Git: ветки, worktree, уборка»): чужой WIP помечен «НЕ ТРОНАТЬ, НЕ
+КОММИТАТЬ», после правки длинных файлов (`app/api/*.py`, `app/static/app.js`)
 переснимать `git status` и не переезжать поверх чужих строк.
