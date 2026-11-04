@@ -446,6 +446,14 @@ assert.ok(jsSrc.includes('params.set("profit", p.profit ? 1 : 0)'),
 assert.ok(jsSrc.includes("Учитывать прибыльность"),
   "в меню PDF есть галка «Учитывать прибыльность»");
 
+// Список «Артикулы ▾» — общий фильтр таблицы и выгрузок: replenishQs кладёт
+// articles, а PDF-URL строится из тех же параметров (регресс T-66: PDF не
+// фильтровался, потому что бэкенд не объявлял articles).
+assert.ok(jsSrc.includes("if (arts) q.articles = arts;"),
+  "replenishQs передаёт список «Артикулы» как articles");
+assert.ok(jsSrc.includes("const q = replenishQs(f);"),
+  "replenishPdfUrl строится из общих параметров таблицы (articles в т.ч.)");
+
 // Скачать PDF — только из меню «PDF ▾»: дубль в тулбаре удалён, он же и «протухал».
 assert.ok(htmlSrc.includes('id="btnReplenishPdf"'), "меню «PDF ▾» осталось");
 assert.ok(htmlSrc.includes('id="exportReplenish"'), "экспорт в Excel на месте");

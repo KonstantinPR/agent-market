@@ -1592,5 +1592,51 @@ def test_api_replenish_export_wish_and_bad_step(db, api_client):
     assert bad.status_code == 400
 
 
+# ------------------------------------------------- фильтр «Артикулы ▾» (API)
+def _seed_arts_filter(db):
+    for art in ("ARTS-1", "ARTS-2"):
+        db.add(models.Product(article=art, name="Товар " + art, net_cost=100.0,
+                              replenishable=True))
+        db.add(models.CustomStock(article=art, quantity=5, net_cost=100.0))
+        _card(db, "wb", vendor=art)
+        db.add(_wb_row("art-" + art, art, TODAY, qty=30))
+    db.commit()
+
+
+def _excel_articles(content):
+    ws = load_workbook(io.BytesIO(content)).active
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    col = headers.index("Артикул") + 1
+    return [ws.cell(r, col).value for r in range(2, ws.max_row + 1)]
+
+
+def test_api_replenish_articles_filter_reaches_excel(db, api_client):
+    """Список «Артикулы ▾» фильтрует и таблицу, и Excel-выгрузку."""
+    _seed_arts_filter(db)
+    win = {"date_from": D0.isoformat(), "date_to": TODAY.isoformat(),
+           "target_days": 30, "window_days": 30}
+
+    full = api_client.get("/api/replenish", params=win)
+    assert {x["article"] for x in full.json()["rows"]} == {"ARTS-1", "ARTS-2"}
+
+    ui = api_client.get("/api/replenish", params={**win, "articles": "ARTS-1"})
+    assert [x["article"] for x in ui.json()["rows"]] == ["ARTS-1"]
+
+    xp = api_client.get("/api/export/replenish", params={**win, "articles": "ARTS-1"})
+    assert xp.status_code == 200
+    assert _excel_articles(xp.content) == ["ARTS-1"]
+
+
+def test_api_replenish_articles_filter_unmatched_exports_empty(db, api_client):
+    """Список из нераспознанных значений даёт пустую выгрузку, а не всё подряд."""
+    _seed_arts_filter(db)
+    win = {"date_from": D0.isoformat(), "date_to": TODAY.isoformat()}
+    xp = api_client.get("/api/export/replenish",
+                        params={**win, "articles": "НЕТ-ТАКОГО"})
+    assert xp.status_code == 200
+    assert _excel_articles(xp.content) == []
+
+
+
 
 

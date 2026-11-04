@@ -173,6 +173,35 @@ def test_no_rows_still_returns_pdf(pdf_api):
     assert r.content.rstrip().endswith(b"%%EOF")
 
 
+def test_articles_filter_matches_ui(pdf_api, db):
+    """Список «Артикулы ▾» таблицы (articles) фильтрует и PDF-карточки."""
+    db.add(models.Product(article="PDF-ART-2", name="Платье 2", net_cost=100.0,
+                          replenishable=True))
+    db.add(models.CustomStock(article="PDF-ART-2", quantity=50, net_cost=100.0))
+    db.add(models.MarketplaceCard(
+        marketplace_id=_mp_id(db, "wb"), chrt_id="c:pdf2", vendor_code="PDF-ART-2",
+        nm_id="", barcode="",
+    ))
+    db.add(models.ProductSize(article="PDF-ART-2", size="42"))
+    db.add(models.WbDetailRow(
+        op_key="pdf2", source="excel", article="PDF-ART-2", doc_type_name="Продажа",
+        sale_dt=TODAY, quantity=60, retail_amount=60000.0, for_pay=54000.0,
+    ))
+    db.commit()
+
+    both = pdf_api.get("/api/export/replenish/pdf", params={"with_photos": 0})
+    assert both.headers["X-Count"] == "2"
+
+    one = pdf_api.get("/api/export/replenish/pdf",
+                      params={"with_photos": 0, "articles": "pdf-art-1"})
+    assert one.headers["X-Count"] == "1"
+
+    none = pdf_api.get("/api/export/replenish/pdf",
+                       params={"with_photos": 0, "articles": "НЕТ-ТАКОГО"})
+    assert none.headers["X-Count"] == "0"
+    assert none.content.startswith(b"%PDF")
+
+
 # ------------------------------------------------------------------ фото
 
 def test_photos_are_attached_when_root_exists(pdf_api, photo_tree):

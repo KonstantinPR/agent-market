@@ -187,6 +187,7 @@ def export_replenish(
     marketplace: Optional[str] = None,
     sort: str = "urgency",
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     show_inactive: int = 0,
     hide_zero_sizes: int = 0,
     view: str = "article",
@@ -196,6 +197,11 @@ def export_replenish(
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
+    """Excel-выгрузка «Потребности»: те же фильтры, что у таблицы.
+
+    ``articles=ART1,ART2,…`` — список «Артикулы ▾» вкладки: артикулы, баркоды,
+    nmID WB и артикулы Ozon резолвятся в UPPER-артикулы, как в ``/api/replenish``.
+    """
     _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
     try:
@@ -206,9 +212,13 @@ def export_replenish(
         back = max(1, int(window_days or settings.sync_days_default))
         from_ = to_ - timedelta(days=back - 1)
     span = (to_ - from_).days + 1
+    tokens = article_tokens_service.split_tokens(articles)
+    arts, _matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
     result = replenish_service.replenish_rows(
         db, from_, to_, target_days=target_days, span_days=span,
         marketplace=marketplace, sort=sort, article_like=article_like,
+        articles=arts,
         show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
         view=view, wish=wish, wish_step=wish_step,
     )
@@ -238,6 +248,7 @@ def export_replenish_pdf(
     marketplace: Optional[str] = None,
     sort: str = "urgency",
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     show_inactive: int = 0,
     cols: Optional[str] = None,
     with_photos: int = 1,
@@ -273,6 +284,10 @@ def export_replenish_pdf(
     ``wish``/``wish_step`` — «Пожелание»: ручной объём N шт на WB и шаг размера;
     при заданном пожелании PDF-план строится из него (кроме режима файла).
 
+    ``articles=ART1,ART2,…`` — тот же список «Артикулы ▾», что фильтрует
+    таблицу (``/api/replenish``): артикулы, баркоды, nmID WB и артикулы Ozon
+    резолвятся в UPPER-артикулы. Без него карточки собираются по всем товарам.
+
     PDF из Excel-файла с правками — отдельный ``POST /export/replenish/pdf``.
     """
     _apply_cabinet(db, cabinet)
@@ -286,9 +301,13 @@ def export_replenish_pdf(
         from_ = to_ - timedelta(days=back - 1)
     span = (to_ - from_).days + 1
 
+    tokens = article_tokens_service.split_tokens(articles)
+    arts, _matched = article_tokens_service.resolve_articles(db, tokens) \
+        if tokens else (None, set())
     common = dict(
         target_days=target_days, span_days=span, marketplace=marketplace,
         sort=sort, article_like=article_like, show_inactive=bool(show_inactive),
+        articles=arts,
     )
     main = replenish_service.replenish_rows(db, from_, to_, view="article", **common)
 
