@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "188";
+const UI_VERSION = "189";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -225,7 +225,7 @@ const LS_COLVIEW_KEYS = [
   "marginDetailCols", "marginFunnelCols", "marginOzonDetailCols",
   "ozAccrualCols", "ozCardsCols", "ozCashflowCols", "ozDetailCols",
   "ozPlacementCols", "ozPricesCols", "ozRealCols", "ozStockCols",
-  "pricingCols", "productsCols", "replenishCols", "whShipmentCols",
+  "pricingCols", "productsCols", "replenishCols", "whReceiptCols", "whShipmentCols",
   "wbCardsCols", "wbDetailCols", "wbFunnelCols", "wbPricesCols",
   "wbSalesCols", "wbStockCols", "wbStorageCols",
 ];
@@ -3955,9 +3955,10 @@ const whDocActionHeader = {
   render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '" title="Открыть товарные позиции этого документа: артикул, штрихкод, размер, количество и цена">Строки</button>' : "",
   tip: "Кнопка открывает товарные позиции документа. Изменение строк здесь меняет остатки.",
 };
-const whReceiptHeaders = whDocBaseHeaders.filter((h) => ["date", "doc_num", "counterparty", "note", "total", "items_count", "source"].includes(h.k)).concat([
-  whDocActionHeader,
-]);
+// «Приходы» показывают те же документные колонки, что и «Отправки»:
+// в «Вид таблицы» доступны все девять (связка и папка по умолчанию скрыты —
+// у Excel-приходов они пустые), кнопка «Строки» добавляется после панели.
+const whReceiptHeaders = whDocBaseHeaders;
 
 function whSourceCell(v) {
   const labels = { excel: "Excel", ui: "Интерфейс", disk: "Яндекс.Диск", paths: "Папки WB" };
@@ -4083,7 +4084,9 @@ async function renderWhDocs(type, boxId, msgId, detailId) {
     pagedTable(box, whDocBaseHeaders, data.rows || [], whDocFooters(data.rows || []),
       null, null, { colviewTab: "wh-shipment" });
   } else {
-    pagedTable(box, whReceiptHeaders, data.rows || [], whDocFooters(data.rows || []));
+    const headers = colViewHeaders("wh-receipt", whReceiptHeaders).concat([whDocActionHeader]);
+    pagedTable(box, headers, data.rows || [], whDocFooters(data.rows || []),
+      "#whRTablePager", colViewPinKeys("wh-receipt"), { colviewTab: "wh-receipt" });
   }
 }
 
@@ -10943,6 +10946,12 @@ registerColView("wh-shipment", {
     article: { headers: whShipArticleHeaders },
   },
 });
+// «Приходы»: один режим — документы. Связка и папка доступны в панели, но по
+// умолчанию скрыты (columns.json: def=false): у Excel- и Диск-приходов их нет.
+registerColView("wh-receipt", {
+  storageKey: "whReceiptCols", pinnable: true,
+  headers: whDocBaseHeaders,
+});
 registerColView("wb-detail", {
   storageKey: "wbDetailCols", pinnable: true,
   mode: () => { const rawEl = document.getElementById("wbDetailRaw"); return rawEl && rawEl.checked ? "rows" : "summary"; },
@@ -13007,7 +13016,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#whSImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=shipment", $("#whSFile"), "#headerMsg", "wh-shipment"));
   wireWhDisk("#whCpToDisk", { kind: "counterparties" }, "#headerMsg", "wh-cp", false);
   wireWhDisk("#whCpFromDisk", { type: "counterparties" }, "#headerMsg", "wh-cp", true);
-  wireWhDisk("#whRToDisk", { kind: "docs", type: "receipt" }, "#headerMsg", "wh-receipt", false);
+  wireWhDisk("#whRToDisk", { kind: "docs-list", type: "receipt" }, "#headerMsg", "wh-receipt", false);
   wireWhDisk("#whRFromDisk", { type: "receipt" }, "#headerMsg", "wh-receipt", true);
   wireWhDisk("#whSFromDisk", { type: "shipment" }, "#headerMsg", "wh-shipment", true);
   // «На диск» в отправках выгружает текущий режим (документы/товары/сводку),

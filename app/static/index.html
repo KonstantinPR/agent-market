@@ -495,10 +495,12 @@
       <button id="whRImport" class="btn" title="Загрузить выбранный Excel-файл прихода: строки с одинаковыми «дата + № документа + контрагент» станут одним документом; повторная загрузка обновит его, а не создаст дубль">Загрузить приход</button>
       <a class="btn" id="whRTemplate" href="/api/warehouse/export/template-docs?type=receipt" title="Скачать пустой шаблон Excel с нужными колонками: Дата | № документа | Контрагент | Артикул | Штрихкод | Размер | Кол-во | Цена">Шаблон</a>
       <button id="whRFromDisk" class="btn" title="Импортировать все .xlsx из папки «/agent_market/Наш склад/Приход» на Яндекс.Диске. Уже загруженные документы обновляются, а не дублируются">Импорт с Диска</button>
+      <a class="btn" id="whRExportRows" href="/api/warehouse/export/docs?type=receipt" title="Полная выгрузка «всё в одном листе»: каждая строка каждого прихода (дата, №, контрагент, артикул, штрихкод, размер, кол-во, цена). Не зависит от фильтров на экране">Все строки в Excel</a>
       <span class="toolbar-right">
         <span id="whRTablePager"></span>
-        <a class="btn" id="whRExport" href="/api/warehouse/export/docs?type=receipt" title="Полная выгрузка приходов: каждая строка каждого документа (дата, №, контрагент, артикул, штрихкод, размер, кол-во, цена). Не зависит от фильтров на экране">Выгрузить в Excel</a>
-        <button id="whRToDisk" class="btn" title="Сформировать тот же Excel и загрузить в папку «/agent_market/Наш склад» на Яндекс.Диске">Загрузить на диск</button>
+        <div class="view-menu" id="whReceiptViewMenu"><button type="button" class="btn" id="btnwhReceiptView" title="Показать/скрыть и переставить колонки списка приходов. Настройки запоминаются в браузере отдельно от отправок">Вид таблицы &#9662;</button><div class="view-menu-panel hidden" id="whReceiptViewPanel"></div></div>
+        <a class="btn" id="whRExport" href="/api/warehouse/export/docs-list?type=receipt" title="Выгрузить в Excel список документов прихода: дата, номер, контрагент, связка, примечание, папка, сумма, позиций, источник">Выгрузить в Excel</a>
+        <button id="whRToDisk" class="btn" title="Сформировать тот же список документов и загрузить его в папку «/agent_market/Наш склад» на Яндекс.Диске">Загрузить на диск</button>
       </span>
     </div>
     <p class="hint">Приход товара. Файл = пачка накладных: Дата | № документа | Контрагент | Артикул | Кол-во | Цена. Строки с одинаковыми №+дата+контрагент — один документ; повторная загрузка обновит документы.</p>
@@ -1327,7 +1329,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=188"></script>
+  <script src="/static/app.js?v=189"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

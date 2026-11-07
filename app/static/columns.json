@@ -221,10 +221,68 @@
     }
    },
    "exportDicts": [
-    "wh_shipment_docs",
+    "wh_docs",
     "wh_shipment_items",
     "wh_shipment_sku",
     "wh_shipment_article"
+   ]
+  },
+  "wh-receipt": {
+   "storageKey": "whReceiptCols",
+   "pinnable": true,
+   "modes": {
+    "default": {
+     "columns": [
+      {
+       "k": "date",
+       "label": "Дата",
+       "def": true
+      },
+      {
+       "k": "doc_num",
+       "label": "Номер",
+       "def": true
+      },
+      {
+       "k": "counterparty",
+       "label": "Контрагент",
+       "def": true
+      },
+      {
+       "k": "cabinet",
+       "label": "Связка",
+       "def": false
+      },
+      {
+       "k": "note",
+       "label": "Примечание",
+       "def": true
+      },
+      {
+       "k": "folder",
+       "label": "Папка",
+       "def": false
+      },
+      {
+       "k": "total",
+       "label": "Сумма",
+       "def": true
+      },
+      {
+       "k": "items_count",
+       "label": "Позиций",
+       "def": true
+      },
+      {
+       "k": "source",
+       "label": "Источник",
+       "def": true
+      }
+     ]
+    }
+   },
+   "exportDicts": [
+    "wh_docs"
    ]
   },
   "wb-detail": {
@@ -4154,7 +4212,7 @@
   }
  },
  "dicts": {
-  "wh_shipment_docs": [
+  "wh_docs": [
    {
     "k": "date",
     "label": "Дата"
