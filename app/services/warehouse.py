@@ -449,7 +449,7 @@ def docs_list_dataframe(db: Session, doc_type: str, cabinet_ids=None,
     if search:
         keys = ("date", "doc_num", "counterparty", "cabinet", "note", "folder", "source")
         rows = [r for r in rows if any(like_match(r[k], search) for k in keys)]
-    return _rows_to_export(rows, export_cols("wh_shipment_docs"))
+    return _rows_to_export(rows, export_cols("wh_docs"))
 
 
 # ── «Отправки»: товарный разрез и сводка (T-58) ─────────────────────────────
