@@ -624,6 +624,7 @@ table.stck tr.filter-row th.stck-col { background: #fafbfc; }
   border-radius: 4px;
 }
 .margin-arts-note { font-size: 12px; color: #666; max-width: 320px; }
+.margin-arts-hint { font-size: 12px; color: #8a6d3b; max-width: 320px; }
 .margin-arts-actions { display: flex; gap: 8px; }
 .margin-arts-text:focus { outline: none; border-color: #111; }
 .pager {

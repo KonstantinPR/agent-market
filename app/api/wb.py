@@ -330,11 +330,16 @@ def api_wb_detail_rows(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    """Сырые строки «Детализации продаж» WB (wb_detail_rows) с фильтрами и пагинацией."""
+    """Сырые строки «Детализации продаж» WB (wb_detail_rows) с фильтрами и пагинацией.
+
+    ``articles`` — список «Артикулы ▾» (T-69): в сыром виде он тоже действует,
+    значения резолвятся в наши артикулы (баркоды/nmID/алиасы).
+    """
     from_, to_ = _parse_window400(date_from, date_to)
     q = select(models.WbDetailRow).where(models.WbDetailRow.sale_dt.isnot(None))
     if from_:
@@ -343,6 +348,9 @@ def api_wb_detail_rows(
         q = q.where(models.WbDetailRow.sale_dt <= to_)
     if article_like:
         q = q.where(common_service.like_col(models.WbDetailRow.article, article_like))
+    arts, arts_meta = article_tokens_service.resolve_filter(db, articles)
+    if arts is not None:
+        q = q.where(func.upper(models.WbDetailRow.article).in_(sorted(arts)))
     total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
     rows = db.execute(
         q.order_by(models.WbDetailRow.sale_dt.desc(), models.WbDetailRow.id.desc())
@@ -365,7 +373,10 @@ def api_wb_detail_rows(
         "srid": r.srid,
         "source": r.source,
     } for r in rows]
-    return {"rows": out, "total": int(total)}
+    resp = {"rows": out, "total": int(total)}
+    if arts_meta:
+        resp["articles"] = arts_meta
+    return resp
 
 
 @router.get("/wb/detail-summary")

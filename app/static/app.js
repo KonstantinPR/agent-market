@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "186";
+const UI_VERSION = "187";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1051,6 +1051,29 @@ function tabLike(id) {
   return $("#" + id) ? $("#" + id).value.trim() : "";
 }
 
+// T-69: единая подсказка к полям поиска. В placeholder у каждого поля был
+// свой огрызок «* = любая часть, ^ = начало, $ = конец», но что значит
+// «^S*MUTON$» — нигде не объяснялось. Здесь же говорим, что список
+// «Артикулы ▾» складывается с поиском через «И» — но только в разделах,
+// где такой список есть.
+const SEARCH_TIP_BASE = "Поиск: «*» — любая часть, «^» в начале — с начала, "
+  + "«$» в конце — с конца. Пример: ^S*MUTON$ — артикулы, которые начинаются "
+  + "на S и заканчиваются на MUTON. Регистр не важен, «%», «_» и «.» — "
+  + "обычные символы.";
+const SEARCH_TIP_LIST = " Список «Артикулы ▾» складывается с поиском через «И»: "
+  + "строка должна пройти оба фильтра.";
+
+function initSearchTips() {
+  document.querySelectorAll("input[placeholder]").forEach((el) => {
+    const ph = String(el.getAttribute("placeholder") || "");
+    if (!/(поиск|содержит)/i.test(ph)) return;
+    const pane = el.closest("section.pane") || document;
+    const withList = !!pane.querySelector('button[id$="Arts"]');
+    const text = SEARCH_TIP_BASE + (withList ? SEARCH_TIP_LIST : "");
+    el.title = el.title ? el.title + " " + text : text;
+  });
+}
+
 // Отложенный запуск (debounce) — единая реализация вместо копий
 // `clearTimeout(timer); timer = setTimeout(...)` в десятках обработчиков.
 function debounceRun(fn, ms) {
@@ -1186,6 +1209,30 @@ function emptyPeriodReason(data, what, hint) {
 function ozEmptyReason(data) {
   return emptyPeriodReason(data, "детализации продаж Ozon",
     "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж.");
+}
+// T-69: «0 строк» при двух фильтрах — это чаще всего пустое пересечение
+// поиска по строке и списка «Артикулы ▾», а не «нет данных за период».
+// Сервер складывает их через «И», поэтому называем оба условия и то, какое
+// из них не нашло ничего — иначе пустая таблица выглядит как сбой загрузки.
+function artsEmptyReason(like, info) {
+  const q = String(like || "").trim();
+  const tokens = Number((info && info.tokens) || 0);
+  const matched = Number((info && info.matched) || 0);
+  if (!q && !tokens) return "";
+  const parts = [];
+  if (q) parts.push("поиск «" + q + "»");
+  if (tokens) parts.push("список «Артикулы» (" + fmt(matched) + " из " + fmt(tokens) + ")");
+  let why;
+  if (tokens && !matched) {
+    why = " — ни одно значение списка не совпало с артикулами в базе";
+  } else if (q && tokens) {
+    why = " — пересечение пусто";
+  } else if (q) {
+    why = " — ничего не найдено";
+  } else {
+    why = " — по этому списку строк нет";
+  }
+  return "0 строк: " + parts.join(" + ") + why;
 }
 // Период, который реально анализирует раздел: даты из шапки. Отдельных полей
 // «С/По» внутри панелей больше нет — иначе «Применить» менял шапку, а раздел
@@ -3364,7 +3411,14 @@ async function renderMarginFunnel(p) {
   }
   const tail = cmpMsg ? " · " + cmpMsg : (linked ? " · сравнение связок" : "");
   let warnText = "";
-  if (data.snapshot_from && data.snapshot_to) {
+  const zeroWhy = (data.rows && data.rows.length)
+    ? "" : artsEmptyReason(tabLike("marginFunnelLike"), data.articles);
+  if (zeroWhy) {
+    msg.textContent = zeroWhy + " · воронка " +
+      ((data.snapshot_from && data.snapshot_to)
+        ? data.snapshot_from + " … " + data.snapshot_to
+        : "не загружена (WB API ▸ Воронка продаж)") + tail;
+  } else if (data.snapshot_from && data.snapshot_to) {
     msg.textContent = "Срез воронки за " + data.snapshot_from + " … " + data.snapshot_to +
       (data.matched ? "" : " (запрошено " + data.date_from + " — " + data.date_to + ")") +
       tail + artsMsg;
@@ -3436,8 +3490,10 @@ function makeArtsMenu(cfg) {
     if (!btn) return;
     const n = list().length;
     btn.textContent = n ? "Артикулы · " + fmt(n) + " \u25BE" : "Артикулы \u25BE";
+    const known = (info && info.tokens === n)
+      ? "\nРаспознано: " + fmt(info.matched) + " из " + fmt(info.tokens) : "";
     btn.title = n
-      ? "Фильтр по списку: " + fmt(n) + " знач. — артикулы, баркоды, nmID WB или артикулы Ozon"
+      ? "Фильтр по списку: " + fmt(n) + " знач. — артикулы, баркоды, nmID WB или артикулы Ozon" + known
       : ARTS_TITLE;
     btn.classList.toggle("active", n > 0);
   }
@@ -3518,6 +3574,13 @@ function makeArtsMenu(cfg) {
     ta.placeholder = ARTS_PLACEHOLDER;
     ta.value = list().join("\n");
     panel.appendChild(ta);
+
+    // Как список складывается с поиском — иначе пустая таблица при
+    // заполненном поиске выглядит как ошибка (T-69).
+    const hint = document.createElement("div");
+    hint.className = "margin-arts-hint";
+    hint.textContent = "Складывается с поиском через «И»: строка должна пройти оба фильтра.";
+    panel.appendChild(hint);
 
     const dz = document.createElement("div");
     dz.className = "pdf-drop";
@@ -3667,13 +3730,6 @@ const replenishArtsMenu = makeArtsMenu({
   tab: "replenish",
 });
 
-// Клиентский фильтр автопилота цен: список «Артикулы» → множество UPPER-артикулов.
-function pricingArtsSet() {
-  const out = new Set();
-  for (const v of pricingArtsMenu.list()) out.add(String(v).trim().toUpperCase());
-  return out;
-}
-
 async function renderMarginDetail(p) {
   const compare = /compare=1/.test(p || "");
   const linked = /links=/.test(p || "");
@@ -3734,8 +3790,11 @@ async function renderMarginDetail(p) {
   const artsMsg = (data.articles && data.articles.tokens)
     ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
   if ((data.rows || []).length === 0) {
-    setStatus("Нет данных. Финансовый отчёт WB скачивается отдельным ключом (finance): WB API ▸ Детализация продаж. " +
-      "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день." + tail + artsMsg);
+    const zeroWhy = artsEmptyReason(tabLike("marginDetailLike"), data.articles);
+    setStatus(zeroWhy
+      ? zeroWhy + " · детализация продаж WB" + tail
+      : "Нет данных. Финансовый отчёт WB скачивается отдельным ключом (finance): WB API ▸ Детализация продаж. " +
+        "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день." + tail + artsMsg);
     return;
   }
   setStatus("Строк: " + fmt((data.rows || []).length) + tail + artsMsg);
@@ -3777,8 +3836,11 @@ async function renderMarginOzonDetail(p) {
   if ((data.rows || []).length === 0) {
     // Раньше здесь был зашитый текст с периодом 2026-02-21 … 2026-08-30:
     // он не зависел ни от выбранного окна, ни от базы и сбивал с толку.
-    setStatus(emptyPeriodReason(data, "детализации продаж Ozon",
-      "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж.") + tail + artsMsg);
+    const zeroWhy = artsEmptyReason(tabLike("marginOzonDetailLike"), data.articles);
+    setStatus(zeroWhy
+      ? zeroWhy + " · детализация Ozon" + tail
+      : emptyPeriodReason(data, "детализации продаж Ozon",
+        "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж.") + tail + artsMsg);
     return;
   }
   let m = "Строк: " + fmt((data.rows || []).length) +
@@ -5138,7 +5200,14 @@ async function renderReplenish() {
   }
   const isSize = replenishView() === "sizes";
   const msg = statusEl();
-  if (msg) {
+  const zeroWhy = msg && !(data.meta || {}).count
+    ? artsEmptyReason(tabLike("replenishLike"), data.articles) : "";
+  if (msg && zeroWhy) {
+    // Пустая таблица при двух фильтрах: называем оба, а не «Строк: 0».
+    msg.textContent = zeroWhy + " · окно " + (data.date_from || "—") +
+      " … " + (data.date_to || "—");
+    delete msg.dataset.tip;
+  } else if (msg) {
     const m = data.meta || {};
     const parts = [
       "Окно: " + (data.date_from || "—") + " … " + (data.date_to || "—"),
@@ -8480,12 +8549,24 @@ async function renderWbDetail() {
         date_from: p.date_from || undefined,
         date_to: p.date_to || undefined,
         article_like: q || undefined,
+        articles: wbDetailArtsMenu.param() || undefined,
         limit: 500,
       }));
       const rows = data.rows || [];
+      wbDetailArtsMenu.setInfo(data.articles);
+      wbDetailArtsMenu.updateButton();
+      wbDetailArtsMenu.syncNote();
       tipEl.classList.add("hidden");
-      if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
-        (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
+      if (!rows.length) {
+        setStatus(artsEmptyReason(q, data.articles)
+          || "Нет строк в базе за выбранный период.");
+      } else if (msg) {
+        const artsMsg = (data.articles && data.articles.tokens)
+          ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
+        msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
+          (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "") +
+          artsMsg;
+      }
       pagedTable(box, colViewHeaders("wb-detail", wbDetailRowHeaders), rows, null, "#wbDetailTablePager", colViewPinKeys("wb-detail"));
     } else {
       const cmpOn = !!cmpQuery("wb-detail").compare;
@@ -8499,7 +8580,8 @@ async function renderWbDetail() {
       const rows = data.rows || [];
       tipEl.classList.remove("hidden");
       if (msg) {
-        let m = "По артикулам: " + fmt(data.count || 0);
+        const zeroWhy = (data.rows && data.rows.length) ? "" : artsEmptyReason(q, data.articles);
+        let m = zeroWhy || ("По артикулам: " + fmt(data.count || 0));
         if (data.articles) m += " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens);
         if (data.prev_window) m += " · сравнение с " + data.prev_window.date_from + ".." + data.prev_window.date_to;
         msg.textContent = m;
@@ -8707,15 +8789,25 @@ async function renderOzDetail() {
         date_from: f.date_from || undefined,
         date_to: f.date_to || undefined,
         article_like: q || undefined,
+        articles: ozDetailArtsMenu.param() || undefined,
         limit: 500,
       }));
       const rows = data.rows || [];
+      ozDetailArtsMenu.setInfo(data.articles);
+      ozDetailArtsMenu.updateButton();
+      ozDetailArtsMenu.syncNote();
       tipEl.classList.add("hidden");
       if (!rows.length) {
-        setStatus(emptyPeriodReason(data, "детализации продаж Ozon",
-          "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж."));
-      } else if (msg) msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
-        (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "");
+        setStatus(artsEmptyReason(q, data.articles)
+          || emptyPeriodReason(data, "детализации продаж Ozon",
+            "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж."));
+      } else if (msg) {
+        const artsMsg = (data.articles && data.articles.tokens)
+          ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
+        msg.textContent = "Строк в базе: " + fmt(data.total || 0) +
+          (rows.length < (data.total || 0) ? " (показаны первые " + fmt(rows.length) + " — меняйте период или поиск)" : "") +
+          artsMsg;
+      }
       pagedTable(box, colViewHeaders("oz-detail", ozDetailRowHeaders), rows, null, "#ozDetailTablePager", colViewPinKeys("oz-detail"));
     } else {
       const cmpOn = !!cmpQuery("oz-detail").compare;
@@ -8730,8 +8822,9 @@ async function renderOzDetail() {
       tipEl.classList.remove("hidden");
       if (msg) {
         if (!rows.length && !data.count) {
-          setStatus(emptyPeriodReason(data, "детализации продаж Ozon",
-            "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж."));
+          setStatus(artsEmptyReason(q, data.articles)
+            || emptyPeriodReason(data, "детализации продаж Ozon",
+              "Обновите детализацию: «Обновить базу» → OZON API ▸ Детализация продаж."));
         } else {
           let m = (ozBySize("oz-detail") ? "По размерам: " : "По товарам: ") + fmt(data.count || 0);
           if (data.articles) m += " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens);
@@ -12006,8 +12099,9 @@ async function refreshPricingPrices() {
 // Пустое состояние таблицы автопилота: «нет данных» и «все строки скрыл
 // фильтр» — разные вещи. Второе раньше выглядело как «Нет данных за выбранный
 // период», хотя данные есть: 305 строк с причиной «держать/пропустить».
-function pricingEmptyText(rows, hiddenPassive, hidePassive) {
+function pricingEmptyText(rows, hiddenPassive, hidePassive, reason) {
   if (rows.length) return "";
+  if (reason) return reason;
   if (hidePassive && hiddenPassive > 0) {
     return "Все " + fmt(hiddenPassive) + " строк скрыты фильтром «Скрыть " +
       "держать/пропустить» — снимите галочку в тулбаре, чтобы увидеть " +
@@ -12024,7 +12118,12 @@ async function renderPricing(apply, applyNote) {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const msg = statusEl();
   const likeEl = $("#pricingLike") || { value: "" };
-  const q = likeEl.value.trim().toLowerCase();
+  const qRaw = likeEl.value.trim();
+  const q = qRaw.toLowerCase();
+  // Список «Артикулы ▾» резолвится на сервере (баркоды/nmID/артикулы Ozon),
+  // как в остальных вкладках, и складывается с поиском через «И» (T-69).
+  const artsParam = pricingArtsMenu.param();
+  if (artsParam) s.articles = artsParam;
   const hideSkipEl = $("#pricingHideSkip");
   const hidePassive = hideSkipEl ? hideSkipEl.checked : false;
   msg.textContent = "Считаю рекомендации…";
@@ -12034,8 +12133,13 @@ async function renderPricing(apply, applyNote) {
     // renderPricingPricesAge(data); // перенесено в строку состояния
     const allRows = data.rows || [];
     let pre = allRows;
-    const arts = pricingArtsSet();
-    if (arts.size) pre = pre.filter((r) => arts.has(String(r.article || "").trim().toUpperCase()));
+    if (data.articles) {
+      pricingArtsMenu.setInfo(data.articles);
+      pricingArtsMenu.updateButton();
+      pricingArtsMenu.syncNote();
+    }
+    const artsMsg = (data.articles && data.articles.tokens)
+      ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
     if (q) {
       pre = pre.filter((r) =>
         likeMatchFields(q, [r.article, r.name])
@@ -12059,6 +12163,7 @@ async function renderPricing(apply, applyNote) {
       // Кулдаун — сразу после «решений»: в хвосте строки его обрезает HEADER_MSG_MAX.
       if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      if (artsMsg) summary += artsMsg;
       // Последнее применение — сразу после счётчиков: в строке состояния текст
       // обрезается по HEADER_MSG_MAX, и в хвосте его было бы не видно.
       summary += " · " + lastApplyStatusText();
@@ -12091,7 +12196,8 @@ async function renderPricing(apply, applyNote) {
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,
-      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive),
+      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive,
+        artsEmptyReason(qRaw, data.articles)),
       onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
     });
     await renderPricingHistory();
@@ -12111,7 +12217,11 @@ async function renderPricingOzon(apply, applyNote) {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const msg = statusEl();
   const likeEl = $("#pricingLike") || { value: "" };
-  const q = likeEl.value.trim().toLowerCase();
+  const qRaw = likeEl.value.trim();
+  const q = qRaw.toLowerCase();
+  // Список «Артикулы ▾» резолвится на сервере и складывается с поиском через «И» (T-69).
+  const artsParam = pricingArtsMenu.param();
+  if (artsParam) s.articles = artsParam;
   const hideSkipEl = $("#pricingHideSkip");
   const hidePassive = hideSkipEl ? hideSkipEl.checked : false;
   msg.textContent = "Считаю рекомендации Ozon…";
@@ -12121,8 +12231,13 @@ async function renderPricingOzon(apply, applyNote) {
     // renderPricingPricesAge(data); // перенесено в строку состояния
     const allRows = data.rows || [];
     let pre = allRows;
-    const arts = pricingArtsSet();
-    if (arts.size) pre = pre.filter((r) => arts.has(String(r.article || "").trim().toUpperCase()));
+    if (data.articles) {
+      pricingArtsMenu.setInfo(data.articles);
+      pricingArtsMenu.updateButton();
+      pricingArtsMenu.syncNote();
+    }
+    const artsMsg = (data.articles && data.articles.tokens)
+      ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
     if (q) {
       pre = pre.filter((r) =>
         likeMatchFields(q, [r.article, r.name])
@@ -12142,6 +12257,7 @@ async function renderPricingOzon(apply, applyNote) {
       // Кулдаун — сразу после «решений»: в хвосте строки его обрезает HEADER_MSG_MAX.
       if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      if (artsMsg) summary += artsMsg;
       summary += " · " + lastApplyStatusText();
       if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
       if (data.as_of) summary += " · на " + data.as_of;
@@ -12152,7 +12268,8 @@ async function renderPricingOzon(apply, applyNote) {
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", ozPricingHeaders), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,
-      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive),
+      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive,
+        artsEmptyReason(qRaw, data.articles)),
       onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
     });
     await renderPricingHistory();
@@ -12370,6 +12487,9 @@ async function exportPricing() {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
+  // Выгрузка повторяет таблицу: тот же список «Артикулы ▾» (T-69).
+  const artsParam = pricingArtsMenu.param();
+  if (artsParam) s.articles = artsParam;
   const oz = pricingMpCurrent() === "oz";
   const msg = statusEl();
   msg.textContent = "Формирую Excel…";
@@ -12475,6 +12595,9 @@ async function uploadPricingToDisk() {
   if (showZeroEl) s.show_zero = showZeroEl.checked;
   const cp = colViewParam("pricing").replace(/^cols=/, "");
   if (cp) s.cols = cp;
+  // Файл на диске — та же выборка, что в таблице (T-69).
+  const artsParam = pricingArtsMenu.param();
+  if (artsParam) s.articles = artsParam;
   const oz = pricingMpCurrent() === "oz";
   const msg = statusEl();
   msg.textContent = "Формирую файл…";
@@ -12512,6 +12635,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initYandexTab();
   initAutomationTabs();
   initTableHover();
+  initSearchTips();
   await loadCabinets();
   initBatchMenu();
   if (localStorage.getItem("cab-auto-refresh") === "1") {

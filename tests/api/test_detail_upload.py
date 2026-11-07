@@ -150,6 +150,31 @@ def test_detail_rows_endpoint_lists_raw_rows(api_client):
     assert {x["article"] for x in rows["rows"]} == {"TST-1", "TST-2"}
 
 
+def test_detail_rows_filter_by_articles_list(api_client, db):
+    """T-69: список «Артикулы ▾» действует и на сырые строки детализации."""
+    df = _detail_df().copy()
+    df["Srid"] = ["sr-1", "sr-2"]
+    r = api_client.post("/api/wb/detail-upload", files={
+        "files": ("d.xlsx", _xlsx(df), XLSX),
+    })
+    assert r.json()["imported"] == 2
+    db.add(models.Product(article="TST-1", name="Товар 1", barcode="4600001"))
+    db.commit()
+
+    rows = api_client.get("/api/wb/detail-rows", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "articles": "4600001"}).json()
+    assert rows["total"] == 1
+    assert {x["srid"] for x in rows["rows"]} == {"sr-1"}
+    assert rows["articles"] == {"tokens": 1, "matched": 1, "unmatched": []}
+
+    empty = api_client.get("/api/wb/detail-rows", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10",
+        "articles": "NOPE"}).json()
+    assert empty["total"] == 0
+    assert empty["articles"]["matched"] == 0
+
+
 def test_upload_detail_same_srid_idempotent(api_client):
     api_client.post("/api/wb/cards")  # products TST-1 для join в margin/detail
     df = _detail_df().iloc[:1].copy()

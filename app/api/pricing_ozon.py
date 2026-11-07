@@ -19,8 +19,16 @@ def pricing_ozon_defaults():
 
 @router.post("/pricing-ozon/recommendations")
 def pricing_ozon_recommendations(payload: dict = Body(default={}), db: Session = Depends(get_db)):
-    """Read-only расчёт рекомендаций автопилота Ozon (по базовым артикулам)."""
+    """Read-only расчёт рекомендаций автопилота Ozon (по базовым артикулам).
+
+    ``articles`` — список «Артикулы ▾»: значения резолвятся в наши артикулы
+    так же, как в остальных вкладках, и фильтруют только вывод (T-69).
+    """
+    arts, arts_meta = article_tokens_service.resolve_filter(db, payload.get("articles"))
     rec = pricing_ozon_service.recommendations_ozon(db, settings=payload)
+    rec["rows"] = article_tokens_service.filter_rows(rec.get("rows"), arts)
+    if arts_meta:
+        rec["articles"] = arts_meta
     return rec
 
 
@@ -73,10 +81,14 @@ PRICING_OZON_ACTION_RU = {
 
 @router.post("/pricing-ozon/export")
 def pricing_ozon_export(payload: dict = Body(default={}), db: Session = Depends(get_db)):
-    """Рекомендации автопилота Ozon в Excel. Изменения в Ozon API НЕ вносятся."""
+    """Рекомендации автопилота Ozon в Excel. Изменения в Ozon API НЕ вносятся.
+
+    ``articles`` фильтрует выгрузку так же, как таблицу на экране (T-69).
+    """
     cols = payload.get("cols")
+    arts, _arts_meta = article_tokens_service.resolve_filter(db, payload.get("articles"))
     rec = pricing_ozon_service.recommendations_ozon(db, settings=payload)
-    df = pd.DataFrame(rec["rows"])
+    df = pd.DataFrame(article_tokens_service.filter_rows(rec["rows"], arts))
     if not df.empty:
         df["action"] = df["action"].map(PRICING_OZON_ACTION_RU)
         df["replenishable"] = df["replenishable"].map({True: "да", False: "нет"})

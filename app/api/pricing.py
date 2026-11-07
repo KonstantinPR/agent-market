@@ -19,12 +19,21 @@ def pricing_defaults():
 
 @router.post("/pricing/recommendations")
 def pricing_recommendations(payload: dict = Body(default={}), db: Session = Depends(get_db)):
-    """Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов)."""
+    """Read-only расчёт рекомендаций по правилам R1-R10. body = настройки (перекрытие дефолтов).
+
+    ``articles`` — список «Артикулы ▾» (по одному значению в строке): артикулы,
+    баркоды, nmID WB и артикулы Ozon резолвятся здесь же, как в остальных
+    вкладках, и фильтруют только вывод (T-69).
+    """
+    arts, arts_meta = article_tokens_service.resolve_filter(db, payload.get("articles"))
     prices_df, updated_at, source = pricing_service.resolve_prices(db)
     main_map = pricing_service.main_influence_map(db, payload)
     rec = pricing_service.recommendations(
         db, settings=payload, prices_df=prices_df, main_map=main_map,
     )
+    rec["rows"] = article_tokens_service.filter_rows(rec.get("rows"), arts)
+    if arts_meta:
+        rec["articles"] = arts_meta
     rec["prices_source"] = source
     rec["prices_updated_at"] = updated_at.isoformat() if updated_at else None
     rec["main_influence"] = {"count": len(main_map)}
@@ -139,14 +148,18 @@ PRICING_ACTION_RU = {
 
 @router.post("/pricing/export")
 def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_db)):
-    """Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся."""
+    """Рекомендации автопилота в Excel. Изменения в WB API НЕ вносятся.
+
+    ``articles`` фильтрует выгрузку так же, как таблицу на экране (T-69).
+    """
     cols = payload.get("cols")
+    arts, _arts_meta = article_tokens_service.resolve_filter(db, payload.get("articles"))
     prices_df, _updated_at, _source = pricing_service.resolve_prices(db)
     main_map = pricing_service.main_influence_map(db, payload)
     rec = pricing_service.recommendations(
         db, settings=payload, prices_df=prices_df, main_map=main_map,
     )
-    df = pd.DataFrame(rec["rows"])
+    df = pd.DataFrame(article_tokens_service.filter_rows(rec["rows"], arts))
     if not df.empty:
         df["action"] = df["action"].map(PRICING_ACTION_RU)
         df["replenishable"] = df["replenishable"].map({True: "да", False: "нет"})

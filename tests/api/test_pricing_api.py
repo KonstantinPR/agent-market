@@ -83,6 +83,48 @@ def test_recommendations_honors_dates(db, api_client):
     assert body["window_days"] == 14
 
 
+def test_recommendations_articles_list_resolves_barcode(db, api_client):
+    """T-69: «Артикулы ▾» в автопилоте резолвится на сервере, как в других вкладках.
+
+    Баркод в списке раньше давал 0 строк: клиент сравнивал сырые значения
+    списка с артикулами. Теперь сервер превращает баркод в артикул.
+    """
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    _seed(db, "TST-2", "1002", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    product = db.execute(
+        select(models.Product).where(models.Product.article == "TST-1")).scalar_one()
+    product.barcode = "4600001"
+    db.commit()
+
+    body = api_client.post("/api/pricing/recommendations",
+                           json={"articles": "4600001"}).json()
+    assert body["rows"]
+    assert {r["article"] for r in body["rows"]} == {"TST-1"}
+    assert body["articles"] == {"tokens": 1, "matched": 1, "unmatched": []}
+
+    # Нераспознанный список — пусто, а не «фильтра нет».
+    body = api_client.post("/api/pricing/recommendations",
+                           json={"articles": "NOPE"}).json()
+    assert body["rows"] == []
+    assert body["articles"]["matched"] == 0
+    assert body["articles"]["unmatched"] == ["NOPE"]
+
+
+def test_export_honors_articles_list(db, api_client):
+    """T-69: выгрузка автопилота фильтруется тем же списком, что и таблица."""
+    _seed(db, "TST-1", "1001", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    _seed(db, "TST-2", "1002", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
+    r = api_client.post("/api/pricing/export", json={"articles": "TST-2"})
+    assert r.status_code == 200
+    assert r.headers["X-Count"] == "1"
+    text = _read_xlsx(r).to_string()
+    assert "TST-2" in text and "TST-1" not in text
+
+
 def test_apply_pushes_and_writes_history(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))

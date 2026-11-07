@@ -1411,6 +1411,59 @@ assert.strictEqual(dragGrip.draggable, true, "ручка перетаскива�
 assert.strictEqual(dragTh.draggable, undefined,
   "сам th не должен быть draggable (иначе ломается выделение текста)");
 
+// T-69: «0 строк» при двух фильтрах объясняется, а не выглядит сбоем.
+const { artsEmptyReason } = sandbox;
+assert.strictEqual(artsEmptyReason("", null), "", "без фильтров причины нет");
+const bothWhy = artsEmptyReason("^S*MUTON$", { tokens: 3, matched: 2, unmatched: ["X"] });
+assert.ok(bothWhy.includes("поиск «^S*MUTON$»") && bothWhy.includes("2 из 3"),
+  "в причине должны быть оба условия: " + bothWhy);
+assert.ok(bothWhy.includes("пересечение пусто"),
+  "оба фильтра — «пересечение пусто»: " + bothWhy);
+const lostWhy = artsEmptyReason("", { tokens: 2, matched: 0 });
+assert.ok(lostWhy.includes("ни одно значение списка"),
+  "нераспознанный список назван: " + lostWhy);
+assert.ok(artsEmptyReason("zzz", null).includes("ничего не найдено"),
+  "один поиск — «ничего не найдено»");
+
+// T-69: подсказка к полям поиска — про «^», «$», «*», пример и «И» со списком.
+const mkTipInput = (ph, pane) => ({
+  getAttribute: () => ph, title: "", closest: () => pane,
+});
+const tipArtsPane = {
+  querySelector: (sel) => (sel === 'button[id$="Arts"]' ? { id: "btnXArts" } : null),
+};
+const tipPlainPane = { querySelector: () => null };
+const tipArts = mkTipInput("Поиск: товар, артикул…", tipArtsPane);
+const tipPlain = mkTipInput("Артикул содержит…", tipPlainPane);
+const tipOther = mkTipInput("Цена", tipArtsPane);
+doc.querySelectorAll = (sel) => (sel === "input[placeholder]"
+  ? [tipArts, tipPlain, tipOther] : []);
+sandbox.initSearchTips();
+assert.ok(tipArts.title.includes("^S*MUTON$") && tipArts.title.includes("с конца"),
+  "подсказка про якоря: " + tipArts.title);
+assert.ok(tipArts.title.includes("Артикулы") && tipArts.title.includes("через «И»"),
+  "в разделах со списком подсказка про «И»: " + tipArts.title);
+assert.ok(!tipPlain.title.includes("через «И»"),
+  "без списка «Артикулы» фразы про «И» быть не должно");
+assert.strictEqual(tipOther.title, "", "не поисковое поле не трогаем");
+
+// Автопилот цен: список «Артикулы ▾» уходит на сервер и в выгрузки, а не
+// фильтруется на клиенте сырыми значениями (T-69).
+assert.ok(!jsSrc.includes("pricingArtsSet("),
+  "клиентский pricingArtsSet должен быть удалён");
+assert.strictEqual(
+  (jsSrc.match(/if \(artsParam\) s\.articles = artsParam;/g) || []).length, 4,
+  "articles должны уходить в расчёт, выгрузку и файл на диск (WB и Ozon)");
+assert.ok(jsSrc.includes("artsEmptyReason(qRaw, data.articles)"),
+  "пустая таблица автопилота объясняет фильтры");
+assert.ok(jsSrc.includes("articles: wbDetailArtsMenu.param() || undefined"),
+  "сырые строки WB должны учитывать список «Артикулы»");
+assert.ok(jsSrc.includes("articles: ozDetailArtsMenu.param() || undefined"),
+  "сырые строки Ozon должны учитывать список «Артикулы»");
+assert.ok(jsSrc.includes('hint.textContent = "Складывается с поиском через «И»'),
+  "в панели «Артикулы» нет подсказки про «И»");
+assert.ok(cssSrc.includes(".margin-arts-hint"), "нет CSS для подсказки списка");
+
 console.log("JS_TESTS_OK");
 """
 

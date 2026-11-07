@@ -1128,6 +1128,16 @@ def test_ozon_detail_fills_rows_and_summary(api_client):
                           params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
     assert rows["total"] == 2
 
+    # T-69: список «Артикулы ▾» действует и на сырые строки.
+    filt = api_client.get("/api/ozon/detail-rows", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "articles": "OZ-1"}).json()
+    assert filt["articles"]["matched"] == 1
+    assert filt["total"] >= 1
+    none = api_client.get("/api/ozon/detail-rows", params={
+        "date_from": "2026-09-01", "date_to": "2026-09-10", "articles": "NOPE"}).json()
+    assert none["total"] == 0
+    assert none["articles"]["matched"] == 0
+
     summ = api_client.get("/api/ozon/detail-summary",
                           params={"date_from": "2026-09-01", "date_to": "2026-09-10"}).json()
     # по умолчанию свёрнуто по товару: OZ-1 и OZ-2 — размеры 1 и 2 артикула OZ

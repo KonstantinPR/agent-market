@@ -309,11 +309,16 @@ def api_ozon_detail_rows(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     article_like: Optional[str] = None,
+    articles: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    """Сырые строки «Детализации реализаций» Ozon (ozon_detail_rows) с фильтрами."""
+    """Сырые строки «Детализации реализаций» Ozon (ozon_detail_rows) с фильтрами.
+
+    ``articles`` — список «Артикулы ▾» (T-69): значения резолвятся в наши
+    артикулы (баркоды/nmID/артикулы Ozon) и действуют и на сырые строки.
+    """
     from_, to_ = _parse_window400(date_from, date_to)
     q = select(models.OzonDetailRow).where(models.OzonDetailRow.date.isnot(None))
     if from_:
@@ -323,6 +328,12 @@ def api_ozon_detail_rows(
     if article_like:
         q = q.where(common_service.like_col(models.OzonDetailRow.offer_id, article_like)
                     | common_service.like_col(models.OzonDetailRow.base_article, article_like))
+    arts, arts_meta = article_tokens_service.resolve_filter(db, articles)
+    if arts is not None:
+        q = q.where(
+            func.upper(func.coalesce(models.OzonDetailRow.base_article, "")).in_(sorted(arts))
+            | func.upper(func.coalesce(models.OzonDetailRow.offer_id, "")).in_(sorted(arts))
+        )
     total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
     rows = db.execute(
         q.order_by(models.OzonDetailRow.date.desc(), models.OzonDetailRow.id.desc())
@@ -347,13 +358,16 @@ def api_ozon_detail_rows(
         "source": r.source,
     } for r in rows]
     df = pd.DataFrame(out) if out else pd.DataFrame()
-    return {
+    resp = {
         "rows": out,
         "total": int(total),
         "totals": _df_totals(df) if len(df) else {},
         "window": {"date_from": date_from or "", "date_to": date_to or ""},
         "detail_range": ozon_detail_range(db),
     }
+    if arts_meta:
+        resp["articles"] = arts_meta
+    return resp
 
 
 @router.get("/ozon/detail-summary")

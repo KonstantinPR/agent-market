@@ -180,3 +180,43 @@ def resolve_articles(db: Session,
         add(base or vc, nm, vc, bc)
 
     return arts, matched
+
+
+def resolve_filter(db: Session,
+                   raw: Optional[str]) -> tuple[Optional[set[str]], dict]:
+    """Список «Артикулы ▾» из запроса → (набор артикулов или None, meta).
+
+    ``None`` — списка нет (пустая строка): фильтр не применяется. Пустой
+    набор — список был, но ни одно значение не распознано: результат должен
+    быть пустым, как и в SQL-фильтрах остальных вкладок.
+
+    ``meta`` — то, что показывает панель списка: сколько значений было и
+    какие не удалось сопоставить с нашим артикулом.
+    """
+    tokens = split_tokens(raw)
+    if not tokens:
+        return None, {}
+    arts, matched = resolve_articles(db, tokens)
+    up_all = {normalize_token(t).upper() for t in tokens if normalize_token(t)}
+    up_found = {normalize_token(m).upper() for m in matched if normalize_token(m)}
+    return arts, {
+        "tokens": len(up_all),
+        "matched": len(up_all & up_found),
+        "unmatched": sorted(up_all - up_found)[:50],
+    }
+
+
+def filter_rows(rows, arts: Optional[set[str]]):
+    """Оставляет строки отчёта, чей ``article`` есть в наборе.
+
+    ``arts is None`` — списка не было, ничего не фильтруем. Пустой набор —
+    не оставляем ни одной строки (как ``IN ()`` в SQL).
+    """
+    if arts is None:
+        return rows
+    out = []
+    for row in rows or []:
+        art = str((row or {}).get("article") or "").strip().upper()
+        if art in arts:
+            out.append(row)
+    return out

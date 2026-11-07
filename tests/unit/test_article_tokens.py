@@ -81,3 +81,34 @@ def test_resolve_articles_empty_tokens(db):
     assert arts == set() and matched == set()
     arts, matched = article_tokens.resolve_articles(db, None)
     assert arts == set() and matched == set()
+
+
+def test_resolve_filter_none_empty_and_meta(db):
+    # Пустая строка — списка нет: фильтр не применяется (None, а не пустой набор).
+    assert article_tokens.resolve_filter(db, "") == (None, {})
+    assert article_tokens.resolve_filter(db, None) == (None, {})
+    assert article_tokens.resolve_filter(db, "\n , ; ") == (None, {})
+
+    db.add(models.Product(article="A-1", name="Товар 1", barcode="2001"))
+    db.commit()
+
+    arts, meta = article_tokens.resolve_filter(db, "2001\nNOPE")
+    assert arts == {"A-1"}
+    assert meta["tokens"] == 2
+    assert meta["matched"] == 1
+    assert meta["unmatched"] == ["NOPE"]
+
+    # Список был, но не распознан: пустой набор, и результат должен быть пустым.
+    arts, meta = article_tokens.resolve_filter(db, "NOPE-1\nNOPE-2")
+    assert arts == set()
+    assert meta["matched"] == 0
+    assert meta["unmatched"] == ["NOPE-1", "NOPE-2"]
+
+
+def test_filter_rows_none_vs_empty():
+    rows = [{"article": "A-1"}, {"article": " b-2 "}, {"name": "без артикула"}]
+    assert article_tokens.filter_rows(rows, None) == rows
+    assert article_tokens.filter_rows(rows, set()) == []
+    assert article_tokens.filter_rows(rows, {"A-1"}) == [{"article": "A-1"}]
+    assert article_tokens.filter_rows(rows, {"B-2"}) == [{"article": " b-2 "}]
+    assert article_tokens.filter_rows(None, {"A-1"}) == []
