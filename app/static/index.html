@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=80">
+<link rel="stylesheet" href="/static/style.css?v=81">
 </head>
 <body>
 <nav class="navbar">
@@ -474,27 +474,33 @@
   </section>
 
   <section id="tab-wh-cp" class="pane">
-    <div class="toolbar">
-      <input type="file" id="whCpFile" accept=".xlsx">
-      <button id="whCpImport" class="btn">Загрузить контрагентов</button>
-      <a class="btn" id="whCpExport" href="/api/warehouse/export/counterparties">Выгрузить в Excel</a>
-      <button id="whCpToDisk" class="btn">На диск</button>
-      <button id="whCpFromDisk" class="btn">С диска</button>
-      <span class="toolbar-right"><span id="whCpTablePager"></span></span>
+    <div class="toolbar toolbar-compact">
+      <input type="file" id="whCpFile" class="hidden" accept=".xlsx">
+      <div class="dropzone toolbar-drop" id="whCpDrop" title="Перетащите сюда Excel-файл контрагентов или нажмите, чтобы выбрать файл. Дальше — кнопка «Загрузить контрагентов»."><span class="dz-label">Файл контрагентов: перетащите или выберите</span></div>
+      <button id="whCpImport" class="btn" title="Загрузить выбранный Excel-файл: контрагенты создаются или обновляются по наименованию, дублей не будет">Загрузить контрагентов</button>
+      <button id="whCpFromDisk" class="btn" title="Импортировать все .xlsx из папки «/agent_market/Наш склад/Контрагенты» на Яндекс.Диске. Существующие контрагенты обновляются по наименованию">Импорт с Диска</button>
+      <span class="toolbar-right">
+        <span id="whCpTablePager"></span>
+        <a class="btn" id="whCpExport" href="/api/warehouse/export/counterparties" title="Выгрузить справочник контрагентов в Excel: наименование, ИНН, тип, телефон, примечание">Выгрузить в Excel</a>
+        <button id="whCpToDisk" class="btn" title="Сформировать тот же Excel и загрузить в папку «/agent_market/Наш склад» на Яндекс.Диске">Загрузить на диск</button>
+      </span>
     </div>
     <p class="hint">Поставщики, покупатели и маркетплейсы (Wildberries и Ozon — тоже контрагенты). Колонки файла: Наименование | ИНН | Тип | Телефон | Примечание.</p>
     <div class="table-wrap" id="whCpTable"></div>
   </section>
 
   <section id="tab-wh-receipt" class="pane" data-wh-type="receipt">
-    <div class="toolbar">
-      <input type="file" id="whRFile" accept=".xlsx">
-      <button id="whRImport" class="btn">Загрузить Приход</button>
-      <a class="btn" id="whRExport" href="/api/warehouse/export/docs?type=receipt">Выгрузить в Excel</a>
-      <a class="btn" id="whRTemplate" href="/api/warehouse/export/template-docs?type=receipt">Шаблон</a>
-      <button id="whRToDisk" class="btn">На диск</button>
-      <button id="whRFromDisk" class="btn">С диска</button>
-      <span class="toolbar-right"><span id="whRTablePager"></span></span>
+    <div class="toolbar toolbar-compact">
+      <input type="file" id="whRFile" class="hidden" accept=".xlsx">
+      <div class="dropzone toolbar-drop" id="whRDrop" title="Перетащите сюда Excel-файл прихода или нажмите, чтобы выбрать файл. Дальше — кнопка «Загрузить приход»."><span class="dz-label">Файл прихода: перетащите или выберите</span></div>
+      <button id="whRImport" class="btn" title="Загрузить выбранный Excel-файл прихода: строки с одинаковыми «дата + № документа + контрагент» станут одним документом; повторная загрузка обновит его, а не создаст дубль">Загрузить приход</button>
+      <a class="btn" id="whRTemplate" href="/api/warehouse/export/template-docs?type=receipt" title="Скачать пустой шаблон Excel с нужными колонками: Дата | № документа | Контрагент | Артикул | Штрихкод | Размер | Кол-во | Цена">Шаблон</a>
+      <button id="whRFromDisk" class="btn" title="Импортировать все .xlsx из папки «/agent_market/Наш склад/Приход» на Яндекс.Диске. Уже загруженные документы обновляются, а не дублируются">Импорт с Диска</button>
+      <span class="toolbar-right">
+        <span id="whRTablePager"></span>
+        <a class="btn" id="whRExport" href="/api/warehouse/export/docs?type=receipt" title="Полная выгрузка приходов: каждая строка каждого документа (дата, №, контрагент, артикул, штрихкод, размер, кол-во, цена). Не зависит от фильтров на экране">Выгрузить в Excel</a>
+        <button id="whRToDisk" class="btn" title="Сформировать тот же Excel и загрузить в папку «/agent_market/Наш склад» на Яндекс.Диске">Загрузить на диск</button>
+      </span>
     </div>
     <p class="hint">Приход товара. Файл = пачка накладных: Дата | № документа | Контрагент | Артикул | Кол-во | Цена. Строки с одинаковыми №+дата+контрагент — один документ; повторная загрузка обновит документы.</p>
     <div class="table-wrap" id="whRTable"></div>
@@ -506,7 +512,7 @@
     <!-- Всё в одном ряду: поиск, связки, режим и «?» слева, импорт и выгрузка
          справа. Отдельного «этажа» с кнопками импорта больше нет — он
          разъезжался на две строки и отодвигал таблицу. -->
-    <div class="toolbar wh-ship-toolbar">
+    <div class="toolbar toolbar-compact">
       <input id="whSLike" placeholder="Поиск: товар, артикул, штрихкод, № отправки… * = любая часть, ^ = начало, $ = конец" title="Поиск по таблице. В документах ищет по дате, номеру, контрагенту, связке, примечанию и папке; в товарном разрезе — по артикулу, названию и штрихкоду. Звёздочка «*» заменяет любую часть текста, «^» в начале привязывает к началу артикула, «$» в конце — к концу.">
       <div class="view-menu" id="whShipCabMenu">
         <button type="button" class="btn" id="btnWhShipCab" title="Отправки каких связок показывать. По умолчанию — только текущая связка из шапки; отметьте чекбоксы, чтобы добавить другие, или «Выбрать все связки»">Связки ▾</button>
@@ -521,7 +527,7 @@
       <span class="tip" id="whShipTip" tabindex="0" role="tooltip">?<span class="tip-text">Суммы считаются по цене строки: для импорта из папок WB это себестоимость товара, а не выручка маркетплейса. Документы без связки (ручной импорт) видны при любом фильтре связок.</span></span>
       <span class="wh-ship-actions">
         <input type="file" id="whSFile" class="hidden" accept=".xlsx,.xlsm">
-        <div class="dropzone wh-ship-drop" id="whSDrop" title="Перетащите сюда Excel-файл отправки или нажмите, чтобы выбрать файл. Дальше — кнопка «Загрузить отправку»."><span class="dz-label">Файл: перетащите или выберите</span></div>
+        <div class="dropzone toolbar-drop" id="whSDrop" title="Перетащите сюда Excel-файл отправки или нажмите, чтобы выбрать файл. Дальше — кнопка «Загрузить отправку»."><span class="dz-label">Файл: перетащите или выберите</span></div>
         <button id="whSImport" class="btn" title="Загрузить выбранный Excel-файл отправки: строки с одинаковыми «дата + номер + контрагент» станут одним документом, повторная загрузка обновит его">Загрузить отправку</button>
         <a class="btn" id="whSTemplate" href="/api/warehouse/export/template-docs?type=shipment" title="Скачать пустой шаблон Excel с нужными колонками: Дата | № документа | Контрагент | Артикул | Кол-во | Цена">Шаблон</a>
         <button id="whSFromDisk" class="btn" title="Импортировать все .xlsx из папки «/agent_market/Наш склад/Отгрузка» на Яндекс.Диске. Файлы уже загруженных отправок обновляются, а не дублируются">Импорт с Диска</button>
@@ -532,7 +538,7 @@
         <span id="whSTablePager"></span>
         <div class="view-menu" id="whShipmentViewMenu"><button type="button" class="btn" id="btnwhShipmentView" title="Показать/скрыть и переставить колонки текущего режима. Настройки запоминаются отдельно для документов, списка товаров и сводки">Вид таблицы &#9662;</button><div class="view-menu-panel hidden" id="whShipmentViewPanel"></div></div>
         <button id="whSExport" class="btn" title="Выгрузить в Excel то, что сейчас на экране: документы, товары списком или сводку (с учётом поиска, связок и «Свернуть по артикулам»)">Выгрузить в Excel</button>
-        <button id="whSToDisk" class="btn" title="Сформировать тот же Excel и загрузить его в папку «/agent_market/Наш склад» на Яндекс.Диске">На диск</button>
+        <button id="whSToDisk" class="btn" title="Сформировать тот же Excel и загрузить его в папку «/agent_market/Наш склад» на Яндекс.Диске">Загрузить на диск</button>
       </span>
     </div>
     <!-- Подсказка по текущему режиму. Класс не «hint»: app.js переносит

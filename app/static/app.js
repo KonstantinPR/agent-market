@@ -695,6 +695,7 @@ function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "btn pager-all";
+      btn.title = "Показать все строки сразу, без постраничного лимита";
       // Кнопка сама сообщает, сколько строк ещё не показано и сколько всего:
       // отдельная подпись «Показано …» и поле «Показывать N» в тулбаре не нужны.
       btn.textContent = pagerAllLabel(list);
@@ -3952,7 +3953,7 @@ const whDocBaseHeaders = [
 // а панель разошлась бы с манифестом.
 const whDocActionHeader = {
   k: "_d", label: "",
-  render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '">Строки</button>' : "",
+  render: (v, r) => r.id ? '<button class="btn small" data-doc-id="' + r.id + '" title="Открыть товарные позиции этого документа: артикул, штрихкод, размер, количество и цена">Строки</button>' : "",
   tip: "Кнопка открывает товарные позиции документа. Изменение строк здесь меняет остатки.",
 };
 const whReceiptHeaders = whDocBaseHeaders.filter((h) => ["date", "doc_num", "counterparty", "note", "total", "items_count", "source"].includes(h.k)).concat([
@@ -4286,23 +4287,25 @@ function initWhShipCabsMenu() {
 }
 
 
-// Зона перетаскивания в тулбаре «Отправок»: клик открывает выбор файла,
-// перетаскивание подставляет файл в #whSFile, подпись показывает имя файла.
-// Раньше это был просто пунктирный блок без обработчиков — бросок файла
-// и клик ничего не делали.
-function initWhShipDrop() {
-  const input = $("#whSFile");
-  const drop = $("#whSDrop");
+// Компактная зона перетаскивания в тулбаре табличного раздела: клик
+// открывает выбор файла, перетаскивание подставляет файл в input, подпись
+// показывает имя файла и «гаснет» обратно после импорта. Раньше такие зоны
+// были просто пунктирными блоками без обработчиков — бросок файла и клик
+// ничего не делали.
+function initToolbarDrop(inputId, dropId, actionLabel) {
+  const input = $("#" + inputId);
+  const drop = $("#" + dropId);
   if (!input || !drop) return;
   const label = drop.querySelector(".dz-label");
   const base = label ? label.textContent : "";
+  const baseTitle = drop.title;
   const show = () => {
     const f = input.files && input.files[0];
     if (label) label.textContent = f ? "Файл: " + f.name : base;
     drop.classList.toggle("has-file", !!f);
     drop.title = f
-      ? f.name + " — нажмите «Загрузить отправку», чтобы отправить его на сервер"
-      : "Перетащите сюда Excel-файл отправки или нажмите, чтобы выбрать файл. Дальше — кнопка «Загрузить отправку».";
+      ? f.name + " — нажмите " + actionLabel + ", чтобы отправить его на сервер"
+      : baseTitle;
   };
   drop.addEventListener("click", () => input.click());
   input.addEventListener("change", show);
@@ -6519,8 +6522,12 @@ async function sendProductsPrices() {
 }
 
 async function uploadFile(url, input, msgSel, tab) {
-  const file = input.files[0];
-  if (!file) { return; }
+  const file = input.files && input.files[0];
+  if (!file) {
+    const msgEl = document.querySelector(msgSel);
+    if (msgEl) msgEl.textContent = "Сначала выберите файл — перетащите его в зону или нажмите на неё";
+    return;
+  }
   const fd = new FormData();
   fd.append("file", file);
   try {
@@ -6547,6 +6554,9 @@ async function uploadFile(url, input, msgSel, tab) {
     }
     document.querySelector(msgSel).textContent = msg + " (" + file.name + ")";
     input.value = "";
+    // Сброс input не шлёт change: подпись дропзоны осталась бы с именем
+    // загруженного файла. Шлём change сами — обработчик вернёт подсказку.
+    input.dispatchEvent(new Event("change", { bubbles: true }));
     await loadTab(tab);
   } catch (err) {
     document.querySelector(msgSel).textContent = "Ошибка: " + err.message;
@@ -8231,6 +8241,7 @@ async function renderCards(name) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "btn pager-all";
+      btn.title = "Догрузить следующую порцию строк с сервера";
       btn.textContent = st.loading ? "Загрузка…" : "Загрузить ещё (" + fmt(Math.min(st.limit, st.total - st.rows.length)) + ")";
       btn.disabled = st.loading;
       btn.addEventListener("click", () => st.fetching());
@@ -13201,7 +13212,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (panel) panel.classList.add("hidden");
     });
   }
-  // ── «Отправки» — импорт/экспорт/диск ──
+  // ── «Наш склад»: импорт/экспорт/диск (контрагенты, приходы, отправки) ──
   $("#whCpImport").addEventListener("click", () => uploadFile("/warehouse/import/counterparties", $("#whCpFile"), "#headerMsg", "wh-cp"));
   $("#whRImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=receipt", $("#whRFile"), "#headerMsg", "wh-receipt"));
   $("#whSImport").addEventListener("click", () => uploadFile("/warehouse/import/docs?type=shipment", $("#whSFile"), "#headerMsg", "wh-shipment"));
@@ -13237,7 +13248,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
   initWhShipCabsMenu();
-  initWhShipDrop();
+  initToolbarDrop("whSFile", "whSDrop", "«Загрузить отправку»");
+  initToolbarDrop("whRFile", "whRDrop", "«Загрузить приход»");
+  initToolbarDrop("whCpFile", "whCpDrop", "«Загрузить контрагентов»");
   onTabInput("whSLike", "wh-shipment", null, 350);
   const whSFromPaths = $("#whSFromPaths");
   if (whSFromPaths) whSFromPaths.addEventListener("click", () => busyRun(openWhPathsPanel));

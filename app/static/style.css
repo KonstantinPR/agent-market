@@ -1185,16 +1185,16 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .paths-imported { background: #f0faf2; color: #1a7f37; border: 1px solid #ccebd2; }
 .paths-bad_name, .paths-no_file { background: #fff7e6; color: #8a5b00; border: 1px solid #f0dfb5; }
 .paths-error { background: #fdeaea; color: #a40e26; border: 1px solid #f3c1c1; }
-/* ── «Отправки»: импорт, режимы и селектор связок в одном ряду (T-58) ── */
-/* Кнопки импорта переехали в общий тулбар: у группы нет своих отступов, иначе
-   она снова встаёт отдельным «этажом» и отодвигает таблицу. Размеры чуть
-   плотнее обычных кнопок — так поиск, связки, режимы и весь импорт
-   помещаются в одну строку на обычном мониторе. */
-.wh-ship-toolbar { column-gap: 6px; row-gap: 6px; margin-bottom: 8px; }
-.wh-ship-toolbar #whSLike { width: 190px; }
-.wh-ship-toolbar .seg-group .seg-btn { padding: 4px 8px; font-size: 12.5px; }
-.wh-ship-toolbar .toolbar-right { gap: 6px; }
-.wh-ship-toolbar .toolbar-right .btn { padding: 3px 8px; font-size: 12.5px; white-space: nowrap; }
+/* ── Общий компактный тулбар табличных разделов (T-70) ── */
+/* Кнопки импорта живут в общем тулбаре: у групп нет своих отступов, иначе
+   они встают отдельным «этажом» и отодвигают таблицу. Размеры чуть плотнее
+   обычных кнопок — так поиск, фильтры и весь импорт помещаются в одну строку
+   на обычном мониторе. Используется в «Приходах», «Отправках» и «Контрагентах». */
+.toolbar-compact { column-gap: 6px; row-gap: 6px; margin-bottom: 8px; }
+.toolbar-compact #whSLike { width: 190px; }
+.toolbar-compact .seg-group .seg-btn { padding: 4px 8px; font-size: 12.5px; }
+.toolbar-compact .toolbar-right { gap: 6px; }
+.toolbar-compact .toolbar-right .btn { padding: 3px 8px; font-size: 12.5px; white-space: nowrap; }
 .wh-ship-actions { display: inline-flex; gap: 5px; align-items: center; flex-wrap: wrap; }
 /* Кнопки импорта в строку и без переносов: подпись не должна рваться на две
    строки и менять высоту ряда. Не влезло — группа переносится целиком. */
@@ -1207,10 +1207,10 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 }
 /* Компактная зона перетаскивания: в том же ряду, высотой и шрифтом с кнопками.
    Пунктир оставлен — по нему видно, что файл можно просто перетащить.
-   Ширина по подписи, но не больше 230px: длинное имя файла уходит в «…». */
-.dropzone.wh-ship-drop {
+   Ширина по подписи, но не больше 260px: длинное имя файла уходит в «…». */
+.dropzone.toolbar-drop {
   flex: 0 0 auto;
-  max-width: 230px;
+  max-width: 260px;
   padding: 3px 8px;
   margin-bottom: 0;
   border-width: 1px;
@@ -1222,7 +1222,7 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
   text-overflow: ellipsis;
 }
 /* Файл выбран: рамка и подпись становятся «активными», в подписи — имя файла. */
-.dropzone.wh-ship-drop.has-file { border-color: #3574b2; background: #eef4fb; color: #1d5fa8; }
+.dropzone.toolbar-drop.has-file { border-color: #3574b2; background: #eef4fb; color: #1d5fa8; }
 /* Кнопки-сегменты: один визуальный переключатель вместо трёх независимых кнопок. */
 .seg-group { display: inline-flex; }
 .seg-group .seg-btn {
