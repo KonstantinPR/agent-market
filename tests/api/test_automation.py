@@ -485,3 +485,45 @@ def test_face_etalon_delete_builtin(client, face_pipeline):
     assert r.status_code == 400
     assert "Встроенный" in r.json()["detail"]
 
+
+# ------------------------------------------------------------------ ретушь тела
+
+
+def test_body_options(client):
+    r = client.get("/api/automation/body/options")
+    assert r.status_code == 200
+    j = r.json()
+    assert [v["id"] for v in j["variants"]] == ["s1", "s2", "s3"]
+    assert j["default_variant"] == "s2"
+    assert j["out_name"] == "Ретушь тела"
+    assert ".jpg" in j["extensions"]
+    assert isinstance(j["ready"], bool)
+
+
+def test_body_start_requires_source(client):
+    r = client.post("/api/automation/body/start", data={"variant": "s2"})
+    assert r.status_code == 400
+    assert r.json()["detail"]
+
+
+def test_body_start_unknown_variant(client):
+    r = client.post("/api/automation/body/start",
+                    data={"variant": "s99", "source_dir": "C:\\photos"})
+    assert r.status_code == 400
+    assert "вариант" in r.json()["detail"].lower()
+
+
+def test_body_start_missing_folder(client):
+    r = client.post("/api/automation/body/start",
+                    data={"variant": "s2", "source_dir": "C:\\no-such-folder-xyz"})
+    assert r.status_code == 400
+
+
+def test_body_state_and_zip_unknown(client):
+    assert client.get("/api/automation/body/state/999999").status_code == 404
+    assert client.get("/api/automation/body/zip/999999").status_code == 404
+
+
+def test_body_stop_unknown(client):
+    assert client.post("/api/automation/body/stop/999999").status_code == 404
+

@@ -24,6 +24,9 @@ DELETE /api/automation/face/etalons/{etalon_id}
 DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
+GET /api/automation/body/options
+GET /api/automation/body/state/{job_id}
+GET /api/automation/body/zip/{job_id}
 GET /api/automation/face/options
 GET /api/automation/face/state/{job_id}
 GET /api/automation/face/zip/{job_id}
@@ -107,6 +110,9 @@ GET /api/wb/detail-rows
 GET /api/wb/detail-summary
 GET /api/yandex/download
 GET /api/yandex/list
+POST /api/automation/body/open/{job_id}
+POST /api/automation/body/start
+POST /api/automation/body/stop/{job_id}
 POST /api/automation/crop/build
 POST /api/automation/face/etalons
 POST /api/automation/face/open/{job_id}

@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "187";
+const UI_VERSION = "188";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1413,6 +1413,7 @@ async function loadTabInner(name, f) {
     else if (name === "automation-names") await renderAutomationNames();
     else if (name === "automation-crop") await renderAutomationCrop();
     else if (name === "automation-faces") await renderAutomationFaces();
+    else if (name === "automation-body") await renderAutomationBody();
     else if (name === "automation-barcodes") await renderAutomationBarcodes();
   } catch (err) {
     console.error("loadTab error:", err);
@@ -7571,6 +7572,206 @@ async function onAutoFaceEtalonDelete() {
   }
 }
 
+// ------------------------------------------------------------ ретушь тела
+// Как и лица: задание фоновое (12-МП кадр ~3–5 с), UI опрашивает состояние.
+let _bodyJobId = null;
+
+async function renderAutomationBody() {
+  const res = document.getElementById("autoBodyResult");
+  if (res) res.innerHTML = "";
+  await loadBodyOptions();
+}
+
+async function loadBodyOptions() {
+  const vSel = document.getElementById("autoBodyVariant");
+  const src = document.getElementById("autoBodySource");
+  if (!vSel) return;
+  try {
+    const opt = await api("/automation/body/options");
+    const keep = vSel.value;
+    vSel.innerHTML = "";
+    for (const v of opt.variants || []) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = v.label;
+      if (v.hint) o.title = v.hint;
+      vSel.appendChild(o);
+    }
+    const has = (opt.variants || []).some((v) => v.id === keep);
+    vSel.value = has ? keep : (opt.default_variant || "s2");
+    if (vSel._menuSync) vSel._menuSync();
+    if (src && !src.value && opt.default_source) src.value = opt.default_source;
+    if (!opt.ready) {
+      _bodyProgress("Пайплайн не найден: " + (opt.pipeline_dir || "") +
+        ". Нужны .venv\\Scripts\\python.exe, body_retouch.py и модели " +
+        "selfie_multiclass_256x256.tflite.", true);
+    }
+  } catch (err) {
+    _bodyProgress("Не удалось загрузить настройки: " + apiErrorMessage(err), true);
+  }
+}
+
+function _bodyProgress(text, isError) {
+  const box = document.getElementById("autoBodyProgress");
+  if (!box) return;
+  box.classList.remove("hidden", "error", "done");
+  if (isError) box.classList.add("error");
+  box.innerHTML = '<div class="afp-line"><span>' + escapeHtml(text) + "</span></div>";
+}
+
+function _bodyProgressState(st) {
+  const box = document.getElementById("autoBodyProgress");
+  if (!box) return;
+  box.classList.remove("hidden", "error", "done");
+  const total = st.total || 0;
+  const done = st.done || 0;
+  const pct = Math.max(0, Math.min(100, st.percent || 0));
+  let title = "Обрабатываю…";
+  if (st.status === "done") title = "Готово";
+  else if (st.status === "failed") title = "Ошибка";
+  else if (st.status === "cancelled") title = "Остановлено";
+  if (st.status === "failed") box.classList.add("error");
+  else if (st.status === "done") box.classList.add("done");
+  let html = '<div class="afp-line"><span>' + escapeHtml(title) + "</span><span>"
+    + (total ? fmt(done) + " / " + fmt(total) : "") + "</span></div>"
+    + '<div class="afp-bar"><div class="afp-fill" style="width:' + pct + '%"></div></div>';
+  if (st.current) {
+    html += '<div class="afp-current" title="' + escapeHtml(st.current) + '">'
+      + escapeHtml(st.current) + "</div>";
+  }
+  if (st.error) {
+    html += '<div class="afp-current">' + escapeHtml(st.error) + "</div>";
+  }
+  box.innerHTML = html;
+}
+
+function _bodySetBusy(busy) {
+  for (const id of ["autoBodyRunFolder", "autoBodyRunFiles"]) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = busy;
+  }
+  const stop = document.getElementById("autoBodyStop");
+  if (stop) stop.classList.toggle("hidden", !busy);
+  if (busy) {
+    const open = document.getElementById("autoBodyOpen");
+    if (open) open.classList.add("hidden");
+  }
+}
+
+async function _bodyPoll(jobId) {
+  const deadline = Date.now() + 3 * 60 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const st = await api("/automation/body/state/" + jobId);
+    _bodyProgressState(st);
+    if (st.status !== "running") return st;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error("Обработка не завершилась за 3 часа");
+}
+
+async function onAutoBodyStart(useFiles) {
+  const msg = statusEl();
+  if (msg) { msg.textContent = "Запускаю обработку…"; msg.classList.remove("error"); }
+  const res = document.getElementById("autoBodyResult");
+  if (res) res.innerHTML = "";
+  try {
+    const fd = new FormData();
+    fd.append("variant", (document.getElementById("autoBodyVariant") || {}).value || "s2");
+    const m = document.getElementById("autoBodyMatch");
+    fd.append("match", m && m.checked ? "1" : "0");
+    if (useFiles) {
+      const fileEl = document.getElementById("autoBodyFiles");
+      if (!fileEl || !fileEl.files.length) throw new Error("Перетащите фото в зону или выберите файлы");
+      for (const f of fileEl.files) fd.append("files", f);
+    } else {
+      const src = ((document.getElementById("autoBodySource") || {}).value || "").trim();
+      if (!src) throw new Error("Укажите папку с исходниками");
+      fd.append("source_dir", src);
+    }
+    const start = await _autoPostJson("/api/automation/body/start", fd, apiSignalLong());
+    _bodyJobId = start.job_id;
+    _bodySetBusy(true);
+    _bodyProgress("Обрабатываю…");
+    const st = await _bodyPoll(_bodyJobId);
+    _bodySetBusy(false);
+    if (st.status === "failed") throw new Error(st.error || "Обработка не удалась");
+    if (st.status === "cancelled") {
+      if (msg) msg.textContent = "Остановлено";
+      return;
+    }
+    if (st.mode === "upload") {
+      await _bodyDownload(st.id, st.filename);
+      if (msg) msg.textContent = "Готово: " + fmt(st.done) + " фото, архив скачан";
+    } else {
+      if (msg) msg.textContent = "Готово: " + fmt(st.done) + " фото → " + st.out_dir;
+      const open = document.getElementById("autoBodyOpen");
+      if (open) open.classList.remove("hidden");
+    }
+    if (res) {
+      let html = '<p class="hint">Обработано: <b>' + fmt(st.done) + "</b>"
+        + (st.total && st.done !== st.total ? " из " + fmt(st.total) : "");
+      if (st.no_skin) html += "; без кожи в кадре (не тронуты): " + fmt(st.no_skin);
+      if (st.failed_files) html += "; ошибок: " + fmt(st.failed_files);
+      html += st.match
+        ? "; тон лица подтянут к коже тела"
+        : "; тон лица не менялся";
+      html += "</p>";
+      if (st.mode === "folder") {
+        html += '<p class="hint">Результат: <code>' + escapeHtml(st.out_dir) + "</code>, "
+          + "превью «до/после» — в подпапке <code>preview</code></p>";
+      }
+      if ((st.log || []).length && (st.no_skin || st.failed_files)) {
+        html += '<p class="hint">' + escapeHtml((st.log || []).join(" · ")) + "</p>";
+      }
+      res.innerHTML = html;
+    }
+  } catch (err) {
+    _bodySetBusy(false);
+    const text = apiErrorMessage(err);
+    _bodyProgress(text, true);
+    if (msg) { msg.textContent = "Ошибка: " + text; msg.classList.add("error"); }
+  }
+}
+
+async function _bodyDownload(jobId, filename) {
+  const resp = await fetch("/api/automation/body/zip/" + jobId, { signal: apiSignal() });
+  if (!resp.ok) {
+    let m = String(resp.status);
+    try { const j = await resp.json(); m = j.detail || m; } catch (e) { /* not json */ }
+    throw new Error(m);
+  }
+  const blob = await resp.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename || "body.zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+async function onAutoBodyStop() {
+  if (!_bodyJobId) return;
+  const msg = statusEl();
+  try {
+    await _autoPostJson("/api/automation/body/stop/" + _bodyJobId, new FormData());
+    if (msg) msg.textContent = "Останавливаю…";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + apiErrorMessage(err); msg.classList.add("error"); }
+  }
+}
+
+async function onAutoBodyOpen() {
+  if (!_bodyJobId) return;
+  const msg = statusEl();
+  try {
+    await _autoPostJson("/api/automation/body/open/" + _bodyJobId, new FormData());
+    if (msg) msg.textContent = "Папка открыта";
+  } catch (err) {
+    if (msg) { msg.textContent = "Ошибка: " + apiErrorMessage(err); msg.classList.add("error"); }
+  }
+}
+
 function initAutoDropzone(inputId, dropId) {
   const input = document.getElementById(inputId);
   const drop = document.getElementById(dropId);
@@ -7730,6 +7931,14 @@ function initAutomationTabs() {
   if (feDel) feDel.addEventListener("click", onAutoFaceEtalonDelete);
   const feRef = document.getElementById("autoFaceReference");
   if (feRef) feRef.addEventListener("change", _faceSyncEtalonButtons);
+  const brf = document.getElementById("autoBodyRunFolder");
+  if (brf) brf.addEventListener("click", () => onAutoBodyStart(false));
+  const brfiles = document.getElementById("autoBodyRunFiles");
+  if (brfiles) brfiles.addEventListener("click", () => onAutoBodyStart(true));
+  const bstop = document.getElementById("autoBodyStop");
+  if (bstop) bstop.addEventListener("click", onAutoBodyStop);
+  const bopen = document.getElementById("autoBodyOpen");
+  if (bopen) bopen.addEventListener("click", onAutoBodyOpen);
   for (const id of ["autoFoldTemplate", "autoNamesTemplate"]) {
     const t = document.getElementById(id);
     if (t) t.addEventListener("click", onAutoTemplate);
@@ -7742,11 +7951,13 @@ function initAutomationTabs() {
   initMenuSelect("autoBarType");
   initMenuSelect("autoFaceVariant");
   initMenuSelect("autoFaceReference");
+  initMenuSelect("autoBodyVariant");
   initAutoDropzone("autoFoldFile", "autoFoldDrop");
   initAutoDropzone("autoNamesFile", "autoNamesDrop");
   initAutoDropzone("autoCropFiles", "autoCropDrop");
   initAutoDropzone("autoBarFile", "autoBarDrop");
   initAutoDropzone("autoFaceFiles", "autoFaceDrop");
+  initAutoDropzone("autoBodyFiles", "autoBodyDrop");
   const bPreview = document.getElementById("autoBarPreview");
   if (bPreview) bPreview.addEventListener("click", onAutoBarPreview);
   const bBuild = document.getElementById("autoBarBuild");

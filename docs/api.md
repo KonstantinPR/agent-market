@@ -2,13 +2,13 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **168**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **174**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
 ## Содержание
 
-- [automation](#automation) — 19 шт.
+- [automation](#automation) — 25 шт.
 - [batch](#batch) — 7 шт.
 - [cabinet](#cabinet) — 8 шт.
 - [cabinets](#cabinets) — 1 шт.
@@ -47,6 +47,12 @@
 | POST | `/api/automation/barcodes/build` | `automation_barcodes_build` | ZIP с PNG-штрихкодами: bar_0001.png, bar_0002.png… |
 | GET | `/api/automation/barcodes/catalog` | `automation_barcodes_catalog` | Штрихкоды из каталога: product_sizes.barcode; у товара без размеров — |
 | POST | `/api/automation/barcodes/preview` | `automation_barcodes_preview` | Предпросмотр: первые MAX_PREVIEW кодов рендерятся в data-url PNG. |
+| POST | `/api/automation/body/open/{job_id}` | `automation_body_open` | Открыть папку с результатом (режим «папка с исходниками»). |
+| GET | `/api/automation/body/options` | `automation_body_options` | Варианты ретуши тела и настройки по умолчанию для вкладки. |
+| POST | `/api/automation/body/start` | `automation_body_start` | Запускает ретушь: папка с исходниками и/или загруженные фото. |
+| GET | `/api/automation/body/state/{job_id}` | `automation_body_state` |  |
+| POST | `/api/automation/body/stop/{job_id}` | `automation_body_stop` |  |
+| GET | `/api/automation/body/zip/{job_id}` | `automation_body_zip` |  |
 | POST | `/api/automation/crop/build` | `automation_crop_build` |  |
 | POST | `/api/automation/face/etalons` | `automation_face_etalon_add` | Готовит свой эталон из загруженного фото (``etalon_prep.py``). |
 | DELETE | `/api/automation/face/etalons/{etalon_id}` | `automation_face_etalon_delete` | Удаляет свой эталон (встроенные неудаляемы). |

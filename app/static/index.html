@@ -69,6 +69,7 @@
         <a class="nav-link" data-tab="automation-names" href="#">Размножить имена</a>
         <a class="nav-link" data-tab="automation-crop" href="#">Кроп изображений</a>
         <a class="nav-link" data-tab="automation-faces" href="#">Обработка лиц</a>
+        <a class="nav-link" data-tab="automation-body" href="#">Ретушь тела</a>
         <a class="nav-link" data-tab="automation-barcodes" href="#">Генерация штрихкодов</a>
       </div>
     </div>
@@ -1188,6 +1189,33 @@
     <div class="table-wrap" id="autoFaceResult"></div>
   </section>
 
+  <section id="tab-automation-body" class="pane">
+    <div class="wb-form">
+      <p class="hint">Ретушь кожи <b>тела</b>: руки, кисти, плечи, шея и зона декольте. Сегментатор отделяет кожу от одежды, фона и волос, поэтому джинсы, юбка и топ остаются как на исходнике — меняется только кожа. Стадии: снятие мелких дефектов и вен, выравнивание тона, матовость; по галочке — подтяжка тона лица к коже тела (нужно после подмены лица эталоном). Варианты отличаются силой: <b>1</b> — мягкая, <b>2</b> — средняя (рабочая), <b>3</b> — глянцевая. Укажите папку с исходниками — готовые фото лягут в подпапку <code>Ретушь тела</code>. Или перетащите фото в зону ниже — результат скачается ZIP.</p>
+      <div class="toolbar">
+        <select id="autoBodyVariant" title="Вариант ретуши: сила снятия дефектов и выравнивания тона"></select>
+        <label class="chk" title="После подмены лица эталоном его тон может разойтись с кожей рук и шеи. Галочка подтягивает кожу лица к коже тела на пару единиц L/a/b — без «пластика»."><input type="checkbox" id="autoBodyMatch" checked> Подтягивать тон лица к коже тела</label>
+      </div>
+      <div class="toolbar">
+        <input id="autoBodySource" type="text" placeholder="Путь к папке с исходниками" style="flex:1;min-width:280px">
+        <button id="autoBodyRunFolder" class="btn btn-primary">Обработать папку</button>
+      </div>
+      <div class="dz-row">
+        <div class="dropzone" id="autoBodyDrop">
+          <span class="dz-label">Перетащите сюда изображения (JPG, PNG, WEBP) — или нажмите для выбора файлов. Они обработаются по одному, готовые файлы скачаются ZIP.</span>
+        </div>
+        <input type="file" id="autoBodyFiles" class="hidden" multiple accept="image/*">
+      </div>
+      <div class="toolbar">
+        <button id="autoBodyRunFiles" class="btn btn-primary">Обработать файлы</button>
+        <button id="autoBodyOpen" class="btn hidden">Открыть папку</button>
+        <button id="autoBodyStop" class="btn hidden">Остановить</button>
+      </div>
+      <div id="autoBodyProgress" class="auto-face-progress hidden"></div>
+    </div>
+    <div class="table-wrap" id="autoBodyResult"></div>
+  </section>
+
   <section id="tab-automation-barcodes" class="pane">
     <div class="wb-form">
       <p class="hint">Генерация штрихкодов: Code128 (универсальный), EAN-13 (GTIN для карточек WB/Ozon, 12 или 13 цифр) и Data Matrix (Честный знак). Строки длиннее 100 символов рисуются как Data Matrix автоматически. Коды — строго по одному в строке; пробелы, запятые и двоеточия внутри кода сохраняются (важно для кодов маркировки). Файл — txt (построчно) или csv/xlsx (первый столбец). На выходе — ZIP с PNG.</p>
@@ -1321,7 +1349,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=187"></script>
+  <script src="/static/app.js?v=188"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

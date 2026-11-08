@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from app.api._common import *  # noqa: F401,F403
 from app.services import barcodes as barcode_service
+from app.services import body_retouch as body_service
 from app.services import face_retouch as face_service
 from app.services import img_cropper as crop_service
 from app.services import img_foldering as foldering_service
@@ -425,6 +426,77 @@ def automation_face_etalon_delete(etalon_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"deleted": True}
+
+
+# -------------------------------------------------------------- ретушь тела
+
+
+@router.get("/automation/body/options")
+def automation_body_options():
+    """Варианты ретуши тела и настройки по умолчанию для вкладки."""
+    return body_service.options()
+
+
+@router.post("/automation/body/start")
+async def automation_body_start(
+    source_dir: str = Form(""),
+    variant: str = Form(body_service.DEFAULT_VARIANT),
+    match: int = Form(1),
+    files: List[UploadFile] = File(default=[]),
+):
+    """Запускает ретушь: папка с исходниками и/или загруженные фото."""
+    uploads: list[tuple[str, bytes]] = []
+    for upf in files or []:
+        data = await upf.read()
+        if data:
+            uploads.append((upf.filename or "image.jpg", data))
+    try:
+        return body_service.start_job(
+            source_dir=source_dir, variant=variant, match=bool(match),
+            uploads=uploads)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/automation/body/state/{job_id}")
+def automation_body_state(job_id: int):
+    st = body_service.job_state(job_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    return st
+
+
+@router.get("/automation/body/zip/{job_id}")
+def automation_body_zip(job_id: int):
+    st = body_service.job_state(job_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    if st.get("status") != "done":
+        raise HTTPException(status_code=409,
+                            detail=st.get("error") or "Архив ещё не готов")
+    path = body_service.zip_path(job_id)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=410, detail="Файл архива недоступен")
+    return FileResponse(path, media_type="application/zip",
+                        filename=st["filename"])
+
+
+@router.post("/automation/body/stop/{job_id}")
+def automation_body_stop(job_id: int):
+    if body_service.job_state(job_id) is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    return {"stopped": body_service.stop_job(job_id)}
+
+
+@router.post("/automation/body/open/{job_id}")
+def automation_body_open(job_id: int):
+    """Открыть папку с результатом (режим «папка с исходниками»)."""
+    if body_service.job_state(job_id) is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    if not body_service.open_folder(job_id):
+        raise HTTPException(status_code=409, detail="Папка с результатом недоступна")
+    return {"opened": True}
+
 
 
 # ------------------------------------------------------------------ штрихкоды
