@@ -386,6 +386,11 @@
        "def": true
       },
       {
+       "k": "stock",
+       "label": "Остаток, шт",
+       "def": true
+      },
+      {
        "k": "revenue",
        "label": "Реализовано",
        "def": true
@@ -5828,6 +5833,10 @@
    {
     "k": "returns_qty",
     "label": "Возвращено, шт"
+   },
+   {
+    "k": "stock",
+    "label": "Остаток, шт"
    },
    {
     "k": "revenue",

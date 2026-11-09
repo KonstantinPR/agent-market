@@ -986,6 +986,60 @@ def _redistribute_articleless(rows, cells, fields, weight_idx=(6, 7)):
                 c[idx] += total * weights[a] / total_w
 
 
+def _wb_stock_by_article(db, date_to=None):
+    """Остатки WB на последнем срезе <= date_to: {UPPER(article): (шт, артикул)}.
+
+    Берётся последний срез stocks (quantity > 0), количество суммируется по
+    складам и размерам. У части кабинетов в stocks.article лежит nmID, а не
+    артикул продавца — такие ключи резолвятся через per-cabinet nm_articles.
+    Числовые ключи без карточки пропускаются: иначе в свод попадали бы
+    безымянные строки-идентификаторы. Вторым значением возвращается артикул
+    в исходном регистре (nm_articles/stock) для отображения.
+    """
+    mp = db.execute(
+        select(models.Marketplace.id).where(models.Marketplace.code == "wb")
+    ).scalar_one_or_none()
+    if mp is None:
+        return {}
+    q = select(func.max(models.Stock.date)).where(
+        models.Stock.marketplace_id == mp)
+    if date_to is not None:
+        q = q.where(models.Stock.date <= date_to)
+    snap = db.execute(q).scalar_one_or_none()
+    if snap is None:
+        return {}
+    nm_map = {
+        _s(nm).upper(): _s(art)
+        for nm, art in db.execute(
+            select(models.NmArticle.nm_id, models.NmArticle.article))
+        if _s(nm) and _s(art)
+    }
+    out: dict = {}
+    for art, qty in db.execute(
+        select(models.Stock.article, func.sum(models.Stock.quantity))
+        .where(models.Stock.marketplace_id == mp,
+               models.Stock.date == snap,
+               models.Stock.quantity > 0)
+        .group_by(models.Stock.article)
+    ):
+        raw = _s(art)
+        if not raw:
+            continue
+        mapped = nm_map.get(raw.upper())
+        if mapped is None and raw.isdigit():
+            continue
+        shown = mapped or raw
+        key = shown.strip().upper()
+        n = int(qty or 0)
+        if n <= 0:
+            continue
+        if key in out:
+            out[key] = (out[key][0] + n, out[key][1])
+        else:
+            out[key] = (n, shown)
+    return out
+
+
 def detail_summary_dataframe(
     db,
     date_from=None,
@@ -1000,11 +1054,16 @@ def detail_summary_dataframe(
     из wb_detail_rows (операции). Возврат вычитает кол-во/выручку/комиссию/
     «к перечислению»; расходы WB (логистика, хранение, услуги) всегда
     остаются расходами. Полезно для выгрузки «как в отчёте» без аналитики.
+
+    Дополнительно в свод всегда попадают артикулы с остатком WB > 0 на конец
+    периода, даже если за окно по ним не было операций: деньги у них нулевые,
+    колонка «Остаток, шт» показывает количество. Такие строки участвуют в
+    распределении безартикульных плат «Хранение» (они и занимают склады).
     """
-    cols = ["article", "title", "sells", "returns_qty", "revenue", "commission",
-            "for_pay", "logistics", "delivery_count", "return_delivery_count",
-            "storage", "pvz_compensation", "payment_services", "services",
-            "ops_count", "sources"]
+    cols = ["article", "title", "sells", "returns_qty", "stock", "revenue",
+            "commission", "for_pay", "logistics", "delivery_count",
+            "return_delivery_count", "storage", "pvz_compensation",
+            "payment_services", "services", "ops_count", "sources"]
     out = pd.DataFrame(columns=cols)
     q = select(models.WbDetailRow)
     if date_from:
@@ -1012,8 +1071,6 @@ def detail_summary_dataframe(
     if date_to:
         q = q.where(models.WbDetailRow.sale_dt <= date_to)
     rows = list(db.execute(q).scalars().all())
-    if not rows:
-        return out
 
     # Фильтр поиска применяется только к выводу (см. like_re): распределение
     # безартикульных расходов и хранения не пересчитывается под фильтр, доли
@@ -1021,18 +1078,21 @@ def detail_summary_dataframe(
     art_check = like_re(article_like)
 
     cells: dict = {}
+    display: dict = {}
     titles: dict = {}
     for r in rows:
-        art = r.article
+        art = _s(r.article)
         if not art or r.sale_dt is None:
             continue
+        key = art.strip().upper()
         is_ret = _is_return_row(r.doc_type_name)
         sign = -1 if is_ret else 1
         qty = r.quantity if _is_goods_row(
             r.doc_type_name, r.retail_amount, r.for_pay) else 0
-        if art not in cells:
-            cells[art] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0, set()]
-        c = cells[art]
+        if key not in cells:
+            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0, set()]
+            display.setdefault(key, art)
+        c = cells[key]
         c[0] += qty * sign                     # sells (нетто)
         c[1] += qty if is_ret else 0           # returns_qty
         c[2] += float(r.retail_amount or 0) * sign   # revenue
@@ -1049,7 +1109,28 @@ def detail_summary_dataframe(
         c[12] += 1                                # ops_count
         c[13].add(str(r.source or ""))
         if (r.title or "").strip():
-            titles.setdefault(art, str(r.title).strip())
+            titles.setdefault(key, str(r.title).strip())
+
+    # Артикулы с остатком WB > 0 показываем всегда, даже без операций за окно.
+    # Добавляем их до распределения хранения, чтобы они участвовали в весах
+    # «объём × тариф × остаток»; безартикульные расходы (доставка/услуги) им
+    # не достаются — там вес считается по продажам/доставкам.
+    stock_map = _wb_stock_by_article(db, date_to)
+    for key, (qty, shown) in stock_map.items():
+        display.setdefault(key, shown)
+        if key not in cells:
+            cells[key] = [0, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0, set()]
+    if not cells:
+        return out
+    if stock_map:
+        for art, name in db.execute(
+            select(models.Product.article, models.Product.name).where(
+                func.upper(models.Product.article).in_(list(stock_map)))
+        ):
+            k = _s(art).upper()
+            n = _s(name)
+            if k in stock_map and n and not titles.get(k):
+                titles[k] = n
 
     # Безартикульные расходы (логистика, услуги, компенсации ПВЗ и др.)
     # распределяются пропорционально весу статьи (delivery_count +
@@ -1073,22 +1154,24 @@ def detail_summary_dataframe(
         db,
         date_from=date_from,
         date_to=date_to,
-        target_articles={(a or "").strip().upper() for a in cells},
+        target_articles=set(cells),
     )
 
     recs = []
-    for art, c in cells.items():
+    for key, c in cells.items():
+        art = display.get(key, key)
         if art_check is not None and art_check.search(art) is None:
             continue
-        if articles is not None and str(art).strip().upper() not in articles:
+        if articles is not None and key not in articles:
             continue
         (sells, returns_qty, revenue, commission, for_pay, logistics,
          delivery_count, return_delivery_count, storage, pvz_compensation,
          payment_services, services, ops, srcs) = c
-        storage = storage + storage_est_map.get(art.strip().upper(), 0.0)
+        storage = storage + storage_est_map.get(key, 0.0)
         recs.append({
-            "article": art, "title": titles.get(art, ""),
+            "article": art, "title": titles.get(key, ""),
             "sells": sells, "returns_qty": returns_qty,
+            "stock": stock_map.get(key, (0, ""))[0],
             "revenue": round(revenue, 2), "commission": round(commission, 2),
             "for_pay": round(for_pay, 2), "logistics": round(logistics, 2),
             "delivery_count": delivery_count, "return_delivery_count": return_delivery_count,
@@ -1099,7 +1182,8 @@ def detail_summary_dataframe(
             "sources": ",".join(sorted(s for s in srcs if s)),
         })
     out = pd.DataFrame(recs, columns=cols)
-    out = out.sort_values("for_pay", ascending=False).reset_index(drop=True)
+    out = out.sort_values(["for_pay", "stock"], ascending=[False, False]
+                          ).reset_index(drop=True)
     return out
 
 

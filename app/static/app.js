@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "189";
+const UI_VERSION = "190";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3139,10 +3139,11 @@ const wbDetailRowHeaders = [
 ];
 
 const wbDetailSummaryHeaders = [
-  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца из детализации. Безартикульные строки (платы без товара) в свод не попадают."},
-  { k: "title", label: "Наименование", render: cellFmts.text , tip: "Название товара из строк детализации — первое непустое по артикулу за окно."},
+  { k: "article", label: "Артикул", render: cellFmts.text , tip: "Артикул продавца из детализации; дополнительно показаны все артикулы с остатком WB > 0 на конец периода. Безартикульные строки (платы без товара) в свод не попадают."},
+  { k: "title", label: "Наименование", render: cellFmts.text , tip: "Название товара из строк детализации — первое непустое по артикулу за окно; для артикулов только с остатком — из каталога."},
   { k: "sells", label: "Продано, шт", num: true, render: cellFmts.int , tip: "Нетто в штуках: товарные строки «Продажа» минус строки «Возврат». Служебные строки (логистика, хранение) не считаются."},
   { k: "returns_qty", label: "Возвращено, шт", num: true, render: cellFmts.int , tip: "Сумма количества по строкам, у которых тип операции — возврат (поиск подстроки «возврат»/«return»)."},
+  { k: "stock", label: "Остаток, шт", num: true, render: cellFmts.int , tip: "Остаток WB («Доступно») на последнем срезе ≤ конца периода. Артикулы без операций за период показаны с нулевыми деньгами и участвуют в распределении хранения."},
   { k: "revenue", label: "Реализовано", num: true, render: cellFmts.money , tip: "Σ «Вайлдберриз реализовал Товар (Пр)» по строкам артикула; строки-возвраты вычитаются обратным знаком."},
   { k: "commission", label: "Комиссия", num: true, render: cellFmts.money , tip: "Σ комиссии WB (КВВ, ppvzSalesCommission) по артикулу; возвраты вычитаются. В базе значения отрицательные."},
   { k: "for_pay", label: "К перечислению", num: true, render: cellFmts.money , tip: "Σ «К перечислению» по строкам артикула, возвраты вычитаются. Свод отсортирован по этой сумме (по убыванию)."},
@@ -8807,6 +8808,7 @@ async function renderWbDetail() {
       if (msg) {
         const zeroWhy = (data.rows && data.rows.length) ? "" : artsEmptyReason(q, data.articles);
         let m = zeroWhy || ("По артикулам: " + fmt(data.count || 0));
+        if (data.stock_only) m += " · только с остатком: " + fmt(data.stock_only);
         if (data.articles) m += " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens);
         if (data.prev_window) m += " · сравнение с " + data.prev_window.date_from + ".." + data.prev_window.date_to;
         msg.textContent = m;

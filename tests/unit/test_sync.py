@@ -525,15 +525,17 @@ def test_detail_summary_dataframe_aggregates_by_article(db):
     upsert_wb_detail_rows(db, rows.iloc[:2], source="excel")
     upsert_wb_detail_rows(db, rows.iloc[2:], source="api")
     out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
-    assert list(out.columns) == ["article", "title", "sells", "returns_qty", "revenue",
-                                  "commission", "for_pay", "logistics", "delivery_count",
-                                  "return_delivery_count", "storage", "pvz_compensation",
-                                  "payment_services", "services", "ops_count", "sources"]
+    assert list(out.columns) == ["article", "title", "sells", "returns_qty", "stock",
+                                  "revenue", "commission", "for_pay", "logistics",
+                                  "delivery_count", "return_delivery_count", "storage",
+                                  "pvz_compensation", "payment_services", "services",
+                                  "ops_count", "sources"]
     by = {r["article"]: r for r in out.to_dict("records")}
     a1 = by["A1"]
     # нетто-продажи = 2 − 1, возвраты отдельным счётчиком
     assert a1["sells"] == 1
     assert a1["returns_qty"] == 1
+    assert a1["stock"] == 0
     assert a1["revenue"] == 1000.0
     assert a1["for_pay"] == 900.0
     assert a1["commission"] == 100.0
@@ -546,6 +548,42 @@ def test_detail_summary_dataframe_aggregates_by_article(db):
     assert a2["sells"] == 1
     assert a2["ops_count"] == 1
     assert a2["sources"] == "api"
+
+
+def test_detail_summary_adds_stock_articles_without_ops(db):
+    """В свод попадают артикулы с остатком WB > 0, даже без операций за окно.
+
+    Остатки у ООО приходят с nmID в article — резолвим через nm_articles;
+    числовые ключи без карточки не добавляем. Дедуп по UPPER(article):
+    строки детализации в нижнем регистре не создают вторую строку.
+    """
+    upsert_wb_detail_rows(db, pd.DataFrame([
+        {"op_key": "sr:s1", "article": "A1", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-01"), "quantity": 1,
+         "retail_amount": 1000.0, "for_pay": 900.0},
+        {"op_key": "sr:s2", "article": "s2", "doc_type_name": "Продажа",
+         "sale_dt": pd.Timestamp("2026-09-02"), "quantity": 1,
+         "retail_amount": 500.0, "for_pay": 450.0},
+    ]), source="excel")
+    db.add_all([
+        models.Product(article="S2", name="Товар S2 из каталога"),
+        models.NmArticle(nm_id="777", article="S3"),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 8), article="A1", quantity=10),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 8), article="S2", quantity=3),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 8), article="777", quantity=4),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 8), article="1999", quantity=7),
+    ])
+    db.commit()
+    out = detail_summary_dataframe(db, date_from="2026-09-01", date_to="2026-09-10")
+    by = {str(r["article"]).upper(): r for r in out.to_dict("records")}
+    assert set(by) == {"A1", "S2", "S3"}  # «1999» без карточки не добавлен
+    assert by["S2"]["stock"] == 3
+    assert by["S2"]["ops_count"] == 1  # дедуп с детализацией в нижнем регистре
+    assert by["S2"]["title"] == "Товар S2 из каталога"
+    assert by["A1"]["stock"] == 10
+    assert by["S3"]["stock"] == 4
+    assert by["S3"]["ops_count"] == 0
+    assert by["S3"]["for_pay"] == 0.0
 
 
 def test_detail_summary_includes_storage_estimate(db):

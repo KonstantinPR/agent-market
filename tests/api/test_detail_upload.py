@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import zipfile
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -642,3 +643,29 @@ def test_detail_summary_new_fields(api_client):
     assert t["revenue"] == 2000.0
     assert t["delivery_count"] == 0
     assert t["pvz_compensation"] == 0.0
+    assert row["stock"] == 0
+    assert body.get("stock_only", 0) == 0
+
+
+def test_detail_summary_includes_stock_only_article(api_client, db):
+    """Свод показывает артикул с остатком WB, у которого не было операций."""
+    df = pd.DataFrame([
+        {"Srid": "sr-s1", "Артикул поставщика": "NS1",
+         "Дата продажи": "2026-09-05", "Кол-во": 1,
+         "Вайлдберриз реализовал Товар (Пр)": 1000.0,
+         "К перечислению Продавцу за реализованный Товар": 900.0},
+    ])
+    api_client.post("/api/wb/detail-upload", files={"files": ("d.xlsx", _xlsx(df), XLSX)})
+    db.add(models.Stock(marketplace_id=1, date=date(2026, 9, 9),
+                        article="NS2", quantity=4))
+    db.commit()
+    r = api_client.get("/api/wb/detail-summary",
+                       params={"date_from": "2026-09-01", "date_to": "2026-09-10"})
+    assert r.status_code == 200
+    body = r.json()
+    rows = {row["article"]: row for row in body["rows"]}
+    assert rows["NS2"]["stock"] == 4
+    assert rows["NS2"]["ops_count"] == 0
+    assert rows["NS2"]["for_pay"] == 0.0
+    assert body["stock_only"] == 1
+    assert body["totals"]["stock"] == 4

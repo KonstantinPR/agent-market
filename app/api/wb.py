@@ -431,6 +431,9 @@ def api_wb_detail_summary(
         "count": len(df),
         "totals": _df_totals(df),
     }
+    if len(df):
+        # Артикулы, попавшие в свод только по остатку (операций за окно нет).
+        resp["stock_only"] = int(((df["stock"] > 0) & (df["ops_count"] == 0)).sum())
     if prev_window:
         resp["prev_window"] = prev_window
     if tokens:
