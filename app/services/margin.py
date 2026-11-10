@@ -328,12 +328,15 @@ DETAIL_MARGIN_COLUMNS = [
 
 
 def _wb_stock_map(db: Session, date_to) -> dict:
-    """Остатки WB на конец окна: {UPPER(article): (quantity, quantity_full, in_way)}.
+    """Остатки WB на конец окна: {UPPER(article): (quantity, quantity_full, in_way, article)}.
 
     Срез стоков — последняя дата <= date_to (строки «ВБ Остатки» по дням);
     если такого среза нет — возвращается {} (нули в колонках). Количество
     суммируется по всем складам и chrt_id артикула (в детализации продаж
-    артикул уже агрегирован).
+    артикул уже агрегирован). У части кабинетов в stocks.article лежит nmID,
+    а не артикул продавца — такие ключи резолвятся через per-cabinet
+    nm_articles; числовые ключи без карточки пропускаются, иначе в таблицу
+    попадали бы безымянные строки-идентификаторы.
     """
     if isinstance(date_to, str):
         date_to = date.fromisoformat(date_to)
@@ -346,6 +349,12 @@ def _wb_stock_map(db: Session, date_to) -> dict:
     )
     if snap is None:
         return {}
+    nm_map = {
+        str(nm).strip().upper(): str(art).strip()
+        for nm, art in db.execute(
+            select(models.NmArticle.nm_id, models.NmArticle.article))
+        if str(nm or "").strip() and str(art or "").strip()
+    }
     out: dict = {}
     q = (
         select(
@@ -358,9 +367,22 @@ def _wb_stock_map(db: Session, date_to) -> dict:
         .group_by(models.Stock.article)
     )
     for art, qty, full, way in db.execute(q):
-        a = (art or "").strip().upper()
-        if a:
-            out[a] = (int(qty or 0), int(full or 0), int(way or 0))
+        raw = str(art or "").strip()
+        if not raw:
+            continue
+        mapped = nm_map.get(raw.upper())
+        if mapped is None and raw.isdigit():
+            continue
+        shown = mapped or raw
+        a = shown.strip().upper()
+        if not a:
+            continue
+        n = (int(qty or 0), int(full or 0), int(way or 0))
+        if a in out:
+            prev = out[a]
+            out[a] = (prev[0] + n[0], prev[1] + n[1], prev[2] + n[2], prev[3])
+        else:
+            out[a] = (n[0], n[1], n[2], shown)
     return out
 
 
@@ -419,25 +441,30 @@ def margin_detail_dataframe(
     if date_to:
         q = q.where(models.WbDetailRow.sale_dt <= date_to)
     rows = list(db.execute(q).scalars().all())
-    if not rows:
-        return out
 
     # Фильтр поиска применяется только к выводу (см. like_re): распределение
     # безартикульных плат «Хранение», логистики и услуг не пересчитывается под
     # фильтр в строке поиска — доли считаются по всему окну периода.
     art_check = like_re(article_like)
 
+    # Остатки WB на конец окна: последний срез стоков <= date_to. Артикулы с
+    # остатком/в пути показываем всегда, даже без операций за окно (деньги у
+    # них нулевые), иначе итоги «Остаток, шт»/«В пути, шт» считались только по
+    # проданным артикулам и были в разы меньше реальных остатков склада.
+    stock_map = _wb_stock_map(db, date_to=date_to) if date_to else {}
+
     # Распределение безартикульных плат «Хранение» по товарам продаж пропорц.
     # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
     # продажи периода). Распределение идёт внутри артикулов окна (target_articles):
     # 100% платы разносится по видимым строкам детализации. Артикулы без объёма в
     # storage_costs получают fallback-вес по среднему объёму — иначе почти 60%
-    # проданных товаров уходили с «Хранением» = 0.
+    # проданных товаров уходили с «Хранением» = 0. Артикулы только с остатком
+    # тоже занимают склад и участвуют в распределении.
     target_articles = {
         (r.article or "").strip().upper()
         for r in rows
         if (r.article or "").strip() and r.sale_dt is not None
-    }
+    } | set(stock_map)
     storage_est = storage_split(
         db,
         date_from=date_from,
@@ -445,13 +472,11 @@ def margin_detail_dataframe(
         target_articles=target_articles,
     )
 
-    # Остатки WB на конец окна: последний срез стоков <= date_to.
-    stock_map = _wb_stock_map(db, date_to=date_to) if date_to else {}
-
     # Два запроса вместо OR: по OR Postgres не применяет план к UPPER(...)
     # (Seq Scan + сравнение с массивом ~16k элементов ≈ 9 с на окне 365 дней),
     # раздельные IN отдают тот же набор строк за ~0.2 с.
     arts_up = {(r.article or "").strip().upper() for r in rows if (r.article or "").strip()}
+    arts_up |= set(stock_map)
     skus_up = {(r.sku or "").strip().upper() for r in rows if (r.sku or "").strip()}
     prods = []
     if arts_up:
@@ -491,19 +516,22 @@ def margin_detail_dataframe(
     def is_ret(t) -> bool:
         return "возврат" in str(t or "").lower() or "return" in str(t or "").lower()
     cells: dict = {}
+    display: dict = {}
     titles: dict = {}
     nms: dict = {}
     for r in rows:
-        art = r.article
+        art = str(r.article or "").strip()
         if not art or r.sale_dt is None:
             continue
+        key = art.upper()
+        display.setdefault(key, art)
         nm = (r.nm_id or "").strip()
-        if nm and nm != "0" and art not in nms:
-            nms[art] = nm
+        if nm and nm != "0" and key not in nms:
+            nms[key] = nm
         sign = -1 if is_ret(r.doc_type_name) else 1
-        if art not in cells:
-            cells[art] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        c = cells[art]
+        if key not in cells:
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        c = cells[key]
         qty = r.quantity if _is_goods_row(
             r.doc_type_name, r.retail_amount, r.for_pay) else 0
         c[0] += qty * sign                       # sells
@@ -522,7 +550,31 @@ def margin_detail_dataframe(
         else:
             c[7] += float(r.delivery_service or 0)       # outbound logistics
         if (r.title or "").strip():
-            titles.setdefault(art, str(r.title).strip())
+            titles.setdefault(key, str(r.title).strip())
+
+    # Артикулы с остатком/в пути показываем всегда, даже без операций за окно.
+    # Добавляем их до распределения безартикульных расходов, чтобы остатки
+    # участвовали в весах (логистика/услуги получают вес по продажам, поэтому
+    # нулевые строки им ничего не добавят, а «Хранение» считается отдельно).
+    for key, (qty, full, way, shown) in stock_map.items():
+        display.setdefault(key, shown)
+        if not (qty or full or way):
+            continue
+        if key not in cells:
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    if not cells:
+        return out
+    # nmID для артикулов только с остатком: в строках детализации его нет,
+    # берём из справочника nm_articles (article → nmID).
+    nm_by_article: dict = {}
+    if stock_map:
+        for nm, art in db.execute(
+            select(models.NmArticle.nm_id, models.NmArticle.article)
+        ):
+            a = str(art or "").strip().upper()
+            n = str(nm or "").strip()
+            if a and n and a not in nm_by_article:
+                nm_by_article[a] = n
     # Безартикульные расходы (логистика, услуги) распределяются
     # пропорционально весу статьи (фолбэк abs(sells)) — как storage_split.
     _redistribute_articleless(rows, cells, {
@@ -540,17 +592,18 @@ def margin_detail_dataframe(
         return out
 
     recs = []
-    for art, c in cells.items():
+    for key, c in cells.items():
+        art = display.get(key, key)
         if art_check is not None and art_check.search(art) is None:
             continue
-        if articles is not None and art.strip().upper() not in articles:
+        if articles is not None and key not in articles:
             continue
         (sells, revenue, commission, logistics, storage, services, income,
          logistics_out, logistics_in, returns_qty) = c
         prod = _find_product(art)
         name = (prod.name or "") if prod else ""
         if not name:
-            name = titles.get(art, "")
+            name = titles.get(key, "")
         net_cost = float(prod.net_cost or 0) if prod else 0.0
         if net_cost <= 0:
             net_cost = default_net_cost
@@ -561,7 +614,7 @@ def margin_detail_dataframe(
         prod_supplier = (prod.supplier or "") if prod else ""
         # Хранение: фактическое по артикулу (обычно 0 — платы безартикульные)
         # + распределённая оценка (объём × тариф × остаток).
-        storage_full = storage + storage_est.get(art.strip().upper(), 0.0)
+        storage_full = storage + storage_est.get(key, 0.0)
         margin_gross = round(income - logistics - storage_full - services, 2)
         margin = round(margin_gross - net_cost * max(0, sells), 2)
         margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
@@ -582,9 +635,10 @@ def margin_detail_dataframe(
         margin_gross_per_one = round(margin_gross / _s, 2) if _s else 0.0
         denom = sells + returns_qty
         return_rate = round(returns_qty / denom * 100, 1) if denom > 0 else 0.0
-        st_q, st_f, st_w = stock_map.get(art.strip().upper(), (0, 0, 0))
+        st_q, st_f, st_w, _shown = stock_map.get(key, (0, 0, 0, ""))
         recs.append({
-            "article": art, "nm_id": nms.get(art, ""), "name": name, "sells": sells,
+            "article": art, "nm_id": nms.get(key) or nm_by_article.get(key, ""),
+            "name": name, "sells": sells,
             "returns_qty": returns_qty,
             "stock_qty": st_q, "stock_total": st_f, "stock_in_way": st_w,
             "revenue": round(revenue, 2),
@@ -611,8 +665,16 @@ def margin_detail_dataframe(
             "margin_gross_per_one": margin_gross_per_one,
             "return_rate": return_rate,
         })
-    out = pd.DataFrame(recs, columns=DETAIL_MARGIN_COLUMNS).sort_values(
-        "margin", ascending=False).reset_index(drop=True)
+    out = pd.DataFrame(recs, columns=DETAIL_MARGIN_COLUMNS)
+    if not out.empty:
+        # Строки с операциями — по убыванию маржи, артикулы только с остатком
+        # (нулевые деньги) — в конце, по остатку: они информационные и не
+        # должны раздвигать реальные продажи с отрицательной маржой.
+        out["_active"] = ((out["sells"] != 0) | (out["revenue"] != 0)
+                          | (out["income"] != 0)).astype(int)
+        out = out.sort_values(
+            ["_active", "margin", "stock_qty"], ascending=[False, False, False]
+        ).drop(columns="_active").reset_index(drop=True)
     return out
 
 

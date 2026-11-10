@@ -352,6 +352,67 @@ def test_margin_detail_stock_columns(db):
     assert b2["stock_in_way"] == 0
 
 
+def test_margin_detail_includes_stock_only_articles(db):
+    """Артикулы с остатком/в пути без операций за окно видны в детализации.
+
+    Итоги «Остаток, шт»/«В пути, шт» должны считаться по всем остаткам склада,
+    а не только по проданным артикулам (иначе KPI занижен в разы).
+    """
+    db.add_all([
+        models.Product(article="S1", name="Сток без продаж", net_cost=100.0),
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 4),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 4), article="A1",
+                     warehouse="WH1", chrt_id="1", quantity=2,
+                     quantity_full=2, in_way=1),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 4), article="S1",
+                     warehouse="WH1", chrt_id="2", quantity=5,
+                     quantity_full=5, in_way=3),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 4), article="ONLYWAY",
+                     warehouse="WH1", chrt_id="3", quantity=0,
+                     quantity_full=0, in_way=4),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(db, date_from=date(2026, 9, 1),
+                                  date_to=date(2026, 9, 5))
+    by = {r["article"]: r for r in out.to_dict("records")}
+    assert set(by) == {"A1", "S1", "ONLYWAY"}
+    assert by["S1"]["sells"] == 0 and by["S1"]["margin"] == 0.0
+    assert by["S1"]["name"] == "Сток без продаж"
+    assert by["S1"]["stock_qty"] == 5 and by["S1"]["stock_in_way"] == 3
+    assert by["ONLYWAY"]["stock_qty"] == 0 and by["ONLYWAY"]["stock_in_way"] == 4
+    assert int(out["stock_qty"].sum()) == 7
+    assert int(out["stock_in_way"].sum()) == 8
+    # Реальные продажи идут первыми, стоковые строки — в конце.
+    assert out.iloc[0]["article"] == "A1"
+
+
+def test_margin_detail_resolves_nmid_stock_and_skips_unknown_numeric(db):
+    """nmID в stocks.article резолвится в артикул; числовой ключ без карточки
+    не добавляет безымянную строку."""
+    db.add_all([
+        models.NmArticle(nm_id="111", article="NM-ART"),
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 4),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 4), article="111",
+                     warehouse="WH1", chrt_id="1", quantity=6,
+                     quantity_full=6, in_way=0),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 4), article="999",
+                     warehouse="WH1", chrt_id="2", quantity=7,
+                     quantity_full=7, in_way=0),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(db, date_from=date(2026, 9, 1),
+                                  date_to=date(2026, 9, 5))
+    arts = set(out["article"])
+    assert "NM-ART" in arts and "999" not in arts and "111" not in arts
+    row = out[out["article"] == "NM-ART"].iloc[0]
+    assert row["stock_qty"] == 6
+    assert row["nm_id"] == "111"
+
+
 def test_margin_detail_stock_no_snapshot_in_window(db):
     """Окно раньше первого среза стоков → остатки 0, без падений."""
     db.add_all([

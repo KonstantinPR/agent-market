@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "190";
+const UI_VERSION = "191";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -3792,6 +3792,8 @@ async function renderMarginDetail(p) {
   }
   const artsMsg = (data.articles && data.articles.tokens)
     ? " · по списку: " + fmt(data.articles.matched) + "/" + fmt(data.articles.tokens) : "";
+  const stockMsg = data.stock_only
+    ? " · только с остатком: " + fmt(data.stock_only) : "";
   if ((data.rows || []).length === 0) {
     const zeroWhy = artsEmptyReason(tabLike("marginDetailLike"), data.articles);
     setStatus(zeroWhy
@@ -3800,7 +3802,7 @@ async function renderMarginDetail(p) {
         "Запрос редкий (1 в ~12 ч), отчёт формируется на вчерашний день." + tail + artsMsg);
     return;
   }
-  setStatus("Строк: " + fmt((data.rows || []).length) + tail + artsMsg);
+  setStatus("Строк: " + fmt((data.rows || []).length) + stockMsg + tail + artsMsg);
 }
 
 async function renderMarginOzonDetail(p) {

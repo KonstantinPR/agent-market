@@ -174,6 +174,11 @@ def api_margin_detail(
         "compare_meta": cmp_meta,
         "totals": totals,
     }
+    if not df.empty:
+        # Артикулы, попавшие в таблицу только по остатку (операций за окно нет).
+        zero_ops = (df["sells"] == 0) & (df["revenue"] == 0) & (df["income"] == 0)
+        in_stock = (df["stock_qty"] != 0) | (df["stock_in_way"] != 0)
+        payload["stock_only"] = int((zero_ops & in_stock).sum())
     if tokens:
         unmatched = [t for t in tokens if t.upper() not in matched]
         payload["articles"] = {
