@@ -116,7 +116,8 @@ def api_margin_detail(
 
     compare_fields + compare_periods — мультивыбор «Сравнения»: выбранные поля
     (см. ``margin_service.MARGIN_CMP_FIELDS``) за до 3 периодов. compare_periods:
-    ``prev``, ``last_year``, ``year:2025``, ``custom:2025-03-01:2025-03-31``.
+    ``prev``, ``prev365``, ``last_year``, ``year:2025``,
+    ``custom:2025-03-01:2025-03-31``.
     Колонки ``cmp<N>_<field>``, метаданные — в ``compare_meta``.
 
     links=id,id,… — сравнение между WB-связками: строки из всех связок сводятся
@@ -456,7 +457,7 @@ def api_margin_funnel(
     compare_fields + compare_periods — мультивыбор «Сравнения»: выбранные поля
     (см. ``funnel.FUNNEL_CMP_FIELDS``) за до 3 периодов. ``prev`` берётся из
     past-блока показанного среза (маркетплейс сам считает предыдущее окно),
-    ``last_year``/``year:YYYY``/``custom:FROM:TO`` — только из сохранённых
+    ``prev365``/``last_year``/``year:YYYY``/``custom:FROM:TO`` — только из сохранённых
     срезов. Колонки ``cmp<N>_<field>``, метаданные — в ``compare_meta``;
     недоступный период помечается ``available=false``.
 
