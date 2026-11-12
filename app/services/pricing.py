@@ -891,6 +891,24 @@ def recommendations(
     # Товар с нулевым складом, но идущий «в пути» — живой: не прячем как мёртвый.
     has_life |= {a for a, v in in_way.items() if _num(v) > 0}
 
+    # Область по умолчанию: товары с движением за последние 2 года видны в
+    # автопилоте даже без сигналов текущего окна. «Живыми» они при этом не
+    # становятся — решение по ним принимает _decide_dead (мёртвый запас).
+    movement_2y: set = set()
+    for (art,) in db.execute(
+        select(models.WbDetailRow.article)
+        .where(
+            models.WbDetailRow.article != "",
+            models.WbDetailRow.sale_dt.isnot(None),
+            models.WbDetailRow.sale_dt >= today - timedelta(days=730),
+        )
+        .distinct()
+    ):
+        a = str(art or "").strip().upper()
+        if a:
+            movement_2y.add(a)
+    visible = has_life | movement_2y
+
     show_zero = bool(s["show_zero"])
     use_season = bool(s.get("use_season", True))
     use_sales = bool(s.get("use_sales", True))
@@ -904,7 +922,7 @@ def recommendations(
         if nm_id is None:
             non_wb += 1
             continue
-        if art not in has_life and not show_zero:
+        if art not in visible and not show_zero:
             hidden_dead += 1
             continue
         if nm_id not in prices:

@@ -1164,3 +1164,63 @@ def test_funnel_cmp_fields_match_frontend():
     keys = re.findall(r'k:\s*"([^"]+)"', block.group(1))
     assert keys == list(FUNNEL_CMP_FIELDS)
 
+
+def test_margin_detail_universe_includes_two_year_movement(db):
+    """Область по умолчанию: артикул с движением за 2 года, но без операций
+    в выбранном окне, попадает в детализацию нулевой строкой."""
+    db.add_all([
+        models.Product(article="OLD1", name="Давний товар", net_cost=100.0),
+        models.WbDetailRow(op_key="sr:old", source="excel", article="OLD1",
+                           doc_type_name="Продажа", sale_dt=date(2025, 1, 10),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0),
+        models.WbDetailRow(op_key="sr:new", source="excel", article="NEW1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 4),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(
+        db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5),
+        include_universe=True)
+    by = {r["article"]: r for r in out.to_dict("records")}
+    assert set(by) == {"OLD1", "NEW1"}
+    assert by["OLD1"]["sells"] == 0 and by["OLD1"]["revenue"] == 0.0
+    assert by["OLD1"]["name"] == "Давний товар"
+    # Без флага — прежняя область: только движение выбранного окна.
+    only = margin_detail_dataframe(
+        db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 5))
+    assert set(only["article"]) == {"NEW1"}
+
+
+def test_funnel_universe_includes_two_year_movement(db):
+    """Область по умолчанию воронки: движение за 2 года без метрик среза."""
+    db.add(models.Product(article="OLD1", name="Давний товар", net_cost=0.0))
+    db.add(_funnel_row())
+    db.add(models.WbDetailRow(
+        op_key="sr:old", source="excel", article="OLD1",
+        doc_type_name="Продажа", sale_dt=date(2025, 1, 10),
+        quantity=1, retail_amount=1000.0, for_pay=900.0))
+    db.commit()
+    df = funnel_dataframe(
+        db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 10),
+        include_universe=True)
+    rows = {r["article"]: r for r in df.to_dict("records")}
+    assert "OLD1" in rows
+    assert rows["OLD1"]["orders"] == 0 and rows["OLD1"]["name"] == "Давний товар"
+    # Строка с активностью среза идёт выше нулевой строки области.
+    assert df.iloc[0]["article"] == "A1"
+    only = funnel_dataframe(
+        db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 10))
+    assert "OLD1" not in set(only["article"])
+
+
+def test_resolve_compare_periods_prev365():
+    """prev365 — 365 дней непосредственно перед текущим окном."""
+    from app.api._common import resolve_compare_periods
+
+    periods = resolve_compare_periods("2026-09-01", "2026-09-10", "prev365")
+    assert len(periods) == 1
+    p = periods[0]
+    assert p["mode"] == "prev365"
+    assert (p["date_from"], p["date_to"]) == ("2025-09-01", "2026-08-31")
+    assert p["short"] == "365 дн. до"
+

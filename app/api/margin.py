@@ -26,6 +26,7 @@ def _wb_detail_payload(db, from_, to_, article_like, compare, compare_window, ow
     df = margin_service.margin_detail_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like,
         default_net_cost=settings.default_net_cost, articles=arts,
+        include_universe=True,
     )
     prev_window = None
     cmp_meta = None
@@ -480,7 +481,7 @@ def api_margin_funnel(
         owner = cabinet_service.link_owner(db, info) if info is not None else ""
         df = margin_service.funnel_dataframe(
             db, date_from=from_, date_to=to_, article_like=article_like,
-            articles=arts,
+            articles=arts, include_universe=True,
         )
         cmp_meta = None
         if cmp_periods and cmp_fields:

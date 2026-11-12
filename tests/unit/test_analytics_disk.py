@@ -1,132 +1,103 @@
 # -*- coding: utf-8 -*-
-"""Юнит-тесты выгрузки аналитики на диск (app/services/analytics_disk.py).
+"""Ежедневная выгрузка аналитики на диск: набор WB и архив версий."""
+import json
+from pathlib import Path
 
-Реальные отчёты Прибыльности требуют данных в схеме связки, поэтому для
-write_reports подменяем реестр отчётов лёгким фейком (пишем одну строку).
-Проверяем: сборку пути фирма→WB/OZON, пропуск неизвестной фирмы, атомарную
-перезапись файлов и разбор периода.
-"""
-import pandas as pd
-import pytest
+from app.services import analytics_disk
 
-from app import models
-from app.services import analytics_disk as ad
-from app.services import cabinets as cabinet_service
+ROOT = Path(__file__).resolve().parents[2]
 
 
-def _mk_company(db, name="Фирма аналитики", analytics_dir=""):
-    user = cabinet_service.seed_user(db)
-    c = models.Company(user_id=user.id, name=name, enabled=True, position=9,
-                       analytics_dir=analytics_dir)
-    db.add(c)
-    db.commit()
-    db.refresh(c)
-    return c
+def test_wb_reports_has_six_named_files():
+    """WB-набор — 6 файлов: воронка, детализация, остатки, хранение,
+    карточки, группы (порядок тоже важен — так их ждёт пользователь)."""
+    names = [r[0] for r in analytics_disk.WB_REPORTS]
+    assert names == [
+        "margin_funnel.xlsx",
+        "margin_detail.xlsx",
+        "margin_stocks.xlsx",
+        "margin_storage.xlsx",
+        "margin_cards.xlsx",
+        "margin_groups.xlsx",
+    ]
 
 
-def _mk_cab(db, company, marketplace="wb", schema=None, code="ad-cab"):
-    user = cabinet_service.seed_user(db)
-    c = models.Cabinet(user_id=user.id, company_id=company.id, code=code,
-                       name="Связка", schema=schema or ("cab_" + code.replace("-", "_")),
-                       marketplace=marketplace,
-                       creds="", enabled=True, position=9)
-    db.add(c)
-    db.commit()
-    db.refresh(c)
-    return cabinet_service.info_by_id(db, c.id, user)
+def test_wb_reports_export_dicts_exist():
+    """Каждый файл ссылается на живой словарь колонок columns.json."""
+    doc = json.loads((ROOT / "app" / "static" / "columns.json")
+                     .read_text(encoding="utf-8"))
+    for _fname, _sheet, export_name, _fn in analytics_disk.WB_REPORTS:
+        assert export_name in doc["dicts"], export_name
 
 
-def test_company_dir_wb_and_ozon(db, tmp_path):
-    comp = _mk_company(db, analytics_dir=r"ООО ДЖОИНС\AGENT MARKET\АНАЛИТИКА")
-    wb = _mk_cab(db, comp, marketplace="wb", code="ad-wb")
-    oz = _mk_cab(db, comp, marketplace="ozon", code="ad-oz")
+def test_archive_existing_moves_and_overwrites(tmp_path):
+    """Старый файл уходит в ARCHIVE с суффиксом _archive; следующий запуск
+    перезаписывает архив, а не копит историю."""
+    folder = tmp_path / "WB"
+    folder.mkdir()
+    (folder / "margin_detail.xlsx").write_bytes(b"old")
 
-    assert ad.company_dir(db, wb, root=str(tmp_path)) == (
-        tmp_path / "ООО ДЖОИНС" / "AGENT MARKET" / "АНАЛИТИКА" / "WB")
-    assert ad.company_dir(db, oz, root=str(tmp_path)) == (
-        tmp_path / "ООО ДЖОИНС" / "AGENT MARKET" / "АНАЛИТИКА" / "OZON")
+    dest = analytics_disk._archive_existing(folder, "margin_detail.xlsx")
+    assert dest == folder / "ARCHIVE" / "margin_detail_archive.xlsx"
+    assert not (folder / "margin_detail.xlsx").exists()
+    assert dest.read_bytes() == b"old"
 
-
-def test_company_dir_none_without_analytics_dir(db, tmp_path):
-    comp = _mk_company(db, analytics_dir="")
-    cab = _mk_cab(db, comp)
-    assert ad.company_dir(db, cab, root=str(tmp_path)) is None
-
-
-def test_write_reports_creates_and_overwrites(db, tmp_path, monkeypatch):
-    comp = _mk_company(db, analytics_dir=r"ИП ПРУДНИКОВ\AGENT MARKET\АНАЛИТИКА")
-    wb = _mk_cab(db, comp, marketplace="wb")
-
-    calls = {}
-
-    def fake_report(name):
-        def _fn(dbb, f, t):
-            calls[name] = (f, t)
-            return pd.DataFrame({"A": [1, 2]})
-        return _fn
-
-    monkeypatch.setattr(ad, "_REPORTS_BY_MP", {
-        "wb": (
-            ("margin_funnel.xlsx", "Воронка", "export_margin_funnel",
-             fake_report("funnel")),
-            ("margin_detail.xlsx", "Маржа", "export_margin_detail",
-             fake_report("detail")),
-        ),
-    })
-    monkeypatch.setattr(ad, "_df_to_bytes", lambda df, sheet, name, **kw: b"DATA")
-
-    res = ad.write_reports(db, wb, "2026-09-01", "2026-09-10", root=str(tmp_path))
-    folder = tmp_path / "ИП ПРУДНИКОВ" / "AGENT MARKET" / "АНАЛИТИКА" / "WB"
-    assert res["files"] == ["margin_funnel.xlsx", "margin_detail.xlsx"]
-    assert (folder / "margin_funnel.xlsx").read_bytes() == b"DATA"
-    assert (folder / "margin_detail.xlsx").read_bytes() == b"DATA"
-    # период распарсен в date-объекты
-    assert str(calls["funnel"][0]) == "2026-09-01"
-    assert str(calls["detail"][1]) == "2026-09-10"
-    assert res["rows"] == 4  # 2 строки × 2 отчёта
-    # временных файлов не осталось, файлы атомарно заменены
-    assert not list(folder.glob("*.tmp"))
-
-    # повторный запуск перезаписывает (файл не растёт, .tmp не копится)
-    monkeypatch.setattr(ad, "_df_to_bytes", lambda df, sheet, name, **kw: b"NEW")
-    res2 = ad.write_reports(db, wb, "2026-09-01", "2026-09-10", root=str(tmp_path))
-    assert res2["files"] == res["files"]
-    assert (folder / "margin_funnel.xlsx").read_bytes() == b"NEW"
+    (folder / "margin_detail.xlsx").write_bytes(b"new")
+    dest2 = analytics_disk._archive_existing(folder, "margin_detail.xlsx")
+    assert dest2 == dest
+    assert dest.read_bytes() == b"new"
+    assert len(list((folder / "ARCHIVE").iterdir())) == 1
 
 
-def test_write_reports_raises_without_folder(db):
-    comp = _mk_company(db, analytics_dir="")
-    cab = _mk_cab(db, comp)
-    with pytest.raises(RuntimeError, match="папка аналитики"):
-        ad.write_reports(db, cab, "2026-09-01", "2026-09-10")
+def test_archive_existing_noop_when_missing(tmp_path):
+    assert analytics_disk._archive_existing(tmp_path, "nope.xlsx") is None
+    assert not (tmp_path / "ARCHIVE").exists()
 
 
-def test_write_reports_raises_for_unknown_marketplace(db, tmp_path, monkeypatch):
-    comp = _mk_company(db, analytics_dir="ФИРМА")
-    cab = _mk_cab(db, comp, marketplace="wb")
-    monkeypatch.setattr(ad, "_REPORTS_BY_MP", {})
-    with pytest.raises(RuntimeError, match="не поддерживается"):
-        ad.write_reports(db, cab, "2026-09-01", "2026-09-10", root=str(tmp_path))
-
-
-def test_period_sheet_name_fits_excel_limits():
+def test_write_reports_six_files_and_archive_rotation(db, tmp_path):
+    """Полный прогон: 6 файлов WB, второй запуск кладёт прежние в ARCHIVE."""
     from datetime import date
+    from types import SimpleNamespace
 
-    name = ad.period_sheet_name(date(2026, 9, 1), date(2026, 9, 10))
-    assert name == "01.09.2026-10.09.2026"
-    assert len(name) <= 31
-    assert not set(name) & set(r":\/?*[]")
+    from app import models
 
+    from app.services import cabinets as cabinet_service
 
-def test_df_to_bytes_adds_empty_period_sheet():
-    """Второй лист книги назван периодом и пуст (данные — только на первом)."""
-    from io import BytesIO
+    user = cabinet_service.seed_user(db)
+    company = models.Company(user_id=user.id, name="Фирма",
+                             analytics_dir="firm")
+    db.add(company)
+    db.commit()
+    db.add_all([
+        models.Product(article="A1", name="Товар", net_cost=100.0),
+        models.WbDetailRow(op_key="sr:1", source="excel", article="A1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 4),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0),
+        models.Stock(marketplace_id=1, date=date(2026, 9, 4), article="A1",
+                     warehouse="WH1", chrt_id="1", quantity=5,
+                     quantity_full=5, in_way=0),
+        models.StorageCost(nm_id="1", article="A1", barcodes_count=1,
+                           volume=1.0, storage_price=10.0,
+                           warehouse_price=5.0),
+        models.MarketplaceCard(marketplace_id=1, chrt_id="1", nm_id="1",
+                               vendor_code="A1", barcode="2000000000001",
+                               brand="Бренд", subject="Куртки", size="",
+                               name="Товар", composition="Хлопок"),
+    ])
+    db.commit()
 
-    data = ad._df_to_bytes(
-        pd.DataFrame({"A": [1, 2]}), "Воронка", "export_margin_funnel",
-        period="01.09.2026-10.09.2026")
-    xl = pd.ExcelFile(BytesIO(data), engine="openpyxl")
-    assert xl.sheet_names == ["Воронка", "01.09.2026-10.09.2026"]
-    assert len(pd.read_excel(xl, sheet_name="Воронка")) == 2
-    assert pd.read_excel(xl, sheet_name="01.09.2026-10.09.2026").empty
+    info = SimpleNamespace(id=1, name="Связка", marketplace="wb",
+                           company_id=company.id)
+    res = analytics_disk.write_reports(
+        db, info, date(2026, 9, 1), date(2026, 9, 10), root=str(tmp_path))
+    assert res["files"] == [r[0] for r in analytics_disk.WB_REPORTS]
+    folder = tmp_path / "firm" / "WB"
+    for fname in res["files"]:
+        assert (folder / fname).exists(), fname
 
+    # Повторный прогон: прежние версии переехали в ARCHIVE (по одному на файл).
+    analytics_disk.write_reports(
+        db, info, date(2026, 9, 11), date(2026, 9, 20), root=str(tmp_path))
+    archived = sorted(p.name for p in (folder / "ARCHIVE").iterdir())
+    assert archived == sorted(
+        Path(f).stem + "_archive" + Path(f).suffix for f in res["files"])

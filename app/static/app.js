@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "191";
+const UI_VERSION = "192";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -5701,6 +5701,7 @@ const MARGIN_CMP_FIELDS = [
 const MARGIN_CMP_DEFAULT_FIELDS = ["margin", "margin_gross"];
 const MARGIN_CMP_MODES = [
   ["prev", "Предыдущий аналогичный"],
+  ["prev365", "365 дней до периода"],
   ["last_year", "Тот же период год назад"],
   ["year", "Весь год"],
   ["custom", "Произвольный период"],
@@ -5726,8 +5727,14 @@ const FUNNEL_CMP_FIELDS = [
 const FUNNEL_CMP_DEFAULT_FIELDS = ["views", "orders", "buyouts", "revenue", "margin", "margin_pct"];
 // Вкладки с расширенным селектором: поля × до трёх периодов.
 const CMP_MULTI_TABS = {
-  "margin-detail": { fields: MARGIN_CMP_FIELDS, defaults: MARGIN_CMP_DEFAULT_FIELDS },
-  "margin-funnel": { fields: FUNNEL_CMP_FIELDS, defaults: FUNNEL_CMP_DEFAULT_FIELDS },
+  "margin-detail": {
+    fields: MARGIN_CMP_FIELDS, defaults: MARGIN_CMP_DEFAULT_FIELDS,
+    periods: ["prev", "prev365"],
+  },
+  "margin-funnel": {
+    fields: FUNNEL_CMP_FIELDS, defaults: FUNNEL_CMP_DEFAULT_FIELDS,
+    periods: ["prev", "prev365"],
+  },
 };
 function cmpMultiCfg(tab) {
   return CMP_MULTI_TABS[tab] || null;
@@ -5746,8 +5753,13 @@ function cmpMultiState(tab) {
     periods = raw.periods;
   } else if (raw.mode) {
     periods = [{ mode: raw.mode, from: raw.from || "", to: raw.to || "", year: raw.year || "" }];
-  } else {
+  } else if ("mode" in raw || "periods" in raw) {
+    // Сохранённое «не сравнивать» (mode: "") — уважаем выбор пользователя.
     periods = [];
+  } else {
+    // Первый заход (состояния нет) — по умолчанию для прибыльности:
+    // предыдущий аналогичный период + 365 дней перед текущим окном.
+    periods = (cfg.periods || []).map((m) => ({ mode: m, year: "", from: "", to: "" }));
   }
   periods = periods.slice(0, 3).map((p) => ({
     mode: MARGIN_CMP_MODES.some((m) => m[0] === p.mode) ? p.mode : "prev",

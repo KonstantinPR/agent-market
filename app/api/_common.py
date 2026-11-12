@@ -98,7 +98,8 @@ def _resolve_compare_window(date_from, date_to, mode="", compare_from=None,
     mode:
       ""/"prev" — предыдущий аналогичный период (как ``_compare_window``);
       "custom"  — явные даты ``compare_from``/``compare_to`` (обе обязательны);
-      "last_year" — то же окно, сдвинутое на год назад (год = 365 дней).
+      "last_year" — то же окно, сдвинутое на год назад (год = 365 дней);
+      "prev365" — 365 дней непосредственно перед текущим окном.
     Возвращает (prev_from, prev_to) либо None, если окно построить нельзя.
     """
     mode = (mode or "").strip().lower()
@@ -112,6 +113,12 @@ def _resolve_compare_window(date_from, date_to, mode="", compare_from=None,
             f = date.fromisoformat(date_from)
             t = date.fromisoformat(date_to)
             return f - timedelta(days=365), t - timedelta(days=365)
+        except (ValueError, TypeError):
+            return None
+    if mode == "prev365":
+        try:
+            f = date.fromisoformat(date_from)
+            return f - timedelta(days=365), f - timedelta(days=1)
         except (ValueError, TypeError):
             return None
     return _compare_window(date_from, date_to, ozon_small=ozon_small)
@@ -135,6 +142,7 @@ def resolve_compare_periods(date_from, date_to, specs, ozon_small=False, limit=3
     Токены через запятую, порядок задаёт порядок колонок:
       ``prev`` — предыдущий аналогичный период;
       ``last_year`` — то же окно год назад;
+      ``prev365`` — 365 дней непосредственно перед текущим окном;
       ``year:2025`` — весь календарный год (01.01–31.12);
       ``custom:2025-03-01:2025-03-31`` — произвольный диапазон.
     Битые/пустые токены пропускаются, одинаковые окна схлопываются,
@@ -172,14 +180,17 @@ def resolve_compare_periods(date_from, date_to, specs, ozon_small=False, limit=3
                 continue
             label = "Произвольный период"
             short = _cmp_short(*window)
-        elif spec in ("prev", "last_year"):
+        elif spec in ("prev", "last_year", "prev365"):
             window = _resolve_compare_window(
                 date_from, date_to, spec, ozon_small=ozon_small)
             if not window:
                 continue
-            label = ("Предыдущий аналогичный" if spec == "prev"
-                     else "Тот же период год назад")
-            short = "пред. период" if spec == "prev" else "год назад"
+            if spec == "prev":
+                label, short = "Предыдущий аналогичный", "пред. период"
+            elif spec == "last_year":
+                label, short = "Тот же период год назад", "год назад"
+            else:
+                label, short = "365 дней до периода", "365 дн. до"
         else:
             continue
         if window in seen:

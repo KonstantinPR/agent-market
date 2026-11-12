@@ -40,6 +40,7 @@ def funnel_dataframe(
     articles: Optional[set] = None,
     strict_window: bool = False,
     with_storage: bool = True,
+    include_universe: bool = False,
 ) -> pd.DataFrame:
     """Прибыльность по Воронке Продаж WB (funnel_metric + себестоимость).
 
@@ -57,6 +58,9 @@ def funnel_dataframe(
     лежащий внутри запрошенного окна (без fallback на пересечение/последний);
     иначе пустой df с attrs available=False. with_storage=False пропускает
     расчёт storage_est (в сравнении он не нужен).
+
+    include_universe=True — область по умолчанию вкладки/экспорта: добавляет
+    артикулы с движением за последние 2 года (даже без метрик в срезе).
     """
     base_cols = [c for c in funnel_service.funnel_columns()
                  if c not in ("past_json", "comparison_json")]
@@ -217,13 +221,55 @@ def funnel_dataframe(
         recs = [r for r in recs if art_check.search(r["article"])]
     if articles is not None:
         recs = [r for r in recs if r["article"].strip().upper() in articles]
+
+    # Область по умолчанию: артикулы с движением за 2 года до окна, даже если
+    # в выбранном срезе воронки у них нет метрик — нулевые строки внизу.
+    if include_universe:
+        uni_to = date_to if date_to is not None else to_
+        universe = _movement_articles(db, uni_to, years=2)
+        have = {(r["article"] or "").strip().upper() for r in recs}
+        extra = sorted(a for a in universe if a not in have)
+        if extra:
+            extra_set = set(extra)
+            prods = {
+                str(p.article).strip().upper(): p
+                for p in db.execute(
+                    select(models.Product).where(
+                        func.upper(models.Product.article).in_(extra))
+                ).scalars().all()
+            }
+            nm_map: dict = {}
+            for nm, art in db.execute(
+                    select(models.NmArticle.nm_id, models.NmArticle.article)):
+                a = str(art or "").strip().upper()
+                n = str(nm or "").strip()
+                if a in extra_set and a not in nm_map and n:
+                    nm_map[a] = n
+            for key in extra:
+                p = prods.get(key)
+                recs.append({
+                    "article": p.article if p is not None else key,
+                    "name": (p.name or "") if p is not None else "",
+                    "nm_id": _num(nm_map.get(key) or 0),
+                    "title": "",
+                    "net_cost": float(p.net_cost or 0) if p is not None else 0.0,
+                    "margin": 0.0,
+                    "margin_pct": 0.0,
+                })
+
     for r in recs:
         for c in all_cols:
             if c not in r:
                 r[c] = 0
     out = pd.DataFrame(recs, columns=all_cols)
     if not out.empty:
-        out = out.sort_values("margin", ascending=False).reset_index(drop=True)
+        # Строки с активностью среза — выше «информационных» нулевых строк
+        # области (у них метрик за срез нет).
+        out["_active"] = ((out["views"] != 0) | (out["orders"] != 0)
+                          | (out["revenue"] != 0)).astype(int)
+        out = out.sort_values(
+            ["_active", "margin"], ascending=[False, False]
+        ).drop(columns="_active").reset_index(drop=True)
     out.attrs["date_from"] = str(from_)
     out.attrs["date_to"] = str(to_)
     out.attrs["matched"] = bool(requested) and (from_, to_) == requested
@@ -386,6 +432,38 @@ def _wb_stock_map(db: Session, date_to) -> dict:
     return out
 
 
+def _movement_articles(db: Session, date_to, years: int = 2) -> set:
+    """UPPER-артикулы с движением за ``years`` лет до ``date_to``.
+
+    Новая область по умолчанию: в таблицы прибыльности попадают товары,
+    которые двигались за последние 2 года, даже если в выбранном окне у них
+    нет операций. Источник — строки детализации WB (продажи/возвраты/платы).
+    """
+    if date_to is None:
+        return set()
+    if isinstance(date_to, str):
+        try:
+            date_to = date.fromisoformat(date_to)
+        except ValueError:
+            return set()
+    start = date_to - timedelta(days=365 * years)
+    out: set = set()
+    q = (
+        select(func.distinct(models.WbDetailRow.article))
+        .where(
+            models.WbDetailRow.article != "",
+            models.WbDetailRow.sale_dt.isnot(None),
+            models.WbDetailRow.sale_dt >= start,
+            models.WbDetailRow.sale_dt <= date_to,
+        )
+    )
+    for (art,) in db.execute(q):
+        a = str(art or "").strip().upper()
+        if a:
+            out.add(a)
+    return out
+
+
 def margin_detail_dataframe(
     db: Session,
     date_from=None,
@@ -393,6 +471,7 @@ def margin_detail_dataframe(
     article_like: Optional[str] = None,
     default_net_cost: float = 0.0,
     articles: Optional[set] = None,
+    include_universe: bool = False,
 ) -> pd.DataFrame:
     """Прибыльность по «Детализации продаж» WB напрямую из wb_detail_rows.
 
@@ -421,6 +500,10 @@ def margin_detail_dataframe(
 
     articles — готовый набор UPPER-артикулов (список из поля/Excel, см.
     ``article_tokens.resolve_articles``). Действует вместе с article_like (И).
+
+    include_universe=True — область по умолчанию вкладки/экспорта: добавляет
+    артикулы с движением за последние 2 года до ``date_to`` (даже без операций
+    в выбранном окне). Остатки WB добавляются всегда и без флага.
     """
     cols = ["article", "nm_id", "name", "sells", "returns_qty",
             "stock_qty", "stock_total", "stock_in_way",
@@ -453,6 +536,12 @@ def margin_detail_dataframe(
     # проданным артикулам и были в разы меньше реальных остатков склада.
     stock_map = _wb_stock_map(db, date_to=date_to) if date_to else {}
 
+    # Область по умолчанию: движение за 2 года до конца окна. Добавляем такие
+    # артикулы нулевыми строками (см. include_universe), чтобы товар не исчезал
+    # из таблицы только потому, что в выбранном периоде не было операций.
+    universe = (_movement_articles(db, date_to, years=2)
+                if include_universe else set())
+
     # Распределение безартикульных плат «Хранение» по товарам продаж пропорц.
     # «объём × тариф × (остаток + проданное×0.5)» (storage_costs × stocks +
     # продажи периода). Распределение идёт внутри артикулов окна (target_articles):
@@ -477,6 +566,7 @@ def margin_detail_dataframe(
     # раздельные IN отдают тот же набор строк за ~0.2 с.
     arts_up = {(r.article or "").strip().upper() for r in rows if (r.article or "").strip()}
     arts_up |= set(stock_map)
+    arts_up |= universe
     skus_up = {(r.sku or "").strip().upper() for r in rows if (r.sku or "").strip()}
     prods = []
     if arts_up:
@@ -567,7 +657,7 @@ def margin_detail_dataframe(
     # nmID для артикулов только с остатком: в строках детализации его нет,
     # берём из справочника nm_articles (article → nmID).
     nm_by_article: dict = {}
-    if stock_map:
+    if stock_map or universe:
         for nm, art in db.execute(
             select(models.NmArticle.nm_id, models.NmArticle.article)
         ):
@@ -590,6 +680,14 @@ def margin_detail_dataframe(
     }, weight_idx=(0,))
     if not cells:
         return out
+
+    # Артикулы области по умолчанию (движение за 2 года), у которых нет ни
+    # операций в окне, ни остатка: информационные нулевые строки в конце.
+    for key in universe:
+        if key not in cells:
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        prod = prods_by_upper.get(key)
+        display.setdefault(key, prod.article if prod is not None else key)
 
     recs = []
     for key, c in cells.items():

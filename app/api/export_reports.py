@@ -618,6 +618,7 @@ def export_margin_detail(
     df = margin_service.margin_detail_dataframe(
         db, date_from=from_, date_to=to_, article_like=article_like,
         default_net_cost=settings.default_net_cost, articles=arts,
+        include_universe=True,
     )
     cmp_periods = resolve_compare_periods(
         date_from, date_to, compare_periods, ozon_small=False,
@@ -733,7 +734,8 @@ def export_margin_funnel(
     from_, to_ = _parse_window400(date_from, date_to)
 
     df = margin_service.funnel_dataframe(
-        db, date_from=from_, date_to=to_, article_like=article_like
+        db, date_from=from_, date_to=to_, article_like=article_like,
+        include_universe=True,
     )
     cmp_periods = resolve_compare_periods(
         date_from, date_to, compare_periods, ozon_small=False,
