@@ -697,6 +697,21 @@ table.data-hl tbody tr:hover > td.hl-col {
   box-shadow: inset 0 0 0 9999px rgba(60, 125, 190, 0.10);
 }
 .est { color: #b08800; }
+/* Inline-сравнение периодов (T-75): в ячейке два значения — текущее цветом
+   по направлению изменения (▲ рост / ▼ падение) и прошлые серым мелким. */
+.cmp-cur { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cmp-cur.pos, .cmp-cur.pos span { color: #1a7f37; font-weight: 600; }
+.cmp-cur.neg, .cmp-cur.neg span { color: #cf222e; font-weight: 600; }
+.cmp-cur .cmp-tri { font-size: 9px; vertical-align: 1px; margin-right: 2px; }
+.cmp-prev {
+  display: block;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 400;
+  color: #8c959f;
+  font-variant-numeric: tabular-nums;
+}
 a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 .tag { font-size: 12px; color: #444; }
 .tag.wb::after { content: " (WB)"; }

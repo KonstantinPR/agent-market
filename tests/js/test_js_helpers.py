@@ -1391,6 +1391,70 @@ assert.ok(jsSrc.includes('cmpQuery("margin-funnel")'), "loadTab не перед�
 assert.ok(jsSrc.includes('setColViewDyn("margin-funnel"'),
   "renderMarginFunnel не регистрирует динамические колонки");
 
+// --- Inline-сравнение периодов (T-75) ---
+// Прошлые значения — вторая строка той же ячейки, отдельных колонок нет.
+const cmpMeta = {
+  columns: [
+    { k: "cmp1_margin", label: "Прибыль · пред. период", kind: "money",
+      period_label: "01.10–31.10.2026", totals: "sum" },
+    { k: "cmp2_margin", label: "Прибыль · 365 дней", kind: "money",
+      period_label: "01.10.2025–30.09.2026", totals: "sum" },
+  ],
+};
+const cmpBase = [
+  { k: "article", label: "Артикул" },
+  { k: "margin", label: "Прибыль", num: true,
+    render: (v) => v == null ? "\u2014" : String(v) },
+];
+const cmpHdrs = sandbox.cmpInlineHeaders(cmpBase, cmpMeta);
+assert.strictEqual(cmpHdrs.length, 2, "inline-сравнение не должно добавлять колонок");
+assert.ok(!cmpHdrs[0].cmp, "колонка без сравнения помечена ошибочно");
+assert.ok(cmpHdrs[1].cmp && cmpHdrs[1].cmp.field === "margin",
+  "поле сравнения не помечено в заголовке");
+const grown = sandbox.cmpInlineHtml("margin", cmpHdrs[1].cmp.cols, 150, "150",
+  { margin: 150, cmp1_margin: 100, cmp2_margin: 90 });
+assert.ok(grown.cur.indexOf("cmp-cur pos") >= 0, "рост не зелёный");
+assert.ok(grown.cur.indexOf("\u25B2") >= 0, "у роста нет треугольника вверх");
+assert.ok(grown.prev.indexOf("cmp-prev") >= 0 && grown.prev.indexOf("100") >= 0,
+  "прошлое значение не показано второй строкой");
+const fallen = sandbox.cmpInlineHtml("margin", cmpHdrs[1].cmp.cols, 50, "50",
+  { cmp1_margin: 100 });
+assert.ok(fallen.cur.indexOf("cmp-cur neg") >= 0, "падение не красное");
+assert.ok(fallen.cur.indexOf("\u25BC") >= 0, "у падения нет треугольника вниз");
+const noPrev = sandbox.cmpInlineHtml("margin", cmpHdrs[1].cmp.cols, 50, "50", {});
+assert.ok(noPrev.cur.indexOf("cmp-cur") >= 0 && noPrev.cur.indexOf("\u25BC") < 0,
+  "без прошлого значения треугольник не рисуется");
+const badUp = sandbox.cmpInlineHtml("cancelled", [{ k: "cmp1_cancelled", kind: "int" }],
+  5, "5", { cmp1_cancelled: 2 });
+assert.ok(badUp.cur.indexOf("cmp-cur neg") >= 0, "рост отмен должен краснеть");
+const flatCmp = sandbox.cmpInlineHtml("margin", [{ k: "cmp1_margin", kind: "money" }],
+  7, "7", { cmp1_margin: 7 });
+assert.ok(flatCmp.cur.indexOf("cmp-cur") >= 0
+  && flatCmp.cur.indexOf("\u25B2") < 0, "при равенстве треугольник не нужен");
+// «Итого»: пересчёт по видимым строкам не теряет итоги прошлых периодов
+const cmpFootHdrs = [{ k: "article", label: "Артикул" },
+  { k: "margin", label: "Прибыль", num: true,
+    cmp: { field: "margin", cols: [{ k: "cmp1_margin", kind: "money" }] } }];
+const rf = sandbox.recomputeFooters(cmpFootHdrs, { margin: 300, cmp1_margin: 200 },
+  [{ margin: 150, cmp1_margin: 100 }, { margin: 150, cmp1_margin: 120 }]);
+assert.strictEqual(rf.margin, 300, "итог текущего периода");
+assert.strictEqual(rf.cmp1_margin, 220,
+  "итог прошлого периода не пересчитан по видимым строкам");
+const totHtml = sandbox.totalsRowHtml(cmpFootHdrs, { margin: 300, cmp1_margin: 220 });
+assert.ok(totHtml.indexOf("cmp-cur") >= 0 && totHtml.indexOf("cmp-prev") >= 0,
+  "в «Итого» нет второй строки прошлого периода");
+assert.strictEqual(
+  JSON.stringify(sandbox.cmpExportKeys([{ k: "article" }, { k: "margin" }], cmpMeta)),
+  JSON.stringify(["cmp1_margin", "cmp2_margin"]),
+  "колонки сравнения пропали из выгрузки");
+assert.strictEqual(JSON.stringify(sandbox.cmpExportKeys([{ k: "article" }], cmpMeta)),
+  JSON.stringify([]), "скрытое поле не должно уходить в выгрузку");
+assert.ok(jsSrc.includes("cmpInlineHeaders(headers, data.compare_meta)")
+  || jsSrc.includes("cmpInlineHeaders(headers, meta)"),
+  "рендер прибыльности не применяет inline-сравнение");
+assert.ok(cssSrc.includes(".cmp-prev"), "нет CSS для прошлого значения");
+assert.ok(cssSrc.includes(".cmp-cur"), "нет CSS для текущего значения");
+
 // Перетаскивание колонок: ручка живёт в шапке (текст заголовка остаётся
 // выделяемым), после drop таблица перерисовывается через st.repaint.
 assert.ok(jsSrc.includes('className = "th-grip"'), "нет ручки перетаскивания в шапке");

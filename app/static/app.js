@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "192";
+const UI_VERSION = "193";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -475,16 +475,24 @@ function recomputeFooters(headers, footers, rows) {
   if (!footers) return footers;
   if (!rows.length) return {};
   const out = {};
+  // Поля inline-сравнения живут второй строкой той же ячейки: их итоги тоже
+  // пересчитываем по видимым строкам, иначе после фильтра «Итого» теряет
+  // значения прошлых периодов (ключей `cmp<N>_*` нет среди колонок).
+  const keys = [];
   for (const c of headers) {
-    const base = footers[c.k];
+    keys.push(c.k);
+    if (c.cmp) for (const cc of c.cmp.cols) keys.push(cc.k);
+  }
+  for (const k of keys) {
+    const base = footers[k];
     if (base == null) continue;
     let sum = 0, cnt = 0;
     for (const r of rows) {
-      const n = Number(r[c.k]);
-      if (r[c.k] != null && r[c.k] !== "" && isFinite(n)) { sum += n; cnt++; }
+      const n = Number(r[k]);
+      if (r[k] != null && r[k] !== "" && isFinite(n)) { sum += n; cnt++; }
     }
-    if (!cnt) { out[c.k] = base; continue; }
-    out[c.k] = (typeof base === "object" && base !== null)
+    if (!cnt) { out[k] = base; continue; }
+    out[k] = (typeof base === "object" && base !== null)
       ? Object.assign({}, base, { avg: sum / cnt })
       : sum;
   }
@@ -526,7 +534,7 @@ function totalsRowHtml(headers, footers) {
     } else if (v == null) {
       h += "<th class=\"totals\"></th>";
     } else {
-      h += totCell(c, v);
+      h += totCell(c, v, footers);
     }
   }
   return h + "</tr>";
@@ -539,7 +547,7 @@ function tbodyRowsHtml(headers, rows) {
   let h = "";
   for (const r of rows) {
     h += "<tr>";
-    for (const c of headers) h += '<td class="' + (c.num ? "num" : "") + '">' + c.render(r[c.k], r) + "</td>";
+    for (const c of headers) h += '<td class="' + (c.num ? "num" : "") + '">' + cmpBodyCell(c, r) + "</td>";
     h += "</tr>";
   }
   return h;
@@ -554,7 +562,7 @@ function table(headers, rows, sort, footers, filters, opts) {
 
 // Ячейка строки «Итого»: v — число (сумма) или {avg: n, dp: decimals} (среднее;
 // dp — знаков после запятой, если рендер колонки кастомный и fmtFloat не ясен).
-function totCell(c, v) {
+function totCell(c, v, footers) {
   const avg = v && typeof v === "object" && typeof v.avg === "number" ? v.avg : null;
   const dp = v && typeof v === "object" && typeof v.dp === "number" ? v.dp : null;
   const n = avg !== null ? avg : v;
@@ -573,7 +581,14 @@ function totCell(c, v) {
   else if (v && typeof v === "object" && v.pct) s = fmtPct(n);
   else if (dp == null) s = n == null ? "—" : fmt(Math.round(Number(n)));
   else s = n == null ? "—" : dp === 0 ? fmt(Math.round(n)) : fmtFloat(n, dp);
-  return '<th class="' + cls + '"' + attr + '><b>' + pre + s + "</b></th>";
+  let body = pre + s;
+  let extra = "";
+  if (c.cmp) {
+    const res = cmpInlineHtml(c.cmp.field, c.cmp.cols, n, body, footers || {});
+    body = res.cur;
+    extra = res.prev;
+  }
+  return '<th class="' + cls + '"' + attr + '><b>' + body + "</b>" + extra + "</th>";
 }
 
 const cellFmts = {
@@ -593,6 +608,102 @@ const cellFmts = {
   text: (v) => (v == null || v === "") ? "—" : v,
   tag: (v) => `<span class="tag ${v}">${MP_LABELS[v] || v}</span>`,
 };
+
+// ---- inline-сравнение периодов (T-75) ------------------------------------
+// Поля, выбранные в «Сравнениях», показываются в своей же колонке: сверху
+// текущее значение (цвет и треугольник — по направлению изменения к первому
+// прошлому периоду, у которого есть значение), ниже серым — значения прошлых
+// периодов. Отдельные колонки `cmp<N>_<field>` в таблицу не добавляются
+// (в Excel-выгрузке они остаются).
+const CMP_INLINE_TRI_UP = "\u25B2";
+const CMP_INLINE_TRI_DOWN = "\u25BC";
+// Рост этих показателей — плохо: цвет инвертируется (расходы, отмены, возвраты).
+const CMP_INLINE_BAD_UP = new Set(["cancelled", "cancel_sum", "return_rate"]);
+
+// { поле: [колонки сравнения cmp1_…, cmp2_…] } из compare_meta.columns.
+function cmpInlineCols(meta) {
+  const groups = new Map();
+  for (const c of (meta && meta.columns) || []) {
+    const m = /^cmp\d+_(.+)$/.exec(c.k || "");
+    if (!m || !m[1]) continue;
+    if (!groups.has(m[1])) groups.set(m[1], []);
+    groups.get(m[1]).push(c);
+  }
+  return groups;
+}
+
+// Число из значения ячейки: сервер отдаёт число, null или {avg} в итогах.
+function cmpInlineNum(v) {
+  if (v && typeof v === "object") v = typeof v.avg === "number" ? v.avg : null;
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
+function cmpInlineFmt(kind, v) {
+  const n = cmpInlineNum(v);
+  if (n == null) return "—";
+  if (kind === "money") return fmtMoney(n);
+  if (kind === "pct") return fmtPct(n);
+  if (kind === "int") return fmt(n);
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n);
+}
+
+// cur — текущее значение (готовый HTML рендера колонки) с треугольником;
+// prev — вторая строка с прошлыми значениями ("" если периодов нет).
+function cmpInlineHtml(field, cols, curVal, curHtml, src) {
+  const prev = (cols || []).map((c) => ({ col: c, val: src ? src[c.k] : null }));
+  const base = prev.map((p) => cmpInlineNum(p.val)).find((n) => n !== null);
+  const n = cmpInlineNum(curVal);
+  let dir = 0;
+  if (n !== null && base != null && n !== base) dir = n > base ? 1 : -1;
+  const good = dir === 0 ? ""
+    : ((dir > 0) !== CMP_INLINE_BAD_UP.has(field) ? "pos" : "neg");
+  const tri = dir > 0 ? CMP_INLINE_TRI_UP : (dir < 0 ? CMP_INLINE_TRI_DOWN : "");
+  const cur = '<span class="cmp-cur' + (good ? " " + good : "") + '">'
+    + (tri ? '<span class="cmp-tri">' + tri + "</span>" : "") + curHtml + "</span>";
+  if (!prev.length) return { cur: cur, prev: "" };
+  const texts = prev.map((p) => cmpInlineFmt(p.col.kind, p.val));
+  const tip = prev.map((p) => (p.col.period_label || "прошлый период")
+    + ": " + cmpInlineFmt(p.col.kind, p.val)
+    + (p.col.available === false ? " (нет среза)" : "")).join("\n");
+  const prevHtml = '<span class="cmp-prev" title="' + escapeHtml(tip) + '">'
+    + texts.join(" \u00B7 ") + "</span>";
+  return { cur: cur, prev: prevHtml };
+}
+
+// Помечает заголовки, у которых есть значения прошлых периодов: тело ячейки
+// и «Итого» дорисуют вторую строку (см. cmpInlineHtml).
+function cmpInlineHeaders(headers, meta) {
+  const groups = cmpInlineCols(meta);
+  if (!groups.size) return headers;
+  return headers.map((h) => {
+    const cols = groups.get(h.k);
+    if (!cols) return h;
+    return Object.assign({}, h, { cmp: { field: h.k, cols: cols } });
+  });
+}
+
+function cmpBodyCell(c, r) {
+  const html = c.render(r[c.k], r);
+  if (!c.cmp) return html;
+  const res = cmpInlineHtml(c.cmp.field, c.cmp.cols, r[c.k], html, r);
+  return res.cur + res.prev;
+}
+
+// Ключи колонок сравнения для выгрузки: в таблице они «спрятаны» в ячейку,
+// но в Excel остаются отдельными колонками (как и раньше). Берём только поля,
+// чьи колонки видны в «Вид таблицы».
+function cmpExportKeys(headers, meta) {
+  const groups = cmpInlineCols(meta);
+  const out = [];
+  for (const h of headers || []) {
+    const cols = groups.get(h.k);
+    if (!cols) continue;
+    for (const c of cols) out.push(c.k);
+  }
+  return out;
+}
 
 function pagedTable(container, headers, rows, footers, pagerSel, pinned, opts) {
   opts = opts || {};
@@ -3361,37 +3472,23 @@ async function renderMarginFunnel(p) {
   const compare = /compare=1/.test(p || "");
   const linked = /links=/.test(p || "");
   const data = await api("/margin/funnel" + p);
-  // Колонки сравнения — динамические: отдаём их в «Вид таблицы» (секция
-  // «Сравнения»), чтобы их можно было скрыть/переставить как обычные.
-  let dyn = [];
-  const cmpCols = (data.compare_meta && data.compare_meta.columns) || [];
-  if (compare && cmpCols.length) {
-    const fmts = {
-      money: cellFmts.moneyCls, int: cellFmts.int, pct: cellFmts.pct,
-      num: (v) => (v == null || v === "") ? "—"
-        : String(Math.round(Number(v) * 100) / 100),
-    };
-    dyn = cmpCols.map((c) => ({
-      k: c.k, label: c.label, num: true,
-      render: fmts[c.kind] || cellFmts.text,
-      tip: "Значение поля «" + (c.label || c.k) + "» за период "
-        + (c.period_label || "") + "." + (c.available === false
-          ? " За этот период нет сохранённого среза." : ""),
-    }));
-  }
-  setColViewDyn("margin-funnel", dyn);
-  let headers = colViewHeaders("margin-funnel", funnelHeaders.concat(dyn));
+  // Значения прошлых периодов — второй строкой в ячейке самого поля (T-75),
+  // отдельных колонок сравнения нет.
+  setColViewDyn("margin-funnel", []);
+  let headers = colViewHeaders("margin-funnel", funnelHeaders);
+  if (compare) headers = cmpInlineHeaders(headers, data.compare_meta);
   if (linked) headers = [ownerCol()].concat(headers);
   const footers = marginFunnelFooters(data.rows || []);
-  if (footers && cmpCols.length) {
-    for (const c of cmpCols) {
-      if (data.totals && Object.prototype.hasOwnProperty.call(data.totals, c.k)) {
+  if (footers && data.totals) {
+    // Итоги прошлых периодов — для второй строки ячейки «Итого».
+    for (const c of ((data.compare_meta && data.compare_meta.columns) || [])) {
+      if (Object.prototype.hasOwnProperty.call(data.totals, c.k)) {
         footers[c.k] = data.totals[c.k];
       }
     }
   }
   pagedTable($("#marginFunnelTable"), headers, data.rows || [], footers, null, colViewPinKeys("margin-funnel"));
-  const cp = colViewParam("margin-funnel");
+  const cp = colViewParam("margin-funnel", cmpExportKeys(headers, data.compare_meta));
   $("#exportMarginFunnel").href = "/api/export/margin/funnel" + p + (cp ? (p ? "&" : "?") + cp : "");
   const msg = statusEl();
   const warn = document.getElementById("marginFunnelPeriodWarn");
@@ -3737,36 +3834,29 @@ async function renderMarginDetail(p) {
   const compare = /compare=1/.test(p || "");
   const linked = /links=/.test(p || "");
   const data = await api("/margin/detail" + p);
-  // Колонки сравнения — динамические: отдаём их в «Вид таблицы» (секция
-  // «Сравнения»), чтобы их можно было скрыть/переставить как обычные.
+  // Значения прошлых периодов — второй строкой в ячейке самого поля (T-75),
+  // отдельных колонок сравнения нет. Старый формат (без compare_meta) ещё
+  // может прийти от прежней версии бэкенда — тогда рисуем колонки как раньше.
+  const meta = data.compare_meta;
   let dyn = [];
-  if (compare) {
-    const meta = data.compare_meta;
-    if (meta && (meta.columns || []).length) {
-      const fmts = { money: cellFmts.moneyCls, int: cellFmts.int, pct: cellFmts.pct };
-      dyn = meta.columns.map((c) => ({
-        k: c.k, label: c.label, num: true,
-        render: fmts[c.kind] || cellFmts.text,
-        tip: "Значение поля «" + (c.label || c.k) + "» за период " + (c.period_label || "") + ".",
-      }));
-    } else {
-      dyn = [
-        { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано, шт за предыдущий период той же длительности."},
-        { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период: Доход − расходы МП − себестоимость × продано."},
-        { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Изменение прибыли, ₽: текущий период минус предыдущий."},
-        { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли в % к предыдущему периоду. Пусто, если в прошлом периоде прибыли не было."},
-      ];
-    }
+  if (compare && !(meta && (meta.columns || []).length)) {
+    dyn = [
+      { k: "sells_pp", label: "Пред. период: Продано, шт", num: true, render: cellFmts.int , tip: "Продано, шт за предыдущий период той же длительности."},
+      { k: "margin_pp", label: "Пред. период: Прибыль, руб", num: true, render: cellFmts.moneyCls , tip: "Прибыль за предыдущий период: Доход − расходы МП − себестоимость × продано."},
+      { k: "delta_ru", label: "Δ прибыли, руб", num: true, render: cellFmts.moneyCls , tip: "Изменение прибыли, ₽: текущий период минус предыдущий."},
+      { k: "delta_pct", label: "Δ прибыли, %", num: true, render: cellFmts.signedPct , tip: "Изменение прибыли в % к предыдущему периоду. Пусто, если в прошлом периоде прибыли не было."},
+    ];
   }
   setColViewDyn("margin-detail", dyn);
   // legacy-колонки старого сравнения не отдаём: их нет в «Вид таблицы»
   const baseHeaders = marginHeaders.filter((h) => !_LEGACY_CMP_COLS.has(h.k));
   let headers = colViewHeaders("margin-detail", baseHeaders.concat(dyn));
+  if (compare) headers = cmpInlineHeaders(headers, meta);
   if (linked) headers = [ownerCol()].concat(headers);
   pagedTable($("#marginDetailTable"), headers, data.rows || [], data.totals, null, colViewPinKeys("margin-detail"));
   const exportBtn = $("#exportMarginDetail");
   if (exportBtn) {
-    const cp = colViewParam("margin-detail");
+    const cp = colViewParam("margin-detail", cmpExportKeys(headers, compare ? data.compare_meta : null));
     exportBtn.dataset.url = "/api/export/margin/detail" + p + (cp ? (p ? "&" : "?") + cp : "");
   }
   // Статус один на весь раздел: сначала писалось «сравнение: …», следом
@@ -6107,10 +6197,12 @@ function initCmpPanel(tab) {
   const hint = document.createElement("div");
   hint.className = "cmp-hint";
   hint.textContent = "Год считается целиком (01.01–31.12), текущий год может быть "
-    + "неполным. Значения показываются рядом с текущим окном без дельт."
+    + "неполным. Значения прошлых периодов показываются второй строкой в ячейке "
+    + "самого поля: зелёный ▲ — рост, красный ▼ — падение, серым — прошлые "
+    + "значения (в порядке периодов ниже)."
     + (tab === "margin-funnel"
       ? " Для воронки «пред. период» берётся из блока WB, остальные периоды — "
-        + "только из сохранённых срезов (иначе колонки пустые)."
+        + "только из сохранённых срезов (иначе значения пустые)."
       : "");
   panel.appendChild(hint);
   renderPeriods();

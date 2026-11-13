@@ -120,7 +120,10 @@
 
 ## В работе
 
-_(пусто)_
+- [T-75] (medium) Прибыльность → «Воронка Продаж WB» и «Детализация Продаж WB»:
+  > где: `app/static/app.js` (`cmpInlineHtml`, `renderMarginFunnel`,
+  > `renderMarginDetail`), `app/static/style.css` (`.cmp-cur`, `.cmp-prev`)
+  > состояние: прошлые значения — второй строкой в ячейке, ветка `t-75-inline-cmp`
 
 ## Заблокированные
 
