@@ -437,6 +437,67 @@ def test_recommendations_promo_plan_cap_api(db, api_client):
     assert row["promo_cap_applied"] is True
 
 
+# --- T-76: пороги акций WB («до N ₽») — импорт Excel и R20 ------------------
+
+def _limits_xlsx(rows):
+    buf = io.BytesIO()
+    pd.DataFrame([["Артикул WB", "Наименование", "Плановая цена"]] + rows) \
+        .to_excel(buf, index=False, header=False)
+    return buf.getvalue()
+
+
+def test_promo_limits_import_summary_and_recommendation(db, api_client):
+    """Импорт двух файлов (разные акции) → cap повышения по минимальному порогу."""
+    nm = "1099756595"
+    _seed(db, "R20A", nm, stock=15, replenishable=True,
+          sales=[(2, 4, 0), (20, 4, 0), (40, 1, 0)],
+          funnel=(200, 30, 10, 0, 900))
+    db.add(models.PriceSnapshot(
+        marketplace="wb", article="R20A", base_article="R20A", nm_id=nm,
+        size="", price=1590, discounted_price=1287.9, discount=19))
+    db.commit()
+
+    r1 = api_client.post(
+        "/api/promo/limits/import?promo_id=2766",
+        files={"file": ("limits_2766.xlsx", _limits_xlsx([[nm, "Товар", 1450]]),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert r1.status_code == 200, r1.text
+    r2 = api_client.post(
+        "/api/promo/limits/import?promo_id=2767",
+        files={"file": ("limits_2767.xlsx", _limits_xlsx([[nm, "Товар", 1388]]),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert r2.status_code == 200, r2.text
+
+    body = api_client.get("/api/promo/limits").json()
+    assert body["total_products"] == 1
+    assert {p["promo_id"] for p in body["promotions"]} == {2766, 2767}
+
+    rec = api_client.post("/api/pricing/recommendations", json={}).json()
+    row = next(x for x in rec["rows"] if x["article"] == "R20A")
+    assert row["promo_limit_total"] == 2
+    assert row["promo_limit_count"] == 2
+    assert row["promo_limit_price"] == 1388.0
+    assert row["target_vis"] <= 1388.0 + 1e-6
+    assert row["promo_limit_applied"] is True
+
+    d = api_client.delete("/api/promo/limits/2766")
+    assert d.status_code == 200 and d.json()["deleted"] == 1
+    rest = api_client.get("/api/promo/limits").json()
+    assert {p["promo_id"] for p in rest["promotions"]} == {2767}
+    assert api_client.delete("/api/promo/limits").json()["deleted"] == 1
+
+
+def test_promo_limits_import_rejects_empty_or_unknown(db, api_client):
+    empty = api_client.post(
+        "/api/promo/limits/import",
+        files={"file": ("x.xlsx", b"", "application/octet-stream")})
+    assert empty.status_code == 400
+    bad = api_client.post(
+        "/api/promo/limits/import",
+        files={"file": ("x.xlsx", b"not an excel", "application/octet-stream")})
+    assert bad.status_code == 400
+
+
 # --- T-48: минимальная цена автоакций WB ------------------------------------
 
 def test_minpromo_status_empty(db, api_client):

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.providers import factory as provider_factory
 from app.services import excel_io
+from app.services import promo_limits as promo_limits_service
 from app.services.cabinets import provider_credentials, run_per_link
 
 
@@ -205,6 +206,17 @@ PRICING_DEFAULTS = {
     "minpromo_block_days": 30.0,        # 7 | 30 | 0 (бессрочно)
     "minpromo_min_pct": 20.0,           # нижняя граница, % от текущей цены
     "minpromo_max_pct": 80.0,           # верхняя граница, % от текущей цены
+    # T-76 (R20): сохранение выгодных акций WB при повышении цены. Акция
+    # автоучастия держит товар, пока витрина ≤ «плановой цены» (порог «до N ₽»).
+    # Автопилот не поднимает цену выше этого порога, если повышение выбило бы
+    # товар из акции; выходит только из наименее выгодных (низкий порог).
+    # gap — запас под порогом, % (5% → цена не выше 95% порога). Убыточную цену
+    # (маржа при цели < promo_keep_min_margin_pct) не сохраняем.
+    "promo_keep_enabled": True,
+    "promo_keep_gap_pct": 5.0,
+    "promo_keep_min_margin_pct": 0.0,
+    "promo_keep_warn_days": 7.0,        # с какого возраста порогов предупреждать
+    "promo_keep_expire_days": 30.0,     # старше — пороги не применяются
 }
 
 
@@ -1055,6 +1067,11 @@ def recommendations(
     # связки (R16) — ничто не должно увести цену ниже, чем просит WB.
     promo_plan_apply(out_rows, _promo_plan_map(db), s)
 
+    # T-76 (R20): сохранить выгодные акции WB при повышении цены. Акция держит
+    # товар, пока витрина ≤ «плановой цены» («до N ₽»); не поднимаем цену выше
+    # порога сохранённой акции, выходим только из наименее выгодных.
+    promo_limit_apply(out_rows, _promo_limit_map(db, s), s)
+
     # T-48: минимальная цена автоакций WB (граница автоскидок маркетплейса).
     # Считается от готового floor_price / витрины, поэтому идёт последним.
     for r in out_rows:
@@ -1539,10 +1556,11 @@ def _demand_strength(f: dict, s: dict) -> float:
 
 
 def _promo_cap_pct(description) -> Optional[float]:
-    """Потолок промо-скидки WB из описания акции («промо-скидка не более N%») → N.
+    """Бустинг WB из описания акции («промо-скидка не более N%») → N, %.
 
-    Возвращает None, если потолок не указан. Это скидка WB поверх цели, а не
-    наша собственная — используется как справочная цифра в UI.
+    Возвращает None, если бустинг не указан. Это надбавка/скидка WB поверх
+    нашей цены, а не наша собственная — справочная цифра в UI (колонка
+    «Бустинг WB, %»); автопилот свой потолок считает от безубытка.
     """
     desc = description or ""
     m = re.search(r"не более\s*(\d+(?:[.,]\d+)?)\s*%", desc, re.I)
@@ -1916,6 +1934,147 @@ def promo_plan_apply(rows: list, plan_map: dict, s: dict) -> int:
                     f"{new_disc:.1f}%")
             r["reason"] = ((reason + ". ") if reason else "") + note
     return sum(1 for r in rows if r.get("promo_cap_applied"))
+
+
+def _promo_limit_map(db, s: dict) -> dict:
+    """nm_id → пороги участия в акциях WB «до N ₽» (плановая цена).
+
+    T-76 / R20. Источники — `wb_promo_limits` (Excel ЛК, включая автоакции) и
+    `wb_promo_nomenclatures` (API regular-акций, только inAction). Строки
+    старше ``promo_keep_expire_days`` не применяются: в ЛК дата загрузки живёт
+    30 дней, после чего порог считается недействительным.
+    """
+    if db is None:
+        return {}
+    expire = _num(s.get("promo_keep_expire_days", 30.0))
+    try:
+        return promo_limits_service.limits_map(db, expire_days=expire)
+    except Exception:  # noqa: BLE001 — нет таблицы не должен ронять расчёт
+        return {}
+
+
+def promo_limit_apply(rows: list, limits: dict, s: dict) -> int:
+    """R20: не выбивать товар из выгодных акций WB повышением цены.
+
+    Участие в акции живо, пока витринная цена ≤ «плановой цены» (порог «до N ₽»,
+    planPrice). Правило ограничивает только ПОВЫШЕНИЕ: целевая цена не
+    поднимается выше самого низкого порога, который ещё проходит с запасом
+    ``promo_keep_gap_pct`` (по умолчанию 5%). Так товар остаётся в акциях с
+    высокими порогами и выходит только из наименее выгодных (низких).
+
+    Исключение: если цена на пороге убыточна (маржа при цели <
+    ``promo_keep_min_margin_pct``), акция не сохраняется — повышение идёт как
+    решил автопилот.
+
+    Инфо-поля строки заполняются всегда, даже при выключенном правиле:
+    ``promo_limit_total`` (загружено порогов), ``promo_limit_count`` (акций,
+    где товар участвует сейчас), ``promo_limit_price`` (порог, который держим),
+    ``promo_limit_keep`` (акций сохраняется при целевой цене),
+    ``promo_limit_applied``, ``promo_limit_age_days``, ``promo_limit_source``.
+    Возвращает число строк, у которых повышение было ограничено.
+    """
+    for r in rows:
+        r.setdefault("promo_limit_total", 0)
+        r.setdefault("promo_limit_count", 0)
+        r.setdefault("promo_limit_price", None)
+        r.setdefault("promo_limit_keep", 0)
+        r.setdefault("promo_limit_applied", False)
+        r.setdefault("promo_limit_age_days", None)
+        r.setdefault("promo_limit_source", "")
+    if not limits:
+        return 0
+
+    gap = _clamp(_num(s.get("promo_keep_gap_pct", 5.0)), 0.0, 90.0)
+    min_margin = _num(s.get("promo_keep_min_margin_pct", 0.0))
+    warn_days = _num(s.get("promo_keep_warn_days", 7.0))
+    enabled = bool(s.get("promo_keep_enabled", True))
+    econ_keys = ("comm_rate", "logistics_unit", "storage_unit",
+                 "other_unit", "net_cost")
+
+    for r in rows:
+        nm = str(r.get("nm_id") or "")
+        items = limits.get(nm) or []
+        if not nm or not items:
+            continue
+        cur = _num(r.get("current_vis"))
+        prices = sorted({round(_num(i.get("plan_price")), 2) for i in items
+                         if _num(i.get("plan_price")) > 0})
+        if cur <= 0 or not prices:
+            continue
+        participating = [p for p in prices if p >= cur - 1e-9]
+        r["promo_limit_total"] = len(prices)
+        r["promo_limit_count"] = len(participating)
+        if not participating:
+            # Текущая цена уже выше всех порогов — сохранять нечего.
+            r["promo_limit_keep"] = 0
+            continue
+
+        # Порог, который держим: минимальный из проходящих с запасом gap.
+        # band/floor_cap не дают опустить границу ниже текущей цены.
+        base = max(participating)
+        floor_cap = max(base * (1 - gap / 100.0), cur)
+        keep_band = [p for p in prices if p >= floor_cap - 1e-9]
+        if not keep_band:
+            continue
+        cap = min(keep_band)
+        r["promo_limit_price"] = round(cap, 2)
+        srcs = {i.get("source") or "" for i in items
+                if round(_num(i.get("plan_price")), 2) == cap}
+        srcs.discard("")
+        r["promo_limit_source"] = ("excel+api" if len(srcs) > 1
+                                   else (next(iter(srcs)) if srcs else ""))
+        ages = [i.get("age_days") for i in items
+                if round(_num(i.get("plan_price")), 2) == cap
+                and i.get("age_days") is not None]
+        r["promo_limit_age_days"] = max(ages) if ages else None
+
+        tgt = _num(r.get("target_vis"))
+        if tgt is not None and tgt > 0:
+            kept = [p for p in prices if p >= tgt - 1e-9]
+            r["promo_limit_keep"] = len(kept)
+        if not enabled or tgt is None or tgt <= cap + 1e-9:
+            continue
+
+        # Исключение: сохранение акции не должно делать цену убыточной.
+        if all(k in r for k in econ_keys):
+            margin = _margin_pct(cap, r)
+            if margin is not None and margin < min_margin - 1e-9:
+                continue
+
+        price = _num(r.get("price"))
+        cur_disc = _num(r.get("current_discount"))
+        if cur_disc is None:
+            cur_disc = 0.0
+        r["target_vis"] = round(cap, 2)
+        if price > 0:
+            r["target_discount"] = round(
+                _clamp((1 - cap / price) * 100, 0.0, 100.0), 1)
+        if r.get("target_discount") is not None:
+            r["delta_discount"] = round(_num(r["target_discount"]) - cur_disc, 1)
+        if all(k in r for k in econ_keys):
+            r["margin_pct_at_target"] = _margin_pct(cap, r)
+        r["promo_limit_applied"] = True
+        r["promo_limit_keep"] = sum(1 for p in prices if p >= cap - 1e-9)
+
+        reason = (r.get("reason") or "").rstrip(".")
+        note = (f"сохранены акции WB: цена не выше порога {cap:,.2f} ₽ "
+                f"(остаётся акций: {r['promo_limit_keep']})").replace(",", " ")
+        if r["promo_limit_age_days"] is not None and \
+                warn_days > 0 and r["promo_limit_age_days"] > warn_days:
+            note += (f"; порогам {r['promo_limit_age_days']} дн. — "
+                     "обновите Excel из ЛК")
+        new_disc = _num(r.get("target_discount"))
+        if new_disc is None or new_disc <= cur_disc + 1e-9:
+            # Повышение целиком съедено порогом — решение становится «держать».
+            r["action"] = "HOLD"
+            r["status"] = "hold"
+            r["reason"] = ((reason + ". ") if reason else "") + note + \
+                " — повышение отложено"
+        else:
+            if r.get("action") in ("RAISE", "HOLD"):
+                r["status"] = "suggested"
+            r["reason"] = ((reason + ". ") if reason else "") + note
+    return sum(1 for r in rows if r.get("promo_limit_applied"))
 
 
 def _decide_dead(f: dict, s: dict) -> dict:

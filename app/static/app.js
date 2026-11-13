@@ -10951,6 +10951,11 @@ const PRICING_LABELS = {
   promo_max_rows: "Товаров за проход, ≤ шт",
   promo_min_stale_days: "Порог «залежалось», дн",
   promo_protect_velocity: "Защита живых, шт/дн",
+  promo_keep_enabled: "Сохранять выгодные акции при повышении",
+  promo_keep_gap_pct: "Запас под порогом акции, %",
+  promo_keep_min_margin_pct: "Мин. маржа для сохранения акции, %",
+  promo_keep_warn_days: "Пороги: напоминать с возраста, дн",
+  promo_keep_expire_days: "Пороги: срок действия, дн",
   follow_main: "T-33: следовать за главной связкой",
   main_influence_pct: "T-33: доля влияния главной, %",
   demand_raise: "R12: поднимать цену при подтверждённом спросе",
@@ -11043,6 +11048,11 @@ const PRICING_HINTS = {
   promo_max_rows: "Сколько товаров максимум разгружать за один проход (по умолчанию 30). Если подходящих товаров больше — берутся самые «жертвенные» по оценке.",
   promo_min_stale_days: "Товары с продажами недавле этого срока разгрузкой не трогаются (по умолчанию 30 дн.). Увеличьте, если хотите разгружать только совсем остывшие позиции.",
   promo_protect_velocity: "Защита живых товаров: если сбыт быстрее этого значения (шт/дн), разгрузка товар не трогает (по умолчанию 0.5). Поставьте 0, чтобы отключить защиту и резать всё, что прошло порог залежалось.",
+  promo_keep_enabled: "T-76: при повышении цены не выбивать товар из выгодных акций WB. Акция держит товар, пока витринная цена ≤ порога «до N ₽» (плановая цена). Автопилот не поднимает цену выше порога самой низкой сохраняемой акции с запасом «Запас под порогом». Выключено — ограничение повышения не действует, колонки-подсказки остаются.",
+  promo_keep_gap_pct: "Запас под порогом акции, % (по умолчанию 5). Цена останавливается не на самом пороге, а на 5% ниже — чтобы округления и скачки витрины не выбили товар из акции. 0 — держаться ровно на пороге.",
+  promo_keep_min_margin_pct: "Если сохранение акции делает цену убыточной (маржа при целевой цене ниже этого значения, %), акция не сохраняется — повышение идёт как решил автопилот. 0 — сохранять акцию, пока цена не убыточна.",
+  promo_keep_warn_days: "С какого возраста загруженных порогов автопилот напоминает обновить Excel из ЛК (дней, по умолчанию 7). Само правило продолжает работать до «Срок действия порогов».",
+  promo_keep_expire_days: "Сколько дней действуют загруженные пороги (по умолчанию 30 — столько же живёт дата загрузки в ЛК). Старше — пороги не применяются, пока не загрузите свежий Excel.",
 };
 
 const PRICING_ACTION = {
@@ -11186,13 +11196,20 @@ const pricingHeaders = [
   { k: "promo_tier_pct", label: "Доля для след. буста, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "ParticipationRate следующей ступени акции: доля наших товаров, которую WB хочет видеть в акции, чтобы дать буст. Не порог скидки и не цель правила — повлиять на неё выбором товаров нельзя, WB отбирает товары сам."},
   { k: "promo_tier_boost", label: "Буст след. ступени", num: true, render: (v) => v == null ? "—" : "×" + (Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)) , tip: "Буст, который даст следующая ступень акции. Достаётся ВСЕМ участникам акции, а не отдельному товару — поэтому своей «ступени» у строки нет."},
   { k: "promo_need_rows", label: "Надо в акцию, шт", num: true, render: (v) => v == null ? "—" : fmt(v) , tip: "Сколько наших товаров WB не хватает до следующего буста: нужная доля × ПУЛ WB (в_промо + не_в_промо) − уже в промо. Справочная цифра: раньше считалось от числа всех наших товаров, что завышало оценку в разы."},
-  { k: "promo_cap_pct", label: "Потолок промо, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Потолок скидки самой акции из описания WB («промо-скидка не более N%»). Справочно; автопилот свой потолок считает от безубытка."},
+  { k: "promo_cap_pct", label: "Бустинг WB, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Бустинг скидки самой акции из описания WB («промо-скидка не более N%»). Справочно; автопилот свой потолок считает от безубытка."},
   { k: "promo_push_applied", label: "Разгружен", render: (v) => v ? "<span class='pos'>да</span>" : "—" , tip: "Правило разгрузки выбрало этот товар: скидка увеличена на шаг promo_push_pct ради продажи залежалого."},
   { k: "promo_delta_discount", label: "Вклад разгрузки, п.п.", num: true, render: promoDeltaCell , tip: "На сколько п.п. разгрузка подняла целевую скидку сверх решения остальных правил. Общая «Дельта скидки» остаётся суммой всех правил."},
   { k: "promo_score", label: "Оценка", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(2) , tip: "Оценка жертвенности 0…2.6: дольше без продаж (до 1.0) + дешевле резать по себестоимости (до 0.6) + больше лежит на складе (до 1.0). Больше = товар лучше подходит под разгрузку."},
   { k: "promo_score_confidence", label: "Полнота оценки", render: promoConfidenceCell , tip: "«Полная» — все сигналы взяты точными значениями. «По фолбэку» — часть данных отсутствовала (например, свой склад не заведён, продаж не было вовсе), оценка приблизительная."},
   { k: "promo_plan_pct", label: "WB просит скидку, %", num: true, render: (v) => v == null ? "—" : fmt(v) + "%" , tip: "Рекомендованная WB скидка (planDiscount из «номенклатуры акции»): максимальная по активным обычным акциям, в которых этот товар есть — как участник или как подходящий кандидат. У автоакций WB этих данных не отдаёт. При включённом «учитывать акции» автопилот не опускает скидку глубже этой цифры (правило R19)."},
   { k: "promo_cap_applied", label: "Ограничено акцией", render: (v) => v ? "<span class='neg'>да</span>" : "—" , tip: "Правило R19 сработало: автопилот хотел скидку глубже, чем рекомендует акция WB, и остановился на плане WB. Товар, уже сидящий глубже рекомендации, не поднимается — потолок только предотвращает углубление."},
+  { k: "promo_limit_count", label: "Акций по порогам, шт", num: true, tip: "T-76: в скольких акциях WB товар участвует сейчас — по загруженным порогам «до N ₽» (плановая цена). Акция держит товар, пока витринная цена ≤ порога. Источник — Excel из ЛК (автоакции) и API обычных акций."},
+  { k: "promo_limit_keep", label: "Сохраняется акций, шт", num: true, tip: "T-76: сколько акций останется при целевой цене автопилота. Повышение ограничивается порогом самой низкой сохраняемой акции с запасом promo_keep_gap_pct (5%). Выход — только из наименее выгодных акций."},
+  { k: "promo_limit_total", label: "Порогов загружено, шт", num: true, tip: "T-76: сколько всего порогов «до N ₽» загружено для этого товара (разные акции могут иметь разные пороги)."},
+  { k: "promo_limit_price", label: "Порог акции, руб", num: true, render: cellFmts.moneyZero, tip: "T-76: плановая цена WB (порог «до N ₽»), которую удерживает автопилот: выше неё товар выпал бы из акции. Выбирается самый низкий порог, проходящий с запасом promo_keep_gap_pct."},
+  { k: "promo_limit_applied", label: "Цена из-за акции", render: (v) => v ? "<span class='neg'>да</span>" : "—" , tip: "T-76: правило R20 сработало — повышение цены ограничено порогом акции WB. Если цель поднялась бы выше порога, цена остановлена на нём (акции сохранены)."},
+  { k: "promo_limit_age_days", label: "Порогам, дн", num: true, tip: "T-76: возраст загруженных порогов, дней. В ЛК дата загрузки живёт 30 дней; старше promo_keep_expire_days не применяются. Старше promo_keep_warn_days — автопилот напоминает обновить Excel."},
+  { k: "promo_limit_source", label: "Источник порогов", render: (v) => v === "excel" ? "Excel ЛК" : v === "api" ? "API" : v === "excel+api" ? "Excel+API" : "—", tip: "T-76: откуда порог: Excel ЛК (единственный источник для автоакций) или API обычных акций (planPrice участников inAction=true)."},
   { k: "last_sale_days_ago", label: "Дней без продаж", num: true, render: (v) => v == null ? "—" : (Number(v) >= 9999 ? "никогда" : fmt(v)) , tip: "Дней с последней продажи товара. Основной сигнал разгрузки: чем больше, тем сильнее товар просится на распродажу. «никогда» = продаж не было вовсе (или новинка без данных)."},
   { k: "revenue_per_one", label: "Ср. чек, руб", num: true, render: cellFmts.money , tip: "Фактическая цена продажи по детализации WB: выручка ÷ проданные штуки, ₽."},
   { k: "income_per_one", label: "К переч./шт, руб", num: true, render: cellFmts.money , tip: "К перечислению на единицу по детализации WB: сколько денег за одну проданную штуку получает продавец."},
@@ -11416,6 +11433,8 @@ function syncPricingMpUi() {
   if (modeMenu) modeMenu.classList.toggle("hidden", oz);
   const promo = $("#pricingPromoRefresh");
   if (promo) promo.classList.toggle("hidden", oz);
+  const limits = $("#pricingLimitsMenu");
+  if (limits) limits.style.display = oz ? "none" : "";
   const priceBtn = $("#pricingPriceRefresh");
   if (priceBtn) priceBtn.textContent = oz ? "Обновить цены Ozon" : "Обновить цены WB";
   const minBtn = $("#pricingMinPrices");
@@ -11906,6 +11925,257 @@ function initPricingMinpromoMenu() {
   panel.addEventListener("change", () => collectPricingSettings());
 }
 
+// T-76: пороги участия в акциях WB — импорт Excel из ЛК и сводка.
+let _pricingLimitsInited = false;
+let _pricingLimitsFile = null;
+
+function _limitsSetMsg(text, isError) {
+  const box = $("#pricingLimitsStatus");
+  if (!box) return;
+  box.textContent = text || "";
+  box.style.color = isError ? "#b00020" : "";
+}
+
+function _limitsPromoLabel(p) {
+  const name = (p && (p.promo_name || p.name)) || "";
+  const pid = p && (p.promo_id != null ? p.promo_id : p.id);
+  if (!pid) return "Без привязки (по имени файла)";
+  return (name || "Акция " + pid) + " (id " + pid + ")";
+}
+
+async function refreshPricingLimitsSummary() {
+  const box = $("#pricingLimitsSummary");
+  if (!box) return;
+  let data;
+  try {
+    data = await api("/promo/limits");
+  } catch (e) {
+    box.textContent = "Не удалось получить пороги: " + apiErrorMessage(e);
+    return;
+  }
+  box.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "hint";
+  head.textContent = "Загружено акций: " + (data.promotions || []).length
+    + " · товаров: " + (data.total_products || 0)
+    + " · строк: " + (data.total_rows || 0);
+  box.appendChild(head);
+  if (!(data.promotions || []).length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "Порогов пока нет. Загрузите Excel из ЛК.";
+    box.appendChild(empty);
+    return;
+  }
+  for (const p of data.promotions) {
+    const row = document.createElement("div");
+    row.className = "colview-row";
+    const txt = document.createElement("span");
+    const lo = p.min_plan_price, hi = p.max_plan_price;
+    const range = (lo && hi)
+      ? (lo === hi ? fmt(lo) : fmt(lo) + "–" + fmt(hi)) + " ₽"
+      : "—";
+    const when = p.age_days == null ? "дата неизвестна"
+      : (p.age_days === 0 ? "сегодня" : p.age_days + " дн. назад");
+    txt.textContent = _limitsPromoLabel(p) + ": " + p.products + " тов., пороги "
+      + range + ", " + when + (p.file_name ? " (" + p.file_name + ")" : "");
+    txt.title = txt.textContent;
+    row.appendChild(txt);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn";
+    del.textContent = "Удалить";
+    del.addEventListener("click", async () => {
+      del.disabled = true;
+      try {
+        await fetch("/api/promo/limits/" + encodeURIComponent(p.promo_id),
+                    { method: "DELETE" });
+        await refreshPricingLimitsSummary();
+        if (currentTab === "pricing") renderPricing(false);
+      } catch (e) {
+        _limitsSetMsg("Ошибка удаления: " + apiErrorMessage(e), true);
+      } finally {
+        del.disabled = false;
+      }
+    });
+    row.appendChild(del);
+    box.appendChild(row);
+  }
+}
+
+async function importPricingLimits(btn) {
+  if (!_pricingLimitsFile) {
+    _limitsSetMsg("Сначала выберите Excel-файл из ЛК", true);
+    return;
+  }
+  const sel = $("#pricingLimitsPromo");
+  const pid = Number((sel && sel.value) || 0);
+  const prev = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Загружаю…"; }
+  _limitsSetMsg("Разбираю Excel и сохраняю пороги…");
+  try {
+    const fd = new FormData();
+    fd.append("file", _pricingLimitsFile);
+    let resp;
+    try {
+      resp = await fetch("/api/promo/limits/import?promo_id=" + encodeURIComponent(pid),
+                         { method: "POST", body: fd });
+    } catch (e) {
+      throw apiErr(e);
+    }
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(j.detail || resp.status + " " + resp.statusText);
+    _pricingLimitsFile = null;
+    const fileName = $("#pricingLimitsFileName");
+    if (fileName) fileName.textContent = "Файл не выбран";
+    const cols = j.columns ? Object.keys(j.columns).join(", ") : "";
+    _limitsSetMsg("Импортировано строк: " + (j.imported || 0)
+      + " (акция: " + _limitsPromoLabel({ promo_id: j.promo_id }) + ")"
+      + (cols ? "; колонки: " + cols : "")
+      + (j.skipped ? "; пропущено: " + j.skipped : ""));
+    await refreshPricingLimitsSummary();
+    if (currentTab === "pricing") renderPricing(false);
+  } catch (e) {
+    _limitsSetMsg("Ошибка импорта: " + apiErrorMessage(e), true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
+async function buildPricingLimitsPanel() {
+  const panel = $("#pricingLimitsPanel");
+  if (!panel) return;
+  panel.innerHTML = "";
+
+  const hint = document.createElement("div");
+  hint.className = "margin-arts-hint";
+  hint.textContent = "WB не отдаёт пороги автоакций по API. В ЛК: «Цены и скидки» → "
+    + "акция → «Обновить через Excel» — и загрузите этот файл сюда. "
+    + "Акция держит товар, пока витрина ≤ «плановой цены» («до N ₽»).";
+  panel.appendChild(hint);
+
+  const promoWrap = document.createElement("label");
+  promoWrap.className = "p-st";
+  const promoHead = document.createElement("span");
+  promoHead.className = "p-st-head";
+  promoHead.textContent = "Акция";
+  promoWrap.appendChild(promoHead);
+  const sel = document.createElement("select");
+  sel.id = "pricingLimitsPromo";
+  const opt0 = document.createElement("option");
+  opt0.value = "0";
+  opt0.textContent = "Без привязки (определить по имени файла)";
+  sel.appendChild(opt0);
+  promoWrap.appendChild(sel);
+  panel.appendChild(promoWrap);
+  api("/promo/list").then((j) => {
+    for (const p of (j.promotions || [])) {
+      const opt = document.createElement("option");
+      opt.value = String(p.id);
+      opt.textContent = _limitsPromoLabel(p);
+      sel.appendChild(opt);
+    }
+  }).catch(() => {});
+
+  const dz = document.createElement("div");
+  dz.className = "pdf-drop";
+  dz.textContent = "Excel из ЛК: перетащите файл сюда или нажмите";
+  dz.title = "Файл .xlsx с колонками «Артикул WB» и «Плановая цена» "
+    + "(если подписи другие — загрузка покажет найденные колонки)";
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = ".xlsx,.xlsm";
+  inp.className = "hidden";
+  dz.addEventListener("click", () => inp.click());
+  dz.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dz.classList.add("over");
+  });
+  dz.addEventListener("dragleave", () => dz.classList.remove("over"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.classList.remove("over");
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) {
+      _pricingLimitsFile = f;
+      const nameEl = $("#pricingLimitsFileName");
+      if (nameEl) nameEl.textContent = f.name;
+    }
+  });
+  inp.addEventListener("change", () => {
+    const f = inp.files && inp.files[0];
+    if (f) {
+      _pricingLimitsFile = f;
+      const nameEl = $("#pricingLimitsFileName");
+      if (nameEl) nameEl.textContent = f.name;
+    }
+  });
+  panel.appendChild(dz);
+  panel.appendChild(inp);
+
+  const fileName = document.createElement("div");
+  fileName.className = "hint";
+  fileName.id = "pricingLimitsFileName";
+  fileName.textContent = _pricingLimitsFile ? _pricingLimitsFile.name : "Файл не выбран";
+  panel.appendChild(fileName);
+
+  const act = document.createElement("button");
+  act.type = "button";
+  act.className = "menu-item";
+  act.id = "pricingLimitsImport";
+  act.textContent = "Загрузить пороги";
+  act.addEventListener("click", () => importPricingLimits(act));
+  panel.appendChild(act);
+
+  const msg = document.createElement("div");
+  msg.className = "hint";
+  msg.id = "pricingLimitsStatus";
+  panel.appendChild(msg);
+
+  const sum = document.createElement("div");
+  sum.id = "pricingLimitsSummary";
+  panel.appendChild(sum);
+
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "menu-item";
+  clear.textContent = "Очистить все пороги";
+  clear.addEventListener("click", async () => {
+    if (!window.confirm("Удалить все загруженные пороги акций?")) return;
+    try {
+      await fetch("/api/promo/limits", { method: "DELETE" });
+      await refreshPricingLimitsSummary();
+      _limitsSetMsg("Все пороги удалены");
+      if (currentTab === "pricing") renderPricing(false);
+    } catch (e) {
+      _limitsSetMsg("Ошибка очистки: " + apiErrorMessage(e), true);
+    }
+  });
+  panel.appendChild(clear);
+
+  await refreshPricingLimitsSummary();
+}
+
+function initPricingLimitsMenu() {
+  const btn = $("#btnpricingLimits");
+  const menu = $("#pricingLimitsMenu");
+  const panel = $("#pricingLimitsPanel");
+  if (!btn || !menu || !panel) return;
+  if (_pricingLimitsInited) return;
+  _pricingLimitsInited = true;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (panel.classList.contains("hidden")) {
+      buildPricingLimitsPanel();
+      panel.classList.remove("hidden");
+    } else {
+      panel.classList.add("hidden");
+    }
+  });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+}
+
 let _pricingShowMenuInited = false;
 
 // Селектор «Показ»: чекбоксы «С нулевыми товарами» и «Скрыть "пропустить"».
@@ -12050,6 +12320,10 @@ const PRICING_GROUPS = [
       "promo_enabled", "promo_max_rows", "promo_min_stale_days",
       "promo_protect_velocity", "promo_push_pct", "promo_max_beyond_floor_pp",
   ] },
+  { title: "Пороги акций WB при повышении", col: 2, keys: [
+      "promo_keep_enabled", "promo_keep_gap_pct", "promo_keep_min_margin_pct",
+      "promo_keep_warn_days", "promo_keep_expire_days",
+  ] },
   { title: "Окно и скорость", col: 1, keys: [
       "window_days", "season_adj", "season_damp", "min_days_with_sales",
       "fallback_window_days",
@@ -12135,6 +12409,8 @@ function pricingParamRow(key, cur) {
       || key === "value_ratio_low" || key === "value_ratio_high"
       || key === "promo_protect_velocity"
       || key === "promo_max_beyond_floor_pp"
+      || key === "promo_keep_gap_pct"
+      || key === "promo_keep_min_margin_pct"
       || key === "cash_flow_bias"
       || key === "lower_soften") ? "0.1" : "1";
     input.value = cur;
@@ -12362,6 +12638,7 @@ const PRICING_FOOT = {
   revenue_per_one: "avg", income_per_one: "avg", commission_per_one: "avg",
   logistics_per_one: "avg", storage_per_one: "avg", doc: "avg", velocity: "avg", trend: "avg",
   promo_count: "sum", promo_part_pct: "avg", promo_tier_pct: "avg", promo_tier_boost: "avg", promo_cap_pct: "avg", promo_plan_pct: "avg",
+  promo_limit_count: "sum", promo_limit_keep: "sum", promo_limit_total: "sum", promo_limit_price: "avg",
   promo_delta_discount: "avg", promo_score: "avg",
 };
 function pricingFooters(rows) {
@@ -13443,6 +13720,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   onTabInput("pricingLike", "pricing", () => renderPricing(false), 350);
   initPricingShowMenu();
   initPricingMinpromoMenu();
+  initPricingLimitsMenu();
   initPricingSettingsMenu();
   const pricingSettingsBox = $("#pricingSettings");
   if (pricingSettingsBox) {

@@ -18,6 +18,7 @@ from app.services.pricing import (
     _value_discount_scale,
     merge_settings,
     project_velocity,
+    promo_limit_apply,
     promo_plan_apply,
     recommendations,
 )
@@ -2111,6 +2112,119 @@ def test_recommendations_promo_plan_cap(db):
     assert row["action"] == "LOWER"
     assert row["target_discount"] <= 7.0 + 1e-9
     assert row["promo_cap_applied"] is True
+
+
+# --- T-76: R20 — сохранение выгодных акций WB при повышении цены ------------
+
+def _limit_row(price=1590.0, cur=19.0, tgt=1.2):
+    """Строка автопилота на повышение: витрина 1 287,90 при цене 1 590."""
+    return {
+        "article": "R20", "nm_id": "1099756595", "price": price,
+        "current_discount": cur,
+        "current_vis": round(price * (1 - cur / 100), 2),
+        "target_discount": tgt,
+        "target_vis": round(price * (1 - tgt / 100), 2),
+        "delta_discount": round(tgt - cur, 1),
+        "action": "RAISE", "status": "suggested", "reason": "устойчивый спрос",
+        "comm_rate": 0.15, "logistics_unit": 40.0, "storage_unit": 10.0,
+        "other_unit": 5.0, "net_cost": 300.0, "margin_pct_at_target": None,
+    }
+
+
+#: Живой пример: автоакции 1 450 / 1 374 / 1 388 / 1 299, вне акции — 1 273.
+_LIMITS = {"1099756595": [
+    {"plan_price": p, "promo_id": i, "source": "excel", "age_days": 2}
+    for i, p in enumerate([1450.0, 1374.0, 1388.0, 1299.0, 1273.0], start=1)
+]}
+
+
+def test_promo_limit_apply_keeps_best_promos_and_caps_raise():
+    """Пример T-76: цель 1 570,85 → потолок 1 388 ₽, сохраняются 2 акции."""
+    rows = [_limit_row()]
+    n = promo_limit_apply(rows, _LIMITS, merge_settings({}))
+    r = rows[0]
+    assert n == 1
+    assert r["promo_limit_total"] == 5
+    assert r["promo_limit_count"] == 4       # участвует в 4 из 5
+    assert r["promo_limit_price"] == 1388.0  # минимальный порог с запасом 5%
+    assert r["promo_limit_keep"] == 2        # 1 388 и 1 450
+    assert r["promo_limit_applied"] is True
+    assert r["target_vis"] == 1388.0
+    assert r["target_discount"] == pytest.approx(12.7, abs=0.05)
+    assert r["promo_limit_source"] == "excel"
+    assert "сохранены акции WB" in r["reason"]
+
+
+def test_promo_limit_apply_noop_when_target_below_cap():
+    """Цель и так ниже порога сохранения — правило не вмешивается."""
+    rows = [_limit_row(tgt=13.0)]  # витрина 1 383,30 < 1 388
+    n = promo_limit_apply(rows, _LIMITS, merge_settings({}))
+    assert n == 0
+    assert rows[0]["promo_limit_applied"] is False
+    assert rows[0]["target_vis"] == round(1590 * 0.87, 2)
+
+
+def test_promo_limit_apply_disabled_keeps_target_but_fills_info():
+    rows = [_limit_row()]
+    n = promo_limit_apply(rows, _LIMITS,
+                          merge_settings({"promo_keep_enabled": False}))
+    assert n == 0
+    assert rows[0]["target_vis"] == round(1590 * (1 - 1.2 / 100), 2)
+    assert rows[0]["promo_limit_count"] == 4
+    assert rows[0]["promo_limit_price"] == 1388.0
+    assert rows[0]["promo_limit_applied"] is False
+
+
+def test_promo_limit_apply_skips_loss_making_keep():
+    """Если на пороге цена убыточна — акцию не сохраняем (исключение)."""
+    rows = [_limit_row()]
+    rows[0]["net_cost"] = 1300.0
+    n = promo_limit_apply(rows, _LIMITS, merge_settings({}))
+    assert n == 0
+    assert rows[0]["promo_limit_applied"] is False
+    assert rows[0]["target_vis"] > 1388.0
+
+
+def test_promo_limit_apply_turns_raise_into_hold():
+    """Повышение целиком съедено порогом → решение становится «держать»."""
+    rows = [{
+        "article": "R20H", "nm_id": "77", "price": 1000.0,
+        "current_discount": 9.0, "current_vis": 910.0,
+        "target_discount": 5.0, "target_vis": 950.0, "delta_discount": -4.0,
+        "action": "RAISE", "status": "suggested", "reason": "спрос",
+        "comm_rate": 0.15, "logistics_unit": 40.0, "storage_unit": 10.0,
+        "other_unit": 5.0, "net_cost": 100.0, "margin_pct_at_target": None,
+    }]
+    limits = {"77": [
+        {"plan_price": 910.0, "promo_id": 1, "source": "excel", "age_days": 1},
+        {"plan_price": 950.0, "promo_id": 2, "source": "excel", "age_days": 1},
+    ]}
+    n = promo_limit_apply(rows, limits, merge_settings({}))
+    assert n == 1
+    assert rows[0]["action"] == "HOLD"
+    assert rows[0]["status"] == "hold"
+    assert rows[0]["target_vis"] == 910.0
+    assert rows[0]["delta_discount"] == 0.0
+    assert "повышение отложено" in rows[0]["reason"]
+
+
+def test_recommendations_promo_limit_cap(db):
+    """Интеграция: пороги из БД ограничивают повышение, колонки заполняются."""
+    nm = "1099756595"
+    from datetime import datetime as _dt
+    _demand_seed(db, "R20I", nm, stock=15)
+    for i, plan in enumerate([1450.0, 1374.0, 1388.0, 1299.0, 1273.0], start=1):
+        db.add(models.PromoLimit(promo_id=i, nm_id=nm, plan_price=plan,
+                                 source="excel", fetched_at=_dt.utcnow()))
+    db.commit()
+    rec = recommendations(db, prices_df=_prices((nm, 1590, 19)), today=TODAY)
+    row = _row(rec, "R20I")
+    assert row["action"] in ("RAISE", "HOLD")
+    assert row["promo_limit_total"] == 5
+    assert row["promo_limit_count"] == 4
+    assert row["promo_limit_price"] == 1388.0
+    assert row["target_vis"] <= 1388.0 + 1e-6
+    assert row["promo_limit_applied"] is True
 
 
 # --- T-48: минимальная цена автоакций WB ------------------------------------

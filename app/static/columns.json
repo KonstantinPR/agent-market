@@ -3855,7 +3855,7 @@
       },
       {
        "k": "promo_cap_pct",
-       "label": "Потолок промо, %",
+       "label": "Бустинг WB, %",
        "def": false
       },
       {
@@ -3886,6 +3886,41 @@
       {
        "k": "promo_cap_applied",
        "label": "Ограничено акцией",
+       "def": false
+      },
+      {
+       "k": "promo_limit_count",
+       "label": "Акций по порогам, шт",
+       "def": false
+      },
+      {
+       "k": "promo_limit_keep",
+       "label": "Сохраняется акций, шт",
+       "def": false
+      },
+      {
+       "k": "promo_limit_total",
+       "label": "Порогов загружено, шт",
+       "def": false
+      },
+      {
+       "k": "promo_limit_price",
+       "label": "Порог акции, руб",
+       "def": false
+      },
+      {
+       "k": "promo_limit_applied",
+       "label": "Цена из-за акции",
+       "def": false
+      },
+      {
+       "k": "promo_limit_age_days",
+       "label": "Порогам, дн",
+       "def": false
+      },
+      {
+       "k": "promo_limit_source",
+       "label": "Источник порогов",
        "def": false
       },
       {
@@ -4198,6 +4233,13 @@
       "promo_score_confidence",
       "promo_plan_pct",
       "promo_cap_applied",
+      "promo_limit_count",
+      "promo_limit_keep",
+      "promo_limit_total",
+      "promo_limit_price",
+      "promo_limit_applied",
+      "promo_limit_age_days",
+      "promo_limit_source",
       "last_sale_days_ago"
      ]
     },
@@ -5410,7 +5452,7 @@
    },
    {
     "k": "promo_cap_pct",
-    "label": "Потолок промо, %"
+    "label": "Бустинг WB, %"
    },
    {
     "k": "promo_push_applied",
@@ -5435,6 +5477,34 @@
     {
      "k": "promo_cap_applied",
      "label": "Ограничено акцией"
+    },
+    {
+     "k": "promo_limit_count",
+     "label": "Акций по порогам, шт"
+    },
+    {
+     "k": "promo_limit_keep",
+     "label": "Сохраняется акций, шт"
+    },
+    {
+     "k": "promo_limit_total",
+     "label": "Порогов загружено, шт"
+    },
+    {
+     "k": "promo_limit_price",
+     "label": "Порог акции, руб"
+    },
+    {
+     "k": "promo_limit_applied",
+     "label": "Цена из-за акции"
+    },
+    {
+     "k": "promo_limit_age_days",
+     "label": "Порогам, дн"
+    },
+    {
+     "k": "promo_limit_source",
+     "label": "Источник порогов"
     },
    {
     "k": "last_sale_days_ago",

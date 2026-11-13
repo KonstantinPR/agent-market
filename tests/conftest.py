@@ -38,6 +38,7 @@ TABLES = ", ".join("public." + t for t in [
     "ozon_accruals", "ozon_placements",
     "counterparties", "warehouse_docs", "warehouse_doc_items",
     "product_sizes", "product_aliases", "wb_promotions", "wb_promo_nomenclatures",
+    "wb_promo_limits",
     "users", "cabinets",
 ])
 

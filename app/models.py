@@ -335,6 +335,36 @@ class PromoNomenclature(Base):
     )
 
 
+class PromoLimit(Base):
+    """Порог участия в акции WB («до N ₽» = planPrice) из Excel ЛК.
+
+    Публичный API WB порогов автоакций не отдаёт (`/promotions/nomenclatures`
+    для auto отвечает 422), поэтому строки заводятся Excel-выгрузкой из ЛК
+    («Цены и скидки» → акция → «Обновить через Excel»). `plan_price` — плановая
+    цена WB: товар остаётся участником, пока витрина ≤ plan_price. `promo_id=0`
+    — файл без привязки к акции (пороги всё равно работают).
+
+    Unique `(promo_id, nm_id)`: повторный импорт того же файла обновляет строки.
+    """
+
+    __tablename__ = "wb_promo_limits"
+    __table_args__ = (
+        UniqueConstraint("promo_id", "nm_id", name="uq_promo_limit_promo_nm"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    promo_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    nm_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    plan_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=True)
+    price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=True)
+    discount: Mapped[float] = mapped_column(Numeric(6, 2), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="excel")
+    file_name: Mapped[str] = mapped_column(String(255), default="")
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
 class ApiPull(Base):
     """Лог последних успешных загрузок из API маркетплейсов (по api+kind)."""
 

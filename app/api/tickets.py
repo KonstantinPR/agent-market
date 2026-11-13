@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Тикеты и акции: /api/tickets/*, /api/promo/*."""
+import json
+
 from app.api._common import *  # noqa: F401,F403
 from app.api._common import (
     _promo_row,
@@ -91,3 +93,60 @@ def promo_list(db: Session = Depends(get_db)):
         .limit(200)
     ).all()
     return {"promotions": [_promo_row(p) for p in rows]}
+
+
+@router.post("/promo/limits/import")
+async def promo_limits_import(file: UploadFile = File(...), promo_id: int = 0,
+                              column_map: str = "",
+                              db: Session = Depends(get_db)):
+    """Импорт порогов участия «до N ₽» из Excel личного кабинета WB (T-76/R20).
+
+    Публичный API автоакций порогов не отдаёт (422), поэтому единственный
+    источник — файл «Цены и скидки» → акция → «Обновить через Excel». Строки
+    складываются в `wb_promo_limits` (upsert по promo_id+nm_id), устаревшие
+    строки той же акции удаляются. ``promo_id`` = 0 — вычислить по имени файла
+    (номер акции или её название), иначе «без привязки».
+
+    ``column_map`` — необязательный JSON вида ``{"nm": "Артикул WB",
+    "plan": "Плановая цена"}`` для нестандартной выгрузки.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Файл пуст")
+    cmap = None
+    if str(column_map or "").strip():
+        try:
+            cmap = json.loads(column_map)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="column_map должен быть JSON-объектом {роль: колонка}")
+        if not isinstance(cmap, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="column_map должен быть JSON-объектом {роль: колонка}")
+    try:
+        meta = promo_limits_service.import_limits(
+            db, data, file.filename or "", promo_id=promo_id, column_map=cmap)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, **meta,
+            "summary": promo_limits_service.summary(db)}
+
+
+@router.get("/promo/limits")
+def promo_limits_list(db: Session = Depends(get_db)):
+    """Сводка загруженных порогов акций: акции, товары, даты, файл."""
+    return promo_limits_service.summary(db)
+
+
+@router.delete("/promo/limits")
+def promo_limits_clear(db: Session = Depends(get_db)):
+    """Удаляет все загруженные пороги акций."""
+    return {"deleted": promo_limits_service.clear(db)}
+
+
+@router.delete("/promo/limits/{promo_id}")
+def promo_limits_clear_promo(promo_id: int, db: Session = Depends(get_db)):
+    """Удаляет пороги одной акции."""
+    return {"deleted": promo_limits_service.clear(db, promo_id=promo_id)}

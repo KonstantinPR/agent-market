@@ -36,6 +36,7 @@ from app.services import (
     pdf_demand,
     photos as photos_service,
     pricing as pricing_service,
+    promo_limits as promo_limits_service,
     refresh as refresh_service,
     replenish as replenish_service,
     sync as sync_service,

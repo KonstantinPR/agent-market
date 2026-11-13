@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 SNAPSHOT = """
 DELETE /api/automation/face/etalons/{etalon_id}
+DELETE /api/promo/limits
+DELETE /api/promo/limits/{promo_id}
 DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
@@ -88,6 +90,7 @@ GET /api/progress
 GET /api/products
 GET /api/products/price-settings
 GET /api/promo/list
+GET /api/promo/limits
 GET /api/pulls
 GET /api/refresh
 GET /api/refresh/history
@@ -154,6 +157,7 @@ POST /api/products/prices/apply
 POST /api/products/refresh
 POST /api/products/replenishable
 POST /api/promo/refresh
+POST /api/promo/limits/import
 POST /api/refresh
 POST /api/refresh-all
 POST /api/refresh/retry-failed
