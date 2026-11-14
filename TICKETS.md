@@ -55,6 +55,12 @@
 
 ## Открытые
 
+- [T-77] (medium) Автопилот цен WB: парсер Excel ЛК по реальным выгрузкам (T-76)
+  > где: app/services/promo_limits.py (parse_limits/infer_promo_id), models.PromoLimit.in_action
+  > состояние: реализовано, ждёт коммита (nm из «Артикул WB», скидка из «Текущей
+  > скидки на сайте, %», участие из «Товар уже участвует в акции» → in_action)
+  > нужно: тесты + импорт трёх выгрузок 13.11.2026, затем закрыть с хешем
+
 - [T-32] (medium) Автопилот цен WB: рекомендации() принимает date_from/date_to
   > Тело: recommendations() принимает date_from/date_to (шапка) + фолбэк
   > window_days; джойн полного среза funnel_metric (рейтинги, выкупы,

@@ -1957,8 +1957,13 @@ def promo_limit_apply(rows: list, limits: dict, s: dict) -> int:
     """R20: не выбивать товар из выгодных акций WB повышением цены.
 
     Участие в акции живо, пока витринная цена ≤ «плановой цены» (порог «до N ₽»,
-    planPrice). Правило ограничивает только ПОВЫШЕНИЕ: целевая цена не
-    поднимается выше самого низкого порога, который ещё проходит с запасом
+    planPrice). Если Excel ЛК сообщает участие напрямую (колонка «Товар уже
+    участвует в акции», поле ``in_action``), порог учитывается только при
+    ``in_action is not False``: товар, которого в акции нет, сохранять не нужно.
+    ``in_action=None`` (колонки не было) → участие считается только по цене.
+
+    Правило ограничивает только ПОВЫШЕНИЕ: целевая цена не поднимается выше
+    самого низкого порога, который ещё проходит с запасом
     ``promo_keep_gap_pct`` (по умолчанию 5%). Так товар остаётся в акциях с
     высокими порогами и выходит только из наименее выгодных (низких).
 
@@ -1997,12 +2002,17 @@ def promo_limit_apply(rows: list, limits: dict, s: dict) -> int:
         if not nm or not items:
             continue
         cur = _num(r.get("current_vis"))
+        prices_all = sorted({round(_num(i.get("plan_price")), 2) for i in items
+                             if _num(i.get("plan_price")) > 0})
+        # Активные пороги: товар либо точно участвует (in_action=True), либо
+        # файл ЛК не сообщает участие (None → считаем по цене).
         prices = sorted({round(_num(i.get("plan_price")), 2) for i in items
-                         if _num(i.get("plan_price")) > 0})
-        if cur <= 0 or not prices:
+                         if _num(i.get("plan_price")) > 0
+                         and i.get("in_action") is not False})
+        if cur <= 0 or not prices_all:
             continue
         participating = [p for p in prices if p >= cur - 1e-9]
-        r["promo_limit_total"] = len(prices)
+        r["promo_limit_total"] = len(prices_all)
         r["promo_limit_count"] = len(participating)
         if not participating:
             # Текущая цена уже выше всех порогов — сохранять нечего.
@@ -2019,12 +2029,14 @@ def promo_limit_apply(rows: list, limits: dict, s: dict) -> int:
         cap = min(keep_band)
         r["promo_limit_price"] = round(cap, 2)
         srcs = {i.get("source") or "" for i in items
-                if round(_num(i.get("plan_price")), 2) == cap}
+                if round(_num(i.get("plan_price")), 2) == cap
+                and i.get("in_action") is not False}
         srcs.discard("")
         r["promo_limit_source"] = ("excel+api" if len(srcs) > 1
                                    else (next(iter(srcs)) if srcs else ""))
         ages = [i.get("age_days") for i in items
                 if round(_num(i.get("plan_price")), 2) == cap
+                and i.get("in_action") is not False
                 and i.get("age_days") is not None]
         r["promo_limit_age_days"] = max(ages) if ages else None
 

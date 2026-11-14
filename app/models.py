@@ -358,6 +358,9 @@ class PromoLimit(Base):
     plan_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=True)
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=True)
     discount: Mapped[float] = mapped_column(Numeric(6, 2), nullable=True)
+    #: Участвует ли товар в акции сейчас (ЛК: «Товар уже участвует в акции»).
+    #: None — в файле не было такой колонки (тогда участие считается по цене).
+    in_action: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     source: Mapped[str] = mapped_column(String(20), default="excel")
     file_name: Mapped[str] = mapped_column(String(255), default="")
     fetched_at: Mapped[datetime] = mapped_column(

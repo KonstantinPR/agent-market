@@ -48,13 +48,30 @@ def _norm_header(value) -> str:
     return s
 
 
+def _nm_priority(header: str) -> int:
+    """Насколько колонка годится на роль nmID. -1 — не артикул вовсе.
+
+    В выгрузке ЛК рядом стоят «Артикул поставщика» и «Артикул WB»: брать первый
+    нельзя (в нём буквы и хвосты размеров), поэтому у «Артикул WB» приоритет выше.
+    """
+    h = _norm_header(header)
+    if "артикул wb" in h or "артикул wildberries" in h:
+        return 3
+    if "nm_id" in h or "nmid" in h or "номенклатур" in h or "код товара" in h:
+        return 2
+    if "артикул" in h and "поставщ" not in h and "продав" not in h:
+        return 1
+    if "артикул" in h:
+        return 0  # артикул поставщика/продавца — только если других нет
+    return -1
+
+
 def _role_of(header: str) -> Optional[str]:
-    """Роль колонки по её подписи: nm / plan / price / discount / name."""
+    """Роль колонки по её подписи: nm / plan / price / discount / name / in_action."""
     h = _norm_header(header)
     if not h:
         return None
-    if ("артикул" in h and "продав" not in h) or "nm_id" in h or "nmid" in h \
-            or "номенклатур" in h or "код товара" in h:
+    if _nm_priority(h) >= 0:
         return "nm"
     if "план" in h and "цен" in h:
         return "plan"
@@ -62,7 +79,15 @@ def _role_of(header: str) -> Optional[str]:
         return "plan"
     if "цена участия" in h or "цена акции" in h or "цена для акции" in h:
         return "plan"
+    if "товар уже участв" in h or h.startswith("участвует в акции"):
+        return "in_action"
+    if h.startswith("статус"):
+        return "status"
     if "скидк" in h:
+        # «Минимальная цена для применения скидки», «Блокировка … скидки» —
+        # это не текущая скидка, и в автоакциях они пустые.
+        if "минимальн" in h or "блокировк" in h:
+            return None
         return "discount"
     if "наимен" in h or "назван" in h:
         return "name"
@@ -72,12 +97,26 @@ def _role_of(header: str) -> Optional[str]:
 
 
 def _map_headers(row: list) -> dict:
-    """Строка заголовков → {роль: индекс колонки}. Первая встреченная роль важнее."""
+    """Строка заголовков → {роль: индекс колонки}.
+
+    Для не-артикульных ролей первая встреченная колонка важнее; для nm выбирается
+    колонка с максимальным приоритетом («Артикул WB» бьёт «Артикул поставщика»).
+    """
     mapping: dict = {}
+    nm_best = (-1, -1)  # (приоритет, индекс)
     for idx, value in enumerate(row):
         role = _role_of(value)
-        if role and role not in mapping:
+        if not role:
+            continue
+        if role == "nm":
+            pri = _nm_priority(_norm_header(value))
+            if pri > nm_best[0]:
+                nm_best = (pri, idx)
+            continue
+        if role not in mapping:
             mapping[role] = idx
+    if nm_best[1] >= 0:
+        mapping["nm"] = nm_best[1]
     return mapping
 
 
@@ -126,16 +165,51 @@ def _nm(value) -> str:
     return m.group(0) if m else ""
 
 
+_TRUE_WORDS = ("да", "yes", "true", "1", "участвует")
+_FALSE_WORDS = ("нет", "no", "false", "0", "не участвует")
+
+
+def _in_action_of(rec: list, mapping: dict) -> Optional[bool]:
+    """Участвует ли товар в акции по данным файла ЛК.
+
+    Приоритет — колонка «Товар уже участвует в акции» (Да/Нет): в выгрузке
+    «Товары для исключения из акции» она точнее статуса (WB пишет «Участвует»
+    двум заблокированным строкам, хотя счётчики акции показывают 0 участников).
+    Если колонки нет — разбираем «Статус» («Участвует: …» / «Не участвует: …»).
+    None — данных нет, участие считается по цене.
+    """
+    idx = mapping.get("in_action")
+    if idx is not None and idx < len(rec):
+        v = str(rec[idx] or "").strip().lower().replace("ё", "е")
+        if v.startswith("не участв"):
+            return False
+        if v.startswith("участв"):
+            return True
+        if v in _TRUE_WORDS:
+            return True
+        if v in _FALSE_WORDS:
+            return False
+    idx = mapping.get("status")
+    if idx is not None and idx < len(rec):
+        v = str(rec[idx] or "").strip().lower()
+        if v.startswith("не участвует"):
+            return False
+        if v.startswith("участвует"):
+            return True
+    return None
+
+
 def parse_limits(data: bytes, column_map: Optional[dict] = None,
                  sheet=0) -> tuple[list, dict]:
     """Разбирает Excel ЛК → (строки-пороги, мета).
 
-    Каждая строка: ``{nm_id, plan_price, price?, discount?}``; дубли nm
-    схлопываются по максимальному plan_price (разные размеры одного товара —
-    участие сохраняется, если хотя бы один размер проходит порог).
+    Каждая строка: ``{nm_id, plan_price, price?, discount?, in_action?}``; дубли
+    nm схлопываются по максимальному plan_price (участие сохраняется, если
+    проходит хотя бы один размер).
 
     ``column_map`` — ручное сопоставление ``{роль: подпись_колонки}`` (роли:
-    nm / plan / price / discount / name) на случай нестандартной выгрузки.
+    nm / plan / price / discount / name / in_action) на случай нестандартной
+    выгрузки.
     """
     raw = pd.read_excel(BytesIO(data), sheet_name=sheet, header=None, dtype=str)
     raw = raw.dropna(how="all")
@@ -149,7 +223,7 @@ def parse_limits(data: bytes, column_map: Optional[dict] = None,
         # Пользователь даёт подписи; ищем их по нормализованному заголовку.
         mapped: dict = {}
         for role, title in column_map.items():
-            if role not in ("nm", "plan", "price", "discount", "name"):
+            if role not in ("nm", "plan", "price", "discount", "name", "in_action"):
                 continue
             want = _norm_header(title)
             for idx, h in enumerate(headers):
@@ -191,6 +265,7 @@ def parse_limits(data: bytes, column_map: Optional[dict] = None,
         discount = None
         if mapping.get("discount") is not None and mapping["discount"] < len(rec):
             discount = _num(rec[mapping["discount"]])
+        in_action = _in_action_of(rec, mapping)
         prev = rows.get(nm)
         if prev is None or plan > prev["plan_price"]:
             rows[nm] = {
@@ -198,7 +273,11 @@ def parse_limits(data: bytes, column_map: Optional[dict] = None,
                 "plan_price": round(plan, 2),
                 "price": round(price, 2) if price is not None else None,
                 "discount": round(discount, 2) if discount is not None else None,
+                "in_action": in_action,
             }
+        elif in_action is not None:
+            # Дубли размеров: участие сохраняем, если участвует хотя бы один.
+            rows[nm]["in_action"] = bool(rows[nm].get("in_action") or in_action)
 
     meta = {
         "header_row": header_idx + 1 if header_idx >= 0 else None,
@@ -207,6 +286,7 @@ def parse_limits(data: bytes, column_map: Optional[dict] = None,
         "rows": len(raw) - header_idx - 1,
         "parsed": len(rows),
         "skipped": skipped,
+        "in_action": sum(1 for r in rows.values() if r.get("in_action") is True),
     }
     return list(rows.values()), meta
 
@@ -235,12 +315,45 @@ def infer_promo_id(db, filename: str) -> int:
         if any(int(p.promo_id or 0) == pid for p in promos):
             return pid
     # 2) Название акции в имени файла (без учёта регистра и лишних символов).
-    norm = re.sub(r"[^a-zа-я0-9]+", " ", low).strip()
+    #    Сначала полное имя (длинные важнее: «… - 2» бьёт «…»), затем имя без
+    #    хвоста в скобках — ЛК в выгрузке обрезает «(автоакция)» до
+    #    «(автоматические скидки)» и т.п.
+    #    Одинаковых названий в ЛК много (акции повторяются из месяца в месяц):
+    #    среди совпадений берём самую длинную подпись, а при равенстве — живую
+    #    сейчас акцию, затем с более поздней датой окончания и большим promo_id.
+    norm = _norm_promo_name(low)
+    now = datetime.utcnow()
+
+    def _rank(p) -> tuple:
+        starts, ends = p.starts_at, p.ends_at
+        try:
+            active = bool(starts and ends and starts <= now <= ends)
+        except TypeError:
+            active = False
+        return (active, ends or datetime.min, int(p.promo_id or 0))
+
+    best_pid, best_key = 0, None
     for p in promos:
-        pname = re.sub(r"[^a-zа-я0-9]+", " ", str(p.name or "").lower()).strip()
-        if pname and len(pname) >= 4 and pname in norm:
-            return int(p.promo_id or 0)
+        pname = _norm_promo_name(p.name)
+        if not pname or len(pname) < 4 or pname not in norm:
+            continue
+        key = (len(pname),) + _rank(p)
+        if best_key is None or key > best_key:
+            best_pid, best_key = int(p.promo_id or 0), key
+    if best_pid:
+        return best_pid
+    named = sorted((_norm_promo_name(p.name), int(p.promo_id or 0)) for p in promos)
+    base = re.split(r"\s*\(|\s+-\s+", norm, maxsplit=1)[0].strip()
+    if len(base) >= 4:
+        hits = {pid for pname, pid in named
+                if pname and pname.split(" (")[0].split(" - ")[0].strip() == base}
+        if len(hits) == 1:
+            return hits.pop()
     return 0
+
+
+def _norm_promo_name(value) -> str:
+    return re.sub(r"[^a-zа-я0-9]+", " ", str(value or "").lower()).strip()
 
 
 def import_limits(db, data: bytes, file_name: str,
@@ -267,6 +380,7 @@ def import_limits(db, data: bytes, file_name: str,
             "plan_price": r["plan_price"],
             "price": r.get("price"),
             "discount": r.get("discount"),
+            "in_action": r.get("in_action"),
             "source": "excel",
             "file_name": str(file_name or "")[:255],
             "fetched_at": now,
@@ -278,6 +392,7 @@ def import_limits(db, data: bytes, file_name: str,
             "plan_price": ins.excluded.plan_price,
             "price": ins.excluded.price,
             "discount": ins.excluded.discount,
+            "in_action": ins.excluded.in_action,
             "source": ins.excluded.source,
             "file_name": ins.excluded.file_name,
             "fetched_at": ins.excluded.fetched_at,
@@ -308,10 +423,11 @@ def _age_days(fetched_at) -> Optional[int]:
 
 
 def limits_map(db, expire_days: float = DEFAULT_EXPIRE_DAYS) -> dict:
-    """nm_id → список порогов ``{plan_price, promo_id, source, age_days}``.
+    """nm_id → список порогов ``{plan_price, promo_id, source, age_days, in_action}``.
 
     Источники:
       * `wb_promo_limits` — Excel ЛК, строки не старше ``expire_days``;
+        ``in_action`` — участие из файла (None, если колонки не было);
       * `wb_promo_nomenclatures` — API regular-акций (`plan_price`), только
         участники (`in_action=True`) активных акций.
 
@@ -320,7 +436,7 @@ def limits_map(db, expire_days: float = DEFAULT_EXPIRE_DAYS) -> dict:
     out: dict = {}
     seen: dict = {}
 
-    def add(nm, promo_id, price, source, age):
+    def add(nm, promo_id, price, source, age, in_action=None):
         nm = str(nm or "")
         price = _num(price)
         if not nm or price is None or price <= 0:
@@ -334,6 +450,7 @@ def limits_map(db, expire_days: float = DEFAULT_EXPIRE_DAYS) -> dict:
             "promo_id": int(promo_id or 0),
             "source": source,
             "age_days": age,
+            "in_action": in_action,
         })
 
     now = datetime.utcnow()
@@ -343,7 +460,7 @@ def limits_map(db, expire_days: float = DEFAULT_EXPIRE_DAYS) -> dict:
             select(models.PromoLimit).where(models.PromoLimit.fetched_at >= cutoff)
         ).scalars():
             add(row.nm_id, row.promo_id, row.plan_price, "excel",
-                _age_days(row.fetched_at))
+                _age_days(row.fetched_at), row.in_action)
     except Exception:  # noqa: BLE001 — нет таблицы/колонки не роняет расчёт
         pass
 
@@ -365,7 +482,7 @@ def limits_map(db, expire_days: float = DEFAULT_EXPIRE_DAYS) -> dict:
             )
         ).all()
         for nm, pid, price, fetched in rows:
-            add(nm, pid, price, "api", _age_days(fetched))
+            add(nm, pid, price, "api", _age_days(fetched), True)
     except Exception:  # noqa: BLE001
         pass
 
@@ -401,6 +518,7 @@ def summary(db) -> dict:
             "promo_id": pid,
             "promo_name": names.get(pid, ""),
             "products": 0,
+            "in_action_products": 0,
             "rows": 0,
             "min_plan_price": None,
             "max_plan_price": None,
@@ -409,6 +527,8 @@ def summary(db) -> dict:
         })
         g["rows"] += 1
         g["products"] += 1
+        if getattr(r, "in_action", None):
+            g["in_action_products"] += 1
         price = float(r.plan_price or 0)
         if price > 0:
             g["min_plan_price"] = (price if g["min_plan_price"] is None
@@ -428,6 +548,8 @@ def summary(db) -> dict:
         "promotions": promotions,
         "total_rows": len(rows),
         "total_products": len({str(r.nm_id) for r in rows}),
+        "total_in_action": len({str(r.nm_id) for r in rows
+                                if getattr(r, "in_action", None)}),
     }
 
 

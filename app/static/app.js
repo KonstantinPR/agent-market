@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "193";
+const UI_VERSION = "194";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -11958,6 +11958,7 @@ async function refreshPricingLimitsSummary() {
   head.className = "hint";
   head.textContent = "Загружено акций: " + (data.promotions || []).length
     + " · товаров: " + (data.total_products || 0)
+    + " (в акции сейчас: " + (data.total_in_action || 0) + ")"
     + " · строк: " + (data.total_rows || 0);
   box.appendChild(head);
   if (!(data.promotions || []).length) {
@@ -11977,8 +11978,10 @@ async function refreshPricingLimitsSummary() {
       : "—";
     const when = p.age_days == null ? "дата неизвестна"
       : (p.age_days === 0 ? "сегодня" : p.age_days + " дн. назад");
-    txt.textContent = _limitsPromoLabel(p) + ": " + p.products + " тов., пороги "
-      + range + ", " + when + (p.file_name ? " (" + p.file_name + ")" : "");
+    const part = p.in_action_products ? ", в акции: " + p.in_action_products : "";
+    txt.textContent = _limitsPromoLabel(p) + ": " + p.products + " тов." + part
+      + ", пороги " + range + ", " + when
+      + (p.file_name ? " (" + p.file_name + ")" : "");
     txt.title = txt.textContent;
     row.appendChild(txt);
     const del = document.createElement("button");
@@ -12031,6 +12034,7 @@ async function importPricingLimits(btn) {
     const cols = j.columns ? Object.keys(j.columns).join(", ") : "";
     _limitsSetMsg("Импортировано строк: " + (j.imported || 0)
       + " (акция: " + _limitsPromoLabel({ promo_id: j.promo_id }) + ")"
+      + (j.in_action ? "; участвует в акции: " + j.in_action : "")
       + (cols ? "; колонки: " + cols : "")
       + (j.skipped ? "; пропущено: " + j.skipped : ""));
     await refreshPricingLimitsSummary();

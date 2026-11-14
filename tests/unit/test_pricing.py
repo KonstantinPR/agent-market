@@ -2164,6 +2164,44 @@ def test_promo_limit_apply_noop_when_target_below_cap():
     assert rows[0]["target_vis"] == round(1590 * 0.87, 2)
 
 
+def test_promo_limit_apply_ignores_not_participating_promos():
+    """Порог акции, в которой товара нет (in_action=False), не ограничивает цену."""
+    limits = {"1099756595": [
+        {"plan_price": p, "promo_id": i, "source": "excel", "age_days": 1,
+         "in_action": p not in (1450.0, 1299.0)}
+        for i, p in enumerate([1450.0, 1374.0, 1388.0, 1299.0, 1273.0], start=1)
+    ]}
+    rows = [_limit_row()]
+    n = promo_limit_apply(rows, limits, merge_settings({}))
+    r = rows[0]
+    assert n == 1
+    # 5 порогов загружено, но участвует только в двух (1 374 и 1 388).
+    assert r["promo_limit_total"] == 5
+    assert r["promo_limit_count"] == 2
+    assert r["promo_limit_price"] == 1374.0
+    assert r["promo_limit_keep"] == 2
+    assert r["promo_limit_applied"] is True
+    assert r["target_vis"] == 1374.0
+
+
+def test_promo_limit_apply_noop_when_no_active_promos():
+    """Если ни в одной акции товар не участвует — сохранять нечего."""
+    limits = {"1099756595": [
+        {"plan_price": p, "promo_id": i, "source": "excel", "age_days": 1,
+         "in_action": False}
+        for i, p in enumerate([1450.0, 1388.0], start=1)
+    ]}
+    rows = [_limit_row()]
+    n = promo_limit_apply(rows, limits, merge_settings({}))
+    r = rows[0]
+    assert n == 0
+    assert r["promo_limit_total"] == 2
+    assert r["promo_limit_count"] == 0
+    assert r["promo_limit_keep"] == 0
+    assert r["promo_limit_applied"] is False
+    assert r["target_vis"] == round(1590 * (1 - 1.2 / 100), 2)
+
+
 def test_promo_limit_apply_disabled_keeps_target_but_fills_info():
     rows = [_limit_row()]
     n = promo_limit_apply(rows, _LIMITS,

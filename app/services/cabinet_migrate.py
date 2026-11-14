@@ -52,6 +52,8 @@ PER_CAB_COLUMN_MIGRATIONS = (
     ("price_changes", "marketplace", "varchar(10) NOT NULL DEFAULT '{mp}'"),
     ("price_changes", "before_price", "numeric(10, 2) NOT NULL DEFAULT 0"),
     ("price_changes", "after_price", "numeric(10, 2)"),
+    # T-76: участие в акции по данным Excel ЛК (None — колонки не было).
+    ("wb_promo_limits", "in_action", "boolean"),
 )
 
 # Индексы под досозданные колонки (в модели index=True, в кабинете — нет).

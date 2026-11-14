@@ -51,8 +51,84 @@ def test_parse_limits_single_price_column_is_plan():
                   header=("Артикул WB", "Наименование", "Цена"))
     rows, meta = pl.parse_limits(data)
     assert rows == [{"nm_id": "123456", "plan_price": 1299.0,
-                     "price": None, "discount": None}]
+                     "price": None, "discount": None, "in_action": None}]
     assert "plan" in meta["columns"]
+
+
+# Реальная шапка выгрузки ЛК («Цены и скидки» → акция → «Обновить через Excel»).
+LK_HEADER = (
+    "Товар уже участвует в акции", "Бренд", "Предмет", "Наименование",
+    "Артикул поставщика", "Артикул WB", "Последний баркод",
+    "Плановая цена для акции", "Текущая розничная цена", "Валюта",
+    "Текущая скидка на сайте, %", "Загружаемая скидка для участия в акции",
+    "Статус",
+)
+
+
+def test_parse_limits_real_lk_header():
+    """Реальная шапка ЛК: nm берётся из «Артикул WB», а не «Артикул поставщика»."""
+    body = [list(LK_HEADER)]
+    body.extend([
+        ["Нет", "Elena Chezelle", "Жакеты", "Жакет-полупальто", "SH034D",
+         6626002, "2012530802021", 5147, 6050, "RUB", 0, "15",
+         "Не участвует: не добавлен или цена выше плановой"],
+        ["Да", "Elena Chezelle", "Жакеты", "Жакет", "SH097D",
+         6626023, "2000036947582", 5098, 7040, "RUB", 29, "29",
+         "Участвует: добавлен, цена равна или ниже плановой"],
+        ["Да", "Elena Chezelle", "Жакеты", "Жакет", "SH099D",
+         6626024, "2000036947583", 5100, 6900, "RUB", 26, "26",
+         "Участвует: добавлен, цена равна или ниже плановой"],
+    ])
+    rows, meta = pl.parse_limits(_xlsx(body))
+    got = {r["nm_id"]: r for r in rows}
+    assert set(got) == {"6626002", "6626023", "6626024"}
+    assert got["6626002"]["plan_price"] == 5147.0
+    assert got["6626002"]["price"] == 6050.0
+    assert got["6626023"]["discount"] == 29.0
+    assert got["6626023"]["in_action"] is True
+    assert got["6626002"]["in_action"] is False
+    assert meta["parsed"] == 3
+    assert meta["skipped"] == 0
+    assert meta["in_action"] == 2
+    assert meta["columns"]["nm"] == "Артикул WB"
+    assert meta["columns"]["discount"] == "Текущая скидка на сайте, %"
+    assert meta["columns"]["in_action"] == "Товар уже участвует в акции"
+
+
+def test_parse_limits_blocked_autodiscount_is_not_discount():
+    """В автоскидках «Минимальная цена…» и «Блокировка…» не являются скидкой."""
+    header = list(LK_HEADER[:11]) + [
+        "Минимальная цена для применения скидки по автоакции",
+        "Блокировка применения скидки по автоакции",
+        "Сколько дней осталось до конца акции",
+    ] + list(LK_HEADER[11:])
+    body = [header]
+    body.append([
+        "Нет", "Бренд", "Предмет", "Товар", "ART1", 7000001, "2000000000001",
+        1000, 1300, "RUB", 12, 500, "Да", 5, "15",
+        "Не участвует: стоит блокировка на снижение цены",
+    ])
+    rows, meta = pl.parse_limits(_xlsx(body))
+    assert rows[0]["discount"] == 12.0
+    assert "минимальн" not in meta["columns"]["discount"].lower()
+    assert meta["columns"]["in_action"] == "Товар уже участвует в акции"
+
+
+def test_parse_limits_status_fallback_and_size_union():
+    """Без колонки «Товар уже участвует…» участие — из «Статус»; размеры объединяются."""
+    header = ("Артикул WB", "Наименование", "Плановая цена для акции", "Статус")
+    body = [list(header)]
+    body.extend([
+        [900001, "Товар, 42", 1000, "Не участвует: не добавлен или цена выше плановой"],
+        [900001, "Товар, 44", 1100, "Участвует: добавлен, цена равна или ниже плановой"],
+        [900002, "Другой", 1200, "Не участвует: стоит блокировка на снижение цены"],
+    ])
+    rows, meta = pl.parse_limits(_xlsx(body))
+    got = {r["nm_id"]: r for r in rows}
+    assert got["900001"]["plan_price"] == 1100.0
+    assert got["900001"]["in_action"] is True
+    assert got["900002"]["in_action"] is False
+    assert meta["columns"]["status"] == "Статус"
 
 
 def test_parse_limits_column_map_override():
@@ -116,6 +192,23 @@ def test_import_limits_upserts_and_drops_stale_rows(db):
     assert summary["promotions"][0]["promo_id"] == 2766
 
 
+def test_import_limits_stores_in_action(db):
+    """Участие из файла ЛК сохраняется и отдаётся в limits_map."""
+    body = [list(LK_HEADER)]
+    body.extend([
+        ["Да", "B", "P", "Участвует", "A1", 7000001, "2000000000001",
+         1000, 1300, "RUB", 12, "15", "Участвует: добавлен, цена равна или ниже плановой"],
+        ["Нет", "B", "P", "Не участвует", "A2", 7000002, "2000000000002",
+         1100, 1400, "RUB", 0, "15", "Не участвует: не добавлен или цена выше плановой"],
+    ])
+    meta = pl.import_limits(db, _xlsx(body), "Чёрная пятница (автоакция).xlsx",
+                            promo_id=3148)
+    assert meta["in_action"] == 1
+    limits = pl.limits_map(db, expire_days=30)
+    assert limits["7000001"][0]["in_action"] is True
+    assert limits["7000002"][0]["in_action"] is False
+
+
 def test_infer_promo_id_from_filename(db):
     now = datetime.utcnow()
     db.add(models.Promotion(
@@ -125,3 +218,30 @@ def test_infer_promo_id_from_filename(db):
     assert pl.infer_promo_id(db, "2766.xlsx") == 2766
     assert pl.infer_promo_id(db, "выгрузка Хиты осени.xlsx") == 2766
     assert pl.infer_promo_id(db, "неизвестно.xlsx") == 0
+
+
+def test_infer_promo_id_real_lk_file_names(db):
+    """Реальные имена выгрузок ЛК: «- 2» не путается с базовой, повторные
+    названия разных месяцев разводятся по активности акции."""
+    now = datetime.utcnow()
+    past = (now - timedelta(days=40), now - timedelta(days=1))
+    live = (now - timedelta(days=1), now + timedelta(days=5))
+    for pid, name, dates in [
+        (3048, "Скидки на немаркированные товары (автоматические скидки)", past),
+        (3174, "Скидки на немаркированные товары (автоматические скидки)", live),
+        (3148, "Чёрная пятница (автоакция)", live),
+        (3150, "Чёрная пятница - 2 (автоакция)", live),
+    ]:
+        db.add(models.Promotion(
+            promo_id=pid, name=name, adv_type="auto", description="",
+            starts_at=dates[0], ends_at=dates[1]))
+    db.commit()
+    assert pl.infer_promo_id(
+        db, "Все товары подходящие для акции_Чёрная пятница (автоакция)_"
+            "13.11.2026 17.18.30.xlsx") == 3148
+    assert pl.infer_promo_id(
+        db, "Все товары подходящие для акции_Чёрная пятница - 2 (автоакция)_"
+            "13.11.2026 17.18.24.xlsx") == 3150
+    assert pl.infer_promo_id(
+        db, "Товары для исключения из акции_Скидки на немаркированные товары "
+            "(автоматические скидки)_13.11.2026 17.18.09.xlsx") == 3174
