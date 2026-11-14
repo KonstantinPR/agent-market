@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "195";
+const UI_VERSION = "196";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -11929,7 +11929,30 @@ function initPricingMinpromoMenu() {
 
 // T-76: пороги участия в акциях WB — импорт Excel из ЛК и сводка.
 let _pricingLimitsInited = false;
-let _pricingLimitsFile = null;
+let _pricingLimitsFiles = [];
+
+function _limitsFilesOf(list) {
+  return Array.from(list || []).filter((f) => /\.(xlsx|xlsm)$/i.test(f.name || ""));
+}
+
+function _limitsFilesLabel() {
+  if (!_pricingLimitsFiles.length) return "Файл не выбран";
+  if (_pricingLimitsFiles.length === 1) return _pricingLimitsFiles[0].name;
+  return "Файлов: " + _pricingLimitsFiles.length + ": "
+    + _pricingLimitsFiles.map((f) => f.name).join(", ");
+}
+
+function _setLimitsFiles(list) {
+  _pricingLimitsFiles = _limitsFilesOf(list);
+  const nameEl = $("#pricingLimitsFileName");
+  if (nameEl) nameEl.textContent = _limitsFilesLabel();
+  const act = $("#pricingLimitsImport");
+  if (act) {
+    act.textContent = _pricingLimitsFiles.length > 1
+      ? "Загрузить пороги (" + _pricingLimitsFiles.length + ")"
+      : "Загрузить пороги";
+  }
+}
 
 function _limitsSetMsg(text, isError) {
   const box = $("#pricingLimitsStatus");
@@ -12009,42 +12032,101 @@ async function refreshPricingLimitsSummary() {
 }
 
 async function importPricingLimits(btn) {
-  if (!_pricingLimitsFile) {
+  if (!_pricingLimitsFiles.length) {
     _limitsSetMsg("Сначала выберите Excel-файл из ЛК", true);
     return;
   }
   const sel = $("#pricingLimitsPromo");
   const pid = Number((sel && sel.value) || 0);
-  const prev = btn ? btn.textContent : "";
-  if (btn) { btn.disabled = true; btn.textContent = "Загружаю…"; }
-  _limitsSetMsg("Разбираю Excel и сохраняю пороги…");
+  const files = _pricingLimitsFiles.slice();
+  // Пачкой акции определяются по именам файлов: один выбранный promo_id на всех
+  // означал бы, что каждый следующий файл затирает пороги предыдущего.
+  const batch = files.length > 1;
+  if (btn) btn.disabled = true;
+  _limitsSetMsg(batch
+    ? "Разбираю " + files.length + " файлов (акции — по именам)…"
+    : "Разбираю Excel и сохраняю пороги…");
+  let imported = 0, skipped = 0;
+  const errors = [];
+  const perPromo = {};
+  const single = { promo_id: 0, in_action: 0, columns: null };
   try {
-    const fd = new FormData();
-    fd.append("file", _pricingLimitsFile);
-    let resp;
-    try {
-      resp = await fetch("/api/promo/limits/import?promo_id=" + encodeURIComponent(pid),
-                         { method: "POST", body: fd });
-    } catch (e) {
-      throw apiErr(e);
+    for (let i = 0; i < files.length; i++) {
+      if (btn) {
+        btn.textContent = files.length > 1
+          ? "Загружаю " + (i + 1) + "/" + files.length + "…" : "Загружаю…";
+      }
+      if (files.length > 1) {
+        _limitsSetMsg("Файл " + (i + 1) + " из " + files.length + ": " + files[i].name);
+      }
+      const fd = new FormData();
+      fd.append("file", files[i]);
+      let resp, j;
+      try {
+        resp = await fetch("/api/promo/limits/import?promo_id="
+                           + encodeURIComponent(batch ? 0 : pid),
+                           { method: "POST", body: fd });
+      } catch (e) {
+        errors.push(files[i].name + ": " + apiErrorMessage(apiErr(e)));
+        continue;
+      }
+      j = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        errors.push(files[i].name + ": " + (j.detail || resp.status + " " + resp.statusText));
+        continue;
+      }
+      imported += Number(j.imported || 0);
+      skipped += Number(j.skipped || 0);
+      const k = String(j.promo_id || 0);
+      const rec = perPromo[k] || (perPromo[k] = { rows: 0, inAction: 0, files: 0 });
+      rec.rows += Number(j.imported || 0);
+      rec.inAction += Number(j.in_action || 0);
+      rec.files += 1;
+      single.promo_id = j.promo_id || 0;
+      single.in_action = j.in_action || 0;
+      single.columns = j.columns || null;
     }
-    const j = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(j.detail || resp.status + " " + resp.statusText);
-    _pricingLimitsFile = null;
-    const fileName = $("#pricingLimitsFileName");
-    if (fileName) fileName.textContent = "Файл не выбран";
-    const cols = j.columns ? Object.keys(j.columns).join(", ") : "";
-    _limitsSetMsg("Импортировано строк: " + (j.imported || 0)
-      + " (акция: " + _limitsPromoLabel({ promo_id: j.promo_id }) + ")"
-      + (j.in_action ? "; участвует в акции: " + j.in_action : "")
-      + (cols ? "; колонки: " + cols : "")
-      + (j.skipped ? "; пропущено: " + j.skipped : ""));
+    const parts = [];
+    if (imported) {
+      if (batch) {
+        parts.push("Импортировано строк: " + imported);
+        const keys = Object.keys(perPromo);
+        if (keys.length) {
+          parts.push("по акциям: " + keys.map((k) => (k === "0" ? "без акции" : k)
+            + " — " + perPromo[k].rows
+            + " (в акции " + perPromo[k].inAction + ")").join(", "));
+        }
+      } else {
+        const cols = single.columns ? Object.keys(single.columns).join(", ") : "";
+        parts.push("Импортировано строк: " + imported
+          + " (акция: " + _limitsPromoLabel({ promo_id: single.promo_id }) + ")"
+          + (single.in_action ? "; участвует в акции: " + single.in_action : "")
+          + (cols ? "; колонки: " + cols : ""));
+      }
+    }
+    const repeated = Object.keys(perPromo)
+      .filter((k) => k !== "0" && perPromo[k].files > 1);
+    if (repeated.length) {
+      parts.push("повторно загружены акции " + repeated.join(", ")
+        + " — остались пороги последнего файла");
+    }
+    if (skipped) parts.push("пропущено: " + skipped);
+    if (parts.length) _limitsSetMsg(parts.join("; "));
+    if (errors.length) {
+      _limitsSetMsg((parts.length ? parts.join("; ") + ". " : "")
+        + "Ошибки: " + errors.join("; "), true);
+    } else if (!imported) {
+      _limitsSetMsg("Ни один файл не импортирован", true);
+    }
     await refreshPricingLimitsSummary();
     if (currentTab === "pricing") renderPricing(false);
   } catch (e) {
     _limitsSetMsg("Ошибка импорта: " + apiErrorMessage(e), true);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = prev; }
+    if (btn) btn.disabled = false;
+    const inpEl = $("#pricingLimitsInput");
+    if (inpEl) inpEl.value = "";
+    _setLimitsFiles([]);
   }
 }
 
@@ -12056,7 +12138,8 @@ async function buildPricingLimitsPanel() {
   const hint = document.createElement("div");
   hint.className = "margin-arts-hint";
   hint.textContent = "WB не отдаёт пороги автоакций по API. В ЛК: «Цены и скидки» → "
-    + "акция → «Обновить через Excel» — и загрузите этот файл сюда. "
+    + "акция → «Обновить через Excel» — и загрузите файлы сюда (можно несколько "
+    + "сразу, акция определяется по имени файла). "
     + "Акция держит товар, пока витрина ≤ «плановой цены» («до N ₽»).";
   panel.appendChild(hint);
 
@@ -12085,12 +12168,15 @@ async function buildPricingLimitsPanel() {
 
   const dz = document.createElement("div");
   dz.className = "pdf-drop";
-  dz.textContent = "Excel из ЛК: перетащите файл сюда или нажмите";
-  dz.title = "Файл .xlsx с колонками «Артикул WB» и «Плановая цена» "
+  dz.textContent = "Excel из ЛК: перетащите файлы сюда или нажмите";
+  dz.title = "Файлы .xlsx с колонками «Артикул WB» и «Плановая цена»; "
+    + "можно выбрать несколько — акция определится по имени каждого файла "
     + "(если подписи другие — загрузка покажет найденные колонки)";
   const inp = document.createElement("input");
   inp.type = "file";
+  inp.id = "pricingLimitsInput";
   inp.accept = ".xlsx,.xlsm";
+  inp.multiple = true;
   inp.className = "hidden";
   dz.addEventListener("click", () => inp.click());
   dz.addEventListener("dragover", (e) => {
@@ -12101,28 +12187,16 @@ async function buildPricingLimitsPanel() {
   dz.addEventListener("drop", (e) => {
     e.preventDefault();
     dz.classList.remove("over");
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) {
-      _pricingLimitsFile = f;
-      const nameEl = $("#pricingLimitsFileName");
-      if (nameEl) nameEl.textContent = f.name;
-    }
+    _setLimitsFiles(e.dataTransfer && e.dataTransfer.files);
   });
-  inp.addEventListener("change", () => {
-    const f = inp.files && inp.files[0];
-    if (f) {
-      _pricingLimitsFile = f;
-      const nameEl = $("#pricingLimitsFileName");
-      if (nameEl) nameEl.textContent = f.name;
-    }
-  });
+  inp.addEventListener("change", () => _setLimitsFiles(inp.files));
   panel.appendChild(dz);
   panel.appendChild(inp);
 
   const fileName = document.createElement("div");
   fileName.className = "hint";
   fileName.id = "pricingLimitsFileName";
-  fileName.textContent = _pricingLimitsFile ? _pricingLimitsFile.name : "Файл не выбран";
+  fileName.textContent = _limitsFilesLabel();
   panel.appendChild(fileName);
 
   const act = document.createElement("button");
