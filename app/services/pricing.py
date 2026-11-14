@@ -58,6 +58,14 @@ PRICING_DEFAULTS = {
     "hot_backlog_factor": 2.0,
     "return_penalty": 0.3,
     "dead_stock_days": 7,
+    # T-78 (R4): потолок скидки для МЁРТВОГО ЗАПАСА (продаж нет ≥ dead_stock_days,
+    # v_proj ≤ 0). Общий max_discount_pct считается от базовой цены, а витринная
+    # скидка WB (автоакция) может быть уже выше него — тогда потолок запрещал
+    # снижение, и обязательный шаг разворачивался в RAISE: цену непродающегося
+    # товара поднимали на 1 п.п. Мёртвым разрешаем идти глубже общего потолка, но
+    # не глубже dead_max_discount_pct и никогда ниже пола floor_price; шаг за
+    # проход по-прежнему ограничен max_drop_pct.
+    "dead_max_discount_pct": 80.0,
     "low_conv_pct": 0.7,
     "fallback_window_days": 90,
     # «Рейтинг по отзывам» из воронки продаж (1..5): чем выше рейтинг — тем
@@ -1793,7 +1801,14 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
         # Суммарный потолок: относительно ТЕКУЩЕЙ скидки, а не относительно
         # target. Иначе шаг R4 + шаг разгрузки складывались и выходили за
         # общий лимит падения max_drop_pct.
-        cap_disc = min(max_disc, 99.0, cur + max_drop)
+        # T-78: у мёртвого запаса общий потолок max_discount_pct может быть уже
+        # пройден автоскидкой WB — тогда разгрузка не добавляла шаг вовсе.
+        # Разрешаем тот же потолок, что и R4 (dead_max_discount_pct), не ниже пола.
+        pot = max_disc
+        if r.get("dead_stock"):
+            pot = max(pot, min(_num(s.get("dead_max_discount_pct"), 80.0),
+                               floor_disc if floor_disc is not None else 100.0))
+        cap_disc = min(pot, 99.0, cur + max_drop)
         if floor_disc is not None:
             cap_disc = min(cap_disc, floor_disc + beyond)
         base_t = _num(r.get("target_discount"), cur)
@@ -2186,14 +2201,23 @@ def _half_discount_guard(cur_disc: float, new_disc: float, factual: float, net_c
     return new_disc
 
 
-def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str) -> dict:
+def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str,
+                    max_disc_item: Optional[float] = None) -> dict:
     """R: если есть остаток — изменение скидки обязательно, HOLD не выдаём.
 
     Ставим минимальный шаг в заданном направлении (max(min_delta_pp, 1 п.п.))
     с уважением к капсам (floor, max_discount_item, минимальная цена WB) и к правилу
-    «скидку при RAISE не режем более чем пополам». Если шаг в заданном направлении
-    невозможен — пробуем противоположное. Если не выходит вовсе (цена <= 0 или оба
-    направления упираются в капсы) — оставляем HOLD как есть.
+    «скидку при RAISE не режем более чем пополам».
+
+    Разворот направления (T-78) допустим только тогда, когда снижение упёрлось
+    в ПОЛ — цена уже на границе убыточности, и подъём защищает от продажи в
+    минус. Если снижение блокирует ПОТОЛОК скидки (WB уже дал витринную скидку
+    выше общего потолка), разворот в RAISE запрещён: поднимать цену товару,
+    который и так не продаётся, бессмысленно. В этом случае — HOLD со статусом
+    ``hold_cap`` и понятной причиной.
+
+    ``max_disc_item`` — перекрыть потолок скидки для этой строки (R4 передаёт
+    потолок мёртвого запаса, см. dead_max_discount_pct).
     """
     step = max(_num(s["min_delta_pp"], 1.0), 1.0)
     price = f["price"]
@@ -2204,7 +2228,8 @@ def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str) -
     eff = min(cur_vis, f["avg_price"]) if f["avg_price"] > 0 else cur_vis
     net_cost = _num(f.get("net_cost"))
     factual = f["avg_price"] if f["avg_price"] > 0 else eff
-    max_disc_item = base.get("max_discount_item")
+    if max_disc_item is None:
+        max_disc_item = base.get("max_discount_item")
     if max_disc_item is None:
         max_disc_item = _num(s["max_discount_pct"])
     suffix = f" — коррекция скидки обязательна (есть остаток {f['stock']} шт)"
@@ -2226,6 +2251,11 @@ def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str) -
             return new_disc, price * (1 - new_disc / 100)
         return None, None
 
+    def lower_blocked_by_floor() -> bool:
+        """Снижение не прошло из-за пола (цена на границе/ниже убытка), не из-за потолка."""
+        floor_vis = _num(f["floor_price"])
+        return floor_vis > 0 and cur_vis <= floor_vis + 1e-9
+
     def emit(action, nd, tv):
         base.update(action=action, status="suggested", reason=reason + suffix,
                     target_discount=round(_clamp(nd, 0, 100), 1),
@@ -2244,6 +2274,15 @@ def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str) -
     nd, tv = try_lower()
     if nd is not None:
         emit("LOWER", nd, tv)
+        return base
+    if not lower_blocked_by_floor():
+        # T-78: потолок скидки блокирует снижение — вверх не разворачиваемся.
+        base.update(
+            action="HOLD", status="hold_cap",
+            reason=(reason.rstrip(".") +
+                    f" — снижать некуда: скидка {cur_disc:.0f}% уже не ниже потолка "
+                    f"{max_disc_item:.0f}%, пол {_num(f['floor_price']):.0f} ₽; "
+                    "повышение цены не предлагаем"))
         return base
     nd, tv = try_raise()
     if nd is not None:
@@ -2327,6 +2366,24 @@ def _decide(f: dict, s: dict) -> dict:
         # без поля безубыточности ниже опускаться нельзя лишь до потолка max_discount_pct
         max_disc_item = _num(s["max_discount_pct"])
     base["max_discount_item"] = round(max_disc_item, 1)
+    # T-78: пол безубыточности теперь виден в строке. Раньше floor_price
+    # оставался None, потому что _base_row() собирается ДО расчёта пола по
+    # unit-экономике/cost_floor — в таблице нельзя было понять, где пол.
+    if _num(floor) > 0:
+        base["floor_price"] = round(_num(floor), 2)
+    # T-78 (R4): потолок скидки для мёртвого запаса. Общий max_discount_pct
+    # считается от базовой цены; у товара с автоскидкой WB витринная скидка уже
+    # выше него, и потолок запрещал снижение. Для мёртвых берём более щедрый
+    # потолок (dead_max_discount_pct), но никогда ниже пола: скидка до пола —
+    # это (1 − floor/price)×100. Если пол неизвестен или выше цены — расширять
+    # нечем (снижать всё равно нельзя, пол блокирует), остаёмся на общем потолке.
+    floor_val = _num(floor)
+    if price > 0 and floor_val > 0:
+        floor_disc = max((1 - floor_val / price) * 100, 0.0)
+        dead_cap = max(max_disc_item, min(_num(s["dead_max_discount_pct"]), floor_disc))
+    else:
+        dead_cap = max_disc_item
+    base["dead_max_discount_item"] = round(dead_cap, 1)
 
     doc = stock / v_proj if v_proj > 0 and stock is not None else float("inf")
     base["doc"] = round(doc, 1) if doc != float("inf") else None
@@ -2359,22 +2416,43 @@ def _decide(f: dict, s: dict) -> dict:
             if item_scale <= 0.01:
                 return _mandatory_step(
                     base, f, s, "LOWER",
-                    _valued_item_reason(f, rating_scale, value_scale))
-            target_vis = max(_num(floor), eff * (1 - max_drop * item_scale / 100))
+                    _valued_item_reason(f, rating_scale, value_scale),
+                    max_disc_item=dead_cap)
+            # T-78: цель — от ТЕКУЩЕЙ витрины (прогрессивное снижение). Раньше
+            # считали от eff (фактической цены прошлых продаж): дойдя до неё,
+            # мёртвый товар двигался дальше только по 1 п.п. за проход, а если
+            # витринная скидка уже была выше общего потолка — цель оказывалась
+            # ВЫШЕ текущей цены и шаг разворачивался в RAISE. Теперь снижаем на
+            # max_drop_pct за проход до пола или до потолка мёртвых; min(cur_vis)
+            # стоит последним, чтобы потолок не мог поднять цену.
+            target_vis = max(_num(floor),
+                             cur_vis * (1 - max_drop * item_scale / 100),
+                             price * (1 - dead_cap / 100))
             target_vis = min(target_vis, cur_vis)
-            target_vis = max(target_vis, price * (1 - max_disc_item / 100))
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
+            base["dead_stock"] = True
+            reason = (f"мёртвый запас: продаж нет {f['last_sale_days_ago']} дн., "
+                      f"остаток {stock} шт")
+            if floor_val > cur_vis + 1e-9:
+                # пол выше витрины: снижать некуда (уже торгуем в убыток) —
+                # обязательный шаг развернётся в RAISE, объясняем это в причине
+                reason += (f" · пол {floor_val:.0f} ₽ выше витрины "
+                           f"{cur_vis:.0f} ₽ — снижать нельзя, поднимаем цену "
+                           "до безубыточности")
+            elif cur_disc > max_disc_item + 1e-9 and dead_cap > max_disc_item + 1e-9:
+                reason += (f" · скидка {cur_disc:.0f}% уже выше общего потолка "
+                           f"{max_disc_item:.0f}% — снижаем до потолка мёртвых "
+                           f"{dead_cap:.0f}%")
             if new_disc - cur_disc >= _num(s["min_delta_pp"]):
                 base.update(action="LOWER", status="suggested",
-                            reason=f"мёртвый запас: продаж нет {f['last_sale_days_ago']} дн., остаток {stock} шт",
+                            reason=reason,
                             target_discount=round(_clamp(new_disc, 0, 100), 1),
                             target_vis=round(target_vis, 2),
                             margin_pct_at_target=_margin_pct(target_vis, f))
                 return base
             else:
-                return _mandatory_step(
-                    base, f, s, "LOWER",
-                    f"мёртвый запас: продаж нет {f['last_sale_days_ago']} дн., остаток {stock} шт")
+                return _mandatory_step(base, f, s, "LOWER", reason,
+                                       max_disc_item=dead_cap)
         return _mandatory_step(base, f, s, "LOWER", "продаж нет (менее порога)")
 
     if not use_sales:
@@ -2774,6 +2852,10 @@ def soften_lower(rows: list, s: dict) -> int:
     «коррекция обязательна») и защита от флапа остаются как есть. Вызывается
     после решений, ДО акций (чтобы добор участия шёл поверх смягчённой скидки)
     и до влияния главной связки. Возвращает число смягчённых строк.
+
+    T-78: мёртвый запас (R4) не смягчаем. Его шаг — max_drop_pct за проход
+    (≈12.75%), и смягчение ÷4 превращало его в 1.15 п.п.: до потолка мёртвых
+    пришлось бы ползти месяцами, а товар не продаётся годами.
     """
     soften = _num(s.get("lower_soften"), 1.0)
     if soften <= 1.0:
@@ -2783,6 +2865,8 @@ def soften_lower(rows: list, s: dict) -> int:
     for r in rows:
         if r.get("action") != "LOWER":
             continue
+        if r.get("dead_stock"):
+            continue  # T-78: шаг мёртвого запаса не смягчаем
         price = _num(r.get("price"))
         cur = _num(r.get("current_discount"))
         tgt = _num(r.get("target_discount"))

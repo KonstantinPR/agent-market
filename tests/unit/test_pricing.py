@@ -346,6 +346,107 @@ def test_r4_dead_stock_lowers(db):
     assert row["action"] == "LOWER"
     assert row["target_discount"] == pytest.approx(15.0, abs=0.5)  # 1000 -> 850
     assert row["target_vis"] == pytest.approx(850.0, abs=1)
+    # T-78: пол безубыточности виден в строке (раньше всегда None)
+    assert row["floor_price"] == pytest.approx(473.0, abs=2)
+
+
+# ------------------------------------------------------------------ T-78: мёртвый запас
+
+
+def test_r4_dead_high_discount_lowers_not_raises(db):
+    """T-78: витринная скидка WB выше общего потолка — мёртвый запас снижаем, а не поднимаем.
+
+    Реальный случай AN-112PSP-5-112-0-07-IV: price 2090, скидка 64% (витрина 752.4),
+    общий потолок 50%. Раньше цель упиралась в price×0.5 = 1045 > витрины, снижение
+    было невозможно, и обязательный шаг разворачивался в RAISE (773.3 ₽).
+    """
+    _seed(db, "T77", "P77", stock=2, net_cost=50,
+          sales=[*_fallback_sales()], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("P77", 2090, 64)), today=TODAY)
+    row = _row(rec, "T77")
+    assert row["action"] == "LOWER"
+    # шаг от ТЕКУЩЕЙ витрины: 752.4 × (1 − 12.75%) = 656.4 (prefer_raise: max_drop' = 12.75)
+    assert row["target_vis"] == pytest.approx(2090 * 0.36 * 0.8725, abs=1)
+    assert row["target_discount"] == pytest.approx(68.6, abs=0.3)
+    # lower_soften (÷4) к мёртвому запасу не применяется: иначе цель была бы ~728 ₽
+    assert row["dead_max_discount_item"] == pytest.approx(80.0, abs=0.1)
+    assert "потолка 50%" in row["reason"]
+
+
+def test_r4_dead_at_dead_cap_holds_not_raises(db):
+    """T-78: дошли до потолка мёртвых — HOLD hold_cap, а не повышение цены."""
+    _seed(db, "T78", "P78", stock=2, net_cost=50,
+          sales=[*_fallback_sales()], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("P78", 2090, 80)), today=TODAY)
+    row = _row(rec, "T78")
+    assert row["action"] == "HOLD"
+    assert row["status"] == "hold_cap"
+    assert "потолк" in row["reason"]
+
+
+def test_r4_dead_below_floor_still_raises(db):
+    """T-78: мёртвому поднимаем цену только когда витрина на поле/ниже (защита от убытка)."""
+    _seed(db, "T79", "P79", stock=5, net_cost=500,
+          sales=[*_fallback_sales()], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("P79", 1000, 60)), today=TODAY)
+    row = _row(rec, "T79")
+    assert row["floor_price"] == pytest.approx(740.0, abs=2)
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] < 60
+    assert "снижать нельзя" in row["reason"]
+
+
+def test_r4_dead_floor_above_price_no_negative_cap(db):
+    """T-78: пол выше базовой цены — потолок не уходит в минус, RAISE объяснён полом.
+
+    Живой случай JJD-GUDIALI-RJN0006-A-BLUE: price 2780, скидка 37%, пол 2962
+    (торгуем в убыток). max_disc_item = (1 − floor/price) < 0, и раньше причина
+    писала «снижаем до потолка мёртвых -7%».
+    """
+    _seed(db, "T82", "P82", stock=1, net_cost=2167,
+          sales=[*_fallback_sales()], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("P82", 2780, 37)), today=TODAY)
+    row = _row(rec, "T82")
+    assert row["floor_price"] == pytest.approx(2962.7, abs=2)
+    assert row["max_discount_item"] < 0
+    # потолок мёртвых не уходит в минус: скидка 0% — это базовая цена
+    assert row["dead_max_discount_item"] == pytest.approx(0.0, abs=0.1)
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(36.0, abs=0.01)
+    assert "снижать нельзя" in row["reason"]
+    assert "потолка мёртвых" not in row["reason"]
+
+
+def test_cap_blocks_lower_holds_instead_of_raising(db):
+    """T-78: у живого товара потолок тоже не разворачивает снижение в RAISE."""
+    # продажи на 5 разных днях — иначе ветка «мало истории продаж» не даёт
+    # unit-экономику и строка выпадает из выдачи (SKIP/META-фильтр)
+    _seed(db, "T80", "P80", stock=100, net_cost=180,
+          sales=[(1, 3, 0), (3, 3, 0), (5, 3, 0), (7, 3, 0), (9, 2, 0)],
+          funnel=(200, 3, 2, 0, 400))
+    rec = recommendations(db, prices_df=_prices(("P80", 1000, 60)), today=TODAY)
+    row = _row(rec, "T80")
+    assert row["action"] == "HOLD"
+    assert row["status"] == "hold_cap"
+    assert "повышение цены не предлагаем" in row["reason"]
+
+
+def test_r4_dead_without_cost_skips(db):
+    """T-78: нет себестоимости и unit-экономики — по-прежнему SKIP (пол неизвестен)."""
+    # Историю продаж WB создаёт другой товар: без единой продажи в БД
+    # recommendations() вообще не считает (нет покрытия окна).
+    _seed(db, "T81X", "P81X", stock=0, sales=[*_fallback_sales()])
+    _seed(db, "T81", "P81", stock=5, net_cost=0, sales=[], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("P81", 1000, 60), ("P81X", 1000, 0)),
+                          today=TODAY, settings={"show_zero": True})
+    row = _row(rec, "T81")
+    assert row["action"] == "SKIP"
+    assert row["status"] == "skipped_no_ratio"
+
+
+def test_dead_max_discount_pct_setting():
+    assert merge_settings()["dead_max_discount_pct"] == pytest.approx(80.0)
+    assert merge_settings({"dead_max_discount_pct": 70})["dead_max_discount_pct"] == pytest.approx(70.0)
 
 
 def test_r5_replenishable_hot_raises_limited(db):
