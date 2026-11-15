@@ -19,6 +19,7 @@ from app.api._common import *  # noqa: F401,F403
 from app.config import BASE_DIR, settings
 from app.services import cabinets as cabinet_service
 from app.services import refresh as refresh_service
+from app.services import storage_settings as storage_service
 
 router = APIRouter()
 
@@ -268,3 +269,66 @@ def api_refresh_all(payload: dict = Body(default={}), db: Session = Depends(get_
         if res.get("job_id"):
             jobs.append(res)
     return {"jobs": jobs, "count": len(jobs)}
+
+
+# ── Ссылки и хранилища проекта (T-80) ────────────────────────────────────────
+# Пути фото/аналитики/отчётов раньше были зашиты в config/.env. Теперь они
+# видны и редактируются в шторке «Личные кабинеты»; сервисы читают их через
+# app.services.storage_settings.
+
+def _user_companies(db: Session):
+    return cabinet_service.companies_of(db, _current_user(db))
+
+
+@router.get("/settings/storage")
+def api_storage_settings_get(db: Session = Depends(get_db)):
+    """Корни хранилищ, папки фирм и список ссылок проекта."""
+    return storage_service.public_payload(db, companies=_user_companies(db))
+
+
+@router.put("/settings/storage")
+def api_storage_settings_put(payload: dict = Body(default={}),
+                             db: Session = Depends(get_db)):
+    """Сохранить корни хранилищ и ссылки проекта.
+
+    Поля: photos_root, analytics_root, reports_folder, links.
+    """
+    try:
+        return storage_service.save(db, payload, companies=_user_companies(db))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/settings/storage/{key}")
+def api_storage_settings_reset(key: str, db: Session = Depends(get_db)):
+    """Сбросить настройку к дефолту: photos_root, analytics_root, reports_folder или links."""
+    try:
+        return storage_service.reset(db, key, companies=_user_companies(db))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/settings/storage/company/{company_id}")
+def api_storage_company_dir(company_id: int, payload: dict = Body(default={}),
+                            db: Session = Depends(get_db)):
+    """Подпапка аналитики фирмы внутри корня (companies.analytics_dir)."""
+    companies = _user_companies(db)
+    company = next((c for c in companies if c.id == company_id), None)
+    if company is None:
+        raise HTTPException(status_code=404, detail="Фирма не найдена")
+    try:
+        return storage_service.save_company_dir(
+            db, company, payload.get("analytics_dir"), companies=companies)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/system/reveal")
+def api_system_reveal(payload: dict = Body(default={}),
+                      db: Session = Depends(get_db)):
+    """Открыть локальную папку в проводнике (только внутри хранилищ)."""
+    try:
+        target = storage_service.reveal(db, payload.get("path"), _user_companies(db))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "path": target}

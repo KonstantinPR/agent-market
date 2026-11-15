@@ -3,6 +3,7 @@
 from app.api._common import *  # noqa: F401,F403
 from sqlalchemy import or_
 
+from app.services import storage_settings as storage_service
 from app.services import warehouse_paths as warehouse_paths_service
 
 router = APIRouter()
@@ -321,7 +322,7 @@ def api_wh_export(kind: str, type: str = "receipt", cabinet_ids: Optional[str] =
 async def api_wh_todisk(kind: str = "docs", type: str = "receipt",
                         cabinet_ids: Optional[str] = None, article_like: str = "",
                         group: str = "rows", db: Session = Depends(get_db)):
-    """Сформировать Excel и загрузить на Яндекс.Диск в папку /agent_market/Наш склад/<kind>."""
+    """Сформировать Excel и загрузить на Яндекс.Диск в папку <отчёты>/Наш склад."""
     if kind == "docs" and type not in ("receipt", "shipment"):
         raise HTTPException(400, "type должен быть receipt или shipment")
     try:
@@ -330,7 +331,7 @@ async def api_wh_todisk(kind: str = "docs", type: str = "receipt",
             kind, db, doc_type=type, cabinet_ids=_parse_cabinet_ids(cabinet_ids),
             article_like=article_like or "", group=group)
         filename = f"{kind}_{type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx" if kind == "docs" else f"{kind}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        folder = "/agent_market/Наш склад"
+        folder = storage_service.join_folder(storage_service.reports_folder(db), "Наш склад")
         r = yandex_service.upload_bytes(token, folder, filename, buf.read())
         return {"ok": True, "path": r.get("path", f"{folder}/{filename}")}
     except yandex_service.YandexDiskError as e:
@@ -343,8 +344,12 @@ async def api_wh_fromdisk(
     db: Session = Depends(get_db),
 ):
     """Импорт всех .xlsx из папки «Наш склад/Приход или Отгрузка» на Диске."""
-    folder_map = {"receipt": "/agent_market/Наш склад/Приход", "shipment": "/agent_market/Наш склад/Отгрузка",
-                  "counterparties": "/agent_market/Наш склад/Контрагенты"}
+    base = storage_service.reports_folder(db)
+    folder_map = {
+        "receipt": storage_service.join_folder(base, "Наш склад", "Приход"),
+        "shipment": storage_service.join_folder(base, "Наш склад", "Отгрузка"),
+        "counterparties": storage_service.join_folder(base, "Наш склад", "Контрагенты"),
+    }
     folder = folder_map.get(type)
     if not folder:
         raise HTTPException(400, f"type {type!r} не поддерживается")

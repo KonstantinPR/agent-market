@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.config import settings
+from app.services import storage_settings
 
 #: Расширения, которые умеет читать Pillow (webp нужен тоже — reportlab его не берёт).
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".webp"}
@@ -102,11 +102,7 @@ class PhotoIndex:
     """Рекурсивный индекс ``артикул -> фотографии`` с кэшем в памяти."""
 
     def __init__(self, root: Path | None = None, ttl: float = INDEX_TTL) -> None:
-        self.root = Path(root) if root else Path(
-            os.environ.get("PHOTOS_ROOT")
-            or getattr(settings, "photos_root", "")
-            or r"C:\YandexDisk\ФОТОГРАФИИ"
-        )
+        self.root = Path(root) if root else Path(storage_settings.photos_root())
         self.ttl = ttl
         self._by_key: dict[str, ArticlePhotos] = {}
         self._built_at: float = 0.0

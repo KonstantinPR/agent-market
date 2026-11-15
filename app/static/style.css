@@ -162,6 +162,66 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 .cab-size-schemas { display: grid; gap: 2px; padding: 4px 0 0 12px; }
 .cab-size-sch { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
 
+/* T-80: ссылки и хранилища проекта в шторке кабинетов */
+.cab-storage {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;
+  display: grid; gap: 8px;
+}
+.cab-storage-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; font-weight: 600; color: #555;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.cab-storage-links-head { margin-top: 2px; }
+.cab-storage-add {
+  border: 1px solid #ddd; background: #fff; border-radius: 6px;
+  font-size: 11px; padding: 2px 7px; cursor: pointer; color: #333;
+  text-transform: none; letter-spacing: 0;
+}
+.cab-storage-add:hover { border-color: #111; background: #f3f6ff; }
+.cab-storage-list { display: grid; gap: 6px; }
+.cab-storage-sub {
+  font-size: 11px; color: #888; text-transform: uppercase;
+  letter-spacing: .04em; margin-top: 2px;
+}
+.cab-storage-row {
+  display: flex; gap: 8px; align-items: flex-start; justify-content: space-between;
+  border: 1px solid #eee; border-radius: 8px; padding: 7px 9px; background: #fcfcfc;
+}
+.cab-storage-row.editing { border-color: #c9d6ee; background: #f7f9ff; flex-wrap: wrap; }
+.cab-storage-main { min-width: 0; flex: 1 1 160px; display: grid; gap: 3px; }
+.cab-storage-title { font-size: 12px; font-weight: 600; color: #333; }
+.cab-storage-val {
+  font-size: 11px; color: #666; line-height: 1.35; word-break: break-all;
+  font-family: Consolas, "Courier New", monospace;
+}
+.cab-storage-val.muted { color: #999; font-style: italic; }
+.cab-storage-url { color: #8a8a8a; font-size: 10px; }
+.cab-storage-link {
+  font-size: 12px; font-weight: 600; color: #1a5fb4;
+  text-decoration: none; word-break: break-word;
+}
+.cab-storage-link:hover { text-decoration: underline; }
+.cab-storage-ok { color: #1a7f37; font-weight: 700; }
+.cab-storage-bad { color: #c0392b; font-weight: 700; }
+.cab-storage-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.cab-storage-act {
+  border: 1px solid #ddd; background: #fff; border-radius: 6px;
+  font-size: 11px; padding: 3px 7px; cursor: pointer; color: #333;
+  text-decoration: none; white-space: nowrap;
+}
+.cab-storage-act:hover { border-color: #111; }
+.cab-storage-act.primary { border-color: #1a7f37; color: #1a7f37; }
+.cab-storage-act.danger { color: #c0392b; }
+.cab-storage-act:disabled { opacity: .45; cursor: not-allowed; }
+.cab-storage-input {
+  width: 100%; box-sizing: border-box; padding: 5px 7px; font-size: 12px;
+  border: 1px solid #bbb; border-radius: 6px;
+  font-family: Consolas, "Courier New", monospace;
+}
+.cab-storage-msg { font-size: 11px; color: #1a7f37; min-height: 14px; }
+.cab-storage-msg.err { color: #c0392b; }
+
 .dropdown { position: relative; }
 .dropdown-menu {
   display: none;

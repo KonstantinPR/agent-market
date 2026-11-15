@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     analytics_root: str = r"E:\Мой диск"
 
     photos_root: str = r"C:\YandexDisk\ФОТОГРАФИИ"
+    #: Облачная папка Яндекс.Диска для отчётов и «Нашего склада» (T-80).
+    #: Путь внутри Диска (начинается с «/»), а не локальная папка синхронизации.
+    yandex_reports_dir: str = "/agent_market"
     thumbs_dir: str = "data/thumbs"
 
     #: «Автоматизация → Обработка лиц»: отдельный проект с onnxruntime,

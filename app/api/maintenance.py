@@ -7,6 +7,7 @@ from app.api._common import (
     _resolve_links_param,
 )
 from app.services import cabinets as cabinet_service
+from app.services import storage_settings as storage_service
 
 router = APIRouter()
 
@@ -591,21 +592,24 @@ def api_refresh_state(job_id: int):
 
 # ------------------------------------------------------- Яндекс.Диск (файлы отчётов)
 @router.post("/yandex/upload")
-async def yandex_upload(file: UploadFile = File(...), folder: str = "/agent_market"):
+async def yandex_upload(file: UploadFile = File(...), folder: Optional[str] = None,
+                        db: Session = Depends(get_db)):
     try:
         token = yandex_service.require_token()
         data = await file.read()
         name = file.filename or "file.xlsx"
-        return yandex_service.upload_bytes(token, folder, name, data)
+        target = folder or storage_service.reports_folder(db)
+        return yandex_service.upload_bytes(token, target, name, data)
     except yandex_service.YandexDiskError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/yandex/list")
-def yandex_list(folder: str = "/agent_market"):
+def yandex_list(folder: Optional[str] = None, db: Session = Depends(get_db)):
     try:
         token = yandex_service.require_token()
-        return yandex_service.list_files(token, folder)
+        target = folder or storage_service.reports_folder(db)
+        return yandex_service.list_files(token, target)
     except yandex_service.YandexDiskError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "196";
+const UI_VERSION = "197";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -6446,7 +6446,7 @@ async function uploadProductsToDisk() {
     const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
     const j = await up.json();
     if (!up.ok) throw new Error(j.detail || up.status);
-    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+    msg.textContent = "На Яндекс.Диске: " + (j.folder || "") + "/" + j.name;
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -6842,7 +6842,7 @@ async function apiUploadDisk(api, kind, msgSel) {
     const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
     const j = await up.json();
     if (!up.ok) throw new Error(j.detail || up.status);
-    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+    msg.textContent = "На Яндекс.Диске: " + (j.folder || "") + "/" + j.name;
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -6895,9 +6895,11 @@ async function renderYandexFiles() {
     return;
   }
   const files = (data.files || []).slice().sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
-  if (msg) msg.textContent = "Файлов в /agent_market: " + fmt(files.length);
+  const where = data.folder || "папке отчётов";
+  if (msg) msg.textContent = "Файлов в " + where + ": " + fmt(files.length);
   if (!files.length) {
-    box.innerHTML = '<div class="empty">В папке /agent_market пока нет файлов. Воспользуйтесь кнопкой «Загрузить на диск» в панелях отчётов.</div>';
+    box.innerHTML = '<div class="empty">В папке ' + escapeHtml(where) +
+      ' пока нет файлов. Воспользуйтесь кнопкой «Загрузить на диск» в панелях отчётов.</div>';
     return;
   }
   let html = '<table><thead><tr><th>Файл</th><th>Изменён</th><th>Размер</th><th></th><th></th></tr></thead><tbody>';
@@ -9086,7 +9088,7 @@ async function uploadWbDetailToDisk() {
     const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
     const j = await up.json();
     if (!up.ok) throw new Error(j.detail || up.status);
-    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+    msg.textContent = "На Яндекс.Диске: " + (j.folder || "") + "/" + j.name;
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -9247,7 +9249,7 @@ async function uploadOzDetailToDisk() {
     const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
     const j = await up.json();
     if (!up.ok) throw new Error(j.detail || up.status);
-    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+    msg.textContent = "На Яндекс.Диске: " + (j.folder || "") + "/" + j.name;
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -9353,7 +9355,7 @@ async function uploadOzPlacementToDisk() {
     const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
     const j = await up.json();
     if (!up.ok) throw new Error(j.detail || up.status);
-    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+    msg.textContent = "На Яндекс.Диске: " + (j.folder || "") + "/" + j.name;
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -9578,7 +9580,7 @@ async function uploadViewToDisk() {
     const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
     const j = await up.json();
     if (!up.ok) throw new Error(j.detail || up.status);
-    msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+    msg.textContent = "На Яндекс.Диске: " + (j.folder || "") + "/" + j.name;
   } catch (err) {
     msg.textContent = "Ошибка: " + err.message;
   }
@@ -9979,6 +9981,7 @@ function openCabinets() {
   $("#cabDrawerOverlay").classList.remove("hidden");
   loadCabinets();
   loadSystemSize(false);
+  loadStorageSettings(false);
 }
 
 function closeCabinets() {
@@ -10024,6 +10027,342 @@ async function loadSystemSize(refresh) {
   } finally {
     _sysSizeBusy = false;
   }
+}
+
+// ── Ссылки и хранилища проекта (T-80) ────────────────────────────────────────
+// Пути фото/аналитики/отчётов и ссылки правятся прямо в шторке; сервер хранит
+// переопределения в app_settings('project'), сервисы читают их через
+// storage_settings. Значения из config/.env остаются дефолтами для «Сбросить».
+let cabStorageData = null;
+let cabStorageEdit = null; // {kind: "root"|"company"|"link", id}
+let cabStorageBusy = false;
+
+const CAB_STORAGE_ROOT_ORDER = ["photos_root", "analytics_root", "reports_folder"];
+
+function cabStorageMsg(text, isError) {
+  const el = $("#cabStorageMsg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.toggle("err", !!isError);
+}
+
+function cabStorageStatus(ok) {
+  return ok
+    ? '<span class="cab-storage-ok" title="Папка доступна">✓</span>'
+    : '<span class="cab-storage-bad" title="Папка не найдена">✗</span>';
+}
+
+async function storagePut(payload) {
+  const d = await apiPut("/settings/storage", payload);
+  cabStorageData = d;
+  cabStorageEdit = null;
+  renderStorageSettings();
+  return d;
+}
+
+async function storageDelete(path) {
+  const resp = await fetch("/api" + path, { method: "DELETE" });
+  if (!resp.ok) throw new Error(resp.status + " " + (await resp.text()));
+  return resp.json();
+}
+
+async function cabStorageRun(fn) {
+  cabStorageMsg("");
+  try {
+    await fn();
+  } catch (err) {
+    cabStorageMsg("Ошибка: " + apiErrorMessage(err), true);
+  }
+}
+
+async function loadStorageSettings(refresh) {
+  const box = $("#cabStorageRoots");
+  if (!box || cabStorageBusy) return;
+  cabStorageBusy = true;
+  try {
+    cabStorageData = await api("/settings/storage");
+    if (refresh) cabStorageEdit = null;
+    renderStorageSettings();
+  } catch (err) {
+    cabStorageMsg("Ошибка: " + apiErrorMessage(err), true);
+  } finally {
+    cabStorageBusy = false;
+  }
+}
+
+function renderStorageSettings() {
+  const data = cabStorageData;
+  if (!data) return;
+  const edit = cabStorageEdit || {};
+  const rootsBox = $("#cabStorageRoots");
+  const compBox = $("#cabStorageCompanies");
+  const linksBox = $("#cabStorageLinks");
+  if (!rootsBox || !compBox || !linksBox) return;
+
+  // Корни хранилищ.
+  let h = "";
+  for (const key of CAB_STORAGE_ROOT_ORDER) {
+    const row = (data.roots || {})[key];
+    if (!row) continue;
+    if (edit.kind === "root" && edit.id === key) {
+      h += '<div class="cab-storage-row editing">' +
+        '<div class="cab-storage-main">' +
+          '<div class="cab-storage-title">' + escapeHtml(row.title) + "</div>" +
+          '<input class="cab-storage-input" id="cabStorageRootInput" value="' +
+            escapeHtml(row.value) + '" spellcheck="false">' +
+        "</div>" +
+        '<div class="cab-storage-actions">' +
+          '<button type="button" class="cab-storage-act primary" data-storage-save="' +
+            escapeHtml(key) + '">Сохранить</button>' +
+          '<button type="button" class="cab-storage-act" data-storage-cancel="1">Отмена</button>' +
+        "</div></div>";
+      continue;
+    }
+    const isDisk = row.kind === "yandex";
+    let open = "";
+    if (isDisk) {
+      open = '<a class="cab-storage-act" href="' + escapeHtml(row.url || "") +
+        '" target="_blank" rel="noopener noreferrer">Открыть</a>';
+    } else {
+      open = '<button type="button" class="cab-storage-act" data-storage-open="' +
+        escapeHtml(row.value) + '" title="Открыть папку в проводнике"' +
+        (row.exists ? "" : " disabled") + ">Открыть</button>";
+    }
+    h += '<div class="cab-storage-row">' +
+      '<div class="cab-storage-main">' +
+        '<div class="cab-storage-title">' + escapeHtml(row.title) + " " +
+          (isDisk ? "" : cabStorageStatus(row.exists)) + "</div>" +
+        '<div class="cab-storage-val" title="' + escapeHtml(row.value) + '">' +
+          escapeHtml(row.value) + "</div>" +
+      "</div>" +
+      '<div class="cab-storage-actions">' +
+        '<button type="button" class="cab-storage-act" data-storage-edit="' + escapeHtml(key) +
+          '">Изменить</button>' +
+        open +
+        (row.custom
+          ? '<button type="button" class="cab-storage-act danger" data-storage-reset="' +
+            escapeHtml(key) + '" title="Вернуть значение по умолчанию">Сбросить</button>'
+          : "") +
+      "</div></div>";
+  }
+  rootsBox.innerHTML = h;
+
+  // Папки фирм внутри корня аналитики.
+  const companies = data.companies || [];
+  h = "";
+  for (const c of companies) {
+    if (edit.kind === "company" && edit.id === c.id) {
+      h += '<div class="cab-storage-row editing">' +
+        '<div class="cab-storage-main">' +
+          '<div class="cab-storage-title">' + escapeHtml(c.name) + "</div>" +
+          '<input class="cab-storage-input" id="cabStorageCompanyInput" value="' +
+            escapeHtml(c.analytics_dir || "") +
+            '" placeholder="ООО ФИРМА\\AGENT MARKET\\АНАЛИТИКА" spellcheck="false">' +
+        "</div>" +
+        '<div class="cab-storage-actions">' +
+          '<button type="button" class="cab-storage-act primary" data-company-save="' +
+            c.id + '">Сохранить</button>' +
+          '<button type="button" class="cab-storage-act" data-company-cancel="1">Отмена</button>' +
+        "</div></div>";
+      continue;
+    }
+    const path = c.path || "";
+    h += '<div class="cab-storage-row">' +
+      '<div class="cab-storage-main">' +
+        '<div class="cab-storage-title">' + escapeHtml(c.name) + " " +
+          (path ? cabStorageStatus(c.exists) : "") + "</div>" +
+        '<div class="cab-storage-val' + (path ? "" : " muted") + '">' +
+          escapeHtml(path || "папка не настроена") + "</div>" +
+      "</div>" +
+      '<div class="cab-storage-actions">' +
+        '<button type="button" class="cab-storage-act" data-company-edit="' + c.id +
+          '">Изменить</button>' +
+        (c.exists
+          ? '<button type="button" class="cab-storage-act" data-storage-open="' +
+            escapeHtml(path) + '">Открыть</button>'
+          : "") +
+      "</div></div>";
+  }
+  if (h) h = '<div class="cab-storage-sub">Папки фирм</div>' + h;
+  compBox.innerHTML = h;
+
+  // Ссылки: встроенные (GitHub, приложение, облака) и свои.
+  const links = data.links || [];
+  h = "";
+  for (const l of links) {
+    if (edit.kind === "link" && edit.id === l.id) {
+      h += '<div class="cab-storage-row editing">' +
+        '<div class="cab-storage-main">' +
+          '<input class="cab-storage-input" id="cabStorageLinkTitle" value="' +
+            escapeHtml(l.title) + '" placeholder="Название" spellcheck="false">' +
+          '<input class="cab-storage-input" id="cabStorageLinkUrl" value="' +
+            escapeHtml(l.url) + '" placeholder="https://…" spellcheck="false">' +
+        "</div>" +
+        '<div class="cab-storage-actions">' +
+          '<button type="button" class="cab-storage-act primary" data-link-save="' +
+            escapeHtml(l.id) + '">Сохранить</button>' +
+          '<button type="button" class="cab-storage-act" data-link-cancel="1">Отмена</button>' +
+        "</div></div>";
+      continue;
+    }
+    h += '<div class="cab-storage-row">' +
+      '<div class="cab-storage-main">' +
+        '<a class="cab-storage-link" href="' + escapeHtml(l.url) +
+          '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l.title) + "</a>" +
+        '<div class="cab-storage-val cab-storage-url">' + escapeHtml(l.url) + "</div>" +
+      "</div>" +
+      '<div class="cab-storage-actions">' +
+        '<button type="button" class="cab-storage-act" data-link-edit="' +
+          escapeHtml(l.id) + '">Изменить</button>' +
+        '<button type="button" class="cab-storage-act danger" data-link-del="' +
+          escapeHtml(l.id) + '">Удалить</button>' +
+      "</div></div>";
+  }
+  if (edit.kind === "link" && !edit.id) {
+    h += '<div class="cab-storage-row editing">' +
+      '<div class="cab-storage-main">' +
+        '<input class="cab-storage-input" id="cabStorageLinkTitle" value="" ' +
+          'placeholder="Название" spellcheck="false">' +
+        '<input class="cab-storage-input" id="cabStorageLinkUrl" value="" ' +
+          'placeholder="https://…" spellcheck="false">' +
+      "</div>" +
+      '<div class="cab-storage-actions">' +
+        '<button type="button" class="cab-storage-act primary" data-link-save="">Добавить</button>' +
+        '<button type="button" class="cab-storage-act" data-link-cancel="1">Отмена</button>' +
+      "</div></div>";
+  }
+  linksBox.innerHTML = h;
+}
+
+function cabStorageEditLink(links, id, title, url) {
+  const out = (links || []).map((l) => ({ ...l }));
+  if (!id) {
+    out.push({ title, url });
+    return out;
+  }
+  const found = out.find((l) => l.id === id);
+  if (found) {
+    found.title = title;
+    found.url = url;
+  }
+  return out;
+}
+
+async function saveStorageLink(id) {
+  const titleEl = $("#cabStorageLinkTitle");
+  const urlEl = $("#cabStorageLinkUrl");
+  const title = titleEl ? titleEl.value.trim() : "";
+  const url = urlEl ? urlEl.value.trim() : "";
+  if (!title || !url) throw new Error("Укажите название и адрес ссылки");
+  const links = cabStorageEditLink((cabStorageData && cabStorageData.links) || [], id, title, url);
+  await storagePut({ links });
+  cabStorageMsg(id ? "Ссылка сохранена" : "Ссылка добавлена");
+}
+
+function initCabStorage() {
+  const box = $("#cabStorage");
+  if (!box) return;
+  box.addEventListener("click", (e) => {
+    const find = (attr) => e.target.closest("[" + attr + "]");
+    const editRoot = find("data-storage-edit");
+    if (editRoot) {
+      cabStorageEdit = { kind: "root", id: editRoot.dataset.storageEdit };
+      renderStorageSettings();
+      return;
+    }
+    const companyEdit = find("data-company-edit");
+    if (companyEdit) {
+      cabStorageEdit = { kind: "company", id: Number(companyEdit.dataset.companyEdit) };
+      renderStorageSettings();
+      return;
+    }
+    const linkEdit = find("data-link-edit");
+    if (linkEdit) {
+      cabStorageEdit = { kind: "link", id: linkEdit.dataset.linkEdit };
+      renderStorageSettings();
+      return;
+    }
+    if (find("data-storage-cancel") || find("data-company-cancel") || find("data-link-cancel")) {
+      cabStorageEdit = null;
+      renderStorageSettings();
+      return;
+    }
+    const saveRoot = find("data-storage-save");
+    if (saveRoot) {
+      const key = saveRoot.dataset.storageSave;
+      const inp = $("#cabStorageRootInput");
+      cabStorageRun(async () => {
+        await storagePut({ [key]: inp ? inp.value.trim() : "" });
+        cabStorageMsg("Сохранено");
+      });
+      return;
+    }
+    const saveCompany = find("data-company-save");
+    if (saveCompany) {
+      const id = Number(saveCompany.dataset.companySave);
+      const inp = $("#cabStorageCompanyInput");
+      cabStorageRun(async () => {
+        const d = await apiPut("/settings/storage/company/" + id,
+          { analytics_dir: inp ? inp.value.trim() : "" });
+        cabStorageData = d;
+        cabStorageEdit = null;
+        renderStorageSettings();
+        cabStorageMsg("Папка фирмы сохранена");
+      });
+      return;
+    }
+    const saveLink = find("data-link-save");
+    if (saveLink) {
+      cabStorageRun(() => saveStorageLink(saveLink.dataset.linkSave || ""));
+      return;
+    }
+    const reset = find("data-storage-reset");
+    if (reset) {
+      const key = reset.dataset.storageReset;
+      cabStorageRun(async () => {
+        cabStorageData = await storageDelete("/settings/storage/" + encodeURIComponent(key));
+        cabStorageEdit = null;
+        renderStorageSettings();
+        cabStorageMsg("Значение сброшено");
+      });
+      return;
+    }
+    const del = find("data-link-del");
+    if (del) {
+      const id = del.dataset.linkDel;
+      cabStorageRun(async () => {
+        const links = ((cabStorageData && cabStorageData.links) || [])
+          .filter((l) => l.id !== id);
+        await storagePut({ links });
+        cabStorageMsg("Ссылка удалена");
+      });
+      return;
+    }
+    const open = find("data-storage-open");
+    if (open) {
+      cabStorageRun(async () => {
+        await apiPost("/system/reveal", { path: open.dataset.storageOpen });
+      });
+    }
+  });
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !e.target.closest("input")) return;
+    const row = e.target.closest(".cab-storage-row");
+    const btn = row && row.querySelector("button.primary");
+    if (btn) {
+      e.preventDefault();
+      btn.click();
+    }
+  });
+  const refresh = $("#cabStorageRefresh");
+  if (refresh) refresh.addEventListener("click", () => loadStorageSettings(true));
+  const add = $("#cabLinkAdd");
+  if (add) add.addEventListener("click", () => {
+    cabStorageEdit = { kind: "link", id: "" };
+    renderStorageSettings();
+    const inp = $("#cabStorageLinkTitle");
+    if (inp) inp.focus();
+  });
 }
 
 async function selectCabinet(id) {
@@ -13231,7 +13570,7 @@ async function uploadBlobToYandex(blob, name, msg) {
   const up = await fetch("/api/yandex/upload", { method: "POST", body: fd });
   const j = await up.json();
   if (!up.ok) throw new Error(j.detail || up.status);
-  msg.textContent = "На Яндекс.Диске: /agent_market/" + j.name;
+  msg.textContent = "На Яндекс.Диске: " + (j.folder || "") + "/" + j.name;
 }
 
 async function uploadMarginFunnelToDisk() {
@@ -13383,7 +13722,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     yd.type = "button";
     yd.className = "btn";
     yd.textContent = "Загрузить на диск";
-    yd.title = "Заливает свежий Excel-отчёт в папку /agent_market на Яндекс.Диске";
+    yd.title = "Заливает свежий Excel-отчёт в настроенную папку на Яндекс.Диске";
     yd.addEventListener("click", () => busyRun(() => apiUploadDisk(api, kind, "#headerMsg")));
     btn.parentNode.insertBefore(yd, btn.nextSibling);
     if (api !== "wb") return;
@@ -13611,6 +13950,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (cabCopyPricing) cabCopyPricing.addEventListener("click", () => copyPricingSettingsAll());
   const cabSizeRefresh = $("#cabSizeRefresh");
   if (cabSizeRefresh) cabSizeRefresh.addEventListener("click", () => loadSystemSize(true));
+  initCabStorage();
   $("#refreshStart").addEventListener("click", () => {
     if (refreshAllMode) startRefreshAll();
     else startRefreshJob();

@@ -44,6 +44,7 @@ FILE_ROLES = {
     "app/services/tickets.py": "реестр тикетов `TICKETS.md` (create/validate/report)",
     "app/services/pdf_demand.py": "PDF «Потребность в товаре»",
     "app/services/photos.py": "индекс фото на диске, выбор папки, fallback по префиксу",
+    "app/services/storage_settings.py": "пути хранилищ и ссылки проекта (`app_settings`)",
     "app/services/thumbs.py": "миниатюры PDF в `data/thumbs/`",
     "app/services/warehouse.py": "складские документы (приход/отгрузка, обороты)",
     "app/services/ozon_article.py": "резолвер артикула/размера Ozon (`base_article`)",

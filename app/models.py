@@ -868,3 +868,20 @@ class OzonBuyout(Base):
     imported_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
     )
+
+
+class AppSetting(Base):
+    """Глобальные настройки проекта (T-80): ключ → JSON-строка.
+
+    Сейчас используется одна строка ``project``: корни хранилищ (фото,
+    аналитика на Google Drive, папка отчётов на Яндекс.Диске) и список
+    ссылок. Живёт в public — это настройки всего проекта, а не связки.
+    """
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )

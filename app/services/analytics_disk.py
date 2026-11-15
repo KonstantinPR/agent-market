@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Выгрузка Excel-отчётов Прибыльности в папки Dropbox на локальном диске.
+"""Выгрузка Excel-отчётов Прибыльности в папки Google Drive на локальном диске.
 
 Кнопка «Обновить аналитику на диск» в «Массовых действиях» формирует ежедневный
 набор отчётов раздела Прибыльность и ПЕРЕЗАПИСЫВАЕТ стабильные .xlsx-файлы в
 папку фирмы (companies.analytics_dir) с подпапкой по маркетплейсу (WB/OZON).
-Так отчёты доступны с других устройств через синхронизацию Dropbox.
+Так отчёты доступны с других устройств через синхронизацию Google Drive
+(корень — настройка «Аналитика» в шторке «Личные кабинеты»).
 
 Набор WB (6 файлов):
   1. margin_funnel.xlsx  — воронка продаж (с областью «движение за 2 года»);
@@ -38,6 +39,7 @@ from app import models
 from app.config import settings
 from app.services import dashboard as dashboard_service
 from app.services import excel_io, margin as margin_service
+from app.services import storage_settings
 from app.services.columns import export_cols
 from app.services.window import parse_window
 
@@ -210,7 +212,7 @@ def company_dir(db: Session, info, root: Optional[str] = None) -> Optional[Path]
     if not rel:
         return None
     mp_dir = "WB" if info.marketplace == "wb" else "OZON"
-    base = Path(root if root is not None else settings.analytics_root)
+    base = Path(root if root is not None else storage_settings.analytics_root(db))
     return base / Path(rel) / mp_dir
 
 

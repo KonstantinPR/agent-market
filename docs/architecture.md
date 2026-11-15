@@ -34,28 +34,29 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 13486 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 6911 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/static/columns.json` | 6592 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/services/pricing.py` | 2935 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
-| `app/services/sync.py` | 2669 | запись выгрузок WB/Ozon в БД |
+| `app/static/app.js` | 14315 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 7070 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/columns.json` | 6843 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/services/pricing.py` | 3208 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
+| `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
+| `app/static/style.css` | 1901 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `app/static/style.css` | 1826 | стили (панели «Вид таблицы», тулбары, таблицы) |
-| `tests/js/test_js_helpers.py` | 1510 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1574 | проверка app.js через Node `vm` |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `app/static/index.html` | 1399 | разметка: навигация `data-tab` + секции `tab-*` |
+| `app/static/index.html` | 1425 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
+| `app/services/margin.py` | 1265 | маржинальность по детализациям, группировка артикулоразмеров |
+| `tests/unit/test_margin.py` | 1226 | юнит-тесты маржинальности |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |
-| `tests/unit/test_margin.py` | 1105 | юнит-тесты маржинальности |
-| `app/services/margin.py` | 1105 | маржинальность по детализациям, группировка артикулоразмеров |
 | `app/providers/ozon.py` | 1039 | HTTP к Ozon |
-| `app/models.py` | 837 | SQLAlchemy-модели (схема БД) |
+| `app/models.py` | 887 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
 | `app/services/warehouse.py` | 729 | складские документы (приход/отгрузка, обороты) |
 | `app/services/dashboard.py` | 692 | сводные панели дашборда |
 | `app/services/tickets.py` | 558 | реестр тикетов `TICKETS.md` (create/validate/report) |
+| `app/services/storage_settings.py` | 430 | пути хранилищ и ссылки проекта (`app_settings`) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
-| `app/services/photos.py` | 255 | индекс фото на диске, выбор папки, fallback по префиксу |
+| `app/services/photos.py` | 251 | индекс фото на диске, выбор папки, fallback по префиксу |
 | `app/database.py` | 240 | engine/session PostgreSQL |
 | `scripts/load_sample.py` | 216 | демо-данные |
 | `app/services/base_price.py` | 178 | рекомендуемая (базовая) цена |
@@ -68,7 +69,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/common.py` | 104 | общие хелперы (wildcard-фильтр `like_*`, окна) |
 | `app/providers/errors.py` | 100 | нормализованные ошибки апстримов |
 | `app/main.py` | 86 | сборка FastAPI-приложения, `/`, статика |
-| `app/config.py` | 79 | `Settings`, читается из `.env` |
+| `app/config.py` | 82 | `Settings`, читается из `.env` |
 | `app/services/excel_io.py` | 73 | чтение/запись Excel |
 | `app/services/columns.py` | 42 | loader columns.json (`export_cols` для Python) |
 | `app/providers/base.py` | 33 | базовый провайдер |
@@ -121,7 +122,8 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 - **Деньги** — `OzonCashFlow`, `OzonAccrual`, `OzonBuyout`.
 - **Цены** — `PriceSnapshot` (`price_snapshots`), `PriceChange` (журнал
   решений), `BasePrice`-логика в `app/services/base_price.py`.
-- **Служебное** — `RefreshRun`, `ApiPull`, `BatchRun`.
+- **Служебное** — `RefreshRun`, `ApiPull`, `BatchRun`, `AppSetting`
+  (глобальные настройки проекта, `key='project'` — пути хранилищ и ссылки).
 
 ### Цены читаются из снимка БД, а не из API
 
@@ -129,6 +131,21 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 используется как fallback. Это дало 8–9 с вместо минут на расчёт и
 покрытие 100% цен / 99.6% скидок. Обратно не меняем: pandas-маски и
 multiprocessing сознательно не оптимизировались.
+
+### Хранилища и ссылки проекта (T-80)
+
+Пути, которые раньше были зашиты в код, теперь живут в `app_settings`
+(`key='project'`, JSON с **переопределениями**): корень фото, корень аналитики
+(локальный Google Drive, напр. `E:\Мой диск`) и папка отчётов на Яндекс.Диске
+(по умолчанию `/agent_market`). Нет ключа — берётся дефолт из `app/config.py`
+и `.env` (для фото — `PHOTOS_ROOT`), поэтому «Сбросить» возвращает исходное
+поведение. Модуль — `app/services/storage_settings.py`; он же хранит список
+ссылок проекта (GitHub, локальное приложение, облака + свои) и умеет
+открывать папки в проводнике (`POST /api/system/reveal`) строго внутри
+настроенных корней. UI — шторка «Личные кабинеты → Ссылки и хранилища».
+Сервисы (`photos`, `analytics_disk`, `/yandex/*`, складские `/warehouse/*`)
+читают действующие значения через `storage_settings.roots()/photos_root()/
+analytics_root()/reports_folder()`, а не `settings.*` напрямую.
 
 ## Обновление данных
 

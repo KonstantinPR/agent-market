@@ -23,6 +23,7 @@ SNAPSHOT = """
 DELETE /api/automation/face/etalons/{etalon_id}
 DELETE /api/promo/limits
 DELETE /api/promo/limits/{promo_id}
+DELETE /api/settings/storage/{key}
 DELETE /api/warehouse/counterparties/{cp_id}
 DELETE /api/warehouse/docs/{doc_id}
 DELETE /api/yandex/delete
@@ -97,6 +98,7 @@ GET /api/refresh/history
 GET /api/refresh/{job_id}
 GET /api/replenish
 GET /api/sales
+GET /api/settings/storage
 GET /api/stocks
 GET /api/storage-cost
 GET /api/system/size
@@ -163,6 +165,7 @@ POST /api/refresh-all
 POST /api/refresh/retry-failed
 POST /api/replenish/import-excel
 POST /api/sync/{code}
+POST /api/system/reveal
 POST /api/tickets
 POST /api/tickets/{tid}/block
 POST /api/tickets/{tid}/close
@@ -189,6 +192,8 @@ POST /api/wb/storage
 POST /api/yandex/upload
 PUT /api/cabinet/pricing-settings
 PUT /api/cabinet/{cabinet_id}/settings
+PUT /api/settings/storage
+PUT /api/settings/storage/company/{company_id}
 PUT /api/warehouse/paths/settings
 """
 

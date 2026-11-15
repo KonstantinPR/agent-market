@@ -2,7 +2,7 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **174**, групп: **31**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **183**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
@@ -25,16 +25,17 @@
 - [pricing-ozon](#pricing-ozon) — 5 шт.
 - [products](#products) — 6 шт.
 - [progress](#progress) — 1 шт.
-- [promo](#promo) — 2 шт.
+- [promo](#promo) — 6 шт.
 - [pulls](#pulls) — 1 шт.
 - [refresh](#refresh) — 5 шт.
 - [refresh-all](#refresh-all) — 1 шт.
 - [replenish](#replenish) — 2 шт.
 - [sales](#sales) — 1 шт.
+- [settings](#settings) — 4 шт.
 - [stocks](#stocks) — 1 шт.
 - [storage-cost](#storage-cost) — 1 шт.
 - [sync](#sync) — 1 шт.
-- [system](#system) — 1 шт.
+- [system](#system) — 2 шт.
 - [tickets](#tickets) — 8 шт.
 - [warehouse](#warehouse) — 20 шт.
 - [wb](#wb) — 11 шт.
@@ -244,6 +245,10 @@
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
+| DELETE | `/api/promo/limits` | `promo_limits_clear` | Удаляет все загруженные пороги акций. |
+| GET | `/api/promo/limits` | `promo_limits_list` | Сводка загруженных порогов акций: акции, товары, даты, файл. |
+| POST | `/api/promo/limits/import` | `promo_limits_import` | Импорт порогов участия «до N ₽» из Excel личного кабинета WB (T-76/R20). |
+| DELETE | `/api/promo/limits/{promo_id}` | `promo_limits_clear_promo` | Удаляет пороги одной акции. |
 | GET | `/api/promo/list` | `promo_list` | Сохранённые акции WB: актуальные и ближайшие (±90 дней), свежие сверху. |
 | POST | `/api/promo/refresh` | `promo_refresh` | Обновление акций WB (wb_promotions) и их номенклатуры (planDiscount). |
 
@@ -282,6 +287,15 @@
 |---|---|---|---|
 | GET | `/api/sales` | `api_sales` |  |
 
+## settings
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| GET | `/api/settings/storage` | `api_storage_settings_get` | Корни хранилищ, папки фирм и список ссылок проекта. |
+| PUT | `/api/settings/storage` | `api_storage_settings_put` | Сохранить корни хранилищ и ссылки проекта. |
+| PUT | `/api/settings/storage/company/{company_id}` | `api_storage_company_dir` | Подпапка аналитики фирмы внутри корня (companies.analytics_dir). |
+| DELETE | `/api/settings/storage/{key}` | `api_storage_settings_reset` | Сбросить настройку к дефолту: photos_root, analytics_root, reports_folder или links. |
+
 ## stocks
 
 | Метод | Путь | Функция | Описание |
@@ -304,6 +318,7 @@
 
 | Метод | Путь | Функция | Описание |
 |---|---|---|---|
+| POST | `/api/system/reveal` | `api_system_reveal` | Открыть локальную папку в проводнике (только внутри хранилищ). |
 | GET | `/api/system/size` | `api_system_size` | Размер файлов проекта (без venv/.git/кэшей/логов) и базы PostgreSQL. |
 
 ## tickets
@@ -341,7 +356,7 @@
 | GET | `/api/warehouse/shipment-cabinets` | `api_shipment_cabinets` | Связки, у которых есть отправки, + количество — для чекбокс-селектора. |
 | GET | `/api/warehouse/shipment-items` | `api_shipment_items` | Товарный разрез отправок. |
 | GET | `/api/warehouse/stock` | `api_stock` |  |
-| POST | `/api/warehouse/todisk` | `api_wh_todisk` | Сформировать Excel и загрузить на Яндекс.Диск в папку /agent_market/Наш склад/<kind>. |
+| POST | `/api/warehouse/todisk` | `api_wh_todisk` | Сформировать Excel и загрузить на Яндекс.Диск в папку <отчёты>/Наш склад. |
 | GET | `/api/warehouse/turnover` | `api_turnover` |  |
 
 ## wb
