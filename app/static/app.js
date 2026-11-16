@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "199";
+const UI_VERSION = "201";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -547,7 +547,8 @@ function tbodyRowsHtml(headers, rows) {
   let h = "";
   for (const r of rows) {
     h += "<tr>";
-    for (const c of headers) h += '<td class="' + (c.num ? "num" : "") + '">' + cmpBodyCell(c, r) + "</td>";
+    // tdCls — класс ячейки из заголовка (T-81: cell-wrap для длинной «Причины»).
+    for (const c of headers) h += '<td class="' + (c.num ? "num " : "") + (c.tdCls || "") + '">' + cmpBodyCell(c, r) + "</td>";
     h += "</tr>";
   }
   return h;
@@ -11250,6 +11251,9 @@ function initHelp() {
 
 // ------------------------------------------------------------- автопилот цен WB
 let pricingDefaults = null;
+// T-81: фильтр «только товары без себестоимости в каталоге» (кнопка в
+// предупреждении над таблицей). Живёт до перезагрузки страницы.
+let pricingCostOnly = false;
 
 const PRICING_LABELS = {
   window_days: "Окно расчёта скорости продаж, дн",
@@ -11271,6 +11275,8 @@ const PRICING_LABELS = {
   return_penalty: "Порог доли возвратов/отмен, 0..1",
   dead_stock_days: "Дней без продаж → мёртвый запас, ≥",
   dead_max_discount_pct: "Потолок скидки для мёртвого запаса, %",
+  estimate_missing_cost: "Себестоимость по соседям, если не задана",
+  estimate_cost_min_peers: "Мин. соседей для оценки себестоимости, шт",
   low_conv_pct: "Низкая конверсия витрины <, %",
   min_rating_reviews: "Рейтинг по отзывам ≥, балл (ценный товар)",
   fallback_window_days: "Окно расчёта unit-экономики по факт., дн",
@@ -11349,6 +11355,8 @@ const PRICING_HINTS = {
   return_penalty: "Если доля возвратов/отмен больше этой величины (0..1), продажи считаются «шумными» и товар не трогаем.",
   dead_stock_days: "Если продаж не было столько дней подряд → мёртвый запас, цену снижаем.",
   dead_max_discount_pct: "Потолок скидки для мёртвого запаса (продаж нет ≥ «Дней без продаж → мёртвый запас»): разрешает уходить глубже общего «Максимальная скидка от базовой цены», но не ниже пола безубыточности и не глубже этого значения. Нужен потому, что витринная скидка WB (автоакция) может быть уже выше общего потолка — тогда общий потолок запрещал снижение и автопилот поднимал цену на 1 п.п. Шаг за проход по-прежнему ограничен «Максимальное снижение цены за шаг».",
+  estimate_missing_cost: "T-81: если себестоимость товара не заведена в каталоге (0 ₽), автопилот оценивает её по средней у соседей — по первой ступени, где хватает данных: группа товаров (JZA → JZ) → наименование → префикс артикула до первого дефиса. Оценка живёт только в расчёте: в каталог не пишется, пол от неё не уходит в «Минимальные цены» и «Мин. цена автоакций». Выключено — прежний пропуск «нет unit-экономики» с подробной причиной.",
+  estimate_cost_min_peers: "T-81: сколько соседей с известной себестоимостью нужно, чтобы средняя считалась надёжной. Меньше — ступень пропускается, берётся следующая (наименование, затем префикс артикула). По умолчанию 3.",
   low_conv_pct: "Много «в корзине», но конверсия ниже этого %, % — интерес без покупок; товар пропускаем.",
   min_rating_reviews: "Рейтинг по отзывам из воронки продаж (1..5): чем выше — тем меньше скидка при снижении, ведь товар ценный. При рейтинге ≥ этого порога снижение ограничивается, а при 5,0 скидка не увеличивается вовсе. 0 = нет данных — ограничений нет.",
   value_ratio_low: "Нижний порог отношения «ценность/себестоимость» (value из каталога ÷ себестоимость). Пока отношение ≤ этого значения — ограничения по ценности нет, скидка снижается как обычно. По умолчанию 1,0: при ценности ≤ себестоимости скидку не тормозим.",
@@ -11491,6 +11499,26 @@ function promoConfidenceCell(v) {
     : "<span style='color:#b8860b'>по фолбэку</span>";
 }
 
+// T-81: себестоимость строки автопилота. «~» перед суммой = в каталоге не
+// задана, взята средняя по соседям (группа → наименование → префикс артикула).
+// В тултипе — откуда цифра и по скольким товарам усреднили.
+const COST_SOURCE_LABELS = {
+  group: "группа",
+  name: "наименование",
+  prefix: "префикс артикула",
+};
+function costCell(v, r) {
+  const est = !!(r && r.net_cost_est);
+  const n = Number(v);
+  if (!est && !(n > 0)) return "—";
+  if (!est) return fmtMoney(n);
+  const src = COST_SOURCE_LABELS[r.cost_source] || "соседи";
+  const tip = "В каталоге себестоимость не указана. Оценка — средняя по " +
+    fmt(r.cost_peers || 0) + " товарам: " + src + " «" + (r.cost_basis || "—") +
+    "». В каталог не пишется, пол от неё в минимальные цены WB не уходит.";
+  return '<span class="est" title="' + escapeHtml(tip) + '">~' + fmtMoney(n) + "</span>";
+}
+
 // Прибыль по товару: маржа с единицы (руб) + рентабельность от выручки (%).
 // v = margin_per_one (руб/шт), r.margin_pct — процент от выручки.
 function profitCell(v, r) {
@@ -11511,7 +11539,7 @@ const pricingHeaders = [
   { k: "target_vis", label: "Целевая цена, руб", num: true, render: targetVisCell , tip: "Цена для покупателя при целевой скидке = базовая цена × (1 − скидка/100). Ниже точки безубыточности автопилот не опускает."},
   { k: "margin_per_one", label: "Прибыль/шт, руб", num: true, render: profitCell , tip: "Фактическая прибыль с единицы по детализации продаж WB за окно: прибыль ÷ проданные штуки. Рядом в скобках — рентабельность от выручки."},
   { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money , tip: "Действующая цена покупателя = базовая цена WB × (1 − текущая скидка/100). Сравните с целевой ценой, чтобы увидеть эффект решения."},
-  { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.moneyZero , tip: "Себестоимость единицы из каталога. Ноль = не заведена: тогда пол безубыточности считается от нуля и решение принимается вслепую."},
+  { k: "net_cost", label: "Себестоимость", num: true, render: costCell , tip: "Себестоимость единицы из каталога. «~» = в каталоге не задана, взята средняя по соседям (группа → наименование → префикс артикула) — наведите на сумму, чтобы увидеть источник и число товаров. Оценка не пишется в каталог и не уходит в минимальные цены WB."},
   { k: "value", label: "Ценность", num: true, render: cellFmts.moneyZero , tip: "Ценность единицы (pure_value) из каталога товаров. Отношение ценность/себестоимость тормозит снижение цены: чем ценнее товар относительно себестоимости, тем меньше автопилот увеличивает скидку (при value ≥ value_ratio_high × себестоимости — не увеличивает вовсе)."},
   { k: "supplier", label: "Поставщик", render: cellFmts.text , tip: "Поставщик товара из каталога (колонка «Поставщик» файла products.xlsx)."},
   { k: "avg_price", label: "Ср. цена факт, руб", num: true, render: cellFmts.money , tip: "Средняя цена заказа из воронки продаж WB за срез. Если воронки нет, в расчётах она заменяется витринной ценой, и защита «цена ниже себестоимости» ослабевает."},
@@ -11532,7 +11560,7 @@ const pricingHeaders = [
   { k: "margin_pct", label: "Маржа факт, % от выручки", num: true, render: cellFmts.pct , tip: "Рентабельность за окно по детализации: прибыль ÷ выручка × 100. Проверяйте согласованность с полем прибыли на единицу."},
   { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(2) , tip: "Средняя оценка по отзывам покупателей 1..5 из воронки (product.feedbackRating). Ключевой сигнал качества: ниже порога автопилот не поднимает цену, высокому «ценному» товару не увеличивает скидку."},
   { k: "action", label: "Решение", render: actionCell , tip: "Итоговое действие: RAISE — снизить скидку (поднять цену), LOWER — увеличить скидку, HALVE — пополам для мёртвых товаров, HOLD — не менять, SKIP — пропустить (нет данных, кулдаун, отказы по качеству)."},
-  { k: "reason", label: "Причина", render: cellFmts.text , tip: "Текстовое объяснение решения: покрытие остатка (DOC), конверсия, корзины, рейтинг, отказы качества, кулдаун после прошлой правки."},
+  { k: "reason", label: "Причина", render: cellFmts.text , tdCls: "cell-wrap", tip: "Текстовое объяснение решения: правило, затем «расчёт» с входными цифрами — пол и его источник (unit-экономика / каталог / оценка соседей), витрина и скидка, потолок, остаток/скорость/DOC, цель, дельта и маржа."},
   { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование товара из каталога products."},
   { k: "stock_wb", label: "Остаток WB", num: true, render: cellFmts.int , tip: "Остаток WB из воронки продаж (product.stocks.wb) — снимок на дату среза. Может отличаться от колонки «Остаток», взятой из последнего среза стоков."},
   { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) , tip: "Покрытие остатка продажами: остаток ÷ скорость (шт/дн). Ниже нижней границы — дефицит, выше верхней — перезапас, вокруг целевого — шаг в любую сторону."},
@@ -11570,7 +11598,7 @@ const pricingHeaders = [
   { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money , tip: "Логистика (туда и обратно) на единицу по детализации WB. Входит в формулу минимальной цены."},
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money , tip: "Хранение на единицу по детализации WB, включая оценку безартикульных плат. Тоже входит в формулу минимальной цены."},
   { k: "price", label: "Цена базовая, руб", num: true, render: cellFmts.money , tip: "Базовая цена карточки WB (price из прайса), от неё считается витринная цена со скидкой."},
-  { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money , tip: "Минимальная цена безубыточности: себестоимость + логистика + комиссия + хранение + услуги, ₽/шт."},
+  { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money , tip: "Минимальная цена безубыточности: себестоимость + логистика + комиссия + хранение + услуги, ₽/шт. Если себестоимость оценена по соседям, пол тоже оценка — в минимальные цены WB он не отправляется."},
   { k: "minpromo_price", label: "Мин. цена автоакций, руб", num: true, render: (v, r) => {
     if (v == null) return "—";
     const mark = r.minpromo_bound ? ' <span class="mp-warn" title="Значение упёрлось в границу ' + (r.minpromo_bound === "min" ? "мин. " : "макс. ") + 'от текущей цены (minpromo_min/max_pct)">⚠</span>' : "";
@@ -12764,6 +12792,7 @@ const PRICING_GROUPS = [
   ] },
   { title: "Цены и шаги", col: 1, keys: [
       "floor_margin_pct", "max_discount_pct", "dead_max_discount_pct",
+      "estimate_missing_cost", "estimate_cost_min_peers",
       "max_raise_pct", "max_drop_pct",
       "lower_soften", "min_delta_pp", "raise_pct_replenishable",
       "dead_min_discount",
@@ -13157,6 +13186,34 @@ function pricingEmptyText(rows, hiddenPassive, hidePassive, reason) {
   }
   return "Нет данных за выбранный период";
 }
+
+// T-81: предупреждение «себестоимость не указана» + кнопка-фильтр по таким
+// товарам. Показывается, только если в ответе есть строки без net_cost.
+function renderPricingCostWarn(data) {
+  const box = $("#pricingCostWarn");
+  const txt = $("#pricingCostWarnText");
+  const btn = $("#pricingCostOnly");
+  if (!box || !txt || !btn) return;
+  const noCost = Number(data.no_cost || 0);
+  const est = Number(data.cost_estimated || 0);
+  if (!noCost) {
+    box.classList.add("hidden");
+    return;
+  }
+  let t = "Себестоимость не указана у " + fmt(noCost) + " тов.";
+  if (est) {
+    t += " — у " + fmt(est) + " пол безубыточности считается по оценке " +
+      "соседей (группа → наименование → префикс артикула)";
+  }
+  t += ". Оценка в каталог не пишется и в минимальные цены WB не уходит — " +
+    "надёжнее заполнить себестоимость.";
+  txt.textContent = t;
+  btn.textContent = pricingCostOnly
+    ? "Показать все товары"
+    : "Товары без себестоимости (" + fmt(noCost) + ")";
+  btn.classList.toggle("active", pricingCostOnly);
+  box.classList.remove("hidden");
+}
 async function renderPricing(apply, applyNote) {
   if (pricingMpCurrent() === "oz") return renderPricingOzon(apply, applyNote);
   await buildPricingSettings();
@@ -13181,6 +13238,9 @@ async function renderPricing(apply, applyNote) {
     // renderPricingPricesAge(data); // перенесено в строку состояния
     const allRows = data.rows || [];
     let pre = allRows;
+    // T-81: кнопка «Товары без себестоимости» — фильтр по каталогу
+    // (net_cost_catalog, а не по оценке: оценённые тоже нуждаются в заполнении).
+    if (pricingCostOnly) pre = pre.filter((r) => Number(r.net_cost_catalog) <= 0);
     if (data.articles) {
       pricingArtsMenu.setInfo(data.articles);
       pricingArtsMenu.updateButton();
@@ -13211,6 +13271,13 @@ async function renderPricing(apply, applyNote) {
       // Кулдаун — сразу после «решений»: в хвосте строки его обрезает HEADER_MSG_MAX.
       if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      // T-81: сколько товаров без себестоимости и у скольких она оценена.
+      // До «последнего применения»: хвост строки состояния обрезается.
+      const noCost = Number(data.no_cost || 0);
+      if (noCost > 0) {
+        summary += ", без себестоимости: " + fmt(noCost) +
+          " (оценка соседей: " + fmt(Number(data.cost_estimated || 0)) + ")";
+      }
       if (artsMsg) summary += artsMsg;
       // Последнее применение — сразу после счётчиков: в строке состояния текст
       // обрезается по HEADER_MSG_MAX, и в хвосте его было бы не видно.
@@ -13241,11 +13308,14 @@ async function renderPricing(apply, applyNote) {
       msg.textContent = summary;
     };
     await refreshPricingLastApply("wb");
+    renderPricingCostWarn(data);
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,
-      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive,
-        artsEmptyReason(qRaw, data.articles)),
+      emptyText: pricingCostOnly && !rows.length
+        ? "Товаров без себестоимости нет — у всех в каталоге указана."
+        : pricingEmptyText(rows, hiddenPassive, hidePassive,
+          artsEmptyReason(qRaw, data.articles)),
       onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
     });
     await renderPricingHistory();
@@ -13305,6 +13375,13 @@ async function renderPricingOzon(apply, applyNote) {
       // Кулдаун — сразу после «решений»: в хвосте строки его обрезает HEADER_MSG_MAX.
       if (underCooldown) summary += ", в кулдауне: " + fmt(underCooldown);
       if (hidePassive && hiddenPassive > 0) summary += ", скрыто «держать»/«пропустить»: " + fmt(hiddenPassive);
+      // T-81: сколько товаров без себестоимости и у скольких она оценена.
+      // До «последнего применения»: хвост строки состояния обрезается.
+      const noCost = Number(data.no_cost || 0);
+      if (noCost > 0) {
+        summary += ", без себестоимости: " + fmt(noCost) +
+          " (оценка соседей: " + fmt(Number(data.cost_estimated || 0)) + ")";
+      }
       if (artsMsg) summary += artsMsg;
       summary += " · " + lastApplyStatusText();
       if (data.date_from && data.date_to) summary += " · окно " + data.date_from + ".." + data.date_to;
@@ -14136,6 +14213,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (pricingPriceRefresh) pricingPriceRefresh.addEventListener("click", () => refreshPricingPrices());
   const pricingMinPrices = $("#pricingMinPrices");
   if (pricingMinPrices) pricingMinPrices.addEventListener("click", () => applyMinPrices());
+  // T-81: кнопка в предупреждении «Товары без себестоимости» — фильтр строк по
+  // каталогу. Заодно снимаем «Скрыть держать/пропустить»: такие товары обычно
+  // именно в SKIP/HOLD, иначе фильтр показал бы пустую таблицу.
+  const pricingCostOnlyBtn = $("#pricingCostOnly");
+  if (pricingCostOnlyBtn) pricingCostOnlyBtn.addEventListener("click", () => {
+    pricingCostOnly = !pricingCostOnly;
+    if (pricingCostOnly) {
+      const hide = $("#pricingHideSkip");
+      if (hide && hide.checked) {
+        hide.checked = false;
+        localStorage.setItem("pricing_hide_skip", "0");
+      }
+    }
+    if (currentTab === "pricing") renderPricing(false);
+  });
   const pricingMpWbBtn = $("#pricingMpWb");
   if (pricingMpWbBtn) pricingMpWbBtn.addEventListener("click", () => {
     if (pricingMpCurrent() === "wb") return;

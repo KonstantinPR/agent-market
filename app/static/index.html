@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=84">
+<link rel="stylesheet" href="/static/style.css?v=87">
 </head>
 <body>
 <nav class="navbar">
@@ -452,6 +452,11 @@
         <button id="pricingExport" class="btn">Экспорт в Excel</button>
         <button id="pricingUpload" class="btn">Загрузить на диск</button>
       </span>
+    </div>
+    <div id="pricingCostWarn" class="pricing-cost-warn hidden">
+      <span class="pricing-cost-warn-icon" aria-hidden="true">⚠</span>
+      <span id="pricingCostWarnText"></span>
+      <button type="button" class="btn" id="pricingCostOnly" title="Показать только товары, у которых себестоимость не задана в каталоге (0 ₽)">Товары без себестоимости</button>
     </div>
     <div id="pricingSettings" class="pricing-settings"></div>
     <div class="table-wrap" id="pricingTable"></div>
@@ -1381,7 +1386,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=199"></script>
+  <script src="/static/app.js?v=201"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

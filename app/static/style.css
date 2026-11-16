@@ -911,6 +911,18 @@ th[data-tip] { border-bottom: 1px dashed #aaa; }
 .refresh-run.partial { color: #b08800; }
 
 /* ------------------------------- автопилот цен WB ------------------------------- */
+/* T-81: предупреждение «себестоимость не указана» + кнопка-фильтр. */
+.pricing-cost-warn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin: 0 0 12px;
+  font-size: 12.5px; line-height: 1.45; color: #6a4b00;
+  background: #fff8e1; border: 1px solid #f0d68a; border-radius: 4px;
+}
+.pricing-cost-warn-icon { color: #b07d00; font-weight: 700; }
+.pricing-cost-warn .btn { margin-left: auto; white-space: nowrap; }
+.pricing-cost-warn .btn.active { background: #fff3cd; border-color: #e0b64a; }
+/* T-81: длинная «Причина» переносится по словам, а не растягивает таблицу. */
+td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-height: 1.35; vertical-align: top; font-size: 12.5px; }
 .pricing-settings {
   display: flex;
   gap: 16px;
