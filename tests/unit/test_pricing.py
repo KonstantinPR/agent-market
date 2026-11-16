@@ -2622,3 +2622,223 @@ def test_record_writes_marketplace_and_vis_prices(db):
     assert float(rec.before_price) == pytest.approx(1800.0)   # 2000 × (1−10%)
     assert float(rec.after_price) == pytest.approx(1500.0)    # 2000 × (1−25%)
 
+
+# ------------------------------------- T-81: оценка себестоимости по соседям
+
+
+def test_estimate_missing_costs_group_first():
+    """T-81: первая ступень — группа товаров; средняя по соседям с себестоимостью."""
+    products = {
+        "JZ1": {"name": "Платье", "net_cost": 400},
+        "JZ2": {"name": "Платье", "net_cost": 500},
+        "JZ3": {"name": "Платье", "net_cost": 600},
+        "JZA-1": {"name": "Платье женское, синий", "net_cost": 0},
+    }
+    est, miss = pricing_service.estimate_missing_costs(products, merge_settings())
+    got = est["JZA-1"]
+    assert got["source"] == "group"
+    assert got["basis"] == "JZ"
+    assert got["cost"] == pytest.approx(500.0)
+    assert got["peers"] == 3
+    assert miss == {}
+
+
+def test_estimate_missing_costs_name_fallback():
+    """T-81: в группе соседей мало — вторая ступень, наименование.
+
+    Одинаковое наименование может встречаться в разных группах (SH/SK/SF),
+    поэтому группа «остальные» у целевого артикула пуста, а по имени соседей
+    хватает.
+    """
+    products = {
+        "SH-1": {"name": "Платье синее", "net_cost": 100},
+        "SK-1": {"name": "Платье синее", "net_cost": 300},
+        "SF-1": {"name": "Платье синее", "net_cost": 500},
+        "ZZ-9": {"name": "Платье синее", "net_cost": 0},
+    }
+    est, _miss = pricing_service.estimate_missing_costs(products, merge_settings())
+    got = est["ZZ-9"]
+    assert got["source"] == "name"
+    assert got["basis"] == "платье синее"
+    assert got["cost"] == pytest.approx(300.0)
+    assert got["peers"] == 3
+
+
+def test_estimate_missing_costs_reports_miss():
+    """T-81: соседей не хватает — возвращается диагностика по всем ступеням."""
+    products = {
+        "AAA-1": {"name": "Иное", "net_cost": 100},
+        "BBB-1": {"name": "Иное", "net_cost": 0},
+    }
+    est, miss = pricing_service.estimate_missing_costs(products, merge_settings())
+    assert est == {}
+    assert miss["BBB-1"]["group"] == "остальные"
+    assert miss["BBB-1"]["group_peers"] == 1
+    assert miss["BBB-1"]["name_peers"] == 1
+    assert miss["BBB-1"]["prefix_peers"] == 0
+    assert miss["BBB-1"]["min_peers"] == 3
+
+
+def test_estimate_missing_costs_min_peers_setting():
+    """T-81: порог «сколько соседей нужно» настраивается."""
+    products = {
+        "JZ1": {"name": "Платье", "net_cost": 400},
+        "JZ2": {"name": "Платье", "net_cost": 500},
+        "JZ3": {"name": "Платье", "net_cost": 600},
+        "JZA-1": {"name": "Платье", "net_cost": 0},
+    }
+    est, miss = pricing_service.estimate_missing_costs(
+        products, merge_settings({"estimate_cost_min_peers": 5}))
+    assert est == {}
+    assert miss["JZA-1"]["group_peers"] == 3
+
+
+def test_article_token_is_prefix_before_dash():
+    assert pricing_service.article_token("JZA-123-1") == "JZA"
+    assert pricing_service.article_token(" an-112psp ") == "AN"
+    assert pricing_service.article_token("") == ""
+
+
+def test_estimate_cost_settings_defaults():
+    s = merge_settings()
+    assert s["estimate_missing_cost"] is True
+    assert s["estimate_cost_min_peers"] == pytest.approx(3.0)
+
+
+def _seed_cost_group(db):
+    """Соседи по группе JZ с известной себестоимостью: средняя = 500 ₽."""
+    for art, cost in (("JZ1", 400), ("JZ2", 500), ("JZ3", 600)):
+        _seed(db, art, "P" + art, stock=0, net_cost=cost,
+              sales=[*_fallback_sales()], funnel=(0, 0, 0, 0, 0))
+
+
+def test_estimate_cost_lowers_dead_stock(db):
+    """T-81: нет себестоимости — оценка по группе даёт пол и LOWER вместо SKIP.
+
+    Живой случай JZA*: 36 платьев с остатком, без продаж и без net_cost.
+    Группа JZ (501 товар с себестоимостью, средняя ≈449 ₽) даёт пол ≈494 ₽,
+    потолок мёртвых 80% — товар снижается, а не пропускается.
+    """
+    _seed_cost_group(db)
+    _seed(db, "JZA-1", "PJZA", stock=5, net_cost=0,
+          sales=[], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(
+        db, prices_df=_prices(("PJZA", 4900, 0)), today=TODAY,
+        settings={"show_zero": True})
+    row = _row(rec, "JZA-1")
+    assert row["action"] == "LOWER"
+    assert row["net_cost_est"] is True
+    assert row["net_cost_catalog"] == 0
+    assert row["net_cost"] == pytest.approx(500.0)
+    assert row["cost_source"] == "group"
+    assert row["cost_basis"] == "JZ"
+    assert row["cost_peers"] == 3
+    assert row["floor_source"] == "est_cost"
+    assert row["floor_price"] == pytest.approx(550.0)
+    # шаг от текущей витрины: 4900 × (1 − 12.75%) = 4275
+    assert row["target_vis"] == pytest.approx(4900 * 0.8725, abs=1)
+    # синтетический пол в мин. цену автоакций не попадает
+    assert row["minpromo_price"] is None
+    assert "оценка себестоимости" in row["reason"]
+    assert "расчёт:" in row["reason"]
+    assert rec["no_cost"] == 1
+    assert rec["cost_estimated"] == 1
+
+
+def test_estimate_cost_holds_at_dead_cap(db):
+    """T-81: с оценённой себестоимостью у потолка мёртвых — HOLD, не RAISE."""
+    _seed_cost_group(db)
+    _seed(db, "JZA-2", "PJZA2", stock=2, net_cost=0,
+          sales=[], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(
+        db, prices_df=_prices(("PJZA2", 4900, 80)), today=TODAY,
+        settings={"show_zero": True})
+    row = _row(rec, "JZA-2")
+    assert row["action"] == "HOLD"
+    assert row["status"] == "hold_cap"
+    assert "повышение цены не предлагаем" in row["reason"]
+
+
+def test_estimate_disabled_keeps_skip(db):
+    """T-81: выключенная оценка возвращает прежний SKIP с понятной причиной."""
+    for art, cost in (("JZ9X", 400), ("JZ9Y", 600), ("JZ9Z", 800)):
+        _seed(db, art, "P" + art, stock=0, net_cost=cost,
+              sales=[*_fallback_sales()], funnel=(0, 0, 0, 0, 0))
+    _seed(db, "JZ9-1", "PJZ9", stock=5, net_cost=0,
+          sales=[], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(
+        db, prices_df=_prices(("PJZ9", 1000, 0)), today=TODAY,
+        settings={"show_zero": True, "estimate_missing_cost": False})
+    row = _row(rec, "JZ9-1")
+    assert row["action"] == "SKIP"
+    assert row["status"] == "skipped_no_ratio"
+    assert row["net_cost_est"] is False
+    assert "оценка по соседям выключена" in row["reason"]
+
+
+def test_no_cost_peers_reason_lists_steps(db):
+    """T-81: соседей нет вовсе — причина перечисляет все три ступени."""
+    _seed(db, "ZZZ-1", "PZZZ", stock=0, net_cost=0, sales=[*_fallback_sales()])
+    _seed(db, "QQQ-1", "PQQQ", stock=5, net_cost=0,
+          sales=[], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(
+        db, prices_df=_prices(("PQQQ", 1000, 0)), today=TODAY,
+        settings={"show_zero": True})
+    row = _row(rec, "QQQ-1")
+    assert row["status"] == "skipped_no_ratio"
+    assert "оценка по соседям не удалась" in row["reason"]
+    assert "префикс QQQ — 0" in row["reason"]
+    assert "заполните себестоимость" in row["reason"]
+
+
+def test_floor_source_unit_econ_for_live_item(db):
+    """T-81: у живого товара пол из unit-экономики — floor_source=unit_econ."""
+    _seed(db, "FS1", "PFS1", stock=100, net_cost=400,
+          sales=[(2, 4, 0), *_fallback_sales()])
+    rec = recommendations(db, prices_df=_prices(("PFS1", 1000, 10)), today=TODAY)
+    row = _row(rec, "FS1")
+    assert row["net_cost_est"] is False
+    assert row["floor_source"] == "unit_econ"
+    assert row["floor_price"] > 0
+
+
+def test_floor_source_net_cost_for_r14(db):
+    """T-81: R14 от каталожной себестоимости — floor_source=net_cost."""
+    _seed(db, "CF3", "PCF3", stock=100, net_cost=400, sales=[(40, 0, 0)])
+    rec = recommendations(db, prices_df=_prices(("PCF3", 1000, 0)), today=TODAY)
+    row = _row(rec, "CF3")
+    assert row["floor_source"] == "net_cost"
+    assert row["floor_price"] == pytest.approx(440.0)
+
+
+def test_estimated_cost_excluded_from_minpromo_and_min_prices(db):
+    """T-81: синтетический пол не уходит в мин. цены WB (ни файл, ни apply-min)."""
+    s = merge_settings()
+    row = {"net_cost": 500.0, "net_cost_est": True, "floor_price": 550.0,
+           "current_vis": 4900.0, "comm_rate": None}
+    assert pricing_service.minpromo_floor_basis(row, s) == 0.0
+    assert pricing_service.minpromo_price(row, s) is None
+    # режим «от текущей цены» от себестоимости не зависит — считается как раньше
+    assert pricing_service.minpromo_price(
+        row, merge_settings({"minpromo_mode": "current_minus"})) is not None
+    res = pricing_service.apply_min_prices(
+        db,
+        rows=[{"article": "EST", "nm_id": "1", "net_cost_est": True,
+               "floor_price": 550.0, "current_vis": 300.0,
+               "current_discount": 70.0, "action": "LOWER",
+               "status": "suggested"}],
+        provider=_FakeProvider())
+    assert res["pushed"] == 0
+    assert "оценённой себестоимостью" in res["note"]
+
+
+def test_record_truncates_reason_to_500(db):
+    """T-81: PriceChange.reason — varchar(500); длинный трейс обрезается."""
+    row = _ui_row(art="LONG")
+    row["reason"] = "я" * 700
+    pricing_service._record(db, [row], applied_at=None)
+    rec = db.execute(
+        select(models.PriceChange).where(models.PriceChange.article == "LONG")
+    ).scalars().one()
+    assert len(rec.reason) == 500
+
