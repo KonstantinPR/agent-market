@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "197";
+const UI_VERSION = "198";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -9981,7 +9981,9 @@ function openCabinets() {
   $("#cabDrawerOverlay").classList.remove("hidden");
   loadCabinets();
   loadSystemSize(false);
-  loadStorageSettings(false);
+  // «Ссылки и хранилища» свёрнуты: грузим только если блок раскрыт и данных ещё нет.
+  const storage = $("#cabStorage");
+  if (storage && storage.open && !cabStorageData) loadStorageSettings(false);
 }
 
 function closeCabinets() {
@@ -10098,6 +10100,12 @@ function renderStorageSettings() {
   const compBox = $("#cabStorageCompanies");
   const linksBox = $("#cabStorageLinks");
   if (!rootsBox || !compBox || !linksBox) return;
+
+  const customCount = CAB_STORAGE_ROOT_ORDER.filter(
+    (key) => data.roots && data.roots[key] && data.roots[key].custom
+  ).length + (data.links || []).filter((l) => !l.builtin).length;
+  const countEl = $("#cabStorageCount");
+  if (countEl) countEl.textContent = customCount ? customCount + " изм." : "";
 
   // Корни хранилищ.
   let h = "";
@@ -10356,6 +10364,10 @@ function initCabStorage() {
   });
   const refresh = $("#cabStorageRefresh");
   if (refresh) refresh.addEventListener("click", () => loadStorageSettings(true));
+  // Ленивая загрузка: первый разворот «селектора» тянет настройки с сервера.
+  box.addEventListener("toggle", () => {
+    if (box.open && !cabStorageData) loadStorageSettings(false);
+  });
   const add = $("#cabLinkAdd");
   if (add) add.addEventListener("click", () => {
     cabStorageEdit = { kind: "link", id: "" };
