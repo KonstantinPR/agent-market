@@ -58,7 +58,8 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 }
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 95;
-  width: min(92vw, 420px);
+  /* Широкая шторка «Личные кабинеты»: 630px ≈ 1,5× прежних 420px. */
+  width: min(92vw, 630px);
   background: #fff;
   border-left: 1px solid #ddd;
   box-shadow: -8px 0 24px rgba(0, 0, 0, .12);
