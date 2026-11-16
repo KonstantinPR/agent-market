@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=86">
+<link rel="stylesheet" href="/static/style.css?v=87">
 </head>
 <body>
 <nav class="navbar">
@@ -452,6 +452,11 @@
         <button id="pricingExport" class="btn">Экспорт в Excel</button>
         <button id="pricingUpload" class="btn">Загрузить на диск</button>
       </span>
+    </div>
+    <div id="pricingCostWarn" class="pricing-cost-warn hidden">
+      <span class="pricing-cost-warn-icon" aria-hidden="true">⚠</span>
+      <span id="pricingCostWarnText"></span>
+      <button type="button" class="btn" id="pricingCostOnly" title="Показать только товары, у которых себестоимость не задана в каталоге (0 ₽)">Товары без себестоимости</button>
     </div>
     <div id="pricingSettings" class="pricing-settings"></div>
     <div class="table-wrap" id="pricingTable"></div>
