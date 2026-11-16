@@ -58,7 +58,8 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 }
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 95;
-  width: min(92vw, 420px);
+  /* Широкая шторка «Личные кабинеты»: 630px ≈ 1,5× прежних 420px. */
+  width: min(92vw, 630px);
   background: #fff;
   border-left: 1px solid #ddd;
   box-shadow: -8px 0 24px rgba(0, 0, 0, .12);
@@ -162,11 +163,28 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
 .cab-size-schemas { display: grid; gap: 2px; padding: 4px 0 0 12px; }
 .cab-size-sch { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
 
-/* T-80: ссылки и хранилища проекта в шторке кабинетов */
+/* T-80: ссылки и хранилища проекта в шторке кабинетов (свёрнуто в селектор) */
 .cab-storage {
   margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;
-  display: grid; gap: 8px;
 }
+.cab-storage-summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px; font-weight: 600; color: #555;
+  text-transform: uppercase; letter-spacing: .04em;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.cab-storage-summary::-webkit-details-marker { display: none; }
+.cab-storage-summary::before {
+  content: "▸"; font-size: 10px; color: #888; margin-right: 2px;
+  transition: transform .12s ease-out;
+}
+.cab-storage[open] > .cab-storage-summary::before { transform: rotate(90deg); }
+.cab-storage-summary:hover { color: #111; }
+.cab-storage-count {
+  margin-left: auto; font-size: 11px; font-weight: 500; color: #888;
+  text-transform: none; letter-spacing: 0;
+}
+.cab-storage-body { display: grid; gap: 8px; padding-top: 10px; }
 .cab-storage-head {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 12px; font-weight: 600; color: #555;

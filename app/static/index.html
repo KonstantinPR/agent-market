@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=82">
+<link rel="stylesheet" href="/static/style.css?v=84">
 </head>
 <body>
 <nav class="navbar">
@@ -1301,20 +1301,26 @@
           <div id="cabSizeSchemas" class="cab-size-schemas"></div>
         </details>
       </div>
-      <div class="cab-storage" id="cabStorage">
-        <div class="cab-storage-head">
+      <details class="cab-storage" id="cabStorage">
+        <summary class="cab-storage-summary" title="Пути фото/аналитики/отчётов и ссылки проекта">
           <span>Ссылки и хранилища</span>
-          <button type="button" id="cabStorageRefresh" class="cab-size-refresh" aria-label="Обновить хранилища" title="Обновить">&#8635;</button>
+          <span class="cab-storage-count" id="cabStorageCount"></span>
+        </summary>
+        <div class="cab-storage-body">
+          <div class="cab-storage-head">
+            <span>Хранилища</span>
+            <button type="button" id="cabStorageRefresh" class="cab-size-refresh" aria-label="Обновить хранилища" title="Обновить">&#8635;</button>
+          </div>
+          <div id="cabStorageRoots" class="cab-storage-list"></div>
+          <div id="cabStorageCompanies" class="cab-storage-list"></div>
+          <div class="cab-storage-head cab-storage-links-head">
+            <span>Ссылки</span>
+            <button type="button" id="cabLinkAdd" class="cab-storage-add" title="Добавить свою ссылку">+ Добавить</button>
+          </div>
+          <div id="cabStorageLinks" class="cab-storage-list"></div>
+          <div id="cabStorageMsg" class="cab-storage-msg"></div>
         </div>
-        <div id="cabStorageRoots" class="cab-storage-list"></div>
-        <div id="cabStorageCompanies" class="cab-storage-list"></div>
-        <div class="cab-storage-head cab-storage-links-head">
-          <span>Ссылки</span>
-          <button type="button" id="cabLinkAdd" class="cab-storage-add" title="Добавить свою ссылку">+ Добавить</button>
-        </div>
-        <div id="cabStorageLinks" class="cab-storage-list"></div>
-        <div id="cabStorageMsg" class="cab-storage-msg"></div>
-      </div>
+      </details>
       <button id="cabCopyPricing" class="btn cab-copy-pricing hidden" title="Скопировать настройки автопилота текущего кабинета во все связки">Скопировать настройки автопилота во все кабинеты</button>
     </div>
   </div>
@@ -1375,7 +1381,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=197"></script>
+  <script src="/static/app.js?v=199"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
