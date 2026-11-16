@@ -22,6 +22,7 @@ from app import models
 from app.providers import factory as provider_factory
 from app.services import excel_io
 from app.services import promo_limits as promo_limits_service
+from app.services.article_groups import article_token, prefix_group
 from app.services.cabinets import provider_credentials, run_per_link
 
 
@@ -186,6 +187,17 @@ PRICING_DEFAULTS = {
     # (мёртвый/перезапас → LOWER) принимается по нему вместо SKIP.
     # Выключено — прежний SKIP skipped_no_ratio. net_cost<=0 → SKIP всегда.
     "no_econ_cost_floor": True,
+    # T-81 (R14): себестоимость не заведена в каталоге — пол по R14 посчитать
+    # нечем, и товар уходил в SKIP skipped_no_ratio (живой случай: 36 платьев
+    # JZA* с остатком и без продаж). Оцениваем себестоимость по средней
+    # себестоимости соседей по иерархии: группа товаров → наименование →
+    # префикс артикула до первого дефиса. Оценка НЕ пишется в каталог: живёт
+    # только в этом прогоне и помечается в строке net_cost_est/cost_source/
+    # cost_peers. Синтетический пол не уходит в «Минимальные цены» и
+    # «Мин. цена автоакций». estimate_cost_min_peers — сколько соседей с
+    # себестоимостью нужно, чтобы средней можно было верить.
+    "estimate_missing_cost": True,
+    "estimate_cost_min_peers": 3,
     # T-32 (R15): ценность остатка (qty × net_cost) — колонка и вес при
     # приоритизации (100×100 ₽ ≠ 1000×100 ₽).
     "stock_value_weight": True,
@@ -255,6 +267,88 @@ def merge_settings(payload=None) -> dict:
             except (TypeError, ValueError):
                 continue
     return out
+
+
+# --- T-81: оценка себестоимости по соседям -----------------------------------
+# У товара без себестоимости в каталоге пол безубытка (R14) посчитать нечем, и
+# он уходил в SKIP skipped_no_ratio. Здесь считается средняя себестоимость
+# соседей по трём ступеням: группа товаров (PREFIXES_ART_DICT) → наименование →
+# префикс артикула до первого дефиса. Оценка используется ТОЛЬКО в этом прогоне.
+COST_SOURCE_LABELS = {
+    "group": "группа",
+    "name": "наименование",
+    "prefix": "префикс артикула",
+}
+
+
+def _norm_name(name) -> str:
+    """Наименование для сравнения: без регистра, лишних пробелов и ёлочек."""
+    return " ".join(str(name or "").lower().split())
+
+
+def _mean(values) -> float:
+    values = list(values)
+    return sum(values) / len(values) if values else 0.0
+
+
+def estimate_missing_costs(products: dict, s: dict) -> tuple[dict, dict]:
+    """Средняя себестоимость соседей для товаров, у которых net_cost = 0.
+
+    products: article -> {"name": str, "net_cost": float, ...} (весь каталог,
+    а не только видимые строки — соседи нужны именно из каталога).
+
+    Возвращает ``(est, miss)``:
+      est  — article -> {"cost", "source", "basis", "peers"} (оценка удалась);
+      miss — article -> диагностика по всем ступеням (оценки нет) — она уходит
+             в «Причину» SKIP, чтобы было видно, чего не хватило.
+
+    Ступени перебираются по порядку, побеждает первая, где набралось не меньше
+    ``estimate_cost_min_peers`` товаров с известной себестоимостью. Оценка
+    округляется до копеек и в каталог не пишется.
+    """
+    min_peers = max(1, int(_num(s.get("estimate_cost_min_peers"), 3)))
+    known = []
+    for art, prod in products.items():
+        cost = _num(prod.get("net_cost"))
+        if cost > 0:
+            known.append((cost, _norm_name(prod.get("name")),
+                          prefix_group(art), article_token(art)))
+    by_group: dict = {}
+    by_name: dict = {}
+    by_prefix: dict = {}
+    for cost, name, grp, token in known:
+        by_group.setdefault(grp, []).append(cost)
+        if name:
+            by_name.setdefault(name, []).append(cost)
+        if token:
+            by_prefix.setdefault(token, []).append(cost)
+
+    est: dict = {}
+    miss: dict = {}
+    for art, prod in products.items():
+        if _num(prod.get("net_cost")) > 0:
+            continue
+        name = _norm_name(prod.get("name"))
+        grp = prefix_group(art)
+        token = article_token(art)
+        candidates = (
+            ("group", grp, by_group.get(grp) or []),
+            ("name", name, by_name.get(name) or []),
+            ("prefix", token, by_prefix.get(token) or []),
+        )
+        for source, basis, peers in candidates:
+            if basis and len(peers) >= min_peers:
+                est[art] = {"cost": round(_mean(peers), 2), "source": source,
+                            "basis": basis, "peers": len(peers)}
+                break
+        else:
+            miss[art] = {
+                "group": grp, "group_peers": len(by_group.get(grp) or []),
+                "name": name, "name_peers": len(by_name.get(name) or []),
+                "prefix": token, "prefix_peers": len(by_prefix.get(token) or []),
+                "min_peers": min_peers,
+            }
+    return est, miss
 
 
 def project_velocity(v_now: float, v_prev: float, season_adj: bool = True, damp: float = 0.5) -> float:
@@ -878,6 +972,13 @@ def recommendations(
         }
         volume_by_article[art] = _num(r.volume_l)
 
+    # T-81: себестоимость не заведена — оцениваем по средней себестоимости
+    # соседей (группа → наименование → префикс артикула). Оценка не пишется в
+    # каталог: подставляется в f["net_cost"] только на этот прогон.
+    est_cost, est_miss = {}, {}
+    if bool(s.get("estimate_missing_cost", True)):
+        est_cost, est_miss = estimate_missing_costs(products, s)
+
     now_df = rows_df[(rows_df["date"] >= now_from)] if not rows_df.empty else rows_df
     prev_df = rows_df[(rows_df["date"] >= prev_from) & (rows_df["date"] <= prev_to)] if not rows_df.empty else rows_df
     fallback_df = rows_df
@@ -946,7 +1047,9 @@ def recommendations(
             hidden_dead += 1
             continue
         if nm_id not in prices:
-            out_rows.append(_row_skip(art, prod, nm_id, "нет карточки/цен WB (нет nmID в списке цен)"))
+            out_rows.append(_row_skip(art, prod, nm_id,
+                                      "нет карточки/цен WB (нет nmID в списке цен)",
+                                      est_cost.get(art)))
             continue
         pr = prices[nm_id]
         price = pr["price"]
@@ -1016,12 +1119,26 @@ def recommendations(
             "detail_known": bool(dl),
             "funnel_known": bool(fl),
             "net_cost": prod["net_cost"],
+            "net_cost_catalog": prod["net_cost"],
+            "net_cost_est": False,
+            "cost_source": None,
+            "cost_basis": "",
+            "cost_peers": 0,
+            "cost_miss": est_miss.get(art),
+            "floor_source": None,
             "value": prod.get("value", 0.0),
             "supplier": prod.get("supplier", ""),
             "sells_net": s_now, "cover_days": cover,
             "comm_rate": None, "logistics_unit": 0.0, "storage_unit": 0.0,
             "other_unit": 0.0, "floor_price": None,
         }
+        est = est_cost.get(art)
+        if est:
+            f["net_cost"] = est["cost"]
+            f["net_cost_est"] = True
+            f["cost_source"] = est["source"]
+            f["cost_basis"] = est["basis"]
+            f["cost_peers"] = int(est["peers"])
         qty_sold = int(art_now["qty_sold"].sum()) if not art_now.empty else 0
         ret_now = int(art_now["ret"].sum()) if not art_now.empty else 0
         pena = ret_now + f["cancelled"]
@@ -1037,6 +1154,7 @@ def recommendations(
                 floor = (ue["logistics_unit"] + ue["storage_unit"]
                          + ue["other_unit"] + f["net_cost"]) / denom
                 f["floor_price"] = max(0.0, floor)
+                f["floor_source"] = "unit_econ"
 
         if mode == "old":
             out_rows.append(_decide_legacy(f, s, legacy_k_norma))
@@ -1085,6 +1203,13 @@ def recommendations(
     for r in out_rows:
         r["minpromo_price"] = minpromo_price(r, s)
 
+    # T-81: подробный трейс в «Причину» — входные цифры, ограничения, результат.
+    # Идёт после всех правил (акции, главная связка, R19/R20), чтобы цифры были
+    # финальными. SKIP без данных и без пола не засоряем: их причина самодостаточна.
+    for r in out_rows:
+        if r.get("reason") and r.get("status") not in TRACE_SKIP_STATUSES:
+            r["reason"] = r["reason"] + _reason_trace(r, s)
+
     # T-64: кулдаун показываем сразу в таблице, а не только при применении —
     # иначе «решений: 89», а «Применить» отправляет 0 строк.
     cooldown_n = mark_cooldown(
@@ -1101,6 +1226,10 @@ def recommendations(
         "cooldown": cooldown_n,
         "hidden_dead": hidden_dead,
         "non_wb": non_wb,
+        # T-81: сколько строк без себестоимости в каталоге и у скольких она
+        # оценена по соседям — для предупреждения и кнопки в UI.
+        "no_cost": sum(1 for r in out_rows if _num(r.get("net_cost_catalog")) <= 0),
+        "cost_estimated": sum(1 for r in out_rows if r.get("net_cost_est")),
         "as_of": str(today),
         "date_from": str(now_from),
         "date_to": str(now_to),
@@ -1118,14 +1247,21 @@ ENRICHED_KEYS = {
 }
 
 
-def _row_skip(art, prod, nm_id, reason):
+def _row_skip(art, prod, nm_id, reason, est=None):
+    est = est or {}
     return {
         "article": art, "name": prod["name"],
         "replenishable": prod["replenishable"], "nm_id": nm_id or "",
         "price": 0.0, "current_discount": 0.0, "current_vis": 0.0,
         "avg_price": 0.0, "stock": None, "doc": None, "stock_value": 0.0,
         "velocity": 0.0, "v_proj": 0.0, "conv_pct": None, "backlog": 0,
-        "net_cost": _num(prod["net_cost"]), "floor_price": None,
+        "net_cost": est.get("cost", _num(prod["net_cost"])),
+        "net_cost_catalog": _num(prod["net_cost"]),
+        "net_cost_est": bool(est),
+        "cost_source": est.get("source"),
+        "cost_basis": est.get("basis", ""),
+        "cost_peers": int(_num(est.get("peers"))),
+        "floor_source": None, "floor_price": None,
         "value": _num(prod.get("value")), "supplier": (prod.get("supplier") or ""),
         "max_discount_item": None, "action": "SKIP", "status": "skipped_no_data",
         "reason": reason, "target_discount": None, "target_vis": None,
@@ -1178,6 +1314,68 @@ def _enriched(f: dict) -> dict:
     }
 
 
+# --- T-81: подробная «Причина» ----------------------------------------------
+# Строка решения объясняет ЧТО произошло, трейс ниже — ПОЧЕМУ: входные цифры
+# (пол и его источник, витрина, остаток, скорость), ограничения (потолок
+# скидки) и результат (цель, дельта, маржа). Считается после всех правил.
+TRACE_SKIP_STATUSES = {"skipped_no_data", "skipped_no_ratio"}
+
+
+def _floor_source_text(r: dict, s: dict) -> str:
+    """Откуда взялся пол строки: unit-экономика, каталог или оценка соседей."""
+    src = r.get("floor_source")
+    margin = _num(s.get("floor_margin_pct"))
+    if src == "unit_econ":
+        return f"unit-экономика, маржа {margin:.0f}%"
+    cost = _num(r.get("net_cost"))
+    if src == "est_cost":
+        label = COST_SOURCE_LABELS.get(r.get("cost_source"), "соседи")
+        basis = r.get("cost_basis") or "—"
+        peers = int(_num(r.get("cost_peers")))
+        return (f"оценка себестоимости {cost:.0f} ₽ × (1 + {margin:.0f}%), "
+                f"{label} «{basis}», {peers} тов.")
+    if src == "net_cost":
+        return f"себестоимость {cost:.0f} ₽ × (1 + {margin:.0f}%)"
+    return "пол не рассчитан"
+
+
+def _reason_trace(r: dict, s: dict) -> str:
+    """Хвост «Причины» с входными цифрами, ограничениями и результатом."""
+    parts = []
+    floor = _num(r.get("floor_price"))
+    if floor > 0:
+        parts.append(f"пол {floor:.0f} ₽ ({_floor_source_text(r, s)})")
+    else:
+        parts.append("пол не рассчитан")
+    price = _num(r.get("price"))
+    cur_vis = _num(r.get("current_vis"))
+    if price > 0:
+        parts.append(f"витрина {cur_vis:.0f} ₽ (база {price:.0f} ₽, "
+                     f"скидка {_num(r.get('current_discount')):.1f}%)")
+    cap = (r.get("dead_max_discount_item") if r.get("dead_stock")
+           else r.get("max_discount_item"))
+    if cap is not None:
+        parts.append(f"потолок скидки {_num(cap):.1f}%")
+    if r.get("stock") is not None:
+        doc = r.get("doc")
+        tail = f", DOC {_num(doc):.0f} дн." if doc is not None else ""
+        parts.append(f"остаток {int(_num(r.get('stock')))} шт, "
+                     f"скорость {_num(r.get('v_proj')):.2f} шт/дн{tail}")
+    target_vis = r.get("target_vis")
+    target_disc = r.get("target_discount")
+    if target_vis is not None and target_disc is not None:
+        delta = r.get("delta_discount")
+        dtxt = f", Δ{_num(delta):+.1f} п.п." if delta is not None else ""
+        parts.append(f"цель {_num(target_vis):.0f} ₽ "
+                     f"(скидка {_num(target_disc):.1f}%{dtxt})")
+        margin = r.get("margin_pct_at_target")
+        if margin is not None:
+            parts.append(f"маржа {_num(margin):.1f}%")
+    else:
+        parts.append(f"итог {r.get('action') or '—'} / {r.get('status') or '—'}")
+    return " · расчёт: " + "; ".join(parts)
+
+
 # --- T-48: минимальная цена автоакций WB -------------------------------------
 # Не «наша» цена, а пол, ниже которого WB не должен опускать в автоакции. Считается
 # на каждую строку и живёт в колонке minpromo_price; доставляется в WB файлом
@@ -1207,7 +1405,12 @@ def minpromo_floor_basis(row: dict, s: dict) -> float:
     R14-фолбэк: если unit-экономики нет, полом считается net_cost с той же
     «Минимальной маржей», что и в автопилоте, — иначе у части строк колонка
     была бы пустой без всякой причины.
+
+    T-81: если себестоимость ОЦЕНЕНА по соседям (net_cost_est), база не
+    считается — синтетический пол нельзя ставить в WB как жёсткий минимум.
     """
+    if row.get("net_cost_est"):
+        return 0.0
     floor = _num(row.get("floor_price"))
     if floor > 0:
         return floor
@@ -1227,6 +1430,12 @@ def minpromo_price(row: dict, s: dict) -> Optional[float]:
     в границу — в строку пишется minpromo_bound для UI-маркера ⚠.
     """
     mode = str(s.get("minpromo_mode") or "floor_reserve")
+    # T-81: пол, посчитанный от оценённой себестоимости, — синтетический. В
+    # «Минимальные цены автоакций» его не отправляем (кроме режима «от текущей
+    # цены», который от себестоимости не зависит).
+    if row.get("net_cost_est") and mode in ("floor", "floor_reserve", "formula"):
+        row["minpromo_bound"] = None
+        return None
     if mode == "current_minus":
         base = _num(row.get("current_vis")) * (1 - _num(s.get("minpromo_drop_pct")) / 100)
     elif mode == "formula":
@@ -1435,6 +1644,13 @@ def _base_row(f: dict) -> dict:
         "stock": f["stock"], "velocity": f["velocity"], "v_proj": f["v_proj"],
         "stock_value": round(_num(f.get("stock")) * _num(f.get("net_cost")), 2),
         "doc": None, "conv_pct": None, "backlog": 0, "net_cost": f["net_cost"],
+        # T-81: себестоимость из каталога и признак её оценки по соседям.
+        "net_cost_catalog": _num(f.get("net_cost_catalog", f["net_cost"])),
+        "net_cost_est": bool(f.get("net_cost_est")),
+        "cost_source": f.get("cost_source"),
+        "cost_basis": f.get("cost_basis", ""),
+        "cost_peers": int(_num(f.get("cost_peers"))),
+        "floor_source": f.get("floor_source"),
         # Дней с последней продажи — основной сигнал «жертвенности» для R11
         # (разгрузки). 9999 = продаж не было вовсе. Покрытие 100 % (в отличие
         # от margin_per_one — детализация есть только у ~50 товаров).
@@ -2290,6 +2506,35 @@ def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str,
     return base
 
 
+def _no_ratio_reason(f: dict, s: dict) -> str:
+    """Почему без unit-экономики и пола товар пропускается (R14, T-81).
+
+    Пишет все входные цифры: были ли продажи, что в каталоге, чего не хватило
+    оценке по соседям — чтобы «Причина» объясняла решение без похода в код.
+    """
+    parts = ["нет unit-экономики: продаж/доходов за окно нет — "
+             "безубыток по факту не посчитать"]
+    cost = _num(f.get("net_cost"))
+    catalog = _num(f.get("net_cost_catalog"))
+    if cost > 0:
+        parts.append(f"себестоимость {cost:.0f} ₽ есть, но пол по ней выключен "
+                     "(«no_econ_cost_floor»)")
+    elif catalog <= 0:
+        parts.append("в каталоге себестоимость не указана (0 ₽)")
+        miss = f.get("cost_miss") or {}
+        if miss:
+            parts.append(
+                "оценка по соседям не удалась: "
+                f"группа {miss.get('group')} — {miss.get('group_peers')} тов. "
+                f"с себестоимостью (нужно ≥ {miss.get('min_peers')}); "
+                f"наименование «{miss.get('name')}» — {miss.get('name_peers')}; "
+                f"префикс {miss.get('prefix')} — {miss.get('prefix_peers')}")
+            parts.append("заполните себестоимость в каталоге товаров")
+        elif not bool(s.get("estimate_missing_cost", True)):
+            parts.append("оценка по соседям выключена («Себестоимость по соседям»)")
+    return "; ".join(parts)
+
+
 def _decide(f: dict, s: dict) -> dict:
     price = f["price"]
     cur_disc = f["current_discount"]
@@ -2346,20 +2591,18 @@ def _decide(f: dict, s: dict) -> dict:
     if use_margin:
         if f["comm_rate"] is None or floor is None:
             # R14: unit-экономики нет (нет продаж/доходов за окно), но остаток
-            # есть и известна себестоимость. По политике cost_floor работаем от
-            # пола = себестоимость + floor_margin_pct (обычный LOWER по
-            # мёртвому/перезапасу), иначе — прежний SKIP.
-            # R14: unit-экономики нет (нет продаж/доходов за окно), но остаток
-            # есть и известна себестоимость. Включённый cost_floor даёт пол =
-            # себестоимость + floor_margin_pct (обычный LOWER по мёртвому/
-            # перезапасу), иначе — прежний SKIP.
+            # есть. Включённый cost_floor даёт пол = себестоимость +
+            # floor_margin_pct (обычный LOWER по мёртвому/перезапасу), иначе —
+            # прежний SKIP. T-81: себестоимость могла быть оценена по соседям —
+            # тогда floor_source = est_cost, и такой пол не уходит в мин. цены.
             net_cost = _num(f.get("net_cost"))
             if bool(s.get("no_econ_cost_floor", True)) and net_cost > 0 and price > 0:
                 floor = net_cost * (1 + _num(s["floor_margin_pct"]) / 100)
                 f["floor_price"] = floor
+                f["floor_source"] = "est_cost" if f.get("net_cost_est") else "net_cost"
             else:
                 base.update(action="SKIP", status="skipped_no_ratio",
-                            reason="нет unit-экономики (нет продаж/доходов — не можем гарантировать break-even)")
+                            reason=_no_ratio_reason(f, s))
                 return base
         max_disc_item = min(_num(s["max_discount_pct"]), (1 - floor / price) * 100 if price > 0 else 0)
     else:
@@ -2371,6 +2614,8 @@ def _decide(f: dict, s: dict) -> dict:
     # unit-экономике/cost_floor — в таблице нельзя было понять, где пол.
     if _num(floor) > 0:
         base["floor_price"] = round(_num(floor), 2)
+        # T-81: откуда пол (unit-экономика / каталог / оценка соседей) — в UI и причине.
+        base["floor_source"] = f.get("floor_source")
     # T-78 (R4): потолок скидки для мёртвого запаса. Общий max_discount_pct
     # считается от базовой цены; у товара с автоскидкой WB витринная скидка уже
     # выше него, и потолок запрещал снижение. Для мёртвых берём более щедрый
@@ -2997,7 +3242,7 @@ def _record(db: Session, rows: list, applied_at: Optional[datetime], error: Opti
             after_discount=float(r.get("target_discount")) if is_applied else None,
             action=r.get("action") or "",
             status=(r.get("status") or "") if not error else "error",
-            reason=str(error) if error else (r.get("reason", "") or ""),
+            reason=str(error)[:500] if error else (r.get("reason", "") or "")[:500],
         ))
     db.commit()
 
@@ -3138,7 +3383,13 @@ def apply_min_prices(
     rows = [dict(r) for r in rows]
 
     targets, no_nm = [], 0
+    skipped_est = 0
     for r in rows:
+        # T-81: пол, посчитанный от оценённой себестоимости, в WB как жёсткий
+        # минимум не отправляем — это не факт закупки, а средняя по соседям.
+        if r.get("net_cost_est"):
+            skipped_est += 1
+            continue
         floor = _num(r.get("floor_price"))
         cur_vis = _num(r.get("current_vis"))
         if floor <= 0 or cur_vis <= 0 or cur_vis >= floor - 1e-9:
@@ -3155,8 +3406,11 @@ def apply_min_prices(
         targets.append(r)
 
     if not targets:
-        return {"applied": [], "pushed": 0, "skipped": no_nm,
-                "note": "Нет товаров с ценой ниже безубыточного минимума."}
+        note = "Нет товаров с ценой ниже безубыточного минимума."
+        if skipped_est:
+            note += (f" Пропущено с оценённой себестоимостью: {skipped_est} "
+                     "(синтетический пол в минимальные цены не ставим).")
+        return {"applied": [], "pushed": 0, "skipped": no_nm, "note": note}
 
     prov = provider or _cab_provider(db)
     items = [{"nmID": r["nm_id"], "price": r["_min_price"], "discount": 0}
@@ -3203,6 +3457,9 @@ def apply_min_prices(
     note = f"Минимальные цены отправлено: {len(items)}."
     if no_nm:
         note += f" Пропущено без nm_id: {no_nm}."
+    if skipped_est:
+        note += (f" Пропущено с оценённой себестоимостью: {skipped_est} "
+                 "(синтетический пол в минимальные цены не ставим).")
     return {"applied": applied_ids, "pushed": len(items), "skipped": no_nm,
             "task_id": result.get("task_id") if isinstance(result, dict) else None,
             "note": note}
