@@ -1411,36 +1411,36 @@ assert.strictEqual(cmpHdrs.length, 2, "inline-сравнение не должн
 assert.ok(!cmpHdrs[0].cmp, "колонка без сравнения помечена ошибочно");
 assert.ok(cmpHdrs[1].cmp && cmpHdrs[1].cmp.field === "margin",
   "поле сравнения не помечено в заголовке");
+const cmpPrevLine = (h) =>
+  h.slice(h.lastIndexOf("\">") + 2, h.lastIndexOf("</span>"));
 const grown = sandbox.cmpInlineHtml("margin", cmpHdrs[1].cmp.cols, 150, "150",
   { margin: 150, cmp1_margin: 100, cmp2_margin: 90 });
 assert.ok(grown.cur.indexOf("cmp-cur pos") >= 0, "рост не зелёный");
 assert.ok(grown.cur.indexOf("\u25B2") >= 0, "у роста нет треугольника вверх");
 assert.ok(grown.prev.indexOf("cmp-prev") >= 0 && grown.prev.indexOf("100") >= 0,
   "прошлое значение не показано второй строкой");
-assert.ok(grown.prev.indexOf("+50,0%") >= 0,
-  "во второй строке нет изменения в процентах к прошлому периоду");
-assert.ok(grown.prev.indexOf("+66,7%") >= 0,
-  "во второй строке нет изменения ко второму прошлому периоду");
-assert.ok(grown.prev.indexOf("cmp-delta pos") >= 0,
-  "рост во второй строке не зелёный");
+assert.strictEqual(cmpPrevLine(grown.prev), "100 \u20BD",
+  "вторая строка — только значение предыдущего периода");
+assert.ok(grown.prev.indexOf("%") < 0 && grown.prev.indexOf("cmp-delta") < 0,
+  "процентов во второй строке быть не должно");
+assert.ok(grown.prev.indexOf("\u00B7") < 0,
+  "третье (более давнее) значение во второй строке не показываем");
 const fallen = sandbox.cmpInlineHtml("margin", cmpHdrs[1].cmp.cols, 50, "50",
   { cmp1_margin: 100 });
 assert.ok(fallen.cur.indexOf("cmp-cur neg") >= 0, "падение не красное");
 assert.ok(fallen.cur.indexOf("\u25BC") >= 0, "у падения нет треугольника вниз");
-assert.ok(fallen.prev.indexOf("\u221250,0%") >= 0
-  && fallen.prev.indexOf("cmp-delta neg") >= 0, "падение во второй строке не красное");
+assert.strictEqual(cmpPrevLine(fallen.prev), "100 \u20BD",
+  "падение: вторая строка — только прошлое значение");
 const pctField = sandbox.cmpInlineHtml("margin_pct",
   [{ k: "cmp1_margin_pct", kind: "pct" }], 12, "12%", { cmp1_margin_pct: 10 });
-assert.ok(pctField.prev.indexOf("+2,0 \u043F.\u043F.") >= 0,
-  "для процентного поля изменение должно быть в п.п.");
+assert.strictEqual(cmpPrevLine(pctField.prev), "10.0%",
+  "для процентного поля вторая строка — только прошлое значение");
 const noPrev = sandbox.cmpInlineHtml("margin", cmpHdrs[1].cmp.cols, 50, "50", {});
 assert.ok(noPrev.cur.indexOf("cmp-cur") >= 0 && noPrev.cur.indexOf("\u25BC") < 0,
   "без прошлого значения треугольник не рисуется");
 const badUp = sandbox.cmpInlineHtml("cancelled", [{ k: "cmp1_cancelled", kind: "int" }],
   5, "5", { cmp1_cancelled: 2 });
 assert.ok(badUp.cur.indexOf("cmp-cur neg") >= 0, "рост отмен должен краснеть");
-assert.ok(badUp.prev.indexOf("cmp-delta neg") >= 0,
-  "рост отмен во второй строке должен краснеть");
 const flatCmp = sandbox.cmpInlineHtml("margin", [{ k: "cmp1_margin", kind: "money" }],
   7, "7", { cmp1_margin: 7 });
 assert.ok(flatCmp.cur.indexOf("cmp-cur") >= 0
