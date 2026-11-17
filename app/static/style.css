@@ -783,13 +783,15 @@ table.data-hl tbody tr:hover > td.hl-col {
 .cmp-cur .cmp-tri { font-size: 9px; vertical-align: 1px; margin-right: 2px; }
 .cmp-prev {
   display: block;
-  white-space: nowrap;
+  white-space: normal;
   font-size: 11px;
   line-height: 1.3;
   font-weight: 400;
   color: #8c959f;
   font-variant-numeric: tabular-nums;
 }
+.cmp-prev .cmp-delta { font-weight: 600; }
+.cmp-prev .cmp-delta:not(.pos):not(.neg) { color: #57606a; }
 a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 .tag { font-size: 12px; color: #444; }
 .tag.wb::after { content: " (WB)"; }

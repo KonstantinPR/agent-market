@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "199";
+const UI_VERSION = "200";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -611,10 +611,12 @@ const cellFmts = {
 
 // ---- inline-сравнение периодов (T-75) ------------------------------------
 // Поля, выбранные в «Сравнениях», показываются в своей же колонке: сверху
-// текущее значение (цвет и треугольник — по направлению изменения к первому
-// прошлому периоду, у которого есть значение), ниже серым — значения прошлых
-// периодов. Отдельные колонки `cmp<N>_<field>` в таблицу не добавляются
-// (в Excel-выгрузке они остаются).
+// последнее (текущее) значение периода, ниже серым — значение прошлого
+// периода и изменение к нему (проценты, у процентных полей — п.п.). Цвет и
+// треугольник — по направлению изменения к первому прошлому периоду, у
+// которого есть значение: рост зелёный ▲, падение красное ▼. Отдельные
+// колонки `cmp<N>_<field>` в таблицу не добавляются (в Excel-выгрузке они
+// остаются).
 const CMP_INLINE_TRI_UP = "\u25B2";
 const CMP_INLINE_TRI_DOWN = "\u25BC";
 // Рост этих показателей — плохо: цвет инвертируется (расходы, отмены, возвраты).
@@ -649,24 +651,72 @@ function cmpInlineFmt(kind, v) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n);
 }
 
-// cur — текущее значение (готовый HTML рендера колонки) с треугольником;
-// prev — вторая строка с прошлыми значениями ("" если периодов нет).
+// Направление изменения: 1 — рост (зелёный), -1 — падение (красный), 0 — нет
+// базы или значения не изменились. У расходных показателей (CMP_INLINE_BAD_UP)
+// рост краснеет: дороже/больше отмен — хуже.
+function cmpInlineDir(field, cur, base) {
+  if (cur === null || base === null || cur === base) return 0;
+  const up = cur > base;
+  return up !== CMP_INLINE_BAD_UP.has(field) ? 1 : -1;
+}
+
+// Изменение текущего значения к прошлому: для денег/штук — проценты, для
+// процентных полей — процентные пункты (сравнивать 10% и 12% относительным
+// «+20%» неудобно). null — базы нет или она нулевая.
+function cmpInlineDelta(kind, cur, base) {
+  if (cur === null || base === null) return null;
+  if (kind === "pct") {
+    const d = cur - base;
+    return isFinite(d) ? { value: Math.round(d * 10) / 10, unit: "pp" } : null;
+  }
+  if (base === 0) return null;
+  const pct = (cur - base) / Math.abs(base) * 100;
+  return isFinite(pct) ? { value: Math.round(pct * 10) / 10, unit: "pct" } : null;
+}
+
+function cmpInlineDeltaText(d) {
+  const abs = new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: 1, maximumFractionDigits: 1,
+  }).format(Math.abs(d.value));
+  return (d.value > 0 ? "+" : d.value < 0 ? "\u2212" : "") + abs
+    + (d.unit === "pp" ? " \u043F.\u043F." : "%");
+}
+
+// Цвет изменения — по смыслу показателя, а не по знаку: рост отмен/возвратов
+// красный, хотя число выросло.
+function cmpInlineDeltaHtml(d, field, cur, base) {
+  const dir = cmpInlineDir(field, cur, base);
+  const good = dir > 0 ? "pos" : (dir < 0 ? "neg" : "");
+  return '<span class="cmp-delta' + (good ? " " + good : "") + '">'
+    + cmpInlineDeltaText(d) + "</span>";
+}
+
+// cur — последнее (текущее) значение (готовый HTML рендера колонки) с
+// треугольником; prev — вторая строка: «прошлое значение + изменение».
 function cmpInlineHtml(field, cols, curVal, curHtml, src) {
   const prev = (cols || []).map((c) => ({ col: c, val: src ? src[c.k] : null }));
-  const base = prev.map((p) => cmpInlineNum(p.val)).find((n) => n !== null);
+  const nums = prev.map((p) => cmpInlineNum(p.val));
+  const base = nums.find((v) => v !== null);
   const n = cmpInlineNum(curVal);
-  let dir = 0;
-  if (n !== null && base != null && n !== base) dir = n > base ? 1 : -1;
-  const good = dir === 0 ? ""
-    : ((dir > 0) !== CMP_INLINE_BAD_UP.has(field) ? "pos" : "neg");
+  const dir = cmpInlineDir(field, n, base === undefined ? null : base);
+  const good = dir > 0 ? "pos" : (dir < 0 ? "neg" : "");
   const tri = dir > 0 ? CMP_INLINE_TRI_UP : (dir < 0 ? CMP_INLINE_TRI_DOWN : "");
   const cur = '<span class="cmp-cur' + (good ? " " + good : "") + '">'
     + (tri ? '<span class="cmp-tri">' + tri + "</span>" : "") + curHtml + "</span>";
   if (!prev.length) return { cur: cur, prev: "" };
-  const texts = prev.map((p) => cmpInlineFmt(p.col.kind, p.val));
-  const tip = prev.map((p) => (p.col.period_label || "прошлый период")
-    + ": " + cmpInlineFmt(p.col.kind, p.val)
-    + (p.col.available === false ? " (нет среза)" : "")).join("\n");
+  const deltaOf = (i) => cmpInlineDelta(prev[i].col.kind, n, nums[i]);
+  const texts = prev.map((p, i) => {
+    const d = deltaOf(i);
+    return cmpInlineFmt(p.col.kind, p.val)
+      + (d ? " " + cmpInlineDeltaHtml(d, field, n, nums[i]) : "");
+  });
+  const tip = prev.map((p, i) => {
+    const d = deltaOf(i);
+    return (p.col.period_label || "прошлый период")
+      + ": " + cmpInlineFmt(p.col.kind, p.val)
+      + (d ? " (" + cmpInlineDeltaText(d) + ")" : "")
+      + (p.col.available === false ? " (нет среза)" : "");
+  }).join("\n");
   const prevHtml = '<span class="cmp-prev" title="' + escapeHtml(tip) + '">'
     + texts.join(" \u00B7 ") + "</span>";
   return { cur: cur, prev: prevHtml };
