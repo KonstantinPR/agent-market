@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import quote
@@ -28,13 +29,14 @@ from app import models
 from app.config import settings
 
 SETTING_KEY = "project"
-ROOT_KEYS = ("photos_root", "analytics_root", "reports_folder")
+ROOT_KEYS = ("photos_root", "analytics_root", "products_file", "reports_folder")
 LINKS_KEY = "links"
 
 #: Заголовки строк хранилищ (для UI и документации).
 ROOT_TITLES = {
     "photos_root": "Фото товаров",
     "analytics_root": "Аналитика (Google Drive)",
+    "products_file": "Каталог себестоимости (products.xlsx)",
     "reports_folder": "Отчёты на Яндекс.Диске",
 }
 
@@ -46,11 +48,24 @@ _URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 # ── значения по умолчанию ────────────────────────────────────────────────────
 
+#: Подпапка общего каталога внутри корня аналитики (T-82).
+PRODUCTS_SUBDIR = "ОБЩИЕ"
+PRODUCTS_NAME = "products.xlsx"
+
+
+def products_file_default(analytics: Optional[str] = None) -> str:
+    """Дефолтный путь к общему файлу каталога: ``<аналитика>/ОБЩИЕ/products.xlsx``."""
+    base = analytics or settings.analytics_root
+    return str(Path(base) / PRODUCTS_SUBDIR / PRODUCTS_NAME)
+
+
 def default_roots() -> dict[str, str]:
     """Дефолтные корни из config/.env (фото — с учётом PHOTOS_ROOT)."""
+    analytics = settings.analytics_root
     return {
         "photos_root": os.environ.get("PHOTOS_ROOT") or settings.photos_root,
-        "analytics_root": settings.analytics_root,
+        "analytics_root": analytics,
+        "products_file": products_file_default(analytics),
         "reports_folder": settings.yandex_reports_dir,
     }
 
@@ -211,16 +226,32 @@ def _clean_links(raw: Any) -> list[dict]:
 
 # ── действующие значения ─────────────────────────────────────────────────────
 
-def roots(db: Optional[Session] = None) -> dict[str, str]:
-    """Действующие корни: переопределение из UI → дефолт из config/.env."""
-    data = _load(db)
+def _effective(data: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
+    """Действующие значения и дефолты с учётом переопределений.
+
+    ``products_file`` по умолчанию лежит внутри действующего корня аналитики:
+    если пользователь перенёс «Мой диск», файл каталога ищется там же, пока
+    путь не переопределён отдельно.
+    """
     defaults = default_roots()
-    out = dict(defaults)
+    values = dict(defaults)
     for key in ROOT_KEYS:
         value = data.get(key)
         if isinstance(value, str) and value.strip():
-            out[key] = value.strip()
-    return out
+            values[key] = value.strip()
+    # Файл каталога не переопределён — он лежит внутри действующего корня
+    # аналитики, поэтому следует за ним (а не за дефолтом из config).
+    override = data.get("products_file")
+    if not (isinstance(override, str) and override.strip()):
+        values["products_file"] = products_file_default(values["analytics_root"])
+    defaults["products_file"] = products_file_default(values["analytics_root"])
+    return values, defaults
+
+
+def roots(db: Optional[Session] = None) -> dict[str, str]:
+    """Действующие корни: переопределение из UI → дефолт из config/.env."""
+    values, _defaults = _effective(_load(db))
+    return values
 
 
 def photos_root(db: Optional[Session] = None) -> str:
@@ -233,6 +264,11 @@ def analytics_root(db: Optional[Session] = None) -> str:
 
 def reports_folder(db: Optional[Session] = None) -> str:
     return normalize_folder(roots(db)["reports_folder"])
+
+
+def products_file(db: Optional[Session] = None) -> str:
+    """Путь к общему файлу каталога себестоимости (T-82)."""
+    return roots(db)["products_file"]
 
 
 def yandex_folder_url(folder: str) -> str:
@@ -254,6 +290,19 @@ def _root_row(key: str, value: str, default: str, custom: bool) -> dict:
     }
     if key == "reports_folder":
         row["url"] = yandex_folder_url(value)
+    elif key == "products_file":
+        row["kind"] = "file"
+        path = Path(value)
+        row["folder"] = str(path.parent)
+        try:
+            row["exists"] = path.is_file()
+            if row["exists"]:
+                st = path.stat()
+                row["size"] = int(st.st_size)
+                row["mtime"] = datetime.fromtimestamp(
+                    st.st_mtime).isoformat(timespec="seconds")
+        except OSError:
+            row["exists"] = False
     else:
         try:
             row["exists"] = Path(value).is_dir()
@@ -286,12 +335,7 @@ def public_payload(
     """Всё, что нужно панели «Ссылки и хранилища»."""
     if data is None:
         data = _load(db)
-    defaults = default_roots()
-    values = dict(defaults)
-    for key in ROOT_KEYS:
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            values[key] = value.strip()
+    values, defaults = _effective(data)
     roots_out = {
         key: _root_row(key, values[key], defaults[key], key in data)
         for key in ROOT_KEYS
@@ -299,10 +343,19 @@ def public_payload(
     links = data.get(LINKS_KEY)
     if not isinstance(links, list):
         links = default_links()
+    # T-82: статус последней синхронизации каталога из файла (ленивый импорт —
+    # products_file сам читает настройки хранилищ).
+    try:
+        from app.services import products_file as products_file_service
+
+        products_sync = products_file_service.public_state()
+    except Exception:  # noqa: BLE001 — статус не должен ломать панель
+        products_sync = {}
     return {
         "roots": roots_out,
         "links": links,
         "companies": companies_payload(db, companies or []),
+        "products_sync": products_sync,
     }
 
 
@@ -318,6 +371,11 @@ def save(db: Session, payload: dict, companies: Optional[Iterable[models.Company
         raise ValueError("Ожидался объект с настройками")
     data = _load(db)
     defaults = default_roots()
+    # T-82: дефолт файла каталога следует за новым корнем аналитики из этого же
+    # запроса — иначе «значение равно дефолту» сравнивалось бы со старым путём.
+    new_analytics = payload.get("analytics_root")
+    if isinstance(new_analytics, str) and new_analytics.strip():
+        defaults["products_file"] = products_file_default(new_analytics.strip())
     photos_changed = False
     for key in ROOT_KEYS:
         if key not in payload:
@@ -395,6 +453,11 @@ def allowed_paths(db: Session, companies: Iterable[models.Company]) -> list[Path
         except OSError:
             continue
     base = Path(values["analytics_root"])
+    # T-82: папку с общим файлом каталога тоже разрешаем открывать.
+    try:
+        out.append(Path(values["products_file"]).parent.resolve())
+    except OSError:
+        pass
     for company in companies:
         rel = (company.analytics_dir or "").strip()
         if not rel:

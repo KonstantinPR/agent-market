@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.api._common import *  # noqa: F401,F403
 from app.config import BASE_DIR, settings
 from app.services import cabinets as cabinet_service
+from app.services import products_file as products_file_service
 from app.services import refresh as refresh_service
 from app.services import storage_settings as storage_service
 
@@ -301,11 +302,23 @@ def api_storage_settings_put(payload: dict = Body(default={}),
 
 @router.delete("/settings/storage/{key}")
 def api_storage_settings_reset(key: str, db: Session = Depends(get_db)):
-    """Сбросить настройку к дефолту: photos_root, analytics_root, reports_folder или links."""
+    """Сбросить настройку к дефолту: photos_root, analytics_root, products_file, reports_folder или links."""
     try:
         return storage_service.reset(db, key, companies=_user_companies(db))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/settings/storage/products-sync")
+def api_storage_products_sync(db: Session = Depends(get_db)):
+    """T-82: обновить каталог (себестоимость/ценность) из products.xlsx.
+
+    Читает файл из настроек хранилищ и пишет `products` через upsert. Возвращает
+    состояние синхронизации: путь, mtime файла, сколько строк прочитано/обновлено,
+    время и текст ошибки (если файл не найден или битый).
+    """
+    products_file_service.sync(db, force=True)
+    return storage_service.public_payload(db, companies=_user_companies(db))
 
 
 @router.put("/settings/storage/company/{company_id}")

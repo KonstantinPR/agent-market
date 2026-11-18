@@ -214,6 +214,13 @@ body { background: #fff; color: #111; font-size: 14px; line-height: 1.5; }
   font-family: Consolas, "Courier New", monospace;
 }
 .cab-storage-val.muted { color: #999; font-style: italic; }
+/* T-82: статус файла каталога (mtime/размер/последняя синхронизация). */
+.cab-storage-meta {
+  font-family: inherit; font-size: 11px; color: #7a7a7a; margin-top: 2px;
+}
+.cab-storage-err {
+  font-family: inherit; font-size: 11px; color: #c0392b; margin-top: 2px;
+}
 .cab-storage-url { color: #8a8a8a; font-size: 10px; }
 .cab-storage-link {
   font-size: 12px; font-weight: 600; color: #1a5fb4;

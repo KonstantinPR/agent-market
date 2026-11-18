@@ -532,7 +532,10 @@ def _decide_ozon(f: dict, s: dict) -> dict:
     if use_margin:
         if f.get("comm_rate") is None or floor is None:
             net_cost = _num(f.get("net_cost"))
-            if bool(s.get("no_econ_cost_floor", True)) and net_cost > 0 and price > 0:
+            # T-82: ключ переименован (no_econ_floor). Формула пола Ozon
+            # (price-based, от детализации Ozon) в T-82 не менялась — здесь
+            # остаётся прежний фолбэк «себестоимость × (1 + маржа)».
+            if bool(s.get("no_econ_floor", True)) and net_cost > 0 and price > 0:
                 floor = net_cost * (1 + _num(s["floor_margin_pct"]) / 100)
                 f["floor_price"] = floor
             else:

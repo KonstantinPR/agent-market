@@ -312,7 +312,9 @@ def test_merge_settings_new_r12_r14_keys():
                         "demand_min_buyouts": 5})
     assert s["demand_raise"] is False
     assert s["demand_raise_pct"] == pytest.approx(12.0)
-    assert s["no_econ_cost_floor"] is False
+    # T-82: ключ переименован в no_econ_floor; старое имя читается как алиас.
+    assert s["no_econ_floor"] is False
+    assert merge_settings({"no_econ_cost_floor": 0})["no_econ_floor"] is False
     assert s["velocity_from_funnel"] is False
     assert s["demand_min_buyouts"] == pytest.approx(5.0)
 
@@ -2424,11 +2426,17 @@ def test_minpromo_price_formula():
     assert pricing_service.minpromo_price(row, s) == 554.0
 
 
-def test_minpromo_floor_basis_fallback_to_net_cost():
-    """R14-фолбэк: нет пола → net_cost × (1 + floor_margin_pct)."""
+def test_minpromo_floor_basis_requires_real_floor():
+    """T-82: база — только настоящий пол; «себестоимость × (1 + маржа)» не выдумываем.
+
+    Старый фолбэк давал заведомо убыточную границу (не учитывал комиссию,
+    логистику, хранение и услуги), поэтому без пола колонка остаётся пустой.
+    """
     row = {"floor_price": 0.0, "net_cost": 400.0, "current_vis": 1000.0}
     s = merge_settings({"floor_margin_pct": 10.0})
-    assert pricing_service.minpromo_floor_basis(row, s) == pytest.approx(440.0)
+    assert pricing_service.minpromo_floor_basis(row, s) == 0.0
+    row["floor_price"] = 607.0
+    assert pricing_service.minpromo_floor_basis(row, s) == pytest.approx(607.0)
 
 
 def test_minpromo_block_label():
@@ -2495,13 +2503,21 @@ def test_minpromo_price_swapped_bounds():
 
 
 def test_minpromo_price_present_in_recommendations(db):
-    """Интеграция: колонка minpromo_price заполняется у обычных строк."""
+    """Интеграция: колонка minpromo_price заполняется у обычных строк.
+
+    T-82: база — пол безубытка (себестоимость + расходы + комиссия + маржа), а
+    не «себестоимость × 1,1». Здесь у строки нет собственных продаж в окне, но
+    есть каталог и остаток — пол считается по средним связки, и minpromo от него.
+    """
     _seed(db, "MP", "555111", stock=100, net_cost=300,
           sales=[*_fallback_sales()], funnel=(100, 2, 1, 0, 0))
-    rec = recommendations(db, prices_df=_prices(("MP", 1000, 10)), today=TODAY)
+    rec = recommendations(db, prices_df=_prices(("555111", 1000, 10)), today=TODAY)
     row = _row(rec, "MP")
+    assert row["floor_price"] is not None and row["floor_price"] > 300.0
     assert row["minpromo_price"] is not None
-    assert row["minpromo_price"] > 0
+    # по умолчанию floor_reserve: пол + 5%, округление вверх до 1 ₽
+    assert row["minpromo_price"] == pytest.approx(
+        pricing_service._ceil_step(row["floor_price"] * 1.05, 1.0))
 
 
 def test_minpromo_template_columns():
@@ -2733,13 +2749,17 @@ def test_estimate_cost_lowers_dead_stock(db):
     assert row["cost_source"] == "group"
     assert row["cost_basis"] == "JZ"
     assert row["cost_peers"] == 3
-    assert row["floor_source"] == "est_cost"
-    assert row["floor_price"] == pytest.approx(550.0)
+    # T-82: пол — полная формула от средних связки: (500 + 40 + 10 + 5) / 0,75
+    assert row["floor_source"] == "cabinet"
+    assert row["floor_price"] == pytest.approx(740.0, abs=0.01)
     # шаг от текущей витрины: 4900 × (1 − 12.75%) = 4275
     assert row["target_vis"] == pytest.approx(4900 * 0.8725, abs=1)
-    # синтетический пол в мин. цену автоакций не попадает
-    assert row["minpromo_price"] is None
-    assert "оценка себестоимости" in row["reason"]
+    # пол уходит в мин. цену автоакций; значение зажато нижней границей
+    # minpromo_min_pct (20% от витрины 4900 = 980)
+    assert row["minpromo_price"] == pytest.approx(980.0)
+    assert row["minpromo_bound"] == "min"
+    assert "средние по связке" in row["reason"]
+    assert "оценка по соседям" in row["reason"]
     assert "расчёт:" in row["reason"]
     assert rec["no_cost"] == 1
     assert rec["cost_estimated"] == 1
@@ -2802,34 +2822,49 @@ def test_floor_source_unit_econ_for_live_item(db):
     assert row["floor_price"] > 0
 
 
-def test_floor_source_net_cost_for_r14(db):
-    """T-81: R14 от каталожной себестоимости — floor_source=net_cost."""
-    _seed(db, "CF3", "PCF3", stock=100, net_cost=400, sales=[(40, 0, 0)])
+def test_floor_source_cabinet_for_r14(db):
+    """T-82: нет своей unit-экономики — пол из средних связки, а не «себестоимость × 1,1».
+
+    Своих продаж в окне нет, но в связке есть история (40 дней назад): комиссия
+    15%, логистика 40 ₽, хранение 10 ₽, услуги 5 ₽ на единицу. Пол =
+    (400 + 40 + 10 + 5) / (1 − 0,15 − 0,10) = 606,67 ₽ — заметно выше старого
+    440 ₽, который не учитывал расходы и был убыточным.
+    """
+    _seed(db, "OTH", "POTH", stock=0, net_cost=300, sales=[(40, 1, 0)])
+    _seed(db, "CF3", "PCF3", stock=100, net_cost=400, sales=[])
     rec = recommendations(db, prices_df=_prices(("PCF3", 1000, 0)), today=TODAY)
     row = _row(rec, "CF3")
-    assert row["floor_source"] == "net_cost"
-    assert row["floor_price"] == pytest.approx(440.0)
+    assert row["floor_source"] == "cabinet"
+    assert row["floor_price"] == pytest.approx(455 / 0.75, abs=0.01)
+    assert row["floor_basis"]["comm_rate"] == pytest.approx(0.15)
+    assert row["floor_basis"]["logistics_unit"] == pytest.approx(40.0)
+    assert "средние по связке" in row["reason"]
 
 
-def test_estimated_cost_excluded_from_minpromo_and_min_prices(db):
-    """T-81: синтетический пол не уходит в мин. цены WB (ни файл, ни apply-min)."""
+def test_estimated_floor_sent_to_minpromo_and_min_prices(db):
+    """T-82: пол по средним связки уходит в мин. цены WB (ни файл, ни apply-min).
+
+    Раньше пол, посчитанный от оценённой себестоимости, считался «синтетическим»
+    и в WB не отправлялся. Теперь пол — настоящий безубыток (себестоимость +
+    расходы + комиссия + маржа), поэтому отправляется везде; число таких строк
+    показывается в подтверждении и в итоге apply-min.
+    """
     s = merge_settings()
     row = {"net_cost": 500.0, "net_cost_est": True, "floor_price": 550.0,
            "current_vis": 4900.0, "comm_rate": None}
-    assert pricing_service.minpromo_floor_basis(row, s) == 0.0
-    assert pricing_service.minpromo_price(row, s) is None
-    # режим «от текущей цены» от себестоимости не зависит — считается как раньше
-    assert pricing_service.minpromo_price(
-        row, merge_settings({"minpromo_mode": "current_minus"})) is not None
+    assert pricing_service.minpromo_floor_basis(row, s) == pytest.approx(550.0)
+    # зажато нижней границей minpromo_min_pct: 20% от витрины 4900 = 980
+    assert pricing_service.minpromo_price(row, s) == pytest.approx(980.0)
     res = pricing_service.apply_min_prices(
         db,
         rows=[{"article": "EST", "nm_id": "1", "net_cost_est": True,
+               "floor_source": "cabinet",
                "floor_price": 550.0, "current_vis": 300.0,
                "current_discount": 70.0, "action": "LOWER",
                "status": "suggested"}],
         provider=_FakeProvider())
-    assert res["pushed"] == 0
-    assert "оценённой себестоимостью" in res["note"]
+    assert res["pushed"] == 1
+    assert "оценённым полом" in res["note"]
 
 
 def test_record_truncates_reason_to_500(db):
