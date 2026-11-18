@@ -782,12 +782,16 @@ table.data-hl tbody tr:hover > td.hl-col {
   box-shadow: inset 0 0 0 9999px rgba(60, 125, 190, 0.10);
 }
 .est { color: #b08800; }
-/* Inline-сравнение периодов (T-75): в ячейке два значения — текущее цветом
-   по направлению изменения (▲ рост / ▼ падение) и прошлые серым мелким. */
-.cmp-cur { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cmp-cur.pos, .cmp-cur.pos span { color: #1a7f37; font-weight: 600; }
-.cmp-cur.neg, .cmp-cur.neg span { color: #cf222e; font-weight: 600; }
-.cmp-cur .cmp-tri { font-size: 9px; vertical-align: 1px; margin-right: 2px; }
+/* Inline-сравнение периодов (T-75): главное число — последнее значение периода,
+   цвет по самому значению (<0 красный, 0–200 жёлтый, >200 зелёный). Треугольник
+   и процент во второй строке показывают динамику. */
+.cmp-cur { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+.cmp-cur.val-pos, .cmp-cur.val-pos span { color: #1a7f37; }
+.cmp-cur.val-neg, .cmp-cur.val-neg span { color: #cf222e; }
+.cmp-cur.val-mid, .cmp-cur.val-mid span { color: #9a6700; }
+.cmp-cur .cmp-tri { font-size: 9px; vertical-align: 1px; margin-right: 2px; font-weight: 600; }
+.cmp-cur .cmp-tri.up { color: #1a7f37; }
+.cmp-cur .cmp-tri.down { color: #cf222e; }
 .cmp-prev {
   display: block;
   white-space: nowrap;
@@ -797,6 +801,10 @@ table.data-hl tbody tr:hover > td.hl-col {
   color: #8c959f;
   font-variant-numeric: tabular-nums;
 }
+.cmp-prev .cmp-chg { font-weight: 600; }
+.cmp-prev .cmp-chg.up { color: #1a7f37; }
+.cmp-prev .cmp-chg.down { color: #cf222e; }
+.cmp-prev .cmp-sep { margin: 0 4px; color: #b0b8c1; }
 a.btn.small { padding: 2px 8px; font-size: 12px; text-decoration: none; }
 .tag { font-size: 12px; color: #444; }
 .tag.wb::after { content: " (WB)"; }
