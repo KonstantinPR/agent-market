@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.api import router
-from app.config import BASE_DIR
+from app.config import BASE_DIR, settings
 from app.services import progress as progress_service
 
 STATIC_DIR = BASE_DIR / "app" / "static"
@@ -34,6 +34,22 @@ async def lifespan(_app):
             pass
 
     threading.Thread(target=_warm_photos, daemon=True).start()
+
+    # T-82: каталог себестоимости из общего products.xlsx. Синхронизация в фоне
+    # при старте (файл ~1 МБ, чтение 1–2 с) + наблюдатель mtime: правки файла на
+    # Диске подхватываются без перезапуска приложения. В тестах БД отдельная
+    # (*_test) — реальный каталог туда не тянем: фоновая запись конкурирует с
+    # TRUNCATE между тестами.
+    def _sync_products_file():
+        try:
+            from app.services import products_file as products_file_service
+            products_file_service.startup_sync()
+            products_file_service.start_watcher()
+        except Exception:  # noqa: BLE001 — синхронизация не должна ронять старт
+            pass
+
+    if not settings.pg_database.endswith("_test"):
+        threading.Thread(target=_sync_products_file, daemon=True).start()
     yield
 
 

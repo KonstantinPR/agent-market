@@ -8,8 +8,14 @@ def test_storage_settings_get(client):
     r = client.get("/api/settings/storage")
     assert r.status_code == 200
     body = r.json()
-    assert set(body["roots"]) == {"photos_root", "analytics_root", "reports_folder"}
+    assert set(body["roots"]) == {
+        "photos_root", "analytics_root", "products_file", "reports_folder"}
     assert body["roots"]["photos_root"]["title"] == "Фото товаров"
+    # T-82: файл каталога себестоимости — отдельный корень (kind=file).
+    file_row = body["roots"]["products_file"]
+    assert file_row["kind"] == "file"
+    assert file_row["value"].endswith("products.xlsx")
+    assert "products_sync" in body
     assert isinstance(body["links"], list) and body["links"]
     assert body["companies"] == []
 

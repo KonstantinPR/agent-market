@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "201";
+const UI_VERSION = "202";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -607,6 +607,20 @@ const cellFmts = {
     ? '<span class="est" title="Себестоимость не задана — оценка">~' + fmtMoney(v) + "</span>"
     : fmtMoney(v),
   text: (v) => (v == null || v === "") ? "—" : v,
+  // T-82: «Причина» в таблице — не длиннее 100 символов (по границе слова),
+  // полный текст — в своей подсказке по наведению/фокусу (текст выделяется).
+  // Полный текст по-прежнему приходит с сервера (reason до 500 символов).
+  reasonShort: (v) => {
+    if (v == null || v === "") return "—";
+    const full = String(v);
+    if (full.length <= 100) return escapeHtml(full);
+    let cut = full.slice(0, 100);
+    const sp = cut.lastIndexOf(" ");
+    if (sp >= 60) cut = cut.slice(0, sp);
+    const short = cut.replace(/[\s·,;:—–-]+$/u, "") + "…";
+    return '<span class="reason-cell" tabindex="0" title="">' + escapeHtml(short) +
+      '<span class="tip-text">' + escapeHtml(full) + "</span></span>";
+  },
   tag: (v) => `<span class="tag ${v}">${MP_LABELS[v] || v}</span>`,
 };
 
@@ -616,6 +630,11 @@ const cellFmts = {
 // прошлому периоду, у которого есть значение), ниже серым — значения прошлых
 // периодов. Отдельные колонки `cmp<N>_<field>` в таблицу не добавляются
 // (в Excel-выгрузке они остаются).
+// последнее (текущее) значение периода, ниже серым — значение предыдущего
+// периода. Цвет и треугольник — по направлению изменения к первому прошлому
+// периоду, у которого есть значение: рост зелёный ▲, падение красное ▼.
+// Остальные выбранные периоды видны в подсказке. Отдельные колонки
+// `cmp<N>_<field>` в таблицу не добавляются (в Excel-выгрузке они остаются).
 const CMP_INLINE_TRI_UP = "\u25B2";
 const CMP_INLINE_TRI_DOWN = "\u25BC";
 // Рост этих показателей — плохо: цвет инвертируется (расходы, отмены, возвраты).
@@ -10040,7 +10059,7 @@ let cabStorageData = null;
 let cabStorageEdit = null; // {kind: "root"|"company"|"link", id}
 let cabStorageBusy = false;
 
-const CAB_STORAGE_ROOT_ORDER = ["photos_root", "analytics_root", "reports_folder"];
+const CAB_STORAGE_ROOT_ORDER = ["photos_root", "analytics_root", "products_file", "reports_folder"];
 
 function cabStorageMsg(text, isError) {
   const el = $("#cabStorageMsg");
@@ -10049,10 +10068,24 @@ function cabStorageMsg(text, isError) {
   el.classList.toggle("err", !!isError);
 }
 
-function cabStorageStatus(ok) {
+function cabStorageStatus(ok, isFile) {
   return ok
-    ? '<span class="cab-storage-ok" title="Папка доступна">✓</span>'
-    : '<span class="cab-storage-bad" title="Папка не найдена">✗</span>';
+    ? '<span class="cab-storage-ok" title="' + (isFile ? "Файл доступен" : "Папка доступна") + '">✓</span>'
+    : '<span class="cab-storage-bad" title="' + (isFile ? "Файл не найден" : "Папка не найдена") + '">✗</span>';
+}
+
+function cabStorageWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? String(iso) : d.toLocaleString("ru-RU");
+}
+
+function cabStorageSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return "";
+  if (n < 1024) return n + " Б";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " КБ";
+  return (n / (1024 * 1024)).toFixed(1) + " МБ";
 }
 
 async function storagePut(payload) {
@@ -10128,23 +10161,49 @@ function renderStorageSettings() {
       continue;
     }
     const isDisk = row.kind === "yandex";
+    const isFile = row.kind === "file";
     let open = "";
     if (isDisk) {
       open = '<a class="cab-storage-act" href="' + escapeHtml(row.url || "") +
         '" target="_blank" rel="noopener noreferrer">Открыть</a>';
     } else {
+      const target = isFile ? (row.folder || row.value) : row.value;
       open = '<button type="button" class="cab-storage-act" data-storage-open="' +
-        escapeHtml(row.value) + '" title="Открыть папку в проводнике"' +
+        escapeHtml(target) + '" title="Открыть папку в проводнике"' +
         (row.exists ? "" : " disabled") + ">Открыть</button>";
+    }
+    // T-82: у файла каталога — когда изменён, сколько весит и когда последний
+    // раз синхронизировался с каталогом (плюс кнопка ручной синхронизации).
+    let meta = "";
+    let syncBtn = "";
+    if (isFile) {
+      const st = data.products_sync || {};
+      const bits = [];
+      if (row.mtime) bits.push("изменён " + cabStorageWhen(row.mtime));
+      if (row.size) bits.push(cabStorageSize(row.size));
+      if (st.synced_at) {
+        bits.push("синхронизирован " + cabStorageWhen(st.synced_at) +
+          (st.rows ? " (" + fmt(st.rows) + " строк)" : ""));
+      } else {
+        bits.push("синхронизация ещё не выполнялась");
+      }
+      meta = '<div class="cab-storage-val cab-storage-meta">' + escapeHtml(bits.join(" · ")) + "</div>";
+      if (st.error) {
+        meta += '<div class="cab-storage-val cab-storage-err">' + escapeHtml(st.error) + "</div>";
+      }
+      syncBtn = '<button type="button" class="cab-storage-act primary" data-products-sync="1"' +
+        (st.running ? " disabled" : "") + ">Обновить каталог из файла</button>";
     }
     h += '<div class="cab-storage-row">' +
       '<div class="cab-storage-main">' +
         '<div class="cab-storage-title">' + escapeHtml(row.title) + " " +
-          (isDisk ? "" : cabStorageStatus(row.exists)) + "</div>" +
+          (isDisk ? "" : cabStorageStatus(row.exists, isFile)) + "</div>" +
         '<div class="cab-storage-val" title="' + escapeHtml(row.value) + '">' +
           escapeHtml(row.value) + "</div>" +
+        meta +
       "</div>" +
       '<div class="cab-storage-actions">' +
+        syncBtn +
         '<button type="button" class="cab-storage-act" data-storage-edit="' + escapeHtml(key) +
           '">Изменить</button>' +
         open +
@@ -10323,6 +10382,24 @@ function initCabStorage() {
     const saveLink = find("data-link-save");
     if (saveLink) {
       cabStorageRun(() => saveStorageLink(saveLink.dataset.linkSave || ""));
+      return;
+    }
+    const syncProducts = find("data-products-sync");
+    if (syncProducts) {
+      cabStorageRun(async () => {
+        syncProducts.disabled = true;
+        cabStorageMsg("Читаю products.xlsx и обновляю каталог…");
+        const d = await apiPost("/settings/storage/products-sync", {});
+        cabStorageData = d;
+        renderStorageSettings();
+        const st = (d && d.products_sync) || {};
+        if (st.error) {
+          cabStorageMsg("Ошибка: " + st.error, true);
+        } else {
+          cabStorageMsg("Каталог обновлён: строк " + fmt(st.rows || 0) +
+            ", записано " + fmt(st.updated || 0) + ".");
+        }
+      });
       return;
     }
     const reset = find("data-storage-reset");
@@ -11277,6 +11354,12 @@ const PRICING_LABELS = {
   dead_max_discount_pct: "Потолок скидки для мёртвого запаса, %",
   estimate_missing_cost: "Себестоимость по соседям, если не задана",
   estimate_cost_min_peers: "Мин. соседей для оценки себестоимости, шт",
+  econ_lookback_days: "Средние связки: окно расчёта, дн",
+  no_econ_floor: "R14: пол без unit-экономики (себестоимость + расходы)",
+  no_econ_comm_pct: "R14: комиссия МП по умолчанию, %",
+  no_econ_logistics: "R14: логистика по умолчанию, ₽/шт",
+  no_econ_storage: "R14: хранение по умолчанию, ₽/шт",
+  no_econ_services: "R14: услуги МП по умолчанию, ₽/шт",
   low_conv_pct: "Низкая конверсия витрины <, %",
   min_rating_reviews: "Рейтинг по отзывам ≥, балл (ценный товар)",
   fallback_window_days: "Окно расчёта unit-экономики по факт., дн",
@@ -11355,8 +11438,14 @@ const PRICING_HINTS = {
   return_penalty: "Если доля возвратов/отмен больше этой величины (0..1), продажи считаются «шумными» и товар не трогаем.",
   dead_stock_days: "Если продаж не было столько дней подряд → мёртвый запас, цену снижаем.",
   dead_max_discount_pct: "Потолок скидки для мёртвого запаса (продаж нет ≥ «Дней без продаж → мёртвый запас»): разрешает уходить глубже общего «Максимальная скидка от базовой цены», но не ниже пола безубыточности и не глубже этого значения. Нужен потому, что витринная скидка WB (автоакция) может быть уже выше общего потолка — тогда общий потолок запрещал снижение и автопилот поднимал цену на 1 п.п. Шаг за проход по-прежнему ограничен «Максимальное снижение цены за шаг».",
-  estimate_missing_cost: "T-81: если себестоимость товара не заведена в каталоге (0 ₽), автопилот оценивает её по средней у соседей — по первой ступени, где хватает данных: группа товаров (JZA → JZ) → наименование → префикс артикула до первого дефиса. Оценка живёт только в расчёте: в каталог не пишется, пол от неё не уходит в «Минимальные цены» и «Мин. цена автоакций». Выключено — прежний пропуск «нет unit-экономики» с подробной причиной.",
+  estimate_missing_cost: "T-81: если себестоимость товара не заведена в каталоге (0 ₽), автопилот оценивает её по средней у соседей — по первой ступени, где хватает данных: группа товаров (JZA → JZ) → наименование → префикс артикула до первого дефиса. Оценка живёт только в расчёте: в каталог не пишется. Сначала проверьте «Каталог себестоимости» в «Личные кабинеты → Ссылки и хранилища» — если артикул есть в products.xlsx, себестоимость придёт оттуда и оценка не понадобится.",
   estimate_cost_min_peers: "T-81: сколько соседей с известной себестоимостью нужно, чтобы средняя считалась надёжной. Меньше — ступень пропускается, берётся следующая (наименование, затем префикс артикула). По умолчанию 3.",
+  econ_lookback_days: "T-82: за сколько дней считать средние комиссию, логистику, хранение и услуги по связке — для товаров, у которых нет собственных продаж в окне расчёта. Медианы берутся по артикулам с продажами за это окно. 14 дней обычно дают слишком мало артикулов (на кабинете 5 — 29), 90 дней — устойчивые цифры (64 артикула).",
+  no_econ_floor: "R14: если unit-экономики строки нет (нет продаж/доходов за окно), но остаток и себестоимость есть — пол всё равно считается, но расходы берутся из средних по связке: пол = (себестоимость + логистика + хранение + услуги) ÷ (1 − комиссия% − «Минимальная маржа»%). Источник по порядку: своя unit-экономика → средние связки за «Средние связки: окно» → значения по умолчанию ниже. Такой пол — настоящий безубыток, поэтому он уходит и в «Мин. цена автоакций», и в «Минимальные цены». Выключено — прежнее поведение «пропустить (нет unit-экономики)». Себестоимость 0 → товар всё равно пропускается.",
+  no_econ_comm_pct: "T-82: комиссия маркетплейса, % от цены — используется только если в связке вообще нет продаж и средние посчитать не из чего. По умолчанию 20%.",
+  no_econ_logistics: "T-82: логистика, ₽ на единицу — только для связки без продаж (когда средние посчитать не из чего). По умолчанию 120 ₽/шт.",
+  no_econ_storage: "T-82: хранение, ₽ на единицу — только для связки без продаж. По умолчанию 0 (у большинства товаров хранение не начисляется).",
+  no_econ_services: "T-82: прочие услуги маркетплейса (эквайринг, обработка, штрафы), ₽ на единицу — только для связки без продаж. По умолчанию 20 ₽/шт.",
   low_conv_pct: "Много «в корзине», но конверсия ниже этого %, % — интерес без покупок; товар пропускаем.",
   min_rating_reviews: "Рейтинг по отзывам из воронки продаж (1..5): чем выше — тем меньше скидка при снижении, ведь товар ценный. При рейтинге ≥ этого порога снижение ограничивается, а при 5,0 скидка не увеличивается вовсе. 0 = нет данных — ограничений нет.",
   value_ratio_low: "Нижний порог отношения «ценность/себестоимость» (value из каталога ÷ себестоимость). Пока отношение ≤ этого значения — ограничения по ценности нет, скидка снижается как обычно. По умолчанию 1,0: при ценности ≤ себестоимости скидку не тормозим.",
@@ -11377,7 +11466,6 @@ const PRICING_HINTS = {
   demand_raise_max_doc: "R12: при DOC выше этого значения спрос НЕ поднимает цену (глубокий перезапас — товар всё равно плохо уходит, сначала разгрузка). По умолчанию 120 дней.",
   velocity_from_funnel: "R13: если за окно нет строк продаж, но в свежем срезе воронки есть активность (выкупы/заказы) — скорость продаж берётся из воронки, и товар НЕ объявляется «мёртвым запасом». Выключено — как раньше: нет строк продаж → мёртвый запас.",
   funnel_velocity_field: "R13: какое поле воронки использовать как прокси скорости: buyouts (выкупы, по умолчанию) или orders (заказы). Только латиница, без пробелов.",
-  no_econ_cost_floor: "R14: если unit-экономики нет (нет продаж/доходов за 90 дней), но остаток есть — считать пол цены по себестоимости: floor = себестоимость × (1 + «Минимальная маржа»/100), и товар идёт по обычным веткам (обычно снижение), а не «пропускается». Выключено — прежнее поведение «пропустить (нет unit-экономики)». Если себестоимость 0 — товар всё равно пропускается.",
   stock_value_weight: "R15: учитывать остаток по деньгам (штуки × себестоимость), а не по штукам — 100 шт × 1000 ₽ важнее 100 шт × 100 ₽. Влияет на приоритет разгрузки через акции WB. В саму формулу DOC остаток входит по-прежнему в штуках.",
   fallback_window_days: "Окно (дней), за которое берутся фактические продажи для расчёта unit-экономики: реальная цена, комиссия, маржа, возвраты.",
   raise_pct_replenishable: "Потолок повышения цены для докупаемых товаров, % — их поднимаем аккуратно, чтобы не потерять выкупы.",
@@ -11560,7 +11648,7 @@ const pricingHeaders = [
   { k: "margin_pct", label: "Маржа факт, % от выручки", num: true, render: cellFmts.pct , tip: "Рентабельность за окно по детализации: прибыль ÷ выручка × 100. Проверяйте согласованность с полем прибыли на единицу."},
   { k: "feedback_rating", label: "Рейтинг по отзывам", num: true, render: (v) => v == null ? "—" : Number(v).toFixed(2) , tip: "Средняя оценка по отзывам покупателей 1..5 из воронки (product.feedbackRating). Ключевой сигнал качества: ниже порога автопилот не поднимает цену, высокому «ценному» товару не увеличивает скидку."},
   { k: "action", label: "Решение", render: actionCell , tip: "Итоговое действие: RAISE — снизить скидку (поднять цену), LOWER — увеличить скидку, HALVE — пополам для мёртвых товаров, HOLD — не менять, SKIP — пропустить (нет данных, кулдаун, отказы по качеству)."},
-  { k: "reason", label: "Причина", render: cellFmts.text , tdCls: "cell-wrap", tip: "Текстовое объяснение решения: правило, затем «расчёт» с входными цифрами — пол и его источник (unit-экономика / каталог / оценка соседей), витрина и скидка, потолок, остаток/скорость/DOC, цель, дельта и маржа."},
+  { k: "reason", label: "Причина", render: cellFmts.reasonShort , tip: "Краткое объяснение решения (до 100 символов); полный текст с «расчётом» — при наведении на ячейку: правило, пол и его источник (unit-экономика / средние связки / каталог / оценка соседей), витрина и скидка, потолок, остаток/скорость/DOC, цель, дельта и маржа."},
   { k: "name", label: "Наименование", render: cellFmts.text , tip: "Наименование товара из каталога products."},
   { k: "stock_wb", label: "Остаток WB", num: true, render: cellFmts.int , tip: "Остаток WB из воронки продаж (product.stocks.wb) — снимок на дату среза. Может отличаться от колонки «Остаток», взятой из последнего среза стоков."},
   { k: "doc", label: "DOC, дн", num: true, render: (v) => v == null ? "—" : fmt(v) , tip: "Покрытие остатка продажами: остаток ÷ скорость (шт/дн). Ниже нижней границы — дефицит, выше верхней — перезапас, вокруг целевого — шаг в любую сторону."},
@@ -11598,7 +11686,18 @@ const pricingHeaders = [
   { k: "logistics_per_one", label: "Логистика/шт, руб", num: true, render: cellFmts.money , tip: "Логистика (туда и обратно) на единицу по детализации WB. Входит в формулу минимальной цены."},
   { k: "storage_per_one", label: "Хранение/шт, руб", num: true, render: cellFmts.money , tip: "Хранение на единицу по детализации WB, включая оценку безартикульных плат. Тоже входит в формулу минимальной цены."},
   { k: "price", label: "Цена базовая, руб", num: true, render: cellFmts.money , tip: "Базовая цена карточки WB (price из прайса), от неё считается витринная цена со скидкой."},
-  { k: "floor_price", label: "Пол (break-even), руб", num: true, render: cellFmts.money , tip: "Минимальная цена безубыточности: себестоимость + логистика + комиссия + хранение + услуги, ₽/шт. Если себестоимость оценена по соседям, пол тоже оценка — в минимальные цены WB он не отправляется."},
+  { k: "floor_price", label: "Пол (break-even), руб", num: true, render: (v, r) => {
+    if (v == null) return "—";
+    const src = r && r.floor_source;
+    const est = !!src && src !== "unit_econ";
+    const label = { cabinet: "средние по связке", settings: "значения по умолчанию",
+      est_cost: "оценка себестоимости", net_cost: "себестоимость без расходов" }[src] || src || "";
+    const mark = est
+      ? ' <span class="est" title="Пол посчитан по источнику «' + escapeHtml(label) +
+        '», а не по собственной unit-экономике строки">~</span>'
+      : "";
+    return cellFmts.money(v) + mark;
+  }, tip: "Минимальная цена безубыточности: (себестоимость + логистика + хранение + услуги) ÷ (1 − комиссия% − «Минимальная маржа»%), ₽/шт. Источник цифр: собственная unit-экономика строки → средние по связке за окно «Средние за, дн» → значения по умолчанию. «~» = пол не по собственной unit-экономике; он тоже уходит в «Минимальные цены», а число таких строк показывается в подтверждении отправки."},
   { k: "minpromo_price", label: "Мин. цена автоакций, руб", num: true, render: (v, r) => {
     if (v == null) return "—";
     const mark = r.minpromo_bound ? ' <span class="mp-warn" title="Значение упёрлось в границу ' + (r.minpromo_bound === "min" ? "мин. " : "макс. ") + 'от текущей цены (minpromo_min/max_pct)">⚠</span>' : "";
@@ -12793,6 +12892,8 @@ const PRICING_GROUPS = [
   { title: "Цены и шаги", col: 1, keys: [
       "floor_margin_pct", "max_discount_pct", "dead_max_discount_pct",
       "estimate_missing_cost", "estimate_cost_min_peers",
+      "no_econ_floor", "econ_lookback_days", "no_econ_comm_pct",
+      "no_econ_logistics", "no_econ_storage", "no_econ_services",
       "max_raise_pct", "max_drop_pct",
       "lower_soften", "min_delta_pp", "raise_pct_replenishable",
       "dead_min_discount",
@@ -13176,8 +13277,10 @@ async function refreshPricingPrices() {
 // Пустое состояние таблицы автопилота: «нет данных» и «все строки скрыл
 // фильтр» — разные вещи. Второе раньше выглядело как «Нет данных за выбранный
 // период», хотя данные есть: 305 строк с причиной «держать/пропустить».
-function pricingEmptyText(rows, hiddenPassive, hidePassive, reason) {
+function pricingEmptyText(rows, hiddenPassive, hidePassive, reason, costOnly) {
   if (rows.length) return "";
+  // T-81: в режиме «только без себестоимости» пустой список — это хорошая новость.
+  if (costOnly) return "Товаров без себестоимости нет — у всех в каталоге указана.";
   if (reason) return reason;
   if (hidePassive && hiddenPassive > 0) {
     return "Все " + fmt(hiddenPassive) + " строк скрыты фильтром «Скрыть " +
@@ -13205,8 +13308,9 @@ function renderPricingCostWarn(data) {
     t += " — у " + fmt(est) + " пол безубыточности считается по оценке " +
       "соседей (группа → наименование → префикс артикула)";
   }
-  t += ". Оценка в каталог не пишется и в минимальные цены WB не уходит — " +
-    "надёжнее заполнить себестоимость.";
+  t += ". Сначала проверьте каталог в «Личные кабинеты → Ссылки и хранилища → " +
+    "Каталог себестоимости (products.xlsx)» и нажмите «Обновить каталог из файла»: " +
+    "если артикул есть в файле, себестоимость придёт оттуда, а оценка соседей не понадобится.";
   txt.textContent = t;
   btn.textContent = pricingCostOnly
     ? "Показать все товары"
@@ -13312,10 +13416,8 @@ async function renderPricing(apply, applyNote) {
     updateSummary(rows);
     pagedTable($("#pricingTable"), colViewHeaders("pricing", pricingActiveHeaders()), rows, null, null, colViewPinKeys("pricing"), {
       footersFn: pricingFooters,
-      emptyText: pricingCostOnly && !rows.length
-        ? "Товаров без себестоимости нет — у всех в каталоге указана."
-        : pricingEmptyText(rows, hiddenPassive, hidePassive,
-          artsEmptyReason(qRaw, data.articles)),
+      emptyText: pricingEmptyText(rows, hiddenPassive, hidePassive,
+        artsEmptyReason(qRaw, data.articles), pricingCostOnly),
       onFilter: (visible) => { _pricingRows = visible; updateSummary(visible); refreshApplyButton(); },
     });
     await renderPricingHistory();
@@ -13516,8 +13618,15 @@ async function applyMinPrices() {
     return;
   }
   const list = rows.slice(0, 5).map((r) => r.article).join(", ") + (rows.length > 5 ? "…" : "");
+  // T-82: пол теперь считается и по средним связки (не только по собственной
+  // unit-экономике). Такие строки тоже уходят в WB — показываем их число, чтобы
+  // решение было осознанным.
+  const estCount = rows.filter((r) => r.floor_source && r.floor_source !== "unit_econ").length;
+  const estNote = estCount
+    ? "\nИз них с оценённым полом (средние связки): " + estCount + "."
+    : "";
   if (!confirm("Отправить в WB минимальные (безубыточные) цены для " + rows.length + " видимых товаров?\n(" +
-      list + ")\n\nБазовая цена будет поднята до пола, скидка обнулена.")) return;
+      list + ")" + estNote + "\n\nБазовая цена будет поднята до пола, скидка обнулена.")) return;
   const btn = $("#pricingMinPrices");
   const prev = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Отправляю…"; }
