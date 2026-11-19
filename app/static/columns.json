@@ -3694,6 +3694,21 @@
         "def": false
        },
        {
+        "k": "days_in_sale",
+        "label": "В продаже, дн.",
+        "def": true
+       },
+       {
+        "k": "orders_net",
+        "label": "Заказов без отмен",
+        "def": false
+       },
+       {
+        "k": "inflight",
+        "label": "Ждут выкупа",
+        "def": true
+       },
+       {
         "k": "buyouts",
         "label": "Выкупы, шт",
         "def": true
@@ -5361,6 +5376,18 @@
      {
       "k": "cancelled",
       "label": "Отмены"
+     },
+     {
+      "k": "days_in_sale",
+      "label": "В продаже, дн."
+     },
+     {
+      "k": "orders_net",
+      "label": "Заказов без отмен"
+     },
+     {
+      "k": "inflight",
+      "label": "Ждут выкупа"
      },
      {
       "k": "conv_to_cart_percent",

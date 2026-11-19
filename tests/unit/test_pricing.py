@@ -20,21 +20,44 @@ from app.services.pricing import (
     project_velocity,
     promo_limit_apply,
     promo_plan_apply,
-    recommendations,
+    recommendations as _recommendations,
 )
 
 TODAY = date.today()
 
+# T-85: защита «спрос / новинка / заказы в пути» гасит снижение цены. Тесты
+# остальных правил (R8, R10, R18, рейтинги, ценность, акции) проверяют именно
+# своё правило, поэтому по умолчанию работают с выключенной защитой; тесты
+# самой T-85 вызывают recommendations(..., t85=True).
+T85_OFF = {
+    "demand_hold_min_orders": 0,
+    "demand_hold_min_backlog": 0,
+    "demand_hold_min_views": 0,
+    "demand_hold_max_doc": 0,
+    "protect_inflight_orders": False,
+    "new_item_grace_days": 0,
+}
+
+
+def recommendations(db, *, t85=False, settings=None, **kwargs):
+    """Обёртка над движком: по умолчанию выключает гварды T-85 (см. T85_OFF)."""
+    if not t85:
+        settings = {**T85_OFF, **(settings or {})}
+    return _recommendations(db, settings=settings, **kwargs)
+
 
 def _seed(db, art, nm, *, name="Товар", net_cost=300, value=0,
-          supplier="", replenishable=False,
-          stock=100, in_way=0, sales=(), funnel=(0, 0, 0, 0, 0), funnel_extra=None):
+          supplier="", replenishable=False, stock_days_ago=90,
+          stock=100, in_way=0, sales=(), funnel=(0, 0, 0, 0, 0), funnel_extra=None,
+          funnel_days_ago=1):
     """Засевает товар: nm-карта, остаток, воронка, продажи.
 
     funnel=(views, adds, orders, cancelled, avg_price) для последнего среза воронки.
     funnel_extra — дополнительные поля среза воронки (рейтинг, выкупы и т.п.).
     sales=список кортежей (offset_days, quantity, returns_qty).
     value/supplier — ценность и поставщик из каталога (products.xlsx).
+    stock_days_ago — когда появился первый остаток: по умолчанию 90 дней назад,
+    чтобы товар не попадал в грейс-период новинки (T-85, new_item_grace_days).
     """
     wb = db.execute(select(models.Marketplace.id).where(models.Marketplace.code == "wb")).scalar_one()
     db.add(models.Product(article=art, name=name, net_cost=net_cost,
@@ -42,11 +65,12 @@ def _seed(db, art, nm, *, name="Товар", net_cost=300, value=0,
                           replenishable=replenishable))
     db.add(models.NmArticle(nm_id=nm, article=art))
     if stock is not None:
-        db.add(models.Stock(marketplace_id=wb, date=TODAY - timedelta(days=1),
+        db.add(models.Stock(marketplace_id=wb, date=TODAY - timedelta(days=stock_days_ago),
                             article=art, warehouse="Все", quantity=stock, in_way=in_way))
     views, adds, orders, cancelled, avg_price = funnel
+    funnel_to = TODAY - timedelta(days=funnel_days_ago)
     db.add(models.FunnelMetric(
-        date_from=TODAY - timedelta(days=7), date_to=TODAY - timedelta(days=1),
+        date_from=funnel_to - timedelta(days=6), date_to=funnel_to,
         nm_id=nm, article=art, views=views, adds=adds, orders=orders,
         cancelled=cancelled, avg_price=avg_price,
         **(funnel_extra or {}),
@@ -140,6 +164,15 @@ def _row(rec, art):
 def _fallback_sales():
     """Продажа за пределами 14-дневного окна (внутри fallback 90 дн.) — даёт unit-экономику."""
     return [(40, 1, 0)]
+
+
+def _seed_history(db):
+    """Старая продажа другого артикула — иначе движок решит, что данных WB нет.
+
+    recommendations() возвращает пустой список, если в таблице продаж нет ни
+    одной строки: без истории не из чего собрать unit-экономику связки.
+    """
+    _seed(db, "HIST", "PHIST", stock=1, sales=[(60, 1, 0)])
 
 
 # ------------------------------------------------------------------ project_velocity
@@ -727,7 +760,7 @@ def test_apply_records_applied_and_returns_items(db):
     fake = _FakeProvider()
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("881234", 2000, 10)), provider=fake, today=TODAY,
-        settings={"prefer_raise": False, "lower_soften": 1.0},
+        settings={**T85_OFF, "prefer_raise": False, "lower_soften": 1.0},
     )
     assert res["applied"] == ["R8"]
     assert res["pushed"] == 1
@@ -749,6 +782,7 @@ def test_apply_error_records_error_and_raises(db):
     with pytest.raises(RuntimeError):
         pricing_service.apply_recommendations(
             db, prices_df=_prices(("881234", 2000, 10)), provider=fake, today=TODAY,
+            settings=T85_OFF,
         )
     logs = db.execute(select(models.PriceChange)).scalars().all()
     assert any(log.status == "error" and "boom" in log.reason for log in logs)
@@ -759,9 +793,11 @@ def test_apply_cooldown_blocks_reapply(db):
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     pricing_service.apply_recommendations(
         db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        settings=T85_OFF,
     )
     res = pricing_service.apply_recommendations(
         db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        settings=T85_OFF,
     )
     assert res["pushed"] == 0
     assert all(r["status"] == "skipped_cooldown"
@@ -777,6 +813,7 @@ def test_recommendations_marks_cooldown_after_apply(db):
           sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
     pricing_service.apply_recommendations(
         db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        settings=T85_OFF,
     )
     rec = recommendations(
         db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
@@ -2876,4 +2913,150 @@ def test_record_truncates_reason_to_500(db):
         select(models.PriceChange).where(models.PriceChange.article == "LONG")
     ).scalars().one()
     assert len(rec.reason) == 500
+
+
+# ------------------------------------------- T-85: спрос, новизна, заказы в пути
+
+
+def test_t85_funnel_velocity_counts_orders_and_days_in_sale():
+    """Скорость = ожидаемые выкупы / дни в продаже, а не выкупы / окно среза."""
+    s = merge_settings()
+    fl = {"orders": 10, "cancelled": 4, "buyouts": 2}
+    # orders_net = 6, prior 0.5 -> 3; выкупов 2, значит 3; дней min(10, 30) = 10
+    assert pricing_service._funnel_velocity(fl, s, 0.5, 10, 30) == pytest.approx(0.3)
+    # Новинка: знаменатель — её возраст, а не всё окно воронки.
+    assert pricing_service._funnel_velocity(fl, s, 0.5, 4, 30) == pytest.approx(0.75)
+    # legacy возвращает прежнее поведение: выкупы / дней среза.
+    legacy = merge_settings({"velocity_basis": "legacy"})
+    assert pricing_service._funnel_velocity(fl, legacy, 0.5, 10, 30) == pytest.approx(2 / 30)
+
+
+def test_t85_buyout_prior_from_funnel_and_default():
+    """Доля выкупа берётся по связке, пока заказов хватает; иначе — настройка."""
+    s = merge_settings()
+    rec = {"orders": 20, "cancelled": 4, "buyouts": 8}
+    funnel = {"A": rec, "a": rec}  # дубли артикул/АРТИКУЛ не суммируются
+    assert pricing_service._buyout_prior(funnel, s) == pytest.approx(8 / 16)
+    small = {"B": {"orders": 3, "cancelled": 0, "buyouts": 1}}
+    assert pricing_service._buyout_prior(small, s) == pytest.approx(0.5)
+
+
+def test_t85_new_item_holds_lower(db):
+    """Новинка (13 дней в продаже) с заказами: DOC 35, но цену не снижаем."""
+    _seed(db, "NEW1", "PN1", stock=5, stock_days_ago=13,
+          sales=[(40, 1, 0)], funnel=(142, 10, 3, 2, 4900),
+          funnel_extra={"buyouts": 1})
+    row = _row(recommendations(db, prices_df=_prices(("PN1", 4900, 0)),
+                               today=TODAY, t85=True), "NEW1")
+    assert row["days_in_sale"] == 13
+    assert row["action"] == "HOLD"
+    assert row["status"] == "hold_new"
+    assert row["target_discount"] is None and row["target_vis"] is None
+    assert "новинка" in row["reason"] and "13 дн." in row["reason"]
+    assert row["orders_net"] == 1 and row["inflight"] == 0
+
+
+def test_t85_new_item_is_not_dead_stock(db):
+    """CARKING-кейс: 3 дня в продаже, 4 заказа, продаж 0 — не «мёртвый запас»."""
+    _seed_history(db)
+    _seed(db, "NEW2", "PN2", stock=1, stock_days_ago=3, sales=[],
+          funnel=(120, 8, 4, 0, 4900))
+    row = _row(recommendations(db, prices_df=_prices(("PN2", 4900, 0)),
+                               today=TODAY, t85=True), "NEW2")
+    assert row["action"] == "HOLD" and row["status"] == "hold_new"
+    assert row["days_in_sale"] == 3
+    assert not row["dead_stock"]
+    assert "мёртвый запас" not in row["reason"]
+
+
+def test_t85_inflight_orders_block_lowering(db):
+    """Заказано, но не выкуплено и не отменено — снижение цены запрещено."""
+    _seed(db, "INF1", "PINF1", stock=50, sales=[(40, 1, 0)],
+          funnel=(100, 5, 3, 0, 1000))
+    row = _row(recommendations(db, prices_df=_prices(("PINF1", 2000, 10)),
+                               today=TODAY, t85=True), "INF1")
+    assert row["doc"] > 60  # перезапас: без защиты был бы LOWER
+    assert row["inflight"] == 3
+    assert row["action"] == "HOLD" and row["status"] == "hold_inflight"
+    assert "ждут выкупа 3" in row["reason"]
+
+
+def test_t85_inflight_stale_slice_allows_lowering(db):
+    """Срез воронки старше inflight_max_days — заказы уже разрешились."""
+    _seed(db, "INF2", "PINF2", stock=50, sales=[(40, 1, 0)],
+          funnel=(100, 5, 3, 0, 1000), funnel_days_ago=20)
+    row = _row(recommendations(
+        db, prices_df=_prices(("PINF2", 2000, 10)), today=TODAY, t85=True,
+        settings={"window_days": 30, "demand_hold_min_orders": 0,
+                  "demand_hold_min_backlog": 0, "demand_hold_min_views": 0},
+    ), "INF2")
+    assert row["action"] == "LOWER"
+
+
+def test_t85_demand_blocks_lowering(db):
+    """Два неотменённых заказа при перезапасе — цену не режем."""
+    _seed(db, "DEM1", "PDEM1", stock=50, sales=[(40, 1, 0)],
+          funnel=(100, 5, 2, 0, 1000), funnel_extra={"buyouts": 2})
+    row = _row(recommendations(db, prices_df=_prices(("PDEM1", 2000, 10)),
+                               today=TODAY, t85=True), "DEM1")
+    assert row["orders_net"] == 2 and row["inflight"] == 0
+    assert row["action"] == "HOLD" and row["status"] == "hold_demand"
+    assert "заказов 2" in row["reason"]
+
+
+def test_t85_cancelled_orders_do_not_hold(db):
+    """Все заказы отменены — спроса нет, снижение разрешено."""
+    _seed(db, "DEM2", "PDEM2", stock=50, sales=[(40, 1, 0)],
+          funnel=(100, 5, 3, 3, 1000))
+    row = _row(recommendations(db, prices_df=_prices(("PDEM2", 2000, 10)),
+                               today=TODAY, t85=True), "DEM2")
+    assert row["orders_net"] == 0 and row["inflight"] == 0
+    assert row["action"] == "LOWER"
+
+
+def test_t85_catastrophic_overstock_allows_lowering(db):
+    """Предохранитель: при DOC выше demand_hold_max_doc спрос не спасает от снижения."""
+    _seed(db, "DEM3", "PDEM3", stock=5000, sales=[(40, 1, 0)],
+          funnel=(100, 5, 2, 0, 1000), funnel_extra={"buyouts": 2})
+    row = _row(recommendations(db, prices_df=_prices(("PDEM3", 2000, 10)),
+                               today=TODAY, t85=True), "DEM3")
+    assert row["doc"] > 365
+    assert row["action"] == "LOWER"
+
+
+def test_t85_demand_does_not_block_raise(db):
+    """Подтверждённый спрос в дефиците — RAISE, защита спроса его не трогает."""
+    _seed(db, "RAI1", "PRAI1", stock=1,
+          sales=[(2, 5, 0), (20, 1, 0), *_fallback_sales()],
+          funnel=(200, 10, 8, 0, 900), funnel_extra={"buyouts": 8})
+    row = _row(recommendations(db, prices_df=_prices(("PRAI1", 1000, 10)),
+                               today=TODAY, t85=True), "RAI1")
+    assert row["action"] == "RAISE"
+
+
+def test_t85_new_item_raise_from_floor_allowed(db):
+    """Новинка, но витрина ниже пола: подъём до безубытка не глушим."""
+    _seed_history(db)
+    _seed(db, "NEW3", "PN3", stock=5, stock_days_ago=5, net_cost=900, sales=[],
+          funnel=(200, 3, 2, 0, 0), funnel_extra={"buyouts": 2})
+    row = _row(recommendations(db, prices_df=_prices(("PN3", 1000, 20)),
+                               today=TODAY, t85=True), "NEW3")
+    assert row["days_in_sale"] == 5
+    assert row["floor_price"] > row["current_vis"]
+    assert row["action"] == "RAISE"
+
+
+def test_t85_days_in_sale_shortens_velocity_window(db):
+    """DOC новинки считается по её возрасту, а не по всему окну воронки."""
+    _seed_history(db)
+    _seed(db, "NEW4", "PN4", stock=10, stock_days_ago=10, sales=[],
+          funnel=(100, 6, 4, 0, 1000))
+    row = _row(recommendations(
+        db, prices_df=_prices(("PN4", 2000, 10)), today=TODAY, t85=True,
+        settings={"new_item_grace_days": 0},
+    ), "NEW4")
+    assert row["days_in_sale"] == 10
+    # 4 заказа × 0.5 = 2 выкупа / 7 дней среза -> 0.2857 шт/дн, DOC = 35
+    assert row["doc"] == pytest.approx(35.0, abs=0.2)
+
 
