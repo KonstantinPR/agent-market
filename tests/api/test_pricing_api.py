@@ -12,17 +12,34 @@ from app.services.pricing import PRICING_DEFAULTS
 
 TODAY = date.today()
 
+# T-85: защита «спрос / новинка / заказы в пути» гасит снижение цены. Тесты
+# остальных правил и путей применения работают с ней выключенной — иначе
+# строка с заказами превращается в HOLD (см. tests/unit/test_pricing.py:T85_OFF).
+T85_OFF = {
+    "demand_hold_min_orders": 0,
+    "demand_hold_min_backlog": 0,
+    "demand_hold_min_views": 0,
+    "demand_hold_max_doc": 0,
+    "protect_inflight_orders": False,
+    "new_item_grace_days": 0,
+}
+
 
 def _read_xlsx(r):
     return pd.read_excel(io.BytesIO(r.content))
 
 
-def _seed(db, art, nm, *, stock, sales, funnel=(0, 0, 0, 0, 0), replenishable=False):
-    """Товар TST-n с nm-картой, остатком, воронкой, продажами (см. unit/test_pricing._seed)."""
+def _seed(db, art, nm, *, stock, sales, funnel=(0, 0, 0, 0, 0), replenishable=False,
+          stock_days_ago=90):
+    """Товар TST-n с nm-картой, остатком, воронкой, продажами (см. unit/test_pricing._seed).
+
+    stock_days_ago=90 по умолчанию: товар не должен попадать в грейс-период
+    новинки T-85, иначе любое снижение цены превратится в HOLD.
+    """
     wb = db.execute(select(models.Marketplace.id).where(models.Marketplace.code == "wb")).scalar_one()
     db.add(models.Product(article=art, name=art, net_cost=300, replenishable=replenishable))
     db.add(models.NmArticle(nm_id=nm, article=art))
-    db.add(models.Stock(marketplace_id=wb, date=TODAY - timedelta(days=1),
+    db.add(models.Stock(marketplace_id=wb, date=TODAY - timedelta(days=stock_days_ago),
                         article=art, warehouse="Все", quantity=stock))
     views, adds, orders, cancelled, avg_price = funnel
     db.add(models.FunnelMetric(
@@ -55,7 +72,7 @@ def test_defaults(api_client):
 def test_recommendations_read_only(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
-    r = api_client.post("/api/pricing/recommendations", json={})
+    r = api_client.post("/api/pricing/recommendations", json=T85_OFF)
     body = r.json()
     assert r.status_code == 200
     assert body["rows"]
@@ -128,7 +145,7 @@ def test_export_honors_articles_list(db, api_client):
 def test_apply_pushes_and_writes_history(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
-    r = api_client.post("/api/pricing/apply", json={})
+    r = api_client.post("/api/pricing/apply", json=T85_OFF)
     body = r.json()
     assert r.status_code == 200
     assert body["applied"] == ["TST-1"]
@@ -146,7 +163,7 @@ def test_apply_pushes_and_writes_history(db, api_client):
 def test_last_apply_endpoint_after_apply(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
-    api_client.post("/api/pricing/apply", json={})
+    api_client.post("/api/pricing/apply", json=T85_OFF)
     body = api_client.get("/api/pricing/last-apply").json()
     la = body["last_apply"]
     assert la is not None
@@ -164,7 +181,7 @@ def test_apply_error_returns_502_and_logs(db, api_client, stub_wb):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
     stub_wb.update_prices_error = RuntimeError("boom: WB API недоступен")
-    r = api_client.post("/api/pricing/apply", json={})
+    r = api_client.post("/api/pricing/apply", json=T85_OFF)
     assert r.status_code == 502
     assert "boom" in r.json()["detail"]
     hist = api_client.get("/api/pricing/history").json()
@@ -174,9 +191,9 @@ def test_apply_error_returns_502_and_logs(db, api_client, stub_wb):
 def test_apply_cooldown_blocks_second(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
-    first = api_client.post("/api/pricing/apply", json={}).json()
+    first = api_client.post("/api/pricing/apply", json=T85_OFF).json()
     assert first["pushed"] == 1
-    second = api_client.post("/api/pricing/apply", json={}).json()
+    second = api_client.post("/api/pricing/apply", json=T85_OFF).json()
     assert second["pushed"] == 0
     assert any(r.get("status") == "skipped_cooldown"
                for r in second["rows"] if r["action"] in ("RAISE", "LOWER"))
@@ -233,12 +250,30 @@ def test_export_contains_funnel_columns(db, api_client):
     assert r.status_code == 200
     df = _read_xlsx(r)
     for col in ("Просмотры", "Добавления в корзину", "Заказы", "Отмены",
-                "Просмотр→Корзина, %", "Корзина→Заказ, %", "Заказов в день"):
+                "Просмотр→Корзина, %", "Корзина→Заказ, %", "Заказов в день",
+                "В продаже, дн.", "Заказов без отмен", "Ждут выкупа"):
         assert col in df.columns, col
     row = df.iloc[0]
     assert int(row["Просмотры"]) == 200
     assert int(row["Заказы"]) == 2
     assert int(row["Добавления в корзину"]) == 3
+
+
+def test_recommendations_t85_fields(db, api_client):
+    """T-85: строка отдаёт дни в продаже, заказы без отмен и ожидающие выкупа."""
+    _seed(db, "TST-9", "1009", stock=5, stock_days_ago=10,
+          sales=[(40, 1, 0)], funnel=(142, 10, 3, 2, 4900))
+    db.add(models.PriceSnapshot(
+        marketplace="wb", article="TST-9", base_article="TST-9", nm_id="1009",
+        size="", price=4900, discounted_price=4900, discount=0))
+    db.commit()
+    body = api_client.post("/api/pricing/recommendations", json={}).json()
+    row = next(r for r in body["rows"] if r["article"] == "TST-9")
+    assert row["days_in_sale"] == 10
+    assert row["orders_net"] == 1
+    assert row["inflight"] == 1
+    assert row["action"] == "HOLD" and row["status"] == "hold_new"
+    assert "новинка" in row["reason"]
 
 
 def test_replenishable_toggle(db, api_client):
@@ -298,9 +333,9 @@ def test_recommendations_promo_fields(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
     _active_promo_db(db)
-    off = api_client.post("/api/pricing/recommendations", json={}).json()
+    off = api_client.post("/api/pricing/recommendations", json=T85_OFF).json()
     on = api_client.post("/api/pricing/recommendations",
-                         json={"promo_enabled": True, "promo_push_pct": 2.0,
+                         json={**T85_OFF, "promo_enabled": True, "promo_push_pct": 2.0,
                                # товар свежий — порог залежалости снимаем
                                "promo_min_stale_days": 0}).json()
     r_off = next(r for r in off["rows"] if r["article"] == "TST-1")
@@ -414,7 +449,7 @@ def test_recommendations_promo_plan_cap_api(db, api_client):
     _seed(db, "TST-1", "1001", stock=1000,
           sales=[(5, 1, 0), (14, 1, 0), (40, 1, 0)], funnel=(200, 3, 2, 0, 0))
     plain = api_client.post("/api/pricing/recommendations",
-                            json={"promo_enabled": True}).json()
+                            json={**T85_OFF, "promo_enabled": True}).json()
     r_plain = next(r for r in plain["rows"] if r["article"] == "TST-1")
     assert r_plain["promo_plan_pct"] is None
     assert r_plain["promo_cap_applied"] is False
@@ -429,7 +464,7 @@ def test_recommendations_promo_plan_cap_api(db, api_client):
         price=2000, plan_price=1980, discount=0, plan_discount=1.0))
     db.commit()
     capped = api_client.post("/api/pricing/recommendations",
-                             json={"promo_enabled": True}).json()
+                             json={**T85_OFF, "promo_enabled": True}).json()
     row = next(r for r in capped["rows"] if r["article"] == "TST-1")
     assert row["promo_plan_pct"] == 1.0
     assert row["action"] == "LOWER"

@@ -183,6 +183,7 @@ def pricing_export(payload: dict = Body(default={}), db: Session = Depends(get_d
         "promo_limit_price", "promo_limit_applied", "promo_limit_age_days",
         "promo_limit_source",
         "last_sale_days_ago",
+        "days_in_sale", "orders_net", "inflight",
         "views", "adds", "orders", "cancelled", "demand_strength",
         "conv_to_cart_percent", "conv_cart_to_order_percent",
         "avg_orders_per_day",

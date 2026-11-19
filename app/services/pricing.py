@@ -178,10 +178,37 @@ PRICING_DEFAULTS = {
     "demand_cart_high_pct": 12.0,
     "demand_boost_min_orders": 3,
     # T-32 (R13): скорость продаж из воронки, если по строке Sales за окно
-    # пусто (нет выручки), но в воронке есть активность. Считаем v_proj =
-    # funnel_velocity_field / дней среза воронки (buyouts по умолчанию).
+    # пусто (нет выручки), но в воронке есть активность. T-85: по умолчанию
+    # считаем по заказам с учётом отмен (orders_net), а не только по выкупам —
+    # иначе новинка без выкупов выглядит «мёртвой», а DOC завышается в разы.
+    # velocity_basis: orders_net (заказы−отмены × доля выкупа) | orders |
+    # buyouts | legacy (старое поле funnel_velocity_field).
     "velocity_from_funnel": True,
     "funnel_velocity_field": "buyouts",
+    "velocity_basis": "orders_net",
+    # T-85 (R22): ожидаемая доля выкупа от неотменённых заказов, если по связке
+    # ещё нельзя оценить её по факту (нужно orders_buyout_prior_min_orders).
+    # На кабинете 5 факт ≈ 90 / 169 ≈ 53 %, поэтому 0.5 — осторожная оценка.
+    "orders_buyout_prior": 0.5,
+    "orders_buyout_prior_min_orders": 10,
+    # T-85 (R23): «дней в продаже» — от первого остатка на складе. Пока товар
+    # новее порога, цену не двигаем: статистики мало, а скидка «съедает»
+    # маржу, которую товар ещё может принести по текущей цене.
+    "new_item_grace_days": 21,
+    # T-85 (R24): спрос останавливает снижение цены. Заказы/корзина/конверсия
+    # означают, что покупатели уже готовы платить текущую цену; снижать её
+    # сразу после заказа — терять маржу и обесценивать покупку для покупателя.
+    "demand_hold_min_orders": 2,
+    "demand_hold_min_backlog": 5,
+    "demand_hold_min_views": 20,
+    # Предохранитель от «вечного удержания»: при катастрофическом перезапасе
+    # (DOC выше порога) спрос уже не оправдывает простой — снижение разрешено.
+    "demand_hold_max_doc": 365.0,
+    # T-85 (R24): заказы «в пути» (заказано, но ещё не выкуплено и не
+    # отменено). Пока они не разрешились, цену не снижаем: покупатель уже
+    # заплатил по текущей цене, а выкуп/отмена вот-вот произойдут.
+    "protect_inflight_orders": True,
+    "inflight_max_days": 14,
     # T-32/T-82 (R14): нет unit-экономики, но есть остаток и себестоимость.
     # Включено — пол безубытка считается по формуле
     # (себестоимость + логистика + хранение + услуги) / (1 − комиссия − маржа),
@@ -383,6 +410,70 @@ def project_velocity(v_now: float, v_prev: float, season_adj: bool = True, damp:
     return float(v_now * (g ** damp))
 
 
+def _funnel_velocity(fl: dict, s: dict, prior: float,
+                     days_in_sale: Optional[int], funnel_days: int) -> float:
+    """T-85 (R13/R22): скорость из воронки с учётом заказов и дней в продаже.
+
+    Раньше знаменателем было всё календарное окно среза воронки, а числителем —
+    только выкупы. Для новинки это завышало DOC в разы: 1 выкуп / 30 дней = 0.03
+    шт/дн при том, что товар в продаже 13 дней. Теперь:
+
+        basis = orders_net (заказы − отмены) | orders (сырые заказы) | buyouts
+        count = max(buyouts, basis × orders_buyout_prior)   # выкуп — факт, заказ — ожидание
+        days  = min(дней_в_продаже, дней_среза), но не меньше 1
+        v     = count / days
+
+    ``max`` не даёт «потерять» уже случившиеся выкупы, если доля выкупа по
+    связке ниже фактической. ``velocity_basis = "legacy"`` возвращает прежнее
+    поведение (``funnel_velocity_field / дней_среза``).
+    """
+    basis = str(s.get("velocity_basis") or "orders_net").strip().lower()
+    buyouts = max(int(fl.get("buyouts") or 0), 0)
+    orders = max(int(fl.get("orders") or 0), 0)
+    cancelled = max(int(fl.get("cancelled") or 0), 0)
+    if basis == "legacy":
+        # Прежнее поведение: выкупы (или выбранное поле) / всё окно среза.
+        count = _num(fl.get(str(s.get("funnel_velocity_field") or "buyouts")))
+        if count <= 0 or funnel_days <= 0:
+            return 0.0
+        return count / funnel_days
+    if basis == "buyouts":
+        count = float(buyouts)
+    elif basis == "orders":
+        count = max(float(buyouts), orders * prior)
+    else:  # orders_net — по умолчанию
+        count = max(float(buyouts), max(orders - cancelled, 0) * prior)
+    if count <= 0:
+        return 0.0
+    days = funnel_days
+    if days_in_sale is not None:
+        item_days = max(int(days_in_sale), 1)
+        days = min(item_days, funnel_days) if funnel_days > 0 else item_days
+    if days <= 0:
+        return 0.0
+    return count / days
+
+
+def _buyout_prior(funnel: dict, s: dict) -> float:
+    """T-85 (R22): доля выкупа от неотменённых заказов по свежему срезу связки.
+
+    Срез воронки хранит записи под двумя ключами (артикул и АРТИКУЛ), поэтому
+    перед суммированием дубли убираем по id. Если заказов мало или выкупов ещё
+    нет (заказы «в пути»), возвращаем настройку ``orders_buyout_prior``.
+    """
+    default = _clamp(_num(s.get("orders_buyout_prior"), 0.5), 0.05, 1.0)
+    seen: dict = {}
+    for rec in funnel.values():
+        seen[id(rec)] = rec
+    orders_net = sum(max(int(r.get("orders") or 0) - int(r.get("cancelled") or 0), 0)
+                     for r in seen.values())
+    buyouts = sum(max(int(r.get("buyouts") or 0), 0) for r in seen.values())
+    min_orders = int(_num(s.get("orders_buyout_prior_min_orders"), 10))
+    if orders_net < max(min_orders, 1) or buyouts <= 0:
+        return default
+    return _clamp(buyouts / orders_net, 0.1, 1.0)
+
+
 def _clamp(value, lo, hi):
     return max(lo, min(hi, value))
 
@@ -524,15 +615,16 @@ def _normalize_prices(prices_df: Optional[pd.DataFrame]) -> dict:
     return out
 
 
-def _funnel_slice(db: Session, date_from: date, date_to: date) -> tuple[dict, int]:
+def _funnel_slice(db: Session, date_from: date, date_to: date) -> tuple[dict, int, Optional[date]]:
     """Последний срез воронки, пересекающий окно [date_from, date_to].
 
     Воронка WB — снимок за период (не по дням), поэтому берём одну (максимально
-    свежую) запись среза и не суммируем срезы. Возвращает (метрики, дней_в_срезе).
+    свежую) запись среза и не суммируем срезы. Возвращает
+    (метрики, дней_в_срезе, дата_конца_среза).
     Метрики — расширенный набор (рейтинги, выкупы, конверсии, остатки WB, WB Клуб,
     вишлисты). Ключи — и как в БД, и в верхнем регистре (артикулы продуктов могут
     отличаться регистром от воронки/детализации). Дней_в_срезе нужен для R13
-    (скорость из воронки: выкупы / дни среза).
+    (скорость из воронки), дата_конца — для R24 (насколько свежи «заказы в пути»).
     """
     snap = db.execute(
         select(models.FunnelMetric.date_from, models.FunnelMetric.date_to)
@@ -544,7 +636,7 @@ def _funnel_slice(db: Session, date_from: date, date_to: date) -> tuple[dict, in
     ).first()
     out: dict = {}
     if snap is None:
-        return out, 0
+        return out, 0, None
     from_d, to_d = snap.date_from, snap.date_to
     q = (
         select(
@@ -597,7 +689,7 @@ def _funnel_slice(db: Session, date_from: date, date_to: date) -> tuple[dict, in
         art = str(r.article).strip()
         out[art] = rec
         out[art.upper()] = rec
-    return out, (to_d - from_d).days + 1
+    return out, (to_d - from_d).days + 1, to_d
 
 
 def _detail_metrics(db: Session, date_from: date, date_to: date) -> dict:
@@ -687,6 +779,28 @@ def _latest_in_way(db: Session, wb_mp: int) -> dict:
         val = int(qty or 0)
         out[str(art)] = val
         out[str(art).upper()] = val
+    return out
+
+
+def _first_stock_dates(db: Session, wb_mp: int) -> dict:
+    """T-85: дата первого остатка (>0) по артикулу — от неё считаем «дней в продаже».
+
+    Историю стоков WB хранит с какого-то момента, поэтому для старых товаров
+    значение — нижняя граница («не меньше N дней»), а для новинок — реальный
+    возраст. Этого достаточно: защита новинок включается только при N < порога.
+    """
+    q = (
+        select(models.Stock.article, func.min(models.Stock.date))
+        .where(models.Stock.marketplace_id == wb_mp,
+               models.Stock.quantity > 0)
+        .group_by(models.Stock.article)
+    )
+    out: dict = {}
+    for art, d in db.execute(q):
+        if d is None:
+            continue
+        out[str(art)] = d
+        out[str(art).upper()] = d
     return out
 
 
@@ -1037,10 +1151,14 @@ def recommendations(
     )
     last_sale_ago = {str(art).upper(): (today - d).days for art, d in last_sale}
 
-    funnel, funnel_days = _funnel_slice(db, now_from, now_to)
+    funnel, funnel_days, funnel_to = _funnel_slice(db, now_from, now_to)
     detail = _detail_metrics(db, now_from, now_to)
     stock = _latest_stock(db, wb_mp)
     in_way = _latest_in_way(db, wb_mp)
+    # T-85: «дней в продаже» и ожидаемая доля выкупа по связке.
+    first_stock = _first_stock_dates(db, wb_mp)
+    buyout_prior = _buyout_prior(funnel, s)
+    funnel_age = (today - funnel_to).days if funnel_to is not None else None
     nm_map = {
         str(r.nm_id).strip(): str(r.article).strip().upper()
         for r in db.execute(select(models.NmArticle.nm_id, models.NmArticle.article))
@@ -1177,15 +1295,18 @@ def recommendations(
         ue = _unit_economics(art_fb)
         fl = funnel.get(art, {})
         dl = detail.get(art, {})
-        # R13: нет строк продаж в окне, но воронка показывает активность —
-        # берём скорость из среза воронки (по умолчанию выкупы), чтобы товар
-        # не объявлялся «мёртвым запасом» (иначе живые товары дешевеют).
+        # T-85 (R23): сколько дней товар в продаже — от первого остатка на складе.
+        first_d = first_stock.get(art)
+        days_in_sale = max((today - first_d).days, 0) if first_d is not None else None
+        # R13/T-85: нет строк продаж в окне, но воронка показывает активность —
+        # берём скорость из среза воронки, чтобы товар не объявлялся «мёртвым
+        # запасом» (иначе живые товары дешевеют). Считаем по заказам с учётом
+        # отмен и дней в продаже (см. _funnel_velocity).
         if (use_sales and v_proj <= 0 and bool(s.get("velocity_from_funnel", True))
                 and fl):
-            field = str(s.get("funnel_velocity_field") or "buyouts")
-            fv = _num(fl.get(field))
-            if fv > 0 and funnel_days > 0:
-                v_proj = fv / funnel_days
+            fv = _funnel_velocity(fl, s, buyout_prior, days_in_sale, funnel_days)
+            if fv > 0:
+                v_proj = fv
         f = {
             "article": art, "name": prod["name"], "replenishable": prod["replenishable"],
             "nm_id": nm_id, "price": price, "current_discount": cur_disc,
@@ -1193,6 +1314,13 @@ def recommendations(
             "in_way": in_way.get(art),
             "velocity": v_now, "v_proj": v_proj, "trend": (v_now / v_prev) if v_prev > 0 else 1.0,
             "last_sale_days_ago": last_sale_ago.get(art, 9999),
+            # T-85: возраст товара (дней в продаже) и «заказы в пути» — заказано,
+            # но ещё не выкуплено и не отменено. Оба сигнала гасят снижение цены.
+            "days_in_sale": days_in_sale,
+            "orders_net": max(int(fl.get("orders", 0)) - int(fl.get("cancelled", 0)), 0),
+            "inflight": max(int(fl.get("orders", 0)) - int(fl.get("buyouts", 0))
+                            - int(fl.get("cancelled", 0)), 0),
+            "funnel_age_days": funnel_age,
             "avg_price": _num(fl.get("avg_price")),
             "adds": int(fl.get("adds", 0)),
             "orders": int(fl.get("orders", 0)),
@@ -1284,7 +1412,9 @@ def recommendations(
         if mode == "old":
             out_rows.append(_decide_legacy(f, s, legacy_k_norma))
         else:
-            out_rows.append(_decide_dead(f, s) if art not in has_life else _decide(f, s))
+            row = _decide_dead(f, s) if art not in has_life else _decide(f, s)
+            # T-85 (R23–R25): новизна и живой спрос гасят изменение цены.
+            out_rows.append(_apply_demand_guards(row, f, s))
 
     for r in out_rows:
         if r.get("target_discount") is not None and r.get("current_discount") is not None:
@@ -1436,6 +1566,13 @@ def _enriched(f: dict) -> dict:
         "storage_per_one": _num(f.get("storage_per_one")),
         "detail_sells": int(f.get("detail_sells") or 0),
         "detail_returns_qty": int(f.get("detail_returns_qty") or 0),
+        # T-85: «дней в продаже» (от первого остатка) и заказы, которые ещё не
+        # разрешились: невыкупленные (в пути) и за вычетом отмен.
+        "days_in_sale": (None if f.get("days_in_sale") is None
+                         else int(_num(f.get("days_in_sale")))),
+        "orders_net": max(int(f.get("orders") or 0) - int(f.get("cancelled") or 0), 0),
+        "inflight": max(int(f.get("orders") or 0) - int(f.get("buyouts") or 0)
+                        - int(f.get("cancelled") or 0), 0),
     }
 
 
@@ -1517,6 +1654,17 @@ def _reason_trace(r: dict, s: dict) -> str:
         tail = f", DOC {_num(doc):.0f} дн." if doc is not None else ""
         parts.append(f"остаток {int(_num(r.get('stock')))} шт, "
                      f"скорость {_num(r.get('v_proj')):.2f} шт/дн{tail}")
+    # T-85: возраст товара и заказы — из-за них цена может удерживаться.
+    days = r.get("days_in_sale")
+    if days is not None:
+        parts.append(f"в продаже {int(_num(days))} дн.")
+    orders = int(_num(r.get("orders")))
+    if orders > 0 or int(_num(r.get("cancelled"))) > 0:
+        parts.append(f"заказов {orders} (отмен {int(_num(r.get('cancelled')))}, "
+                     f"ждут выкупа {int(_num(r.get('inflight')))})")
+    backlog = max(int(_num(r.get("adds"))) - orders, 0)
+    if backlog > 0:
+        parts.append(f"в корзине {backlog}")
     target_vis = r.get("target_vis")
     target_disc = r.get("target_discount")
     if target_vis is not None and target_disc is not None:
@@ -2140,6 +2288,10 @@ def _promo_pass(rows: list, promos: list, s: dict, volume_by_article: dict) -> N
     for r in rows:
         if r.get("action") not in ("HOLD", "LOWER") or not r.get("nm_id"):
             continue
+        # T-85: строку удержали из-за спроса/новизны/заказов в пути — разгрузка
+        # акциями не должна обходить это решение и снова резать цену.
+        if r.get("status") in ("hold_new", "hold_inflight", "hold_demand"):
+            continue
         price = _num(r.get("price"))
         cur = _num(r.get("current_discount"))
         if price <= 0 or cur < 0:
@@ -2648,6 +2800,109 @@ def _mandatory_step(base: dict, f: dict, s: dict, direction: str, reason: str,
     if nd is not None:
         emit("RAISE", nd, tv)
     return base
+
+
+def _hold_row(r: dict, status: str, note: str) -> dict:
+    """T-85: превращает решение в HOLD, сохраняя исходный расчёт в причине.
+
+    Целевые поля обнуляются, чтобы «Применить» не отправил цену, а метка
+    мёртвого запаса снимается: снижения не будет, и потолок мёртвых не нужен.
+    """
+    prev = (r.get("reason") or "").strip().rstrip(".")
+    r["action"] = "HOLD"
+    r["status"] = status
+    r["reason"] = note if not prev else f"{note} · расчёт без этой защиты: {prev}"
+    r["target_discount"] = None
+    r["target_vis"] = None
+    r["margin_pct_at_target"] = None
+    r["dead_stock"] = False
+    return r
+
+
+def _demand_hold_reason(r: dict, f: dict, s: dict) -> Optional[str]:
+    """T-85 (R25): почему снижение остановлено спросом (None — спроса нет).
+
+    Сигналы — заказы за вычетом отмен, «в корзине» и высокая конверсия при
+    заметных просмотрах. Предохранитель ``demand_hold_max_doc``: если товар
+    лежит мёртвым грузом дольше порога, спрос уже не оправдывает простой.
+    """
+    max_doc = _num(s.get("demand_hold_max_doc"), 0.0)
+    doc = r.get("doc")
+    if max_doc > 0 and doc is not None and _num(doc) > max_doc:
+        return None
+
+    def hit(threshold, value) -> bool:
+        thr = int(_num(threshold))
+        return thr > 0 and value >= thr
+
+    orders_net = int(f.get("orders_net") or 0)
+    backlog = max(int(f.get("adds") or 0) - int(f.get("orders") or 0), 0)
+    views = int(f.get("views") or 0)
+    # Отменённые заказы спросом не считаются: покупатель передумал.
+    conv = (orders_net / views * 100) if views > 0 else 0.0
+
+    parts = []
+    if hit(s.get("demand_hold_min_orders"), orders_net):
+        parts.append(f"заказов {orders_net}")
+    if hit(s.get("demand_hold_min_backlog"), backlog):
+        parts.append(f"в корзине {backlog}")
+    if hit(s.get("demand_hold_min_views"), views) and \
+            conv >= _num(s.get("hot_conv_pct"), 1.5):
+        parts.append(f"конверсия {conv:.1f}% при {views} просмотрах")
+    return ", ".join(parts) if parts else None
+
+
+def _apply_demand_guards(r: dict, f: dict, s: dict) -> dict:
+    """T-85 (R23–R25): новизна и живой спрос останавливают изменение цены.
+
+    Пост-обработка результата ``_decide``/``_decide_dead``: проверки живут в
+    одном месте и не дублируются в каждой ветке дерева решений.
+
+    * **R23 «новинка»** — товар в продаже меньше ``new_item_grace_days`` дней.
+      Заказов ещё мало, статистика шумная: и снижать, и поднимать нечем
+      подтвердить. Исключение — RAISE из-за цены НИЖЕ пола: это не про спрос,
+      а про убыток.
+    * **R24 «ждут выкупа»** — ``inflight > 0``: заказано, но ещё не выкуплено и
+      не отменено. Покупатель оформил по текущей цене; снижение обесценивает
+      его покупку и срезает маржу. Защита действует, пока срез воронки свежий
+      (``inflight_max_days``).
+    * **R25 «есть спрос»** — заказы, корзина или высокая конверсия: товар
+      покупают по текущей цене, снижать её значит отдавать маржу бесплатно.
+    """
+    action = r.get("action")
+    if action not in ("LOWER", "RAISE"):
+        return r
+
+    floor = _num(f.get("floor_price"))
+    below_floor = floor > 0 and floor > _num(f.get("current_vis")) + 1e-9
+
+    days = f.get("days_in_sale")
+    grace = int(_num(s.get("new_item_grace_days"), 0))
+    if days is not None and grace > 0 and int(days) < grace:
+        if action == "LOWER" or not below_floor:
+            return _hold_row(
+                r, "hold_new",
+                f"новинка: в продаже {int(days)} дн. из {grace} — статистики мало, "
+                "цену не двигаем")
+        return r
+
+    if action != "LOWER":
+        return r
+
+    inflight = int(f.get("inflight") or 0)
+    max_age = int(_num(s.get("inflight_max_days"), 0))
+    age = f.get("funnel_age_days")
+    fresh = max_age <= 0 or age is None or int(age) <= max_age
+    if bool(s.get("protect_inflight_orders", True)) and inflight > 0 and fresh:
+        return _hold_row(
+            r, "hold_inflight",
+            f"ждут выкупа {inflight} заказ(ов) — покупатель уже оформил по текущей "
+            "цене, снижать не будем")
+
+    why = _demand_hold_reason(r, f, s)
+    if why:
+        return _hold_row(r, "hold_demand", f"есть спрос ({why}) — цену не снижаем")
+    return r
 
 
 def _no_ratio_reason(f: dict, s: dict) -> str:

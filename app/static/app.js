@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "202";
+const UI_VERSION = "204";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -11420,6 +11420,16 @@ const PRICING_LABELS = {
   demand_cart_high_pct: "R12: «в корзине»/просмотры — максимум, %",
   demand_boost_min_orders: "R12: мин. заказов для полной шкалы, шт",
   demand_raise_max_doc: "R12: не поднимать при DOC выше, дн",
+  velocity_basis: "R13: база скорости из воронки",
+  orders_buyout_prior: "R13: ожидаемая доля выкупа от заказов, 0..1",
+  orders_buyout_prior_min_orders: "R13: заказов для оценки доли выкупа, ≥",
+  new_item_grace_days: "R23: грейс-период новинки, дн",
+  demand_hold_min_orders: "R25: спрос — заказов без отмен, ≥",
+  demand_hold_min_backlog: "R25: спрос — «в корзине», ≥",
+  demand_hold_min_views: "R25: спрос — просмотров для сигнала конверсии, ≥",
+  demand_hold_max_doc: "R25: при DOC выше спрос не держит цену, дн",
+  protect_inflight_orders: "R24: не снижать, пока заказы ждут выкупа",
+  inflight_max_days: "R24: свежесть среза воронки для защиты, дн",
   min_delta_pct: "Ozon: мин. изменение цены, %",
   oz_price_step: "Ozon: шаг цены, руб",
   ozon_auto_action_guard: "Ozon: учитывать автоакции при расчёте пола",
@@ -11472,7 +11482,17 @@ const PRICING_HINTS = {
   demand_boost_min_orders: "R12: объёмный предохранитель. Если заказов меньше этого числа, «сила спроса» умножается на (заказы ÷ порог) — малая выборка не разгоняет цену. 0 — предохранитель выключен.",
   demand_raise_max_doc: "R12: при DOC выше этого значения спрос НЕ поднимает цену (глубокий перезапас — товар всё равно плохо уходит, сначала разгрузка). По умолчанию 120 дней.",
   velocity_from_funnel: "R13: если за окно нет строк продаж, но в свежем срезе воронки есть активность (выкупы/заказы) — скорость продаж берётся из воронки, и товар НЕ объявляется «мёртвым запасом». Выключено — как раньше: нет строк продаж → мёртвый запас.",
-  funnel_velocity_field: "R13: какое поле воронки использовать как прокси скорости: buyouts (выкупы, по умолчанию) или orders (заказы). Только латиница, без пробелов.",
+  velocity_basis: "R13/T-85: из чего считать скорость, когда своих продаж нет. «Заказы − отмены × доля выкупа» (по умолчанию) — заказы считаются ожидаемыми выкупами, поэтому новинка без выкупов не выглядит мёртвой. «Заказы × доля выкупа» — как есть, без учёта отмен. «Только выкупы» — прежнее поведение (осторожно: завышает DOC). «Старое: поле воронки / всё окно» — совсем прежняя формула, без поправки на дни в продаже.",
+  orders_buyout_prior: "R13/T-85: какую долю неотменённых заказов в среднем выкупают. Используется, когда по связке ещё нельзя оценить долю по факту (мало заказов). На кабинете 5 факт ≈ 53 %, поэтому 0.5 — осторожная оценка. 0.5 значит «из 4 заказов выкупят ~2».",
+  orders_buyout_prior_min_orders: "R13/T-85: со скольких неотменённых заказов в свежем срезе связки доля выкупа считается по факту (выкупы ÷ заказы без отмен), а не по значению выше. По умолчанию 10 — на меньшей выборке доля слишком шумная.",
+  new_item_grace_days: "T-85 (R23): грейс-период новинки. Пока товар в продаже меньше этого числа дней (от первого остатка на складе), автопилот цену не двигает: ни вниз, ни вверх — статистики мало, а снижение сразу съедает маржу, которую товар ещё может принести. Исключение — подъём, если витрина уже ниже пола безубытка. 0 — защита выключена.",
+  demand_hold_min_orders: "T-85 (R25): сколько заказов без отмен за свежий срез останавливает снижение цены. Товар покупают по текущей цене — снижать её значит отдавать маржу бесплатно. По умолчанию 2. 0 — сигнал выключен.",
+  demand_hold_min_backlog: "T-85 (R25): сколько покупателей «в корзине» (добавления минус заказы) останавливает снижение цены. По умолчанию 5. 0 — сигнал выключен.",
+  demand_hold_min_views: "T-85 (R25): минимальные просмотры, при которых конверсия считается сигналом спроса (вместе с «Конверсия горячего спроса ≥»). Нужно, чтобы 1 заказ на 2 просмотра не выглядел спросом. По умолчанию 20. 0 — сигнал выключен.",
+  demand_hold_max_doc: "T-85 (R25): предохранитель от «вечного удержания». Если DOC выше этого значения, товар лежит мёртвым грузом и снижение цены всё же разрешается, несмотря на заказы/корзину. По умолчанию 365 дней. 0 — предохранитель выключен.",
+  protect_inflight_orders: "T-85 (R24): не снижать цену, пока есть заказы «в пути» — заказано, но ещё не выкуплено и не отменено. Покупатель уже оформил по текущей цене: снижение обесценивает его покупку и срезает маржу. Защита работает, пока срез воронки свежий («Свежесть среза»).",
+  inflight_max_days: "T-85 (R24): насколько свежим должен быть срез воронки, чтобы заказы «в пути» ещё считались неразрешёнными. Срез старше этого числа дней — заказы уже выкупились или отменились, защита не действует. По умолчанию 14 дней.",
+  funnel_velocity_field: "R13: какое поле воронки использовать как прокси скорости: buyouts (выкупы, по умолчанию) или orders (заказы). Работает только при «Старое: поле воронки / всё окно».",
   stock_value_weight: "R15: учитывать остаток по деньгам (штуки × себестоимость), а не по штукам — 100 шт × 1000 ₽ важнее 100 шт × 100 ₽. Влияет на приоритет разгрузки через акции WB. В саму формулу DOC остаток входит по-прежнему в штуках.",
   fallback_window_days: "Окно (дней), за которое берутся фактические продажи для расчёта unit-экономики: реальная цена, комиссия, маржа, возвраты.",
   raise_pct_replenishable: "Потолок повышения цены для докупаемых товаров, % — их поднимаем аккуратно, чтобы не потерять выкупы.",
@@ -11645,6 +11665,9 @@ const pricingHeaders = [
   { k: "adds", label: "Добавления в корзину", num: true, render: cellFmts.int , tip: "Добавления в корзину за срез воронки (cartCount), шт." },
   { k: "orders", label: "Заказы", num: true, render: cellFmts.int , tip: "Заказы за срез воронки (orderCount), шт." },
   { k: "cancelled", label: "Отмены", num: true, render: cellFmts.int , tip: "Отменённые заказы за срез воронки (cancelCount), шт." },
+  { k: "days_in_sale", label: "В продаже, дн.", num: true, render: cellFmts.int , tip: "T-85: сколько дней товар в продаже — от первого остатка на складе. Пока товар новее «Грейс-периода новинки», автопилот цену не двигает: статистики мало." },
+  { k: "orders_net", label: "Заказов без отмен", num: true, render: cellFmts.int , tip: "T-85: заказы минус отмены за срез воронки. Отменённые заказы спросом не считаются, поэтому из них считается скорость и защита от снижения цены." },
+  { k: "inflight", label: "Ждут выкупа", num: true, render: cellFmts.int , tip: "T-85: заказано, но ещё не выкуплено и не отменено. Пока такие заказы есть, цену не снижаем: покупатель уже оформил по текущей цене." },
   { k: "buyouts", label: "Выкупы, шт", num: true, render: cellFmts.int , tip: "Выкупы за срез воронки продаж: заказы, которые покупатель забрал. Отличаются от заказов из-за отмен и невыкупов."},
   { k: "backlog", label: "В корзине", num: true, render: cellFmts.int , tip: "Добавления в корзину минус заказы, не меньше нуля: спрос есть, а сделки нет. Используется как сигнал «много в корзинах, но не покупают»."},
   { k: "conv_pct", label: "Конверсия, %", num: true, render: cellFmts.pct , tip: "Заказы ÷ просмотры × 100 по воронке. Ниже 0,7% автопилот не увеличивает скидку, при большом «в корзине» — пропускает товар."},
@@ -12914,7 +12937,15 @@ const PRICING_GROUPS = [
       "demand_raise_pct", "demand_raise_pct_max",
       "demand_conv_low_pct", "demand_conv_high_pct",
       "demand_cart_low_pct", "demand_cart_high_pct", "demand_boost_min_orders",
-      "demand_raise_max_doc", "velocity_from_funnel",
+      "demand_raise_max_doc",
+  ] },
+  { title: "Спрос, новинки и скорость из воронки", col: 1, keys: [
+      "velocity_from_funnel", "velocity_basis", "funnel_velocity_field",
+      "orders_buyout_prior", "orders_buyout_prior_min_orders",
+      "new_item_grace_days",
+      "protect_inflight_orders", "inflight_max_days",
+      "demand_hold_min_orders", "demand_hold_min_backlog",
+      "demand_hold_min_views", "demand_hold_max_doc",
   ] },
   { title: "Качество и рост", col: 1, keys: [
       "min_rating_for_raise", "min_conv_buyout_for_raise",
@@ -12946,6 +12977,16 @@ function saveOpenPricingGroups(detailsNodes) {
   localStorage.setItem("pricing_open_groups", JSON.stringify(open));
 }
 
+// T-85: параметры-перечисления в панели настроек (не число и не чекбокс).
+const PRICING_SELECTS = {
+  velocity_basis: [
+    { v: "orders_net", t: "Заказы − отмены × доля выкупа" },
+    { v: "orders", t: "Заказы × доля выкупа" },
+    { v: "buyouts", t: "Только выкупы" },
+    { v: "legacy", t: "Старое: поле воронки / всё окно" },
+  ],
+};
+
 function pricingParamRow(key, cur) {
   const lbl = document.createElement("label");
   lbl.className = "p-st";
@@ -12966,6 +13007,20 @@ function pricingParamRow(key, cur) {
     head.appendChild(tip);
   }
   lbl.appendChild(head);
+  const opts = PRICING_SELECTS[key];
+  if (opts) {
+    const sel = document.createElement("select");
+    sel.dataset.key = key;
+    for (const o of opts) {
+      const op = document.createElement("option");
+      op.value = String(o.v);
+      op.textContent = o.t;
+      if (String(o.v) === String(cur)) op.selected = true;
+      sel.appendChild(op);
+    }
+    lbl.appendChild(sel);
+    return lbl;
+  }
   const input = document.createElement("input");
   input.dataset.key = key;
   if (typeof cur === "boolean") {
@@ -12981,6 +13036,7 @@ function pricingParamRow(key, cur) {
       || key === "promo_keep_gap_pct"
       || key === "promo_keep_min_margin_pct"
       || key === "cash_flow_bias"
+      || key === "orders_buyout_prior"
       || key === "lower_soften") ? "0.1" : "1";
     input.value = cur;
   }
