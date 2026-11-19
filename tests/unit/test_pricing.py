@@ -1936,6 +1936,16 @@ def test_apply_main_influence_off_switch(db):
     assert "influenced_by_main" not in r
 
 
+def test_apply_main_influence_skips_new_item(db):
+    """T-85: новинку в грейс-периоде главная связка не поднимает."""
+    r = _inf_row(cur_disc=20.0)
+    r["status"] = "hold_new"
+    n = pricing_service.apply_main_influence([r], {"A1": 10.0}, {})
+    assert n == 0
+    assert r["action"] == "HOLD" and r["status"] == "hold_new"
+    assert "influenced_by_main" not in r
+
+
 def test_apply_main_influence_keeps_stronger_local_raise(db):
     """Локальный расчёт уже поднимает сильнее — строку не переписываем вниз."""
     r = _inf_row(cur_disc=20.0, tgt_disc=5.0, action="RAISE")  # target_vis = 1900

@@ -1007,6 +1007,10 @@ def apply_main_influence(rows: list, main_map: dict, s: dict) -> int:
     max_disc = _num(s.get("max_discount_pct"), 100.0)
     touched = 0
     for r in rows:
+        # T-85 (R23): новинку не двигаем — повышение от главной связки тоже.
+        # Иначе R16 обходил бы грейс-период и поднимал цену на шумной выборке.
+        if r.get("status") == "hold_new":
+            continue
         d_pct = main_map.get(_canon_article(r.get("article")))
         if not d_pct or d_pct <= 0:
             continue
