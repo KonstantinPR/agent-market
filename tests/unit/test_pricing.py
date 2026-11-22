@@ -638,6 +638,11 @@ def test_enriched_columns_from_funnel_and_detail(db):
     assert row["return_rate"] == pytest.approx(25.0, abs=0.1)
     assert row["margin_pct"] == pytest.approx(50.0, abs=1.0)
     assert row["margin_per_one"] == pytest.approx(500.0, abs=5.0)
+    # T-86: суммы за окно — как на вкладке «Детализация продаж WB».
+    # margin_gross = 3200 − 800 (без расходов WB) = 2400,
+    # margin = 2400 − 300 × 3 нетто-продажи = 1500.
+    assert row["margin_gross"] == pytest.approx(2400.0, abs=1.0)
+    assert row["margin"] == pytest.approx(1500.0, abs=1.0)
     assert row["revenue_per_one"] == pytest.approx(1000.0, abs=5.0)
     assert row["detail_sells"] == 3
     assert row["detail_returns_qty"] == 1

@@ -3634,6 +3634,16 @@
        "def": true
       },
       {
+       "k": "margin_gross",
+       "label": "Маржа, до себестоимости, руб",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль, руб",
+       "def": true
+      },
+      {
        "k": "current_vis",
        "label": "Цена сейчас, руб",
        "def": true
@@ -5420,6 +5430,14 @@
    {
     "k": "margin_pct",
     "label": "Маржа факт, % от выручки"
+   },
+   {
+    "k": "margin_gross",
+    "label": "Маржа, до себестоимости, руб"
+   },
+   {
+    "k": "margin",
+    "label": "Прибыль, руб"
    },
    {
     "k": "margin_per_one",

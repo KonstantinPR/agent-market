@@ -716,6 +716,10 @@ def _detail_metrics(db: Session, date_from: date, date_to: date) -> dict:
             continue
         rec = {
             "return_rate": _num(row.get("return_rate")),
+            # T-86: суммы за окно — те же цифры, что в «Детализации продаж WB».
+            # margin_gross — маржа до себестоимости, margin — прибыль после неё.
+            "margin": _num(row.get("margin")),
+            "margin_gross": _num(row.get("margin_gross")),
             "margin_pct": _num(row.get("margin_pct")),
             "margin_per_one": _num(row.get("margin_per_one")),
             "income_per_one": _num(row.get("income_per_one")),
@@ -1343,6 +1347,9 @@ def recommendations(
             "cancel_sum": _num(fl.get("cancel_sum")),
             "wb_club_buyout_percent": _num(fl.get("wb_club_buyout_percent")),
             "return_rate": _num(dl.get("return_rate")),
+            # T-86: суммы за окно из детализации — как в «Детализации продаж WB».
+            "margin": _num(dl.get("margin")),
+            "margin_gross": _num(dl.get("margin_gross")),
             "margin_pct": _num(dl.get("margin_pct")),
             "margin_per_one": _num(dl.get("margin_per_one")),
             "income_per_one": _num(dl.get("income_per_one")),
@@ -1561,6 +1568,10 @@ def _enriched(f: dict) -> dict:
         "cancel_sum": _num(f.get("cancel_sum")),
         "wb_club_buyout_percent": _num(f.get("wb_club_buyout_percent")),
         "return_rate": _num(f.get("return_rate")),
+        # T-86: суммы за окно из детализации (те же цифры, что на вкладке
+        # «Детализация продаж WB»): маржа до себестоимости и прибыль после неё.
+        "margin": _num(f.get("margin")),
+        "margin_gross": _num(f.get("margin_gross")),
         "margin_pct": _num(f.get("margin_pct")),
         "margin_per_one": _num(f.get("margin_per_one")),
         "income_per_one": _num(f.get("income_per_one")),

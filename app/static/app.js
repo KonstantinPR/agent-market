@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "204";
+const UI_VERSION = "205";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -11653,6 +11653,8 @@ const pricingHeaders = [
   { k: "main_delta_pct", label: "Влияние главной, %", num: true, render: (v) => v == null || v === "" ? "—" : Number(v).toFixed(1) + "%" , tip: "T-33: насколько главная связка подняла витринную цену этого товара (Δ%). Локальная цена поднимается как минимум на половину от этого значения (main_influence_pct), никогда не снижается против главной. Пусто — товар главной не поднимался."},
   { k: "target_vis", label: "Целевая цена, руб", num: true, render: targetVisCell , tip: "Цена для покупателя при целевой скидке = базовая цена × (1 − скидка/100). Ниже точки безубыточности автопилот не опускает."},
   { k: "margin_per_one", label: "Прибыль/шт, руб", num: true, render: profitCell , tip: "Фактическая прибыль с единицы по детализации продаж WB за окно: прибыль ÷ проданные штуки. Рядом в скобках — рентабельность от выручки."},
+  { k: "margin_gross", label: "Маржа, до себестоимости, руб", num: true, render: cellFmts.moneyZero , tip: "T-86: сумма за выбранный период из детализации продаж WB — к перечислению минус логистика, хранение и услуги, но БЕЗ вычета себестоимости. Те же цифры, что в колонке «Маржа, до себестоимости» вкладки «Детализация продаж WB». Пусто, если детализация за период не загружена."},
+  { k: "margin", label: "Прибыль, руб", num: true, render: cellFmts.moneyZero , tip: "T-86: сумма за выбранный период из детализации продаж WB — маржи до себестоимости минус себестоимость проданных штук. Те же цифры, что в колонке «Прибыль» вкладки «Детализация продаж WB». Пусто, если детализация за период не загружена."},
   { k: "current_vis", label: "Цена сейчас, руб", num: true, render: cellFmts.money , tip: "Действующая цена покупателя = базовая цена WB × (1 − текущая скидка/100). Сравните с целевой ценой, чтобы увидеть эффект решения."},
   { k: "net_cost", label: "Себестоимость", num: true, render: costCell , tip: "Себестоимость единицы из каталога. «~» = в каталоге не задана, взята средняя по соседям (группа → наименование → префикс артикула) — наведите на сумму, чтобы увидеть источник и число товаров. Оценка не пишется в каталог и не уходит в минимальные цены WB."},
   { k: "value", label: "Ценность", num: true, render: cellFmts.moneyZero , tip: "Ценность единицы (pure_value) из каталога товаров. Отношение ценность/себестоимость тормозит снижение цены: чем ценнее товар относительно себестоимости, тем меньше автопилот увеличивает скидку (при value ≥ value_ratio_high × себестоимости — не увеличивает вовсе)."},
@@ -13256,7 +13258,7 @@ function refreshApplyButton() {
 // Какая агрегация нужна в строке «Итого» для каждой колонки: sum (сумма) или avg (среднее).
 const PRICING_FOOT = {
   stock: "sum", stock_wb: "sum", in_way: "sum", buyouts: "sum", backlog: "sum",
-  add_to_wishlist: "sum", cancel_sum: "sum",
+  add_to_wishlist: "sum", cancel_sum: "sum", margin: "sum", margin_gross: "sum",
   delta_discount: "avg", target_discount: "avg", current_discount: "avg", target_vis: "avg", current_vis: "avg",
   avg_price: "avg", net_cost: "avg", margin_pct: "avg", margin_per_one: "avg", feedback_rating: "avg",
   margin_pct_at_target: "avg", conv_buyout_percent: "avg", return_rate: "avg", conv_pct: "avg",
