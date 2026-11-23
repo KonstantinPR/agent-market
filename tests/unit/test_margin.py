@@ -68,6 +68,25 @@ def test_detail_margin_gross_subtracts_wb_expenses(db):
     assert row["margin_gross"] == 1200.0 - 50.0 - 10.0 - 0.0  # 1140
 
 
+def test_detail_payout_total_matches_seller_report_fields(db):
+    """«Итого к перечислению» вычитает из forPay все статьи сводки WB,
+    включая возмещения ПВЗ и платёжные услуги (них нет в margin_gross)."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:sale1", source="excel", article="B2P",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                           quantity=1, retail_amount=2000.0, for_pay=1200.0,
+                           delivery_service=50.0, paid_storage=10.0,
+                           penalty=5.0, deduction=3.0,
+                           additional_payment=-2.0, rebill_logistic_cost=-4.0,
+                           pvz_compensation=6.0, payment_services=7.0),
+    ])
+    db.commit()
+    row = margin_detail_dataframe(db).iloc[0]
+    assert row["services"] == 2.0
+    assert row["margin_gross"] == 1138.0
+    assert row["payout_total"] == 1125.0
+
+
 def test_detail_negative_sells_margin_gross_zero_cogs(db):
     """При отрицательных продажах (возвраты > продаж) margin_gross корректен,
     себестоимость НЕ вычитается, margin = margin_gross."""

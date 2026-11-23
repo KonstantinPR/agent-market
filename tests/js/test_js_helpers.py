@@ -1252,7 +1252,7 @@ assert.deepStrictEqual(normObj(sandbox.cmpQuery("margin-detail")), {},
   "выключенное сравнение не должно давать параметров");
 assert.strictEqual(sandbox.cmpButtonLabel("margin-detail"), "Сравнения ▾");
 
-// панель собирается без DOM-ошибок: 12 полей и строки периодов
+// панель собирается без DOM-ошибок: 13 полей и строки периодов
 lsStore["cmpPeriodState"] = JSON.stringify({
   "margin-detail": { fields: ["margin"], periods: [{ mode: "prev" }, { mode: "year", year: "2025" }] },
 });
@@ -1265,7 +1265,7 @@ doc.getElementById = (id) => {
 sandbox.initMarginDetailCompare();
 assert.ok(capPanel, "панель «Сравнения» не найдена");
 assert.strictEqual(capPanel.children.length, 6, "ожидались блоки: поля, разделитель, периоды, кнопки, разделитель, подсказка");
-assert.strictEqual(capPanel.children[0].children.length, 12, "должно быть 12 чекбоксов полей");
+assert.strictEqual(capPanel.children[0].children.length, 13, "должно быть 13 чекбоксов полей");
 assert.strictEqual(capPanel.children[2].children.length, 2, "должно быть 2 строки периодов");
 assert.strictEqual(capPanel.children[2].children[0].children.length, 4,
   "в строке периода: режим, год, удаление, даты");
