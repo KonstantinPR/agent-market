@@ -2,7 +2,7 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **184**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **187**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
@@ -36,7 +36,7 @@
 - [storage-cost](#storage-cost) — 1 шт.
 - [sync](#sync) — 1 шт.
 - [system](#system) — 2 шт.
-- [tickets](#tickets) — 8 шт.
+- [tickets](#tickets) — 11 шт.
 - [warehouse](#warehouse) — 20 шт.
 - [wb](#wb) — 11 шт.
 - [yandex](#yandex) — 4 шт.
@@ -328,9 +328,12 @@
 |---|---|---|---|
 | GET | `/api/tickets` | `api_tickets` | Очередь тикетов из TICKETS.md. |
 | POST | `/api/tickets` | `api_tickets_create` | Создаёт тикет в «Открытые». |
+| POST | `/api/tickets/draft` | `api_tickets_draft` | Сохраняет свободный текст из окна «Мысль» как черновик и выдаёт метку. |
 | POST | `/api/tickets/{tid}/block` | `api_ticket_block` |  |
 | POST | `/api/tickets/{tid}/close` | `api_ticket_close` |  |
 | POST | `/api/tickets/{tid}/decline` | `api_ticket_decline` |  |
+| POST | `/api/tickets/{tid}/discard` | `api_ticket_discard` | Отклоняет черновик: номер не переиспользуется. |
+| POST | `/api/tickets/{tid}/promote` | `api_ticket_promote` | Превращает черновик в тикет (агент может уточнить заголовок/тело). |
 | POST | `/api/tickets/{tid}/reopen` | `api_ticket_reopen` |  |
 | POST | `/api/tickets/{tid}/start` | `api_ticket_start` |  |
 | POST | `/api/tickets/{tid}/unblock` | `api_ticket_unblock` |  |

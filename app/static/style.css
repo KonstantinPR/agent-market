@@ -1524,6 +1524,7 @@ td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-hei
 .ticket-card.state-in_progress { border-color: #bcd4ee; background: #f7faff; }
 .ticket-card.state-blocked { border-color: #f2e0b0; background: #fffaf0; }
 .ticket-card.state-closed { opacity: .6; }
+.ticket-card.state-draft { border-color: #d7c4ee; background: #fbf8ff; }
 .ticket-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .ticket-head b { font-size: 12px; color: #555; }
 .ticket-pri {
@@ -1553,6 +1554,7 @@ td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-hei
 }
 .ticket-form { display: grid; gap: 10px; }
 .ticket-form label { display: grid; gap: 4px; font-size: 12px; color: #555; }
+#draftText { min-height: 180px; resize: vertical; }
 .ticket-form input, .ticket-form select, .ticket-form textarea {
   border: 1px solid #ccc;
   border-radius: 3px;

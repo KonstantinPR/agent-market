@@ -1,13 +1,15 @@
 """Очередь тикетов: файл TICKETS.md — единый источник правды.
 
 Тот же файл читают и правят агенты/человек вручную, поэтому мутации
-затрагивают только тела четырёх секций тикетов
-(Открытые / В работе / Заблокированные / Закрытые). Всё остальное
+затрагивают только тела пяти секций
+(Черновики / Открытые / В работе / Заблокированные / Закрытые). Всё остальное
 (шапка, правила, служебные секции) остаётся байт-в-байт.
 
 Номера в файле не хранятся: метка выводится из имени git-ветки, а свободный
-номер считается как max+1 по уже занятым меткам. Поэтому второго источника
-правды нет, и переписывание одной строки не может рассинхронизировать файл.
+номер считается как max+1 по уже занятым меткам. Черновики создаются из браузера,
+где ветки нет, — им метка выдаётся тем же max+1 сразу при сохранении текста.
+Поэтому второго источника правды нет, и переписывание одной строки не может
+рассинхронизировать файл.
 """
 
 import re
@@ -23,6 +25,7 @@ TICKETS_FILE = BASE_DIR / "TICKETS.md"
 _LOCK = threading.Lock()
 
 SECTIONS = [
+    ("Черновики", "draft"),
     ("Открытые", "open"),
     ("В работе", "in_progress"),
     ("Заблокированные", "blocked"),
@@ -135,11 +138,13 @@ def validate(path=None, check_branches: bool = False) -> list:
             )
 
     for key, blocks in ((k, _section_blocks(info, k)) for _n, k in SECTIONS):
+        allowed = (("closed", "declined") if key == "closed" else
+                   ("draft",) if key == "draft" else PRIORITIES)
         for b in blocks:
-            if key == "closed" and b["marker"] not in ("closed", "declined"):
-                problems.append(f"{b['id']}: в «Закрытые» без пометки (closed/declined)")
-            if key != "closed" and b["marker"] in ("closed", "declined"):
-                problems.append(f"{b['id']}: помечен {b['marker']}, но лежит в «{_LABEL[key]}»")
+            if b["marker"] not in allowed:
+                problems.append(
+                    f"{b['id']}: пометка ({b['marker']}) не подходит для «{_LABEL[key]}»"
+                )
 
     if check_branches:
         have = ticket_branches(cwd=p.parent)
@@ -180,6 +185,9 @@ BOOTSTRAP = """# Тикеты — agent_market
   по разделу, «В работе» без ветки.
 - Приоритет: `low | medium | high`. Чем выше приоритет, тем раньше берётся.
 - Состояние тикета определяется разделом, в котором он лежит:
+  - «Черновики» — мысль/задача в свободном тексте: метка уже выдана и текст
+    сохранён, но тикет ещё не сформулирован; агент уточняет его и переводит
+    в «Открытые»;
   - «Открытые» — в очереди, можно брать;
   - «В работе» — активные тикеты (может быть несколько);
   - «Заблокированные» — ждёт внешних данных/доступа/решения от владельца
@@ -210,6 +218,10 @@ BOOTSTRAP = """# Тикеты — agent_market
   в «В работе», затем код + тесты + коммит и закрытие тикета с хешем.
 - Если для тикета нужен токен, доступ или решение — тикет уходит
   в «Заблокированные» с описанием ожидания.
+
+## Черновики
+
+_(пусто)_
 
 ## Открытые
 
@@ -260,8 +272,9 @@ def _parse_block(raw: list) -> dict:
             s = s[1:].strip()
         if s:
             body.append(s)
-    return {"id": tid, "marker": marker,
-            "priority": marker if marker in PRIORITIES else "medium",
+    priority = None if marker == "draft" else (
+        marker if marker in PRIORITIES else "medium")
+    return {"id": tid, "marker": marker, "priority": priority,
             "title": rest, "body": body, "commit": None, "raw": raw}
 
 
@@ -373,6 +386,14 @@ def _ticket_dict(b: dict, key: str) -> dict:
     }
 
 
+def _quoted_body(text: str) -> list:
+    """Строки тела тикета с префиксом «>» (пустые строки сохраняются)."""
+    raw = []
+    for ln in str(text or "").split("\n"):
+        raw.append("    > " + ln.rstrip() if ln.strip() else "    >")
+    return raw
+
+
 # ---------------------------------------------------------------- публичный API
 
 def load(path=None) -> dict:
@@ -437,6 +458,41 @@ def create(title: str, body: str = "", priority: str = "medium", path=None,
                 "title": title, "body": (body or "").strip(), "commit": None}
 
 
+def draft(text: str, path=None) -> dict:
+    """Сохраняет свободный текст как черновик с новой меткой T-<N>.
+
+    Номер берётся только из файла (max+1), а не из ветки сервера: окно
+    черновиков работает в браузере, где никакой ветки агента нет. Метка
+    занимается сразу — пока черновик лежит в файле, её не получит никто другой.
+    """
+    p = _path(path)
+    text = str(text or "").strip()
+    if not text:
+        raise TicketError("Текст черновика обязателен")
+    nonempty = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    title = nonempty[0] if nonempty else "Черновик"
+    if len(title) > 80:
+        title = title[:79].rstrip() + "…"
+    with _LOCK:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists():
+            p.write_text(BOOTSTRAP, encoding="utf-8")
+        info = _load(p)
+        tid = next_label(info)
+        if _find(info, tid)[1] is not None:
+            raise TicketError(f"Метка {tid} уже занята", 409)
+        raw = [f"- [{tid}] (draft) {title}"] + _quoted_body(text)
+        block = {"id": tid, "marker": "draft", "priority": None,
+                 "title": title, "body": [ln.rstrip() for ln in text.split("\n")],
+                 "commit": None, "raw": raw}
+        blocks = _section_blocks(info, "draft")
+        blocks.append(block)
+        _set_section_blocks(info, "draft", blocks)
+        _write(p, info["lines"], info["segs"])
+        return {"id": tid, "state": "draft", "priority": None,
+                "title": title, "body": text, "commit": None}
+
+
 def _move(tid: str, allowed: tuple, to_key: str, path, build=None, err_ctx="") -> dict:
     p = _path(path)
     if not p.exists():
@@ -470,6 +526,38 @@ def _build_reopen(b: dict) -> dict:
     raw = [f"- [{b['id']}] (medium) {b['title']}"]
     return {"id": b["id"], "marker": "medium", "priority": "medium",
             "title": b["title"], "body": [], "commit": None, "raw": raw}
+
+
+def promote(tid: str, title: Optional[str] = None, body: Optional[str] = None,
+            priority: str = "medium", path=None) -> dict:
+    """Превращает черновик в обычный тикет в «Открытые».
+
+    Вызванный агентом вариант передаёт уточнённые `title`/`body`/`priority`;
+    без них берётся то, что пользователь написал в окне черновиков.
+    """
+    priority = str(priority or "medium").strip().lower()
+    if priority not in PRIORITIES:
+        raise TicketError("Приоритет должен быть low | medium | high")
+
+    def build(b: dict) -> dict:
+        new_title = b["title"]
+        if title is not None and str(title).strip():
+            new_title = str(title).strip()
+        new_body = "\n".join(b["body"]) if body is None else str(body)
+        raw = [f"- [{tid}] ({priority}) {new_title}"] + _quoted_body(new_body)
+        return {"id": tid, "marker": priority, "priority": priority,
+                "title": new_title,
+                "body": [ln for ln in str(new_body).split("\n")],
+                "commit": None, "raw": raw}
+
+    return _move(tid, ("draft",), "open", path, build=build,
+                 err_ctx="оформить черновик")
+
+
+def discard(tid: str, path=None) -> dict:
+    """Отклоняет черновик, не переиспользуя его номер."""
+    return _move(tid, ("draft",), "closed", path,
+                 build=_build_closed("declined"), err_ctx="отклонить черновик")
 
 
 def start(tid: str, path=None) -> dict:

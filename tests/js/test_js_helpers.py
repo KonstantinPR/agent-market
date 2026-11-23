@@ -742,6 +742,16 @@ assert.ok(htmlSrc.includes("app.js?v=" + uiVer),
 assert.ok(!htmlSrc.includes("autoreload.js"),
   "index.html не подключает autoreload.js: страницу обновляет только пользователь");
 
+assert.ok(["ticketDraft", "draftModal", "draftText", "draftSave"]
+  .every((id) => htmlSrc.includes('id="' + id + '"')),
+  "вкладка «Тикеты» содержит окно черновика");
+assert.ok(jsSrc.includes('apiPost("/tickets/draft"') && jsSrc.includes("copyTicketDraft("),
+  "окно черновика сохраняет текст и копирует номер с текстом в буфер");
+assert.ok(apiSrc.includes('@router.post("/tickets/draft")')
+  && apiSrc.includes('@router.post("/tickets/{tid}/promote")')
+  && apiSrc.includes('@router.post("/tickets/{tid}/discard")'),
+  "бэкенд тикетов умеет создавать, оформлять и отклонять черновики");
+
 // «Массовые действия → Обновить аналитику на диск»: чекбокс + прокидка дат.
 assert.ok(htmlSrc.includes('id="batchAnalytics"'),
   "в меню массовых действий есть чекбокс batchAnalytics");

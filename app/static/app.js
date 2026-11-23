@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "206";
+const UI_VERSION = "207";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -8161,6 +8161,7 @@ async function updateLastPull(name) {
 
 // ------------------------------------------------------------- тикеты
 const TICKET_COLS = [
+  ["draft", "Черновики"],
   ["open", "Открытые"],
   ["in_progress", "В работе"],
   ["blocked", "Заблокированные"],
@@ -8173,13 +8174,20 @@ function ticketPriBadge(pri) {
 }
 
 function ticketCard(key, t) {
+  let bodyText = t.body || "";
+  if (key === "draft" && t.title && bodyText.startsWith(t.title)) {
+    bodyText = bodyText.slice(t.title.length).replace(/^\s*\n/, "");
+  }
   let body = "";
-  if (t.body) body = '<div class="ticket-body">' + escapeHtml(t.body) + "</div>";
+  if (bodyText) body = '<div class="ticket-body">' + escapeHtml(bodyText) + "</div>";
   let commit = "";
   if (t.commit) commit = '<span class="ticket-commit">' + escapeHtml(t.commit) + "</span>";
   const id = escapeHtml(t.id);
   const actions = [];
-  if (key === "open") {
+  if (key === "draft") {
+    actions.push('<button class="btn btn-primary" data-act="promote" data-id="' + id + '">В тикет</button>');
+    actions.push('<button class="btn" data-act="discard" data-id="' + id + '">Отклонить</button>');
+  } else if (key === "open") {
     actions.push('<button class="btn" data-act="start" data-id="' + id + '">Взять в работу</button>');
     actions.push('<button class="btn" data-act="block" data-id="' + id + '">Заблокировать</button>');
   } else if (key === "in_progress") {
@@ -8263,6 +8271,25 @@ async function ticketAction(act, id, card) {
   await renderTickets();
 }
 
+async function copyTicketDraft(text) {
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { ok = false; }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  ta.remove();
+  return ok;
+}
+
 function initTicketsTab() {
   const board = document.getElementById("ticketsBoard");
   if (!board) return;
@@ -8293,6 +8320,41 @@ function initTicketsTab() {
   document.getElementById("ticketModalCancel").addEventListener("click", closeModal);
   document.getElementById("ticketModal").addEventListener("click", (e) => {
     if (e.target.id === "ticketModal") closeModal();
+  });
+  const draftModal = document.getElementById("draftModal");
+  const draftText = document.getElementById("draftText");
+  const openDraft = () => {
+    draftModal.classList.remove("hidden");
+    draftText.focus();
+  };
+  const closeDraft = () => {
+    draftModal.classList.add("hidden");
+    draftText.value = "";
+  };
+  document.getElementById("ticketDraft").addEventListener("click", openDraft);
+  document.getElementById("draftModalClose").addEventListener("click", closeDraft);
+  document.getElementById("draftModalCancel").addEventListener("click", closeDraft);
+  draftModal.addEventListener("click", (e) => {
+    if (e.target.id === "draftModal") closeDraft();
+  });
+  document.getElementById("draftSave").addEventListener("click", async () => {
+    const text = draftText.value.trim();
+    if (!text) {
+      setStatus("Напишите текст мысли", { error: true });
+      draftText.focus();
+      return;
+    }
+    try {
+      const res = await apiPost("/tickets/draft", { text });
+      const copied = await copyTicketDraft(res.copy || (res.id + "\n" + res.body));
+      closeDraft();
+      await renderTickets();
+      setStatus("Черновик " + res.id + (copied
+        ? " создан и скопирован в буфер"
+        : " создан; скопируйте вручную: " + res.id + "\n" + text), { error: !copied });
+    } catch (err) {
+      setStatus(err.message, { error: true });
+    }
   });
   document.getElementById("ticketCreate").addEventListener("click", async () => {
     const msg = statusEl();

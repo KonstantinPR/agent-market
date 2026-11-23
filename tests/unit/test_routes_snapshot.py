@@ -167,9 +167,12 @@ POST /api/replenish/import-excel
 POST /api/sync/{code}
 POST /api/system/reveal
 POST /api/tickets
+POST /api/tickets/draft
 POST /api/tickets/{tid}/block
 POST /api/tickets/{tid}/close
 POST /api/tickets/{tid}/decline
+POST /api/tickets/{tid}/discard
+POST /api/tickets/{tid}/promote
 POST /api/tickets/{tid}/reopen
 POST /api/tickets/{tid}/start
 POST /api/tickets/{tid}/unblock
