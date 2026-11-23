@@ -2,7 +2,7 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **183**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **184**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
@@ -31,7 +31,7 @@
 - [refresh-all](#refresh-all) — 1 шт.
 - [replenish](#replenish) — 2 шт.
 - [sales](#sales) — 1 шт.
-- [settings](#settings) — 4 шт.
+- [settings](#settings) — 5 шт.
 - [stocks](#stocks) — 1 шт.
 - [storage-cost](#storage-cost) — 1 шт.
 - [sync](#sync) — 1 шт.
@@ -294,7 +294,8 @@
 | GET | `/api/settings/storage` | `api_storage_settings_get` | Корни хранилищ, папки фирм и список ссылок проекта. |
 | PUT | `/api/settings/storage` | `api_storage_settings_put` | Сохранить корни хранилищ и ссылки проекта. |
 | PUT | `/api/settings/storage/company/{company_id}` | `api_storage_company_dir` | Подпапка аналитики фирмы внутри корня (companies.analytics_dir). |
-| DELETE | `/api/settings/storage/{key}` | `api_storage_settings_reset` | Сбросить настройку к дефолту: photos_root, analytics_root, reports_folder или links. |
+| POST | `/api/settings/storage/products-sync` | `api_storage_products_sync` | T-82: обновить каталог (себестоимость/ценность) из products.xlsx. |
+| DELETE | `/api/settings/storage/{key}` | `api_storage_settings_reset` | Сбросить настройку к дефолту: photos_root, analytics_root, products_file, reports_folder или links. |
 
 ## stocks
 

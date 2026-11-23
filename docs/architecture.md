@@ -34,16 +34,16 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 14315 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 7070 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/static/columns.json` | 6843 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/services/pricing.py` | 3208 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
+| `app/static/app.js` | 14624 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 7085 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/columns.json` | 6888 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/services/pricing.py` | 3871 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
-| `app/static/style.css` | 1901 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/style.css` | 1946 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `tests/js/test_js_helpers.py` | 1574 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1597 | проверка app.js через Node `vm` |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `app/static/index.html` | 1425 | разметка: навигация `data-tab` + секции `tab-*` |
+| `app/static/index.html` | 1435 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
 | `app/services/margin.py` | 1265 | маржинальность по детализациям, группировка артикулоразмеров |
 | `tests/unit/test_margin.py` | 1226 | юнит-тесты маржинальности |
@@ -52,9 +52,9 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/models.py` | 887 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
 | `app/services/warehouse.py` | 729 | складские документы (приход/отгрузка, обороты) |
-| `app/services/dashboard.py` | 692 | сводные панели дашборда |
+| `app/services/dashboard.py` | 642 | сводные панели дашборда |
 | `app/services/tickets.py` | 558 | реестр тикетов `TICKETS.md` (create/validate/report) |
-| `app/services/storage_settings.py` | 430 | пути хранилищ и ссылки проекта (`app_settings`) |
+| `app/services/storage_settings.py` | 493 | пути хранилищ и ссылки проекта (`app_settings`) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 251 | индекс фото на диске, выбор папки, fallback по префиксу |
 | `app/database.py` | 240 | engine/session PostgreSQL |
@@ -67,8 +67,8 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/progress.py` | 118 | прогресс длительных выкачек: ContextVar + реестр, GET /api/progress |
 | `app/services/yandex_disk.py` | 108 | загрузка отчётов на Яндекс.Диск |
 | `app/services/common.py` | 104 | общие хелперы (wildcard-фильтр `like_*`, окна) |
+| `app/main.py` | 102 | сборка FastAPI-приложения, `/`, статика |
 | `app/providers/errors.py` | 100 | нормализованные ошибки апстримов |
-| `app/main.py` | 86 | сборка FastAPI-приложения, `/`, статика |
 | `app/config.py` | 82 | `Settings`, читается из `.env` |
 | `app/services/excel_io.py` | 73 | чтение/запись Excel |
 | `app/services/columns.py` | 42 | loader columns.json (`export_cols` для Python) |

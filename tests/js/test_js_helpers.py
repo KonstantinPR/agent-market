@@ -739,6 +739,8 @@ const uiVer = (jsSrc.match(/const UI_VERSION = "(\d+)"/) || [])[1];
 assert.ok(uiVer, "app.js объявляет UI_VERSION");
 assert.ok(htmlSrc.includes("app.js?v=" + uiVer),
   "index.html подключает app.js v" + uiVer + " (бамп UI_VERSION забыл в index.html?)");
+assert.ok(!htmlSrc.includes("autoreload.js"),
+  "index.html не подключает autoreload.js: страницу обновляет только пользователь");
 
 // «Массовые действия → Обновить аналитику на диск»: чекбокс + прокидка дат.
 assert.ok(htmlSrc.includes('id="batchAnalytics"'),
