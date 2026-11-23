@@ -539,6 +539,7 @@ def test_margin_detail_totals_row(api_client):
     assert t["sells"] == 3
     assert t["revenue"] == 3000.0
     assert t["income"] == 2550.0
+    assert t["payout_total"] == 2550.0
 
 
 def _jwt(oid):

@@ -19,7 +19,8 @@ from app.services.sync import _is_goods_row, _redistribute_articleless, storage_
 MARGIN_CMP_FIELDS = {
     "sells": ("Продано, шт", "int", "sum"),
     "revenue": ("Выручка", "money", "sum"),
-    "income": ("К перечислению", "money", "sum"),
+    "income": ("К перечислению за товар", "money", "sum"),
+    "payout_total": ("Итого к перечислению", "money", "sum"),
     "commission": ("Комиссия", "money", "sum"),
     "logistics": ("Логистика", "money", "sum"),
     "storage": ("Хранение (оц)", "money", "sum"),
@@ -363,7 +364,7 @@ DETAIL_MARGIN_COLUMNS = [
     "article", "nm_id", "name", "sells", "returns_qty",
     "stock_qty", "stock_total", "stock_in_way",
     "revenue", "commission", "logistics", "logistics_qty", "logistics_out", "logistics_in",
-    "storage", "services", "income", "margin_gross", "net_cost",
+    "storage", "services", "income", "payout_total", "margin_gross", "net_cost",
     "net_cost_est", "value", "supplier",
     "margin", "margin_per_one", "margin_pct", "margin_pct_income",
     "margin_roi_pct",
@@ -485,8 +486,13 @@ def margin_detail_dataframe(
     Если себестоимость не найдена/0 — берётся default_net_cost,
     и флаг net_cost_est=True помечает товар как «оценку».
 
-    Формула: margin_gross (Маржа, до себестоимости) = income (к перечислению,
-    с учётом знака возвратов) − логистика − хранение − услуги;
+    income — поле WB «К перечислению Продавцу за реализованный Товар» (forPay,
+    с учётом знака возвратов), а не итог выплаты. payout_total (Итого к
+    перечислению) = income − логистика − хранение − услуги − возмещения ПВЗ
+    − платёжные услуги; это аналог «Итого к перечислению» из сводки WB, но
+    не банковское зачисление (выплаты приходят с задержкой).
+    Формула: margin_gross (Маржа, до себестоимости) = income − логистика
+    − хранение − услуги;
     margin (Маржа-себест.) = margin_gross − net_cost × продано.
     margin_pct — рентабельность от выручки (реализовано WB).
 
@@ -509,7 +515,7 @@ def margin_detail_dataframe(
     cols = ["article", "nm_id", "name", "sells", "returns_qty",
             "stock_qty", "stock_total", "stock_in_way",
             "revenue", "commission", "logistics", "logistics_qty", "logistics_out", "logistics_in",
-            "storage", "services", "income", "margin_gross", "net_cost",
+            "storage", "services", "income", "payout_total", "margin_gross", "net_cost",
             "net_cost_est", "value", "supplier",
             "margin", "margin_per_one", "margin_pct", "margin_pct_income",
             "margin_roi_pct",
@@ -621,7 +627,7 @@ def margin_detail_dataframe(
             nms[key] = nm
         sign = -1 if is_ret(r.doc_type_name) else 1
         if key not in cells:
-            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0]
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0]
         c = cells[key]
         qty = r.quantity if _is_goods_row(
             r.doc_type_name, r.retail_amount, r.for_pay) else 0
@@ -634,6 +640,8 @@ def margin_detail_dataframe(
             + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)
         c[6] += float(r.for_pay or 0) * sign            # income
         # Логистика туда/обратно, возвраты, «штуки» логистики (туда+обратно)
+        c[11] += float(r.pvz_compensation or 0)        # возмещения ПВЗ
+        c[12] += float(r.payment_services or 0)        # платёжные услуги
         if is_ret(r.doc_type_name):
             c[8] += float(r.delivery_service or 0)       # inbound logistics
             if _is_goods_row(r.doc_type_name, r.retail_amount, r.for_pay):
@@ -653,7 +661,7 @@ def margin_detail_dataframe(
         if not (qty or full or way):
             continue
         if key not in cells:
-            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0]
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0]
     if not cells:
         return out
     # nmID для артикулов только с остатком: в строках детализации его нет,
@@ -680,6 +688,8 @@ def margin_detail_dataframe(
         "services": (5, lambda r: float(r.penalty or 0) + float(r.deduction or 0)
                      + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)),
         "logistics_qty.int": (10, lambda r: int(r.delivery_count or 0) + int(r.return_delivery_count or 0)),
+        "pvz_compensation": (11, lambda r: float(r.pvz_compensation or 0)),
+        "payment_services": (12, lambda r: float(r.payment_services or 0)),
     }, weight_idx=(0,))
     if not cells:
         return out
@@ -688,7 +698,7 @@ def margin_detail_dataframe(
     # операций в окне, ни остатка: информационные нулевые строки в конце.
     for key in universe:
         if key not in cells:
-            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0]
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0]
         prod = prods_by_upper.get(key)
         display.setdefault(key, prod.article if prod is not None else key)
 
@@ -700,7 +710,8 @@ def margin_detail_dataframe(
         if articles is not None and key not in articles:
             continue
         (sells, revenue, commission, logistics, storage, services, income,
-         logistics_out, logistics_in, returns_qty, logistics_qty) = c
+         logistics_out, logistics_in, returns_qty, logistics_qty,
+         pvz_compensation, payment_services) = c
         prod = _find_product(art)
         name = (prod.name or "") if prod else ""
         if not name:
@@ -717,6 +728,7 @@ def margin_detail_dataframe(
         # + распределённая оценка (объём × тариф × остаток).
         storage_full = storage + storage_est.get(key, 0.0)
         margin_gross = round(income - logistics - storage_full - services, 2)
+        payout_total = round(margin_gross - pvz_compensation - payment_services, 2)
         margin = round(margin_gross - net_cost * max(0, sells), 2)
         margin_per_one = round(margin / sells, 2) if sells > 0 else 0.0
         margin_pct = round(margin / revenue * 100, 2) if revenue > 0 and sells > 0 else 0.0
@@ -750,7 +762,8 @@ def margin_detail_dataframe(
             "logistics_in": round(logistics_in, 2),
             "storage": round(storage_full, 2),
             "services": round(services, 2),
-            "income": round(income, 2), "margin_gross": margin_gross,
+            "income": round(income, 2), "payout_total": payout_total,
+            "margin_gross": margin_gross,
             "net_cost": round(net_cost, 2),
             "net_cost_est": est, "margin": margin,
             "value": round(prod_value, 2), "supplier": prod_supplier,

@@ -381,7 +381,7 @@
 
   <section id="tab-margin-detail" class="pane">
     <div class="toolbar">
-      <span class="tip" id="marginDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из финансового отчёта WB (детализация продаж). Маржа = "К перечислению" − себестоимость. "Прочее" — разница (возвраты/корректировки).</span></span>
+      <span class="tip" id="marginDetailTip" tabindex="0" role="tooltip">?<span class="tip-text">Данные из финансового отчёта WB (детализация продаж). «К перечислению за товар» — forPay, а не итог выплаты; «Итого к перечислению» вычитает из него логистику, хранение, услуги и возмещения. Маржа = «К перечислению за товар» − расходы WB; прибыль вычитает ещё себестоимость. Банковские поступления приходят с задержкой и не равны начислениям за окно.</span></span>
       <input id="marginDetailLike" placeholder="Артикул содержит… (напр. TIE) * = любая часть, ^ = начало, $ = конец">
       <div class="view-menu" id="marginDetailArtsMenu">
         <button type="button" class="btn" id="btnMarginDetailArts" title="Фильтр по списку: артикулы, баркоды, nmID WB или артикулы Ozon — из текста или Excel">Артикулы &#9662;</button>
@@ -1412,7 +1412,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=214"></script>
+  <script src="/static/app.js?v=215"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
     <div class="xyz-modal-dialog" role="dialog" aria-modal="true">

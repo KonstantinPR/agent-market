@@ -72,7 +72,7 @@ function _cabLinksFiltered(mp, force) {
 function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
 function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "214";
+const UI_VERSION = "215";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -2694,11 +2694,12 @@ const marginHeaders = [
   { k: "logistics_in", label: "Логистика обратно", num: true, render: cellFmts.moneyCls, tip: "Обратная доставка (строки Возврат)" },
   { k: "storage", label: "Хранение (оц)", num: true, render: cellFmts.moneyCls, tip: "Безартикульные платы WB разнесены по «объём × тариф × остаток»" },
   { k: "services", label: "Услуги", num: true, render: cellFmts.moneyCls , tip: "Прочие удержания WB: штрафы, удержания, доплаты и перерасчёт логистики. В безартикульных строках разносятся по весу статьи."},
-  { k: "income",  label: "К перечислению", num: true, render: cellFmts.money , tip: "forPay за период с учётом знака возвратов: сколько WB перечислит за товар после всех удержаний."},
+  { k: "income",  label: "К перечислению за товар", num: true, render: cellFmts.money , tip: "forPay за период с учётом знака возвратов: поле «К перечислению Продавцу за реализованный Товар» из детализации WB. Это НЕ итоговая сумма к перечислению — из неё ещё вычитаются логистика, хранение, услуги и возмещения."},
+  { k: "payout_total", label: "Итого к перечислению", num: true, render: cellFmts.money , tip: "Ближайший аналог «Итого к перечислению» из сводки WB: «К перечислению за товар» − логистика − хранение (оц) − услуги − возмещения ПВЗ − платёжные услуги. От «Маржи до себестоимости» отличается двумя последними вычетами; не равен банковскому зачислению (есть задержка выплат)."},
   { k: "net_cost", label: "Себестоимость", num: true, render: cellFmts.money , tip: "Себестоимость единицы из каталога: сначала по артикулу, иначе по баркоду строки детализации. Нет в каталоге — значение по умолчанию, строка помечается как оценка."},
   { k: "value", label: "Ценность", num: true, render: cellFmts.money , tip: "Ценность единицы (pure_value) из каталога товаров (import products.xlsx). Отношение ценность/себестоимость влияет на решение автопилота цен: чем ценнее товар, тем меньше скидка при снижении."},
   { k: "supplier", label: "Поставщик", render: cellFmts.text , tip: "Поставщик товара из каталога (колонка «Поставщик» файла products.xlsx)."},
-  { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.moneyCls , tip: "К перечислению − логистика − хранение − услуги. Показывает прибыль до списания себестоимости проданного."},
+  { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.moneyCls , tip: "«К перечислению за товар» − логистика − хранение (оц) − услуги. Показывает прибыль до списания себестоимости проданного; возмещения ПВЗ и платёжные услуги здесь ещё не вычтены."},
   { k: "margin",  label: "Прибыль", num: true, render: cellFmts.moneyCls , tip: "Маржа до себестоимости − себестоимость × проданное. Себестоимость списывается только за проданное, за возвращённое — нет."},
   { k: "margin_per_one", label: "Прибыль на ед.", num: true, render: cellFmts.moneyCls , tip: "Прибыль ÷ проданное количество, ₽/шт."},
   { k: "margin_pct", label: "Прибыль, %", num: true, render: cellFmts.pct , tip: "Рентабельность продаж (ROS): прибыль ÷ выручка (реализация) × 100."},
@@ -5845,7 +5846,8 @@ const CMP_MODE_LABELS = {
 const MARGIN_CMP_FIELDS = [
   { k: "sells", label: "Продано, шт", kind: "int" },
   { k: "revenue", label: "Выручка", kind: "money" },
-  { k: "income", label: "К перечислению", kind: "money" },
+  { k: "income", label: "К перечислению за товар", kind: "money" },
+  { k: "payout_total", label: "Итого к перечислению", kind: "money" },
   { k: "commission", label: "Комиссия", kind: "money" },
   { k: "logistics", label: "Логистика", kind: "money" },
   { k: "storage", label: "Хранение (оц)", kind: "money" },
