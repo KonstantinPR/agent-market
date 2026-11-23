@@ -1484,6 +1484,8 @@ td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-hei
 .auto-bar-err-msg { font-size: 10px; margin-top: 6px; opacity: .85; }
 
 /* ------------------------------- тикеты ------------------------------- */
+.ticket-menu-btn, .ticket-section-select { display: none; }
+.ticket-actions-menu { display: flex; flex-wrap: wrap; gap: 6px; }
 .tickets-board {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -1938,3 +1940,58 @@ th:hover .th-grip { opacity: .75; }
 th.th-dragging { opacity: .35; cursor: grabbing; }
 th.th-drag-over { box-shadow: inset -2px 0 0 #7aa7d0; }
 th.th-drag-over-left { box-shadow: inset 2px 0 0 #7aa7d0; }
+
+@media (max-width: 1000px) {
+  .navbar, .filters { padding-left: 10px; padding-right: 10px; }
+  main { padding: 12px 10px; }
+  .navbar { flex-wrap: wrap; gap: 12px; }
+  .menu-btn { display: inline-block; margin-left: auto; }
+  .navbar .links { display: none; width: 100%; flex-direction: column; align-items: stretch; }
+  .navbar .links.open { display: flex; }
+  .navbar .dropdown-menu { position: static; box-shadow: none; min-width: 0; }
+  .navbar .dropdown:not(.open) .dropdown-menu { display: none; }
+  .navbar-right { display: none; width: 100%; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; gap: 8px; border-top: 1px solid #eee; padding-top: 8px; }
+  .navbar .links.open + .navbar-right { display: flex; }
+  .navbar-right #batchMenuBtn, .navbar-right #cabBtn { width: 100%; max-width: none; justify-content: space-between; }
+  .navbar-right #cabBtnLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #batchMenu { min-width: min(280px, calc(100vw - 24px)); }
+  .filters { flex-wrap: wrap; }
+  .crumb { min-width: 0; flex: 1 1 220px; overflow: hidden; text-overflow: ellipsis; }
+  #headerMsg { flex-basis: 100%; max-width: 100%; margin-left: 0; white-space: normal; }
+  #refreshBadge { margin-left: 0; }
+  .tscroll { max-height: calc(100vh - 260px); }
+
+  .dash-filters-right, #dashActiveViewMenu { margin-left: 0; }
+  .dash-groupby { white-space: normal; }
+  .view-menu-panel { min-width: min(300px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
+  .charts { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .dash-kpis { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .dash-cols { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .dash-xyz-cols { grid-template-columns: 1fr; }
+
+  body:has(#tab-tickets.active) > header.filters { display: none; }
+  body:has(#tab-tickets.active) main { padding-top: 8px; }
+  #tab-tickets .toolbar { flex-wrap: wrap; }
+  .ticket-menu-btn { display: inline-flex; }
+  .ticket-section-select { display: inline-block; max-width: 62vw; min-width: 0; }
+  .ticket-actions-menu { display: none; width: 100%; flex-direction: column; align-items: stretch; gap: 4px; padding: 6px; background: #fff; border: 1px solid #eee; border-radius: 6px; }
+  .ticket-actions-menu.open { display: flex; }
+  .ticket-actions-menu .btn { text-align: left; }
+  #ticketsBoard .ticket-col { display: none; }
+  #ticketsBoard .ticket-col.ticket-col-selected { display: block; }
+  .tickets-board { display: block; }
+  .ticket-close-form input { min-width: 0; }
+  .modal { padding: 16px 10px; }
+  .modal-box { width: min(620px, 100%); }
+  #draftModal { align-items: center; padding: 12px; }
+  #draftModal .modal-box { width: min(90vw, 620px); background: rgba(255, 255, 255, .9); backdrop-filter: blur(4px); }
+  #draftModal .modal-head, #draftModal .modal-body > .hint, #draftModal .ticket-form label, #draftModal #draftModalCancel { display: none; }
+  #draftModal .modal-body { padding: 16px; }
+  #draftModal #draftText { min-height: 46vh; border: 0; padding: 0; background: transparent; font-size: 16px; resize: none; outline: none; }
+  #draftModal .modal-actions { justify-content: center; }
+  #draftModal #draftSave { width: 100%; }
+
+  .toolbar input[type="date"], .toolbar input:not([type]) { width: auto; max-width: 100%; min-width: 0; flex-shrink: 1; }
+  .cmp-panel, .margin-arts-text, #pricingMinpromoPanel { max-width: calc(100vw - 24px); }
+  .pricing-col-1, .pricing-col-2 { min-width: 0; }
+}

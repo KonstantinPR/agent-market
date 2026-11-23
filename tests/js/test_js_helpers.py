@@ -1598,3 +1598,47 @@ def test_js_helpers(node_bin, tmp_path):
     assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
     assert "JS_TESTS_OK" in res.stdout
     assert "COLVIEW_FILTER_OK" in res.stdout
+
+
+def test_responsive_css_manifest():
+    css_path = Path(__file__).resolve().parents[2] / "app" / "static" / "style.css"
+    css = css_path.read_text(encoding="utf-8")
+    marker = "@media (max-width: 1000px)"
+    assert marker in css
+    start = css.index(marker)
+    depth = 0
+    end = None
+    for pos in range(css.index("{", start), len(css)):
+        if css[pos] == "{":
+            depth += 1
+        elif css[pos] == "}":
+            depth -= 1
+            if depth == 0:
+                end = pos
+                break
+    assert end is not None
+    block = css[start:end + 1]
+    for selector in (
+        ".menu-btn",
+        ".navbar .links.open",
+        ".navbar-right { display: none;",
+        ".navbar .links.open + .navbar-right",
+        "#headerMsg",
+        ".dash-xyz-cols",
+        ".ticket-menu-btn",
+        ".ticket-actions-menu.open",
+        "#ticketsBoard .ticket-col.ticket-col-selected",
+        "#draftModal .modal-box",
+        "#draftModal #draftSave",
+        ".tickets-board",
+        ".ticket-close-form input",
+    ):
+        assert selector in block, "нет адаптивного правила: " + selector
+    html = css_path.with_name("index.html").read_text(encoding="utf-8")
+    assert "style.css?v=" in html
+    for ident in ("ticketMenuBtn", "ticketActions", "ticketSectionSelect"):
+        assert 'id="' + ident + '"' in html, "нет элемента: " + ident
+    assert ">Ок</button>" in html
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "ticket-col-selected" in js
+    assert "ticketSectionSelect" in js

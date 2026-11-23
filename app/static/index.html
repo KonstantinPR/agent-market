@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Market</title>
-<link rel="stylesheet" href="/static/style.css?v=88">
+<link rel="stylesheet" href="/static/style.css?v=91">
 </head>
 <body>
 <nav class="navbar">
@@ -1072,9 +1072,13 @@
 
   <section id="tab-tickets" class="pane">
     <div class="toolbar">
-      <button id="ticketDraft" class="btn btn-primary" title="Записать мысль: текст сохранится как черновик, а номер и текст скопируются в буфер">Мысль…</button>
-      <button id="ticketAdd" class="btn">Добавить тикет</button>
-      <button id="ticketsRefresh" class="btn">Обновить</button>
+      <button id="ticketMenuBtn" class="btn ticket-menu-btn" aria-label="Действия тикетов">&#9776;</button>
+      <select id="ticketSectionSelect" class="ticket-section-select" aria-label="Раздел тикетов"></select>
+      <div class="ticket-actions-menu" id="ticketActions">
+        <button id="ticketDraft" class="btn btn-primary" title="Записать мысль: текст сохранится как черновик, а номер и текст скопируются в буфер">Мысль…</button>
+        <button id="ticketAdd" class="btn">Добавить тикет</button>
+        <button id="ticketsRefresh" class="btn">Обновить</button>
+      </div>
     </div>
     <div id="ticketsBoard"></div>
   </section>
@@ -1401,13 +1405,13 @@
       </div>
       <div class="modal-actions">
         <button id="draftModalCancel" class="btn">Отмена</button>
-        <button id="draftSave" class="btn btn-primary">ОК — дать номер</button>
+        <button id="draftSave" class="btn btn-primary">Ок</button>
       </div>
     </div>
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=207"></script>
+  <script src="/static/app.js?v=210"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
     <div class="xyz-modal-dialog" role="dialog" aria-modal="true">

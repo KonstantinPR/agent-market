@@ -69,7 +69,7 @@ function _cabLinksFiltered(mp) {
 function cabLinksAll() { return _cabLinksFiltered(null); }
 function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
 
-const UI_VERSION = "207";
+const UI_VERSION = "210";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -8167,6 +8167,15 @@ const TICKET_COLS = [
   ["blocked", "Заблокированные"],
   ["closed", "Закрытые"],
 ];
+let ticketSection = "draft";
+
+function applyTicketSection() {
+  const sel = document.getElementById("ticketSectionSelect");
+  if (sel) sel.value = ticketSection;
+  document.querySelectorAll("#ticketsBoard .ticket-col").forEach((col) => {
+    col.classList.toggle("ticket-col-selected", col.dataset.section === ticketSection);
+  });
+}
 
 function ticketPriBadge(pri) {
   if (!pri) return "";
@@ -8232,7 +8241,8 @@ async function renderTickets() {
   let html = '<div class="tickets-board">';
   for (const [key, label] of TICKET_COLS) {
     const list = (d.sections && d.sections[key]) || [];
-    html += '<div class="ticket-col"><h3 class="ticket-col-h">' + label
+    html += '<div class="ticket-col' + (key === ticketSection ? " ticket-col-selected" : "")
+      + '" data-section="' + key + '"><h3 class="ticket-col-h">' + label
       + ' <span class="ticket-count">' + fmt(list.length) + "</span></h3>";
     if (!list.length) {
       html += '<div class="empty">пусто</div>';
@@ -8243,6 +8253,7 @@ async function renderTickets() {
   }
   html += "</div>";
   board.innerHTML = html;
+  applyTicketSection();
 }
 
 async function ticketAction(act, id, card) {
@@ -8293,6 +8304,28 @@ async function copyTicketDraft(text) {
 function initTicketsTab() {
   const board = document.getElementById("ticketsBoard");
   if (!board) return;
+  const ticketMenuBtn = document.getElementById("ticketMenuBtn");
+  const ticketActions = document.getElementById("ticketActions");
+  if (ticketMenuBtn && ticketActions) {
+    ticketMenuBtn.addEventListener("click", () => ticketActions.classList.toggle("open"));
+    ticketActions.addEventListener("click", (ev) => {
+      if (ev.target.closest("button")) ticketActions.classList.remove("open");
+    });
+  }
+  const sectionSelect = document.getElementById("ticketSectionSelect");
+  if (sectionSelect) {
+    TICKET_COLS.forEach(([key, label]) => {
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = label;
+      sectionSelect.appendChild(opt);
+    });
+    sectionSelect.value = ticketSection;
+    sectionSelect.addEventListener("change", () => {
+      ticketSection = sectionSelect.value;
+      applyTicketSection();
+    });
+  }
   board.addEventListener("click", async (ev) => {
     const btn = ev.target.closest("[data-act]");
     if (!btn) return;
