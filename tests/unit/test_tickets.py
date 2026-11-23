@@ -40,7 +40,7 @@ def test_load_bootstrap_empty(tfile):
     d = t.load(tfile)
     assert d["counter"] == 1
     assert d["missing"] is False
-    for key in ("open", "in_progress", "blocked", "closed"):
+    for key in ("draft", "open", "in_progress", "blocked", "closed"):
         assert d["sections"][key] == []
 
 
@@ -101,6 +101,101 @@ def test_create_bootstraps_missing_file(tmp_path):
     assert c["id"] == "T-1"
     assert p.exists()
     assert "## Открытые" in _text(p)
+
+
+# ------------------------------------------------------------------ черновики
+
+def test_draft_keeps_full_text_and_takes_next_number(tfile):
+    text = "Первая строка — заголовок\nВторая строка с деталями"
+    d = t.draft(text, path=tfile)
+    assert d["id"] == "T-1"
+    assert d["state"] == "draft"
+    assert d["body"] == text
+    data = t.load(tfile)
+    assert _ids(data, "draft") == ["T-1"]
+    assert data["sections"]["draft"][0]["priority"] is None
+    assert data["sections"]["draft"][0]["title"] == "Первая строка — заголовок"
+    assert data["counter"] == 2
+    assert "## Черновики" in _text(tfile)
+
+
+def test_draft_does_not_use_server_branch(tfile, monkeypatch):
+    monkeypatch.setattr(t, "current_branch", lambda cwd=None: "t-42-slug")
+    assert t.draft("мысль", path=tfile)["id"] == "T-1"
+
+
+def test_draft_requires_text(tfile):
+    with pytest.raises(t.TicketError) as e:
+        t.draft("  \n ", path=tfile)
+    assert e.value.status == 400
+    assert t.load(tfile)["counter"] == 1
+
+
+def test_draft_title_is_first_line_shortened(tfile):
+    long_line = "Очень длинная мысль " * 10
+    d = t.draft(long_line + "\nдетали", path=tfile)
+    assert len(d["title"]) <= 80
+    assert d["title"].endswith("…")
+    assert t.load(tfile)["sections"]["draft"][0]["body"] == long_line.rstrip() + "\nдетали"
+
+
+def test_draft_and_ticket_share_numbering(tfile):
+    t.draft("A", path=tfile)
+    assert t.create("B", path=tfile)["id"] == "T-2"
+    assert t.load(tfile)["counter"] == 3
+
+
+def test_promote_draft_uses_agent_wording(tfile):
+    t.draft("мысль\nдетали", path=tfile)
+    r = t.promote("T-1", title="Уточнённый заголовок",
+                  body="где: module.py\nнужно: поправить", priority="high", path=tfile)
+    assert r["state"] == "open"
+    assert r["priority"] == "high"
+    data = t.load(tfile)
+    assert _ids(data, "draft") == []
+    assert _ids(data, "open") == ["T-1"]
+    assert data["sections"]["open"][0]["title"] == "Уточнённый заголовок"
+    assert data["sections"]["open"][0]["body"] == "где: module.py\nнужно: поправить"
+    assert "(draft)" not in _text(tfile)
+
+
+def test_promote_draft_keeps_original_wording_by_default(tfile):
+    t.draft("Заголовок из мысли\nтело из мысли", path=tfile)
+    r = t.promote("T-1", path=tfile)
+    assert r["title"] == "Заголовок из мысли"
+    assert r["body"] == "Заголовок из мысли\nтело из мысли"
+    assert r["priority"] == "medium"
+
+
+def test_promote_rejects_non_draft_and_bad_priority(tfile):
+    t.create("A", path=tfile)
+    with pytest.raises(t.TicketError) as e:
+        t.promote("T-1", path=tfile)
+    assert e.value.status == 409
+    t.draft("B", path=tfile)
+    with pytest.raises(t.TicketError):
+        t.promote("T-2", priority="urgent", path=tfile)
+    assert _ids(t.load(tfile), "draft") == ["T-2"]
+
+
+def test_discard_draft_retires_number(tfile):
+    t.draft("мысль", path=tfile)
+    r = t.discard("T-1", path=tfile)
+    assert r["state"] == "declined"
+    data = t.load(tfile)
+    assert _ids(data, "draft") == []
+    assert _ids(data, "closed") == ["T-1"]
+    assert data["counter"] == 2
+    with pytest.raises(t.TicketError):
+        t.discard("T-1", path=tfile)
+
+
+def test_validate_flags_wrong_draft_marker(tfile):
+    t.draft("мысль", path=tfile)
+    tfile.write_text(_text(tfile).replace("- [T-1] (draft)", "- [T-1] (high)", 1),
+                     encoding="utf-8")
+    problems = t.validate(tfile)
+    assert any("T-1" in p and "Черновики" in p for p in problems)
 
 
 # ------------------------------------------------------------------ переходы
@@ -217,7 +312,9 @@ def test_placeholder_restored_when_section_emptied(tfile):
 
 def test_existing_raw_body_indent_kept(tfile):
     """Блок с произвольным отступом тела не ломается при перемещении."""
-    text = _text(tfile).replace("_(пусто)_", "- [T-1] (medium) Заголовок\n  > одна\n\t> две")
+    text = _text(tfile).replace(
+        "## Открытые\n\n_(пусто)_",
+        "## Открытые\n\n- [T-1] (medium) Заголовок\n  > одна\n\t> две", 1)
     tfile.write_text(text, encoding="utf-8")
     t.start("T-1", path=tfile)
     d = t.load(tfile)

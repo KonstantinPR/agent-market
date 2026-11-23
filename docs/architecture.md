@@ -34,16 +34,16 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 14315 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 7070 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/app.js` | 14400 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 7100 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/static/columns.json` | 6843 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 3208 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
-| `app/static/style.css` | 1901 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/style.css` | 1921 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `tests/js/test_js_helpers.py` | 1574 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1598 | проверка app.js через Node `vm` |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `app/static/index.html` | 1425 | разметка: навигация `data-tab` + секции `tab-*` |
+| `app/static/index.html` | 1452 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
 | `app/services/margin.py` | 1265 | маржинальность по детализациям, группировка артикулоразмеров |
 | `tests/unit/test_margin.py` | 1226 | юнит-тесты маржинальности |
@@ -53,7 +53,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
 | `app/services/warehouse.py` | 729 | складские документы (приход/отгрузка, обороты) |
 | `app/services/dashboard.py` | 692 | сводные панели дашборда |
-| `app/services/tickets.py` | 558 | реестр тикетов `TICKETS.md` (create/validate/report) |
+| `app/services/tickets.py` | 646 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/storage_settings.py` | 430 | пути хранилищ и ссылки проекта (`app_settings`) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 251 | индекс фото на диске, выбор папки, fallback по префиксу |
@@ -167,6 +167,14 @@ analytics_root()/reports_folder()`, а не `settings.*` напрямую.
 хранятся**: метку выдаёт имя git-ветки (`t-<N>-<слаг>`), свободный номер
 считается как max+1. Так нельзя разойтись со счётчиком, потому что
 счётчика нет.
+
+Раздел «Черновики» добавляет к четырём обычным секциям пятую: окно «Мысль»
+в UI (`POST /api/tickets/draft`) сохраняет
+произвольный текст и сразу занимает метку `T-<N>`, копируя в буфер номер
+вместе с текстом. Черновик не является тикетом: агент по этому номеру
+уточняет формулировку и вызывает `POST /api/tickets/{tid}/promote`, чтобы
+перевести запись в «Открытые». `discard` уводит черновик в «Закрытые» с
+пометкой `declined`, не освобождая номер.
 
 ```powershell
 .\venv\Scripts\python.exe -m app.services.tickets validate   # exit 1 = проблемы

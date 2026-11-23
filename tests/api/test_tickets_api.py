@@ -22,7 +22,7 @@ def test_get_tickets_empty(ticket_api):
     assert r.status_code == 200
     j = r.json()
     assert j["missing"] is True
-    assert set(j["sections"]) == {"open", "in_progress", "blocked", "closed"}
+    assert set(j["sections"]) == {"draft", "open", "in_progress", "blocked", "closed"}
 
 
 def test_create_and_get(ticket_api):
@@ -39,6 +39,34 @@ def test_create_and_get(ticket_api):
 def test_create_validation(ticket_api):
     assert ticket_api.post("/api/tickets", json={"title": ""}).status_code == 400
     assert ticket_api.post("/api/tickets", json={"title": "X", "priority": "urgent"}).status_code == 400
+
+
+def test_draft_copies_number_and_text(ticket_api):
+    r = ticket_api.post("/api/tickets/draft", json={"text": "Мысль\nс деталями"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["id"] == "T-1"
+    assert j["copy"] == "T-1\nМысль\nс деталями"
+    d = ticket_api.get("/api/tickets").json()
+    assert d["sections"]["draft"][0]["body"] == "Мысль\nс деталями"
+    assert d["counter"] == 2
+    assert ticket_api.post("/api/tickets/draft", json={"text": " "}).status_code == 400
+
+
+def test_promote_and_discard_draft(ticket_api):
+    ticket_api.post("/api/tickets/draft", json={"text": "Черновик\nдетали"})
+    r = ticket_api.post("/api/tickets/T-1/promote", json={
+        "title": "Оформленный тикет", "priority": "high"})
+    assert r.status_code == 200
+    assert r.json()["state"] == "open"
+    assert r.json()["priority"] == "high"
+    d = ticket_api.get("/api/tickets").json()
+    assert d["sections"]["draft"] == []
+    assert d["sections"]["open"][0]["title"] == "Оформленный тикет"
+
+    assert ticket_api.post("/api/tickets/draft", json={"text": "Ещё мысль"}).json()["id"] == "T-2"
+    assert ticket_api.post("/api/tickets/T-2/discard").json()["state"] == "declined"
+    assert ticket_api.post("/api/tickets/T-2/promote").status_code == 409
 
 
 def test_start_close_flow(ticket_api):

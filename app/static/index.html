@@ -1067,7 +1067,8 @@
 
   <section id="tab-tickets" class="pane">
     <div class="toolbar">
-      <button id="ticketAdd" class="btn btn-primary">Добавить тикет</button>
+      <button id="ticketDraft" class="btn btn-primary" title="Записать мысль: текст сохранится как черновик, а номер и текст скопируются в буфер">Мысль…</button>
+      <button id="ticketAdd" class="btn">Добавить тикет</button>
       <button id="ticketsRefresh" class="btn">Обновить</button>
     </div>
     <div id="ticketsBoard"></div>
@@ -1380,8 +1381,28 @@
     </div>
   </div>
 </div>
+<div id="draftModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>Мысль — черновик тикета</h3>
+      <button id="draftModalClose" class="modal-close" aria-label="Закрыть">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">Пиши как есть. После «ОК» текст сохранится в разделе «Черновики», а номер и текст попадут в буфер — вставь их агенту, он оформит тикет.</p>
+      <div class="ticket-form">
+        <label>Текст задачи
+          <textarea id="draftText" rows="9" placeholder="Что сделать? Свободные мысли, контекст, ссылки…"></textarea>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button id="draftModalCancel" class="btn">Отмена</button>
+        <button id="draftSave" class="btn btn-primary">ОК — дать номер</button>
+      </div>
+    </div>
+  </div>
+</div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=201"></script>
+  <script src="/static/app.js?v=202"></script>
   <script src="/static/autoreload.js?v=1"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>

@@ -31,6 +31,36 @@ def api_tickets_create(body: dict = Body(...)):
     )
 
 
+@router.post("/tickets/draft")
+def api_tickets_draft(body: dict = Body(...)):
+    """Сохраняет свободный текст из окна «Мысль» как черновик и выдаёт метку."""
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Текст черновика обязателен")
+    res = _ticket_or_error(tickets_service.draft, text=text)
+    return {**res, "copy": res["id"] + "\n" + res["body"]}
+
+
+@router.post("/tickets/{tid}/promote")
+def api_ticket_promote(tid: str, body: dict = Body(default={})):
+    """Превращает черновик в тикет (агент может уточнить заголовок/тело)."""
+    priority = str(body.get("priority") or "medium").strip().lower()
+    raw_title = body.get("title")
+    raw_body = body.get("body")
+    return _ticket_or_error(
+        tickets_service.promote, tid,
+        title=None if raw_title is None else str(raw_title),
+        body=None if raw_body is None else str(raw_body),
+        priority=priority,
+    )
+
+
+@router.post("/tickets/{tid}/discard")
+def api_ticket_discard(tid: str):
+    """Отклоняет черновик: номер не переиспользуется."""
+    return _ticket_or_error(tickets_service.discard, tid)
+
+
 @router.post("/tickets/{tid}/start")
 def api_ticket_start(tid: str):
     return _ticket_or_error(tickets_service.start, tid)
