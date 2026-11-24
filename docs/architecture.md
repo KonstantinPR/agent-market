@@ -34,19 +34,19 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 14688 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/app.js` | 14729 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/api/ (20 файлов)` | 7115 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/static/columns.json` | 6888 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/static/columns.json` | 6897 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 3871 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
 | `app/static/style.css` | 1997 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `tests/js/test_js_helpers.py` | 1644 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1669 | проверка app.js через Node `vm` |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `app/static/index.html` | 1460 | разметка: навигация `data-tab` + секции `tab-*` |
+| `app/static/index.html` | 1461 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
-| `app/services/margin.py` | 1265 | маржинальность по детализациям, группировка артикулоразмеров |
-| `tests/unit/test_margin.py` | 1226 | юнит-тесты маржинальности |
+| `app/services/margin.py` | 1269 | маржинальность по детализациям, группировка артикулоразмеров |
+| `tests/unit/test_margin.py` | 1257 | юнит-тесты маржинальности |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |
 | `app/providers/ozon.py` | 1039 | HTTP к Ozon |
 | `app/models.py` | 887 | SQLAlchemy-модели (схема БД) |

@@ -51,8 +51,8 @@ function cabHideNoKeys() {
   return localStorage.getItem("cab-hide-nokeys") === "1";
 }
 
-function _cabLinksFiltered(mp) {
-  if (!cabCompareOn()) return undefined;
+function _cabLinksFiltered(mp, force) {
+  if (!force && !cabCompareOn()) return undefined;
   const ids = [];
   for (const comp of (cabState.companies || [])) {
     for (const lk of (comp.links || [])) {
@@ -62,14 +62,17 @@ function _cabLinksFiltered(mp) {
   if (ids.length < 2) return undefined;
   const chosen = cabCompareLinks();
   let picked = chosen.length ? ids.filter((id) => chosen.includes(id)) : ids.slice();
-  if (picked.length < 2) return undefined;
+  if (picked.length < 2) {
+    if (!force) return undefined;
+    picked = ids.slice();
+  }
   return picked.join(",");
 }
 
-function cabLinksAll() { return _cabLinksFiltered(null); }
-function cabLinksFor(mp) { return _cabLinksFiltered(mp); }
+function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
+function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "210";
+const UI_VERSION = "213";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1579,7 +1582,10 @@ function dashQuery() {
   // Период сравнения для графиков (Сравнить ▾): compare=1 + режим/даты.
   const cmp = cmpQuery("dashboard");
   if (cmp.compare) { q.compare = 1; Object.assign(q, cmp); }
-  const links = cabLinksAll();
+  const dim = $("#chartADim") ? $("#chartADim").value : "mp";
+  const links = dim === "cab"
+    ? (mp ? cabLinksFor(mp, true) : cabLinksAll(true))
+    : cabLinksAll();
   if (links) q.links = links;
   return q;
 }
@@ -1879,6 +1885,16 @@ const DASH_PREFIX_COLORS = [
   "#8a5a2b", "#7f7f7f", "#b59a3e", "#e05252", "#2e7d32", "#1565c0",
 ];
 
+const DASH_CAB_COLORS = [
+  "#6f4bff", "#1fae64", "#d18f00", "#3b6cff", "#e05cb6", "#00a5b8",
+  "#e05252", "#2e7d32", "#8a5a2b", "#1565c0", "#b59a3e", "#7f7f7f",
+];
+
+function dashCabColor(owner, owners) {
+  const i = owners.indexOf(owner);
+  return DASH_CAB_COLORS[(i < 0 ? 0 : i) % DASH_CAB_COLORS.length];
+}
+
 // Прошлый период на графиках сравнения: единый приглушённый серый.
 const DASH_PREV_COLOR = "rgba(120, 120, 120, 0.55)";
 
@@ -1910,6 +1926,29 @@ function dashChartA() {
     const colors = rows.map((_, i) =>
       DASH_PREFIX_COLORS[i % DASH_PREFIX_COLORS.length]);
     return { labels, values, colors, m, groups: rows, horizontal: true };
+  }
+  if (dim === "cab") {
+    const allRows = dashData && dashData.kpis ? dashData.kpis.per_mp : [];
+    const rows = allRows.filter((x) => x.owner).slice()
+      .sort((a, b) => (Number(b[metric]) || 0) - (Number(a[metric]) || 0));
+    const owners = Array.from(new Set(rows.map((x) => x.owner)))
+      .sort((a, b) => String(a).localeCompare(String(b), "ru"));
+    const labels = rows.map((x) => x.owner);
+    const values = rows.map((x) => x[metric] || 0);
+    const colors = rows.map((x) => dashCabColor(x.owner, owners));
+    const prevRows = ((dashData && dashData.per_marketplace_prev) || [])
+      .filter((x) => x.owner);
+    const prevByKey = new Map(prevRows.map((x) =>
+      [(x.owner || "") + "|" + (x.marketplace || ""), x]));
+    const prevValues = rows.map((x) => {
+      const k = (x.owner || "") + "|" + (x.marketplace || "");
+      return prevByKey.has(k) ? (prevByKey.get(k)[metric] || 0) : null;
+    });
+    const prevColors = rows.map((x) =>
+      dashPrevColor(dashCabColor(x.owner, owners)));
+    return { labels, values, colors, prevValues, prevColors,
+             hasPrev: rows.length > 0 && prevRows.length > 0,
+             m, empty: rows.length === 0, horizontal: true };
   }
   const rows = dashData && dashData.kpis ? dashData.kpis.per_mp : [];
   const labels = rows.map((x) => x.owner || MP_LABELS[x.marketplace] || x.marketplace);
@@ -1966,10 +2005,11 @@ function paintDashChartA() {
     options: chartOpts(a, horizontal),
   });
   const cap = $("#dashChartACap");
-  if (cap) cap.textContent =
-    a.m.label + ($("#chartADim") && $("#chartADim").value === "prefix"
-      ? " по группам · " + (DASH_GROUPINGS[dashGroupBy] || "")
-      : " по маркетплейсам");
+  const dim = $("#chartADim") ? $("#chartADim").value : "mp";
+  if (cap) cap.textContent = a.m.label + (
+    dim === "prefix" ? " по группам · " + (DASH_GROUPINGS[dashGroupBy] || "")
+      : dim === "cab" ? " по связкам"
+        : " по маркетплейсам");
 }
 
 function chartOpts(a, horizontal) {
@@ -2649,6 +2689,7 @@ const marginHeaders = [
   { k: "revenue", label: "Выручка", num: true, render: cellFmts.money , tip: "Реализация (retailAmount) за период. Возвраты вычитаются со знаком минус, поэтому возвращённый товар уменьшает выручку."},
   { k: "commission", label: "Комиссия", num: true, render: cellFmts.moneyCls , tip: "Комиссия КВВ за период с учётом знака возврата. Справочно: из прибыли не вычитается — уже сидит в «к перечислению»."},
   { k: "logistics", label: "Логистика", num: true, render: cellFmts.moneyCls , tip: "Логистика целиком (туда + обратно). Расход остаётся расходом даже по возвращённому товару."},
+  { k: "logistics_qty", label: "Логистика, шт", num: true, render: cellFmts.int , tip: "Сколько штук товаров покатали туда и обратно: сумма «Количество доставок» и «Количество возврата» из детализации WB за период."},
   { k: "logistics_out", label: "Логистика туда", num: true, render: cellFmts.moneyCls, tip: "Доставка покупателю (строки Продажа)" },
   { k: "logistics_in", label: "Логистика обратно", num: true, render: cellFmts.moneyCls, tip: "Обратная доставка (строки Возврат)" },
   { k: "storage", label: "Хранение (оц)", num: true, render: cellFmts.moneyCls, tip: "Безартикульные платы WB разнесены по «объём × тариф × остаток»" },
@@ -14196,10 +14237,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const el = $("#" + id);
     if (el) el.addEventListener("change", repaintDashCharts);
   });
-  ["chartADim", "chartAMetric"].forEach((id) => {
-    const el = $("#" + id);
-    if (el) el.addEventListener("change", repaintDashCharts);
-  });
+  const chartDim = $("#chartADim");
+  if (chartDim) chartDim.addEventListener("change", () => loadTab("dashboard"));
+  const chartMetric = $("#chartAMetric");
+  if (chartMetric) chartMetric.addEventListener("change", repaintDashCharts);
   initDashCollapse();
   initDashDrag();
   initDashTabs();

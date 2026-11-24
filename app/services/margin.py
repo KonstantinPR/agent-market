@@ -362,10 +362,11 @@ def funnel_prev_dataframe(db: Session, current: pd.DataFrame,
 DETAIL_MARGIN_COLUMNS = [
     "article", "nm_id", "name", "sells", "returns_qty",
     "stock_qty", "stock_total", "stock_in_way",
-    "revenue", "commission", "logistics", "logistics_out", "logistics_in",
-    "storage", "services", "income", "margin_gross", "net_cost", "net_cost_est",
-    "value", "supplier",
-    "margin", "margin_per_one", "margin_pct", "margin_pct_income", "margin_roi_pct",
+    "revenue", "commission", "logistics", "logistics_qty", "logistics_out", "logistics_in",
+    "storage", "services", "income", "margin_gross", "net_cost",
+    "net_cost_est", "value", "supplier",
+    "margin", "margin_per_one", "margin_pct", "margin_pct_income",
+    "margin_roi_pct",
     "commission_per_one", "logistics_per_one",
     "logistics_out_per_one", "logistics_in_per_one",
     "storage_per_one", "income_per_one", "revenue_per_one",
@@ -507,7 +508,7 @@ def margin_detail_dataframe(
     """
     cols = ["article", "nm_id", "name", "sells", "returns_qty",
             "stock_qty", "stock_total", "stock_in_way",
-            "revenue", "commission", "logistics", "logistics_out", "logistics_in",
+            "revenue", "commission", "logistics", "logistics_qty", "logistics_out", "logistics_in",
             "storage", "services", "income", "margin_gross", "net_cost",
             "net_cost_est", "value", "supplier",
             "margin", "margin_per_one", "margin_pct", "margin_pct_income",
@@ -620,7 +621,7 @@ def margin_detail_dataframe(
             nms[key] = nm
         sign = -1 if is_ret(r.doc_type_name) else 1
         if key not in cells:
-            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0]
         c = cells[key]
         qty = r.quantity if _is_goods_row(
             r.doc_type_name, r.retail_amount, r.for_pay) else 0
@@ -632,13 +633,14 @@ def margin_detail_dataframe(
         c[5] += float(r.penalty or 0) + float(r.deduction or 0) \
             + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)
         c[6] += float(r.for_pay or 0) * sign            # income
-        # Логистика туда/обратно и возвраты
+        # Логистика туда/обратно, возвраты, «штуки» логистики (туда+обратно)
         if is_ret(r.doc_type_name):
             c[8] += float(r.delivery_service or 0)       # inbound logistics
             if _is_goods_row(r.doc_type_name, r.retail_amount, r.for_pay):
                 c[9] += qty                              # returns_qty
         else:
             c[7] += float(r.delivery_service or 0)       # outbound logistics
+        c[10] += int(r.delivery_count or 0) + int(r.return_delivery_count or 0)
         if (r.title or "").strip():
             titles.setdefault(key, str(r.title).strip())
 
@@ -651,7 +653,7 @@ def margin_detail_dataframe(
         if not (qty or full or way):
             continue
         if key not in cells:
-            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0]
     if not cells:
         return out
     # nmID для артикулов только с остатком: в строках детализации его нет,
@@ -677,6 +679,7 @@ def margin_detail_dataframe(
                          or "return" in str(r.doc_type_name or "").lower() else 0.0),
         "services": (5, lambda r: float(r.penalty or 0) + float(r.deduction or 0)
                      + float(r.additional_payment or 0) + float(r.rebill_logistic_cost or 0)),
+        "logistics_qty.int": (10, lambda r: int(r.delivery_count or 0) + int(r.return_delivery_count or 0)),
     }, weight_idx=(0,))
     if not cells:
         return out
@@ -685,7 +688,7 @@ def margin_detail_dataframe(
     # операций в окне, ни остатка: информационные нулевые строки в конце.
     for key in universe:
         if key not in cells:
-            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            cells[key] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0]
         prod = prods_by_upper.get(key)
         display.setdefault(key, prod.article if prod is not None else key)
 
@@ -697,7 +700,7 @@ def margin_detail_dataframe(
         if articles is not None and key not in articles:
             continue
         (sells, revenue, commission, logistics, storage, services, income,
-         logistics_out, logistics_in, returns_qty) = c
+         logistics_out, logistics_in, returns_qty, logistics_qty) = c
         prod = _find_product(art)
         name = (prod.name or "") if prod else ""
         if not name:
@@ -742,6 +745,7 @@ def margin_detail_dataframe(
             "revenue": round(revenue, 2),
             "commission": round(commission, 2),
             "logistics": round(logistics, 2),
+            "logistics_qty": int(logistics_qty),
             "logistics_out": round(logistics_out, 2),
             "logistics_in": round(logistics_in, 2),
             "storage": round(storage_full, 2),

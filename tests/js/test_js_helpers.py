@@ -791,6 +791,8 @@ assert.strictEqual(sandbox.batchPeriodLabel({ date_from: "2026-09-23", date_to: 
 // «Массовые действия → Проверить пропущенные детализации».
 assert.ok(htmlSrc.includes('id="batchDetailCheck"'),
   "в меню массовых действий есть чекбокс batchDetailCheck");
+assert.ok(/id="batchDetailCheck"[^>]*\bchecked\b/.test(htmlSrc),
+  "«Проверить пропущенные детализации» включён по умолчанию");
 assert.ok(jsSrc.includes("detail_check: \"batchDetailCheck\""),
   "batchActions() знает про действие detail_check");
 assert.ok(jsSrc.includes('s.action === "detail_check"') && jsSrc.includes("s.details"),
@@ -881,6 +883,29 @@ assert.ok(jsSrc.includes("function dashPrevColor"),
   "есть приглушение цвета для прошлого периода");
 assert.ok(jsSrc.includes("function paintDashCompareCaption"),
   "подпись окна сравнения выводится в заголовке «Динамика за период»");
+
+assert.ok(htmlSrc.includes('<option value="cab">По связкам</option>'),
+  "в разрезе графика «Доход» есть «По связкам»");
+assert.ok(jsSrc.includes("function _cabLinksFiltered(mp, force)") &&
+  jsSrc.includes("if (!force && !cabCompareOn()) return undefined;") &&
+  jsSrc.includes("function cabLinksAll(force)") &&
+  jsSrc.includes("function cabLinksFor(mp, force)"),
+  "_cabLinksFiltered умеет принудительно брать связки без глобального сравнения");
+assert.ok(jsSrc.includes('const dim = $("#chartADim") ? $("#chartADim").value : "mp";'),
+  "dashQuery читает разрез графика «Доход»");
+assert.ok(/const links = dim === "cab"\s*\n\s*\? \(mp \? cabLinksFor\(mp, true\) : cabLinksAll\(true\)\)/.test(jsSrc),
+  "dashQuery включает links для разреза «По связкам» даже без cab-compare");
+assert.ok(jsSrc.includes("const owners = Array.from(new Set(rows.map((x) => x.owner)))"),
+  "цвета связок назначаются по уникальному владельцу");
+assert.ok(jsSrc.includes('if (dim === "cab") {') &&
+  jsSrc.includes('allRows.filter((x) => x.owner)') &&
+  jsSrc.includes("dashCabColor("),
+  "график «Доход» рисует связки с подписью и цветом по владельцу");
+assert.ok(jsSrc.includes(': dim === "cab" ? " по связкам"'),
+  "подпись графика показывает разрез «по связкам»");
+assert.ok(jsSrc.includes('chartDim.addEventListener("change", () => loadTab("dashboard"))') &&
+  jsSrc.includes('chartMetric.addEventListener("change", repaintDashCharts)'),
+  "смена разреза перезагружает Обзор, смена метрики только перерисовывает график");
 
 // Множественные виды графика «Динамика за период»: столбцы / линия / кривая / область.
 assert.ok(htmlSrc.includes('id="chartType"') && htmlSrc.includes('value="smooth"')

@@ -2691,6 +2691,11 @@
        "def": true
       },
       {
+       "k": "logistics_qty",
+       "label": "Логистика, шт",
+       "def": false
+      },
+      {
        "k": "logistics_out",
        "label": "Логистика туда",
        "def": false
@@ -4492,6 +4497,10 @@
    {
     "k": "logistics",
     "label": "Логистика"
+   },
+   {
+    "k": "logistics_qty",
+    "label": "Логистика, шт"
    },
    {
     "k": "storage",

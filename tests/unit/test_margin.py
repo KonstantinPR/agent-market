@@ -601,6 +601,7 @@ def test_margin_detail_logistics_split_and_per_unit(db):
     assert row["logistics_out"] == 200.0
     assert row["logistics_in"] == 50.0
     assert row["logistics"] == 250.0
+    assert row["logistics_qty"] == 0  # delivery_count/return_delivery_count не заданы
     # *_per_one: sells=8 (комиссия только с Продажи = 200)
     assert row["commission_per_one"] == round(200.0 / 8, 2)
     assert row["logistics_per_one"] == round(250.0 / 8, 2)
@@ -612,6 +613,36 @@ def test_margin_detail_logistics_split_and_per_unit(db):
         (2000.0 - 250.0 - 0.0 - 0.0) / 8, 2)  # no storage estimate → 0
     # return_rate = 2 / (8 + 2) * 100 = 20%
     assert row["return_rate"] == 20.0
+
+
+def test_margin_detail_logistics_qty_counts_and_redistribution(db):
+    """«Логистика, шт» = delivery_count + return_delivery_count по товару;
+    безартикульные строки разносятся пропорционально весу (abs(sells))."""
+    db.add_all([
+        models.WbDetailRow(op_key="sr:s1", source="excel", article="A1",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                           quantity=2, retail_amount=2000.0, for_pay=1800.0,
+                           delivery_count=2, return_delivery_count=0),
+        models.WbDetailRow(op_key="sr:r1", source="excel", article="A1",
+                           doc_type_name="Возврат", sale_dt=date(2026, 9, 2),
+                           quantity=1, retail_amount=1000.0, for_pay=1000.0,
+                           delivery_count=0, return_delivery_count=1),
+        models.WbDetailRow(op_key="sr:s2", source="excel", article="B2",
+                           doc_type_name="Продажа", sale_dt=date(2026, 9, 1),
+                           quantity=1, retail_amount=1000.0, for_pay=900.0,
+                           delivery_count=1, return_delivery_count=0),
+        # Безартикульная логистика с количеством — разносится по abs(sells): A1=1, B2=1
+        models.WbDetailRow(op_key="sr:la", source="excel", article="",
+                           doc_type_name="Логистика", sale_dt=date(2026, 9, 3),
+                           delivery_count=4, return_delivery_count=0),
+    ])
+    db.commit()
+    out = margin_detail_dataframe(db)
+    by = {r["article"]: r for r in out.to_dict("records")}
+    # A1: (2+1) своих + 4*1/2 от безартикульной = 5
+    assert by["A1"]["logistics_qty"] == 5
+    # B2: 1 своя + 4*1/2 = 3
+    assert by["B2"]["logistics_qty"] == 3
 
 
 def test_margin_detail_per_unit_zero_sells_no_division(db):
