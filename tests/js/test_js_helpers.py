@@ -993,6 +993,8 @@ assert.ok(/#hdrTip\s*\{[^}]*pointer-events:\s*auto/.test(excelCss),
   "#hdrTip принимает курсор (pointer-events: auto)");
 assert.ok(/\.tip \.tip-text\s*\{[^}]*user-select:\s*text/.test(excelCss),
   "текст подсказок «?» можно выделить");
+assert.ok(/\.reason-cell \.tip-text\s*\{[^}]*user-select:\s*text/.test(excelCss),
+  "полная «Причина» в подсказке тоже выделяется");
 assert.ok(excelCss.includes("transition: opacity .12s ease, visibility 0s linear .3s"),
   "подсказки «?» прячутся с задержкой, а не мгновенно");
 

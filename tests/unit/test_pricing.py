@@ -10,6 +10,7 @@ from app import models
 from app.services import pricing as pricing_service
 from app.services.pricing import (
     _active_promotions,
+    _effective_dead_stock_days,
     _parse_ranging,
     _promo_cap_pct,
     _promo_pass,
@@ -383,6 +384,45 @@ def test_r4_dead_stock_lowers(db):
     assert row["target_vis"] == pytest.approx(850.0, abs=1)
     # T-78: пол безубыточности виден в строке (раньше всегда None)
     assert row["floor_price"] == pytest.approx(473.0, abs=2)
+
+
+def test_zero_stock_below_floor_halves_discount(db):
+    _seed(db, "ZS1", "PZS1", net_cost=300, stock=0,
+          sales=[*_fallback_sales()], funnel=(100, 10, 3, 0, 400))
+    rec = recommendations(db, prices_df=_prices(("PZS1", 1000, 60)), today=TODAY)
+    row = _row(rec, "ZS1")
+    assert row["action"] == "RAISE"
+    assert row["target_discount"] == pytest.approx(30.0, abs=0.1)
+    assert row["target_vis"] == pytest.approx(700.0, abs=1)
+    assert row["floor_price"] == pytest.approx(473.0, abs=2)
+    assert "вдвое" in row["reason"]
+
+
+def test_zero_stock_above_floor_stays_hold(db):
+    _seed(db, "ZS2", "PZS2", net_cost=300, stock=0,
+          sales=[*_fallback_sales()], funnel=(100, 10, 3, 0, 400))
+    rec = recommendations(db, prices_df=_prices(("PZS2", 1000, 20)), today=TODAY)
+    row = _row(rec, "ZS2")
+    assert row["action"] == "HOLD"
+    assert row["status"] == "hold"
+    assert "распродан" in row["reason"]
+
+
+def test_effective_dead_stock_days_scales_with_price():
+    assert _effective_dead_stock_days({"price": 500}, {}) == 7
+    assert _effective_dead_stock_days({"price": 10000}, {}) == 140
+    assert _effective_dead_stock_days({"price": 100000}, {}) == 180
+    assert _effective_dead_stock_days({"current_vis": 2000}, {"dead_stock_days": 10}) == 40
+
+
+def test_expensive_recent_no_sales_is_not_dead_stock(db):
+    _seed(db, "DS1", "PDS1", net_cost=300, stock=100,
+          sales=[*_fallback_sales()], funnel=(0, 0, 0, 0, 0))
+    rec = recommendations(db, prices_df=_prices(("PDS1", 10000, 0)), today=TODAY)
+    row = _row(rec, "DS1")
+    assert row["dead_stock_days"] == 140.0
+    assert "мёртвый запас" not in row["reason"]
+    assert "порог 140" in row["reason"]
 
 
 # ------------------------------------------------------------------ T-78: мёртвый запас

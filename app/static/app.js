@@ -72,7 +72,7 @@ function _cabLinksFiltered(mp, force) {
 function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
 function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "213";
+const UI_VERSION = "214";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {

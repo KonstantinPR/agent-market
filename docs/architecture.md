@@ -37,11 +37,11 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/static/app.js` | 14729 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/api/ (20 файлов)` | 7115 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/static/columns.json` | 6897 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/services/pricing.py` | 3871 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
+| `app/services/pricing.py` | 3906 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
-| `app/static/style.css` | 1997 | стили (панели «Вид таблицы», тулбары, таблицы) |
+| `app/static/style.css` | 2029 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `tests/js/test_js_helpers.py` | 1669 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1671 | проверка app.js через Node `vm` |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `app/static/index.html` | 1461 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |

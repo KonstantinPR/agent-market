@@ -36,6 +36,9 @@ def _cab_provider(db=None):
     creds = provider_credentials(db, "wb")
     return provider_factory.get_wb_provider(credentials=creds or None)
 
+DEAD_STOCK_PRICE_BASE = 500.0
+DEAD_STOCK_DAYS_MAX = 180.0
+
 PRICING_DEFAULTS = {
     "window_days": 14,
     "target_doc": 30,
@@ -2717,6 +2720,14 @@ def _valued_item_reason(f: dict, rating_scale: float, value_scale: float) -> str
     return "ценный товар (" + "; ".join(parts) + ") — скидку не увеличиваем"
 
 
+def _effective_dead_stock_days(f: dict, s: dict) -> float:
+    days = _num(s.get("dead_stock_days"), 7.0)
+    price = _num(f.get("price")) or _num(f.get("current_vis"))
+    if price <= 0:
+        return days
+    return min(DEAD_STOCK_DAYS_MAX, days * max(1.0, price / DEAD_STOCK_PRICE_BASE))
+
+
 def _half_discount_guard(cur_disc: float, new_disc: float, factual: float, net_cost: float) -> float:
     """R: при RAISE (скидку уменьшаем) никогда не режем её более чем пополам.
 
@@ -2999,6 +3010,25 @@ def _decide(f: dict, s: dict) -> dict:
                     reason="нет данных об остатках (вытяните WB Остатки)")
         return base
     if use_inv and stock <= 0:
+        floor_val = _num(f.get("floor_price")) or _num(floor)
+        price_val = f["price"]
+        cur_disc = f["current_discount"]
+        cur_vis = f["current_vis"]
+        if use_margin and floor_val > 0 and price_val > 0 and cur_vis < floor_val:
+            floor_disc = max(0.0, (1 - floor_val / price_val) * 100)
+            target_disc = max(0.0, min(cur_disc / 2.0, floor_disc))
+            if cur_disc - target_disc >= _num(s["min_delta_pp"]):
+                target_vis = price_val * (1 - target_disc / 100)
+                base.update(
+                    action="RAISE", status="suggested",
+                    reason=(f"распродан (остаток 0), но витрина {cur_vis:.0f} ₽ ниже пола "
+                            f"{floor_val:.0f} ₽ — режем скидку вдвое "
+                            f"({cur_disc:.0f}%→{target_disc:.0f}%)"),
+                    target_discount=round(_clamp(target_disc, 0, 100), 1),
+                    target_vis=round(target_vis, 2),
+                    margin_pct_at_target=_margin_pct(target_vis, f),
+                )
+                return base
         base.update(action="HOLD", status="hold", reason="распродан (остаток 0)")
         return base
 
@@ -3066,7 +3096,9 @@ def _decide(f: dict, s: dict) -> dict:
 
     # R4: мёртвый запас (фактор «Продажи»)
     if use_sales and v_proj <= 0:
-        if f["last_sale_days_ago"] >= int(s["dead_stock_days"]):
+        dead_days = _effective_dead_stock_days(f, s)
+        base["dead_stock_days"] = round(dead_days, 1)
+        if f["last_sale_days_ago"] >= dead_days:
             if item_scale <= 0.01:
                 return _mandatory_step(
                     base, f, s, "LOWER",
@@ -3085,7 +3117,8 @@ def _decide(f: dict, s: dict) -> dict:
             target_vis = min(target_vis, cur_vis)
             new_disc = (1 - target_vis / price) * 100 if price > 0 else cur_disc
             base["dead_stock"] = True
-            reason = (f"мёртвый запас: продаж нет {f['last_sale_days_ago']} дн., "
+            reason = (f"мёртвый запас: продаж нет {f['last_sale_days_ago']} дн. "
+                      f"(порог {dead_days:.0f} дн. для цены {price:.0f} ₽), "
                       f"остаток {stock} шт")
             if floor_val > cur_vis + 1e-9:
                 # пол выше витрины: снижать некуда (уже торгуем в убыток) —
@@ -3107,7 +3140,9 @@ def _decide(f: dict, s: dict) -> dict:
             else:
                 return _mandatory_step(base, f, s, "LOWER", reason,
                                        max_disc_item=dead_cap)
-        return _mandatory_step(base, f, s, "LOWER", "продаж нет (менее порога)")
+        return _mandatory_step(
+            base, f, s, "LOWER",
+            f"продаж нет ({f['last_sale_days_ago']} дн. < порог {dead_days:.0f} дн.)")
 
     if not use_sales:
         if stock is None or stock <= 0:

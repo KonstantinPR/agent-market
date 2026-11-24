@@ -1128,6 +1128,12 @@ td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-hei
   outline: none;
 }
 .tip:hover, .tip:focus { background: #dceafc; border-color: #3574b2; }
+.reason-cell {
+  position: relative;
+  display: inline-block;
+  cursor: help;
+  outline: none;
+}
 .tip .tip-text {
   position: absolute;
   z-index: 60;
@@ -1154,7 +1160,31 @@ td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-hei
   transition: opacity .12s ease, visibility 0s linear .3s;
   white-space: normal;
 }
-.tip .tip-text::after {
+.reason-cell .tip-text {
+  position: absolute;
+  z-index: 60;
+  bottom: 150%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 340px;
+  padding: 9px 11px;
+  background: #3b4757;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  border-radius: 6px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  display: block;
+  opacity: 0;
+  visibility: hidden;
+  user-select: text;
+  cursor: auto;
+  transition: opacity .12s ease, visibility 0s linear .3s;
+  white-space: normal;
+}
+.tip .tip-text::after, .reason-cell .tip-text::after {
   content: "";
   position: absolute;
   top: 100%;
@@ -1163,7 +1193,7 @@ td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-hei
   border: 5px solid transparent;
   border-top-color: #3b4757;
 }
-.tip:hover .tip-text {
+.tip:hover .tip-text, .reason-cell:hover .tip-text {
   opacity: 1;
   visibility: visible;
   /* Подсказка «?» при наведении появляется с задержкой (~1с) — чтобы не
@@ -1171,7 +1201,9 @@ td.cell-wrap { white-space: normal; min-width: 320px; max-width: 520px; line-hei
   transition: opacity .12s ease 1s, visibility 0s linear 1s;
 }
 .tip:focus .tip-text,
-.tip:focus-within .tip-text {
+.tip:focus-within .tip-text,
+.reason-cell:focus .tip-text,
+.reason-cell:focus-within .tip-text {
   opacity: 1;
   visibility: visible;
   transition: opacity .12s ease, visibility 0s;
