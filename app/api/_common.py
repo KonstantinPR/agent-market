@@ -12,7 +12,7 @@ from typing import List, Optional
 import pandas as pd
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -825,25 +825,32 @@ def _unit_econ(rows) -> Optional[dict]:
     """
     revenue = 0.0
     qty = 0.0
+    expense_qty = 0.0
     commission = 0.0
     logistics = 0.0
     storage = 0.0
     services = 0.0
     for r in rows:
-        qty += max(float(getattr(r, "qty", 0) or 0), 0)
+        row_qty = max(float(getattr(r, "qty", 0) or 0), 0)
+        row_expense = float(getattr(r, "expense_qty", 0) or 0)
+        if row_expense <= 0:
+            row_expense = row_qty
+        qty += row_qty
+        expense_qty += row_expense
         revenue += float(getattr(r, "revenue", 0) or 0)
         commission += float(getattr(r, "commission", 0) or 0)
-        logistics += float(getattr(r, "logistics", 0) or 0)
-        storage += float(getattr(r, "storage", 0) or 0)
-        services += float(getattr(r, "services", 0) or 0)
-    if revenue <= 0 or qty <= 0:
+        if row_expense > 0:
+            logistics += float(getattr(r, "logistics", 0) or 0)
+            storage += float(getattr(r, "storage", 0) or 0)
+            services += float(getattr(r, "services", 0) or 0)
+    if revenue <= 0 or qty <= 0 or expense_qty <= 0:
         return None
     comm_rate = min(0.5, abs(commission) / revenue)
     return {
         "comm_rate": float(comm_rate),
-        "logistics_unit": abs(logistics) / qty,
-        "storage_unit": abs(storage) / qty,
-        "other_unit": abs(services) / qty,
+        "logistics_unit": abs(logistics) / expense_qty,
+        "storage_unit": abs(storage) / expense_qty,
+        "other_unit": abs(services) / expense_qty,
     }
 
 
@@ -853,12 +860,24 @@ def _sale_agg_rows(db: Session, days: int):
     q = (
         select(
             models.Sale.article,
-            func.sum(models.Sale.quantity - models.Sale.returns_qty).label("qty"),
+            func.sum(case(
+                (models.Sale.quantity < 0, models.Sale.quantity),
+                else_=models.Sale.quantity - models.Sale.returns_qty,
+            )).label("qty"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.quantity), else_=0,
+            )).label("expense_qty"),
             func.sum(models.Sale.revenue).label("revenue"),
             func.sum(models.Sale.commission).label("commission"),
-            func.sum(models.Sale.logistics).label("logistics"),
-            func.sum(models.Sale.storage).label("storage"),
-            func.sum(models.Sale.services).label("services"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.logistics), else_=0,
+            )).label("logistics"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.storage), else_=0,
+            )).label("storage"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.services), else_=0,
+            )).label("services"),
         )
         .where(models.Sale.date >= start)
         .group_by(models.Sale.article)

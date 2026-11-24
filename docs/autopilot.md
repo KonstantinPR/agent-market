@@ -109,10 +109,13 @@ v_funnel     = count / days                                        # шт/ден
 **Unit-экономика** (за `fallback_window_days = 90` дн):
 
 ```
+qty_net        = Σ quantity, если есть отрицательные строки возвратов,
+                 иначе Σ (quantity − returns_qty)     # старый формат sales
+qty_sold       = Σ quantity по строкам с quantity > 0
 comm_rate      = |commission| / revenue, кап 0.5
-logistics_unit = |logistics| / qty          # ₽/шт
-storage_unit   = |storage|    / qty         # ₽/шт
-other_unit     = |services|   / qty         # ₽/шт
+logistics_unit = |logistics| / qty_sold     # ₽/шт, только продажи
+storage_unit   = |storage|   / qty_sold     # ₽/шт, только продажи
+other_unit     = |services|  / qty_sold     # ₽/шт, только продажи
 ```
 
 **Пол цены (break-even)** — ниже автопилот никогда не опускается:
@@ -333,10 +336,13 @@ returns_ratio = (returns_qty_now + cancelled) / qty_sold_now       # пена в
 avg_price     = средняя цена из воронки (реальные продажи)
 Unit-экономика (за fallback_window_days = 90 дн):
 
+qty_net        = Σ quantity, если есть отрицательные строки возвратов,
+                 иначе Σ (quantity − returns_qty)     # старый формат sales
+qty_sold       = Σ quantity по строкам с quantity > 0
 comm_rate      = |commission| / revenue, кап 0.5
-logistics_unit = |logistics| / qty          # ₽/шт
-storage_unit   = |storage|    / qty         # ₽/шт
-other_unit     = |services|   / qty         # ₽/шт
+logistics_unit = |logistics| / qty_sold     # ₽/шт, только продажи
+storage_unit   = |storage|   / qty_sold     # ₽/шт, только продажи
+other_unit     = |services|  / qty_sold     # ₽/шт, только продажи
 Пол цены (break-even) — ниже автопилот никогда не опускается:
 
 floor = (logistics_unit + storage_unit + other_unit + net_cost)

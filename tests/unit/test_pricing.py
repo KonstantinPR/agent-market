@@ -16,6 +16,7 @@ from app.services.pricing import (
     _promo_pass,
     _promo_plan_map,
     _sacrifice_score,
+    _unit_economics,
     _value_discount_scale,
     merge_settings,
     project_velocity,
@@ -2912,6 +2913,47 @@ def test_floor_source_unit_econ_for_live_item(db):
     assert row["net_cost_est"] is False
     assert row["floor_source"] == "unit_econ"
     assert row["floor_price"] > 0
+
+
+def test_unit_economics_ignores_zero_qty_service_rows():
+    rows = pd.DataFrame([
+        {"qty": 0, "expense_qty": 0, "revenue": 0.0, "commission": 0.0,
+         "logistics": 382.46, "storage": 0.0, "services": 9.47},
+        {"qty": 1, "expense_qty": 1, "revenue": 4495.0, "commission": -168.21,
+         "logistics": 238.46, "storage": 0.0, "services": 19.81},
+        {"qty": 2, "expense_qty": 2, "revenue": 6534.0, "commission": -1189.60,
+         "logistics": 620.92, "storage": 0.0, "services": 130.68},
+        {"qty": -1, "expense_qty": 0, "revenue": -3267.0, "commission": 594.80,
+         "logistics": 0.0, "storage": 0.0, "services": 0.0},
+    ])
+    ue = _unit_economics(rows)
+    assert ue["qty"] == 2
+    assert ue["qty_sold"] == 3
+    assert ue["logistics_unit"] == pytest.approx((238.46 + 620.92) / 3)
+    assert ue["other_unit"] == pytest.approx((19.81 + 130.68) / 3)
+    assert ue["comm_rate"] == pytest.approx(abs(-168.21 - 1189.60 + 594.80) / 7762.0)
+
+
+def test_floor_logistics_excludes_wb_service_rows(db):
+    wb = db.execute(select(models.Marketplace.id).where(models.Marketplace.code == "wb")).scalar_one()
+    _seed(db, "TL94", "PTL94", stock=10, net_cost=400,
+          sales=[(2, 1, 0), (4, 1, 0), (40, 1, 0)])
+    db.add_all([
+        models.Sale(marketplace_id=wb, date=TODAY - timedelta(days=3),
+                    article="TL94", source="v5", quantity=0, returns_qty=0,
+                    revenue=0, commission=0, logistics=900, storage=0,
+                    services=50, income=0),
+        models.Sale(marketplace_id=wb, date=TODAY - timedelta(days=5),
+                    article="TL94", source="v5", quantity=-1, returns_qty=1,
+                    revenue=-500, commission=75, logistics=0, storage=0,
+                    services=0, income=-450),
+    ])
+    db.commit()
+    rec = recommendations(db, prices_df=_prices(("PTL94", 1000, 0)), today=TODAY)
+    row = _row(rec, "TL94")
+    assert row["floor_source"] == "unit_econ"
+    assert row["floor_basis"]["logistics_unit"] == pytest.approx(40.0)
+    assert row["floor_basis"]["other_unit"] == pytest.approx(5.0)
 
 
 def test_floor_source_cabinet_for_r14(db):

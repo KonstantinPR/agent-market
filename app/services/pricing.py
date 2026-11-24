@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -812,24 +812,32 @@ def _first_stock_dates(db: Session, wb_mp: int) -> dict:
 
 
 def _unit_economics(rows: pd.DataFrame) -> Optional[dict]:
-    """Приводит unit-экономику по суммам sales (колонки: revenue, commission, ...)."""
+    """Приводит unit-экономику по суммам sales (колонки: revenue, commission, ...).
+
+    T-94: расходы WB делятся на проданные штуки (expense_qty), служебные строки
+    детализации с quantity=0 в расходы не попадают.
+    """
     if rows is None or rows.empty:
         return None
     revenue = _num(rows["revenue"].sum())
     qty = max(_num(rows["qty"].sum()), 0)
-    if revenue <= 0 or qty <= 0:
+    expense_qty = (_num(rows["expense_qty"].sum())
+                   if "expense_qty" in rows.columns else qty)
+    if revenue <= 0 or qty <= 0 or expense_qty <= 0:
         return None
     comm = abs(_num(rows["commission"].sum()))
     comm_rate = min(0.5, comm / revenue)
-    logistics_unit = abs(_num(rows["logistics"].sum())) / qty
-    storage_unit = abs(_num(rows["storage"].sum())) / qty
-    other_unit = abs(_num(rows["services"].sum())) / qty
+    sold = rows if "expense_qty" not in rows.columns else rows[rows["expense_qty"] > 0]
+    logistics_unit = abs(_num(sold["logistics"].sum())) / expense_qty
+    storage_unit = abs(_num(sold["storage"].sum())) / expense_qty
+    other_unit = abs(_num(sold["services"].sum())) / expense_qty
     return {
         "comm_rate": comm_rate,
         "logistics_unit": logistics_unit,
         "storage_unit": storage_unit,
         "other_unit": other_unit,
         "qty": qty,
+        "qty_sold": expense_qty,
     }
 
 
@@ -869,12 +877,24 @@ def _econ_fallback(db: Session, s: dict, today: Optional[date] = None) -> dict:
         q = (
             select(
                 models.Sale.article,
-                func.sum(models.Sale.quantity - models.Sale.returns_qty).label("qty"),
+                func.sum(case(
+                    (models.Sale.quantity < 0, models.Sale.quantity),
+                    else_=models.Sale.quantity - models.Sale.returns_qty,
+                )).label("qty"),
+                func.sum(case(
+                    (models.Sale.quantity > 0, models.Sale.quantity), else_=0,
+                )).label("expense_qty"),
                 func.sum(models.Sale.revenue).label("revenue"),
                 func.sum(func.abs(models.Sale.commission)).label("commission"),
-                func.sum(func.abs(models.Sale.logistics)).label("logistics"),
-                func.sum(func.abs(models.Sale.storage)).label("storage"),
-                func.sum(func.abs(models.Sale.services)).label("services"),
+                func.sum(case(
+                    (models.Sale.quantity > 0, func.abs(models.Sale.logistics)), else_=0,
+                )).label("logistics"),
+                func.sum(case(
+                    (models.Sale.quantity > 0, func.abs(models.Sale.storage)), else_=0,
+                )).label("storage"),
+                func.sum(case(
+                    (models.Sale.quantity > 0, func.abs(models.Sale.services)), else_=0,
+                )).label("services"),
             )
             .where(
                 models.Sale.marketplace_id == wb_mp,
@@ -887,14 +907,15 @@ def _econ_fallback(db: Session, s: dict, today: Optional[date] = None) -> dict:
         rates, logs, stores, others, units = [], [], [], [], 0
         for r in db.execute(q):
             qty = _num(r.qty)
+            expense_qty = _num(r.expense_qty)
             revenue = _num(r.revenue)
-            if qty <= 0 or revenue <= 0:
+            if qty <= 0 or revenue <= 0 or expense_qty <= 0:
                 continue
             units += int(qty)
             rates.append(min(0.5, _num(r.commission) / revenue))
-            logs.append(_num(r.logistics) / qty)
-            stores.append(_num(r.storage) / qty)
-            others.append(_num(r.services) / qty)
+            logs.append(_num(r.logistics) / expense_qty)
+            stores.append(_num(r.storage) / expense_qty)
+            others.append(_num(r.services) / expense_qty)
         if rates:
             stats.update({
                 "source": "cabinet",
@@ -1129,14 +1150,26 @@ def recommendations(
         select(
             models.Sale.date,
             models.Sale.article,
-            func.sum(models.Sale.quantity - models.Sale.returns_qty).label("qty"),
+            func.sum(case(
+                (models.Sale.quantity < 0, models.Sale.quantity),
+                else_=models.Sale.quantity - models.Sale.returns_qty,
+            )).label("qty"),
             func.sum(models.Sale.quantity).label("qty_sold"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.quantity), else_=0,
+            )).label("expense_qty"),
             func.sum(models.Sale.returns_qty).label("ret"),
             func.sum(models.Sale.revenue).label("revenue"),
             func.sum(models.Sale.commission).label("commission"),
-            func.sum(models.Sale.logistics).label("logistics"),
-            func.sum(models.Sale.storage).label("storage"),
-            func.sum(models.Sale.services).label("services"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.logistics), else_=0,
+            )).label("logistics"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.storage), else_=0,
+            )).label("storage"),
+            func.sum(case(
+                (models.Sale.quantity > 0, models.Sale.services), else_=0,
+            )).label("services"),
         )
         .where(
             models.Sale.marketplace_id == wb_mp,
@@ -1149,7 +1182,8 @@ def recommendations(
     rows_df = pd.DataFrame([{
         "date": r.date, "article": str(r.article).strip().upper(),
         "qty": int(r.qty or 0),
-        "qty_sold": int(r.qty_sold or 0), "ret": int(r.ret or 0),
+        "qty_sold": int(r.qty_sold or 0),
+        "expense_qty": int(r.expense_qty or 0), "ret": int(r.ret or 0),
         "revenue": _num(r.revenue), "commission": _num(r.commission),
         "logistics": _num(r.logistics), "storage": _num(r.storage),
         "services": _num(r.services),
