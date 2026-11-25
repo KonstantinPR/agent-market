@@ -7,9 +7,12 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 
 from app import models
+from app.api._common import _REPLENISH_EXPORT, _REPLENISH_EXPORT_SIZES
 from app.services.replenish import (
-    WB_SORT_VELOCITY_DAYS, apply_sort_budget, apply_wish, parse_wish_step,
-    profit_factor, replenish_rows, wb_profit_factors, wb_sorting_plan,
+    WB_SORT_VELOCITY_DAYS, _sync_wish_summary, apply_rehab_stock,
+    apply_size_cap, apply_sort_budget, apply_sort_plan_options, apply_wish,
+    parse_wish_step, profit_factor, replenish_rows, wb_profit_factors,
+    wb_sorting_plan,
 )
 
 TODAY = date(2026, 9, 20)
@@ -1635,6 +1638,94 @@ def test_api_replenish_articles_filter_unmatched_exports_empty(db, api_client):
                         params={**win, "articles": "НЕТ-ТАКОГО"})
     assert xp.status_code == 200
     assert _excel_articles(xp.content) == []
+
+
+def test_export_replenish_template_matches_excel_headers(api_client):
+    resp = api_client.get("/api/export/replenish/template")
+    assert resp.status_code == 200
+    wb = load_workbook(io.BytesIO(resp.content))
+    assert wb.sheetnames == ["Потребность", "Потребность по размерам"]
+    assert ([c.value for c in wb["Потребность"][1]]
+            == list(_REPLENISH_EXPORT.values()))
+    assert ([c.value for c in wb["Потребность по размерам"][1]]
+            == list(_REPLENISH_EXPORT_SIZES.values()))
+
+
+def test_api_replenish_passes_plan_options(db, api_client, monkeypatch):
+    captured = {}
+
+    def fake_rows(*args, **kwargs):
+        captured.update(kwargs)
+        return {"rows": [], "meta": {}}
+
+    monkeypatch.setattr(
+        "app.api.replenish.replenish_service.replenish_rows", fake_rows
+    )
+    resp = api_client.get("/api/replenish", params={
+        "max_per_size": 1, "rehab_units": 3,
+    })
+    assert resp.status_code == 200
+    assert captured["max_per_size"] == 1
+    assert captured["rehab_units"] == 3
+
+
+def _sort_options_plan():
+    return {
+        "PROFIT": {
+            "article": "PROFIT", "factor": 1.0, "total": 10,
+            "sizes": [
+                {"size": "42", "to_sort": 5, "vel": 0.5, "avail": 0, "net": 10},
+                {"size": "44", "to_sort": 5, "vel": 1.0, "avail": 0, "net": 20},
+            ],
+        },
+        "LOSS": {
+            "article": "LOSS", "factor": 0.0, "total": 0,
+            "sizes": [
+                {"size": "40", "to_sort": 0, "vel": 0.0, "avail": 0, "net": 0},
+                {"size": "42", "to_sort": 0, "vel": 0.02, "avail": 0, "net": 1},
+                {"size": "44", "to_sort": 0, "vel": 0.5, "avail": 2, "net": 10},
+            ],
+        },
+    }
+
+
+def test_apply_size_cap_limits_every_size():
+    plan = _sort_options_plan()
+    changed = apply_size_cap(plan, 1)
+    assert changed == 2
+    assert all(it["to_sort"] <= 1
+               for e in plan.values() for it in e["sizes"])
+    assert plan["PROFIT"]["total"] == 2
+    assert apply_size_cap(plan, 0) == 0
+
+
+def test_apply_rehab_stock_picks_most_distant_loss_sizes():
+    plan = _sort_options_plan()
+    summary = apply_rehab_stock(plan, 2)
+    assert summary == {"requested": 2, "placed": 2, "short": 0}
+    loss = {it["size"]: it["to_sort"] for it in plan["LOSS"]["sizes"]}
+    assert loss == {"40": 1, "42": 1, "44": 0}
+    assert plan["LOSS"]["total"] == 2
+    assert plan["PROFIT"]["total"] == 10
+
+
+def test_apply_sort_plan_options_caps_after_rehab():
+    plan = _sort_options_plan()
+    summary = apply_sort_plan_options(plan, max_per_size=1, rehab_units=5)
+    assert summary["rehab"]["placed"] == 3
+    assert summary["max_per_size"] == 1
+    assert summary["capped_sizes"] == 2
+    assert all(it["to_sort"] <= 1
+               for e in plan.values() for it in e["sizes"])
+    assert plan["LOSS"]["total"] == 3
+
+
+def test_sync_wish_summary_after_cap():
+    summary = {"total": 10, "step": "2", "placed": 10, "short": 0, "reason": ""}
+    plan = {"A": {"sizes": [{"to_sort": 2}, {"to_sort": 3}]}}
+    assert _sync_wish_summary(summary, plan) is summary
+    assert summary["placed"] == 5
+    assert summary["short"] == 5
 
 
 

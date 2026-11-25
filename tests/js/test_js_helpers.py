@@ -549,12 +549,15 @@ assert.ok(jsSrc.includes('to_sort: _footSum(rows, "to_sort")'),
 // повторяются в каждом размере — берём их по уникальным артикулам (иначе 2×/N×).
 const footRows = [
   { article: "A", our_stock: 10, our_cost: 100, margin_per_one: 2, margin_pct: 10,
+    margin: 10, margin_gross: 12,
     wb_sells: 3, wb_net: 3, wb_ret: 0, wb_qty: 5, sells: 3, returns_qty: 0,
     income: 900, oz_qty: 1 },
   { article: "A", our_stock: 10, our_cost: 100, margin_per_one: 2, margin_pct: 10,
+    margin: 10, margin_gross: 12,
     wb_sells: 0, wb_net: 0, wb_ret: 1, wb_qty: 2, sells: 3, returns_qty: 0,
     income: 900, oz_qty: 1 },
   { article: "B", our_stock: 7, our_cost: 200, margin_per_one: 4, margin_pct: 20,
+    margin: 20, margin_gross: 25,
     wb_sells: 1, wb_net: 1, wb_ret: 0, wb_qty: 4, sells: 1, returns_qty: 2,
     income: 300, oz_qty: 3 },
 ];
@@ -573,7 +576,9 @@ assert.strictEqual(fsz.margin_pct.avg, 15, "рент-сть по уникаль�
 assert.strictEqual(fsz.wb_net, 4, "итог «Продажи WB нетто» — сумма");
 assert.strictEqual(fsz.wb_ret, 1, "итог «Возвраты WB» — сумма");
 assert.strictEqual(fsz.wb_qty, 11, "итог «WB склад» (размеры) — сумма");
-assert.ok(!("margin" in fsz), "в размерном виде нет мёртвого итога «Маржа руб»");
+assert.strictEqual(fsz.margin, 30, "итог «Прибыль» по уникальным артикулам");
+assert.strictEqual(fsz.margin_gross, 37,
+                   "итог «Маржа, до себестоимости» по уникальным артикулам");
 
 // Итоги «WB API ▸ Остатки»: доступно/всего на складах/в пути — сумма.
 const sf = sandbox.stockFooters([

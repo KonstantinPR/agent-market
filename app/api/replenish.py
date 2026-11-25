@@ -26,6 +26,8 @@ def api_replenish(
     view: str = "article",
     wish: int = 0,
     wish_step: str = "",
+    max_per_size: int = 0,
+    rehab_units: int = 0,
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
@@ -39,8 +41,9 @@ def api_replenish(
     articles=ART1,ART2,… — фильтр по списку (как на «Детализация Продаж WB»):
     артикулы/баркоды/nmID WB/артикулы Ozon резолвятся в UPPER-артикулы.
     wish/wish_step — «Пожелание»: ручной объём N шт на WB и шаг размера
-    («2»/«2-4»); кривой шаг — 400. cabinet — локальный выбор связки в разделе
-    (None — активная из куки).
+    («2»/«2-4»); кривой шаг — 400. max_per_size — потолок штук на размер,
+    rehab_units — число штук для точечной реабилитации убыточных карточек.
+    cabinet — локальный выбор связки в разделе (None — активная из куки).
     """
     inf = _apply_cabinet(db, cabinet)
     from_, to_ = _parse_window400(date_from, date_to)
@@ -68,6 +71,7 @@ def api_replenish(
         articles=arts,
         show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
         view=view, wish=wish, wish_step=wish_step,
+        max_per_size=max_per_size, rehab_units=rehab_units,
     )
     result["date_from"] = from_.isoformat()
     result["date_to"] = to_.isoformat()

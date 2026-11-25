@@ -98,8 +98,8 @@ def _detail_maps(df: pd.DataFrame):
         key = art.upper()
         out.setdefault(key, {
             "sells": 0, "returns_qty": 0, "income": 0.0, "revenue": 0.0,
-            "margin": 0.0, "margin_per_one": 0.0, "margin_pct": 0.0,
-            "net_cost_est": 0, "name": "",
+            "margin": 0.0, "margin_gross": 0.0, "margin_per_one": 0.0,
+            "margin_pct": 0.0, "net_cost_est": 0, "name": "",
         })
         d = out[key]
         d["sells"] += int(_num(rec.get("sells")))
@@ -107,6 +107,7 @@ def _detail_maps(df: pd.DataFrame):
         d["income"] += _num(rec.get("income"))
         d["revenue"] += _num(rec.get("revenue"))
         d["margin"] += _num(rec.get("margin"))
+        d["margin_gross"] += _num(rec.get("margin_gross"))
         d["net_cost_est"] += int(_num(rec.get("net_cost_est")))
         name = str(rec.get("name") or "").strip()
         if name and not d["name"]:
@@ -428,6 +429,7 @@ def wb_sorting_plan(
 def _wb_sort_plan(
     db: Session, date_to, keys, target_days: int = 30,
     wish: int = 0, wish_step: str = "", margin_by_art: Optional[dict] = None,
+    max_per_size: int = 0, rehab_units: int = 0,
 ):
     """План подсортировки на WB (как PDF по умолчанию) для набора артикулов.
 
@@ -438,11 +440,16 @@ def _wb_sort_plan(
 
     При ``wish > 0`` поверх плана применяется «Пожелание» — ручной объём на WB
     (``apply_wish``), с учётом ``wish_step`` и удельной маржи ``margin_by_art``.
-    Возвращает ``(plan, wish_summary)``: сводка ``None``, если пожелание не
-    задано, иначе ``{total, step, placed, short, reason}`` для ``meta.wish``.
+    ``max_per_size``/``rehab_units`` задают потолок на размер и точечную
+    реабилитацию убыточных карточек (кроме активного «Пожелания»).
+    Возвращает ``(plan, wish_summary, plan_summary)``: ``wish_summary`` — ``None``
+    или ``{total, step, placed, short, reason}`` для ``meta.wish``;
+    ``plan_summary`` — сводка ``apply_sort_plan_options`` для ``meta.sort_plan``.
     """
     if not keys:
-        return {}, None
+        return {}, None, {"max_per_size": 0, "capped_sizes": 0, "rehab": {
+            "requested": 0, "placed": 0, "short": 0,
+        }}
     articles = sorted(keys)
     factors = wb_profit_factors(db, date_to, articles=articles)
     plan = wb_sorting_plan(
@@ -452,7 +459,15 @@ def _wb_sort_plan(
     summary = None
     if int(wish or 0) > 0:
         summary = apply_wish(plan, wish, wish_step, margin_by_art or {})
-    return plan, summary
+    plan_summary = apply_sort_plan_options(
+        plan,
+        max_per_size=max_per_size,
+        rehab_units=rehab_units,
+        allow_rehab=int(wish or 0) == 0,
+    )
+    if plan_summary["capped_sizes"]:
+        _sync_wish_summary(summary, plan)
+    return plan, summary, plan_summary
 
 
 def apply_sort_budget(plan: dict, budgets: dict) -> dict:
@@ -511,6 +526,114 @@ def apply_sort_budget(plan: dict, budgets: dict) -> dict:
             it["to_sort"] = v
         entry["total"] = sum(new)
     return plan
+
+
+def _recalc_plan_entry(entry: dict) -> None:
+    entry["total"] = sum(
+        max(0, int(it.get("to_sort") or 0))
+        for it in (entry.get("sizes") or [])
+    )
+
+
+def _sync_wish_summary(summary: Optional[dict], plan: dict) -> Optional[dict]:
+    if not summary or summary.get("reason"):
+        return summary
+    placed = sum(
+        max(0, int(it.get("to_sort") or 0))
+        for entry in plan.values()
+        for it in (entry.get("sizes") or [])
+    )
+    summary["placed"] = placed
+    summary["short"] = max(0, int(summary.get("total") or 0) - placed)
+    return summary
+
+
+def apply_size_cap(plan: dict, max_per_size: int = 0) -> int:
+    """Ограничить «дослать» одного размера сверху; 0 — выключено.
+
+    Возвращает число размеров, у которых значение было уменьшено. Изменяет
+    ``plan`` на месте и пересчитывает итог по затронутым артикулам.
+    """
+    cap = max(0, int(max_per_size or 0))
+    if cap <= 0:
+        return 0
+    changed = 0
+    for entry in plan.values():
+        for it in entry.get("sizes") or []:
+            v = max(0, int(it.get("to_sort") or 0))
+            if v > cap:
+                it["to_sort"] = cap
+                changed += 1
+        _recalc_plan_entry(entry)
+    return changed
+
+
+def apply_rehab_stock(plan: dict, units: int = 0) -> dict:
+    """Вернуть по одной штуке в самые «далёкие» размеры убыточных товаров.
+
+    Кандидаты — размеры артикулов с ``factor == 0``, где план ничего не
+    отгружает. Приоритет: самая низкая скорость продаж, затем меньший
+    остаток и меньший нетто-продаж за окно скорости; равные случаи
+    разрешаются по артикулу и размеру. Каждый размер получает не более одной
+    штуки: цель — попробовать товар на минимальной поставке, а не завалить
+    убыточный артикул большим объёмом.
+    """
+    requested = max(0, min(int(units or 0), 500))
+    summary = {"requested": requested, "placed": 0, "short": 0}
+    if requested <= 0:
+        return summary
+    cands = []
+    for art, entry in plan.items():
+        factor = entry.get("factor")
+        if factor is None or float(factor) != 0:
+            continue
+        for it in entry.get("sizes") or []:
+            if max(0, int(it.get("to_sort") or 0)) > 0:
+                continue
+            cands.append({
+                "art": art,
+                "size": it.get("size") or "",
+                "item": it,
+                "vel": _num(it.get("vel")),
+                "avail": max(0, int(it.get("avail") or 0)),
+                "net": max(0, int(it.get("net") or 0)),
+            })
+    cands.sort(key=lambda c: (
+        c["vel"], c["avail"], c["net"], c["art"], c["size"],
+    ))
+    touched = set()
+    for c in cands[:requested]:
+        c["item"]["to_sort"] = 1
+        touched.add(c["art"])
+    for art in touched:
+        _recalc_plan_entry(plan[art])
+    summary["placed"] = min(requested, len(cands))
+    summary["short"] = requested - summary["placed"]
+    return summary
+
+
+def apply_sort_plan_options(
+    plan: dict,
+    max_per_size: int = 0,
+    rehab_units: int = 0,
+    allow_rehab: bool = True,
+) -> dict:
+    """Применить лимит штук на размер и реабилитацию убыточных размеров.
+
+    Порядок важен: сначала точечная реабилитация даёт по штуке в самые
+    «далёкие» размеры, затем потолок гарантирует, что ни один размер не
+    получит больше ``max_per_size``. Изменяет ``plan`` на месте.
+    """
+    rehab = apply_rehab_stock(plan, rehab_units) if allow_rehab else {
+        "requested": 0, "placed": 0, "short": 0,
+    }
+    cap = max(0, int(max_per_size or 0))
+    capped = apply_size_cap(plan, cap)
+    return {
+        "max_per_size": cap,
+        "capped_sizes": capped,
+        "rehab": rehab,
+    }
 
 
 def parse_wish_step(spec) -> tuple:
@@ -781,6 +904,8 @@ def replenish_rows(
     view: str = "article",
     wish: int = 0,
     wish_step: str = "",
+    max_per_size: int = 0,
+    rehab_units: int = 0,
 ) -> dict:
     """Главный расчёт. Возвращает {'rows': [...], 'meta': {...}}.
 
@@ -795,6 +920,8 @@ def replenish_rows(
 
     ``wish``/``wish_step`` — «Пожелание»: ручной объём N шт на WB и шаг
     размера ("2"/"2-4"), поверх плана (``apply_wish``); сводка в ``meta.wish``.
+    ``max_per_size``/``rehab_units`` — лимит штук на размер и реабилитация
+    убыточных карточек; сводка в ``meta.sort_plan``.
     """
     span = span_days or _span_days(date_from, date_to)
     target_days = max(1, int(target_days or 30))
@@ -811,6 +938,7 @@ def replenish_rows(
             codes=codes, sort=sort, article_like=article_like, articles=articles,
             show_inactive=show_inactive, hide_zero_sizes=hide_zero_sizes,
             wish=wish, wish_step=wish_step,
+            max_per_size=max_per_size, rehab_units=rehab_units,
         )
 
     wb_df, oz_df = _detail_aggregates(db, date_from, date_to)
@@ -856,11 +984,15 @@ def replenish_rows(
     # чтобы в окне без WB-продаж дефицит не был 0 при пустой карточке.
     plan_total: dict = {}
     wish_summary = None
+    plan_summary = {"max_per_size": 0, "capped_sizes": 0, "rehab": {
+        "requested": 0, "placed": 0, "short": 0,
+    }}
     if "wb" in codes:
-        plan, wish_summary = _wb_sort_plan(
+        plan, wish_summary, plan_summary = _wb_sort_plan(
             db, date_to, sorted(keys), target_days,
             wish=wish, wish_step=wish_step,
             margin_by_art=_margin_by_art(detail_maps),
+            max_per_size=max_per_size, rehab_units=rehab_units,
         )
         plan_total = {k: int(e.get("total") or 0) for k, e in plan.items()}
     # «Пожелание» применено (план реально переписан) — тогда «Отгрузить WB»
@@ -978,6 +1110,9 @@ def replenish_rows(
             rem -= s
 
         margin_total = _num(wb_d.get("margin")) + _num(oz_d.get("margin"))
+        margin_gross_total = (
+            _num(wb_d.get("margin_gross")) + _num(oz_d.get("margin_gross"))
+        )
         income_total = _num(wb_d.get("income")) + _num(oz_d.get("income"))
         margin_per_one = (
             round(margin_total / net, 2) if net > 0 else 0.0
@@ -1026,6 +1161,7 @@ def replenish_rows(
             "ship_wb": ship["wb"], "ship_oz": ship["ozon"],
             "need_buy": need_buy,
             "income": round(income_total, 2), "margin": round(margin_total, 2),
+            "margin_gross": round(margin_gross_total, 2),
             "margin_per_one": margin_per_one, "margin_pct": margin_pct,
             "net_cost_est": int(_num(wb_d.get("net_cost_est")) + _num(oz_d.get("net_cost_est"))),
             "status": status,
@@ -1060,6 +1196,7 @@ def replenish_rows(
         meta["inactive_total"] = inactive_total
     if wish_summary is not None:
         meta["wish"] = wish_summary
+    meta["sort_plan"] = plan_summary
     return {"rows": rows, "meta": meta}
 
 
@@ -1069,6 +1206,7 @@ def _size_view(
     articles: Optional[set] = None,
     show_inactive: bool = False, hide_zero_sizes: bool = False,
     wish: int = 0, wish_step: str = "",
+    max_per_size: int = 0, rehab_units: int = 0,
 ) -> dict:
     """Плоский разрез «по размерам».
 
@@ -1137,22 +1275,31 @@ def _size_view(
     if articles is not None:
         keys = {k for k in keys if str(k).strip().upper() in articles}
     if not keys:
-        return {"rows": [], "meta": _meta(0)}
+        meta = _meta(0)
+        meta["sort_plan"] = {"max_per_size": 0, "capped_sizes": 0, "rehab": {
+            "requested": 0, "placed": 0, "short": 0,
+        }}
+        return {"rows": [], "meta": meta}
 
     # План подсортировки на WB (как PDF) — источник «Дослать» и «WB дефицит»
     # по каждому размеру карточки. Размер вне плана (например, только Ozon)
     # остаётся на расчёте по окну спроса.
     plan = {}
     plan_sz = {}
+    plan_summary = {"max_per_size": 0, "capped_sizes": 0, "rehab": {
+        "requested": 0, "placed": 0, "short": 0,
+    }}
     margin_by_art = _margin_by_art(detail_maps)
     if "wb" in codes:
         # Базовый план без «Пожелания»: N раздаём отдельно, только по размерам
         # показанных строк (ниже). Иначе часть штук уезжает в размеры плана,
         # которых нет в разрезе (180-дневное окно скорости), и футер
         # «Итого дослать» оказывается меньше пожелания.
-        plan, _ = _wb_sort_plan(
+        plan, _, plan_summary = _wb_sort_plan(
             db, date_to, sorted(keys), target_days,
             wish=0, wish_step="", margin_by_art=margin_by_art,
+            max_per_size=max_per_size,
+            rehab_units=rehab_units if int(wish or 0) == 0 else 0,
         )
         plan_sz = {
             art: {it["size"]: it for it in (entry.get("sizes") or [])}
@@ -1203,6 +1350,9 @@ def _size_view(
         a_ret_oz = int(_num(oz_d.get("returns_qty")))
         a_net = max(0, a_sells_wb) + max(0, a_sells_oz - a_ret_oz)
         margin_total = _num(wb_d.get("margin")) + _num(oz_d.get("margin"))
+        margin_gross_total = (
+            _num(wb_d.get("margin_gross")) + _num(oz_d.get("margin_gross"))
+        )
         margin_per_one = round(margin_total / a_net, 2) if a_net > 0 else 0.0
         margin_pct = _num(wb_d.get("margin_pct")) or _num(oz_d.get("margin_pct"))
 
@@ -1305,6 +1455,7 @@ def _size_view(
                 "wb_mp_in_way": wb_t, "oz_mp_in_way": oz_t,
                 "margin_per_one": margin_per_one, "margin_pct": margin_pct,
                 "margin": round(margin_total, 2),
+                "margin_gross": round(margin_gross_total, 2),
                 "~zero": zero,
             }
             pit = plan_sz.get(key, {}).get(s or "—")
@@ -1317,6 +1468,8 @@ def _size_view(
     wish_summary = None
     if "wb" in codes and int(wish or 0) > 0:
         wish_summary = apply_wish(wish_plan, wish, wish_step, margin_by_art)
+        if int(max_per_size or 0) > 0 and apply_size_cap(wish_plan, max_per_size):
+            _sync_wish_summary(wish_summary, wish_plan)
         for row, pit in wish_rows:
             row["to_sort"] = int(pit.get("to_sort") or 0)
             row["wb_def"] = row["to_sort"]
@@ -1360,6 +1513,7 @@ def _size_view(
         meta["inactive_total"] = inactive_total
     if wish_summary is not None:
         meta["wish"] = wish_summary
+    meta["sort_plan"] = plan_summary
     return {"rows": rows, "meta": meta}
 
 
@@ -1385,4 +1539,5 @@ def _meta(count: int, rows=None, target_days: int = 30, span: int = 1, codes=Non
         "wb_mp_in_way_total": sum(r.get("wb_mp_in_way", 0) for r in rows),
         "oz_mp_in_way_total": sum(r.get("oz_mp_in_way", 0) for r in rows),
         "margin_total": round(sum(r.get("margin", 0) for r in rows), 2),
+        "margin_gross_total": round(sum(r.get("margin_gross", 0) for r in rows), 2),
     }

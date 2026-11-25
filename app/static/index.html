@@ -650,6 +650,13 @@
               </select>
             </label>
             <div class="wish-hint">Пожелание задаёт ручной итог отгрузки на WB: N шт раскидываются по размерам по выгоде, шаг отбирает размеры лесенки. Пусто — обычный план.</div>
+            <label class="chk" title="Максимум штук в одном размере плана подсортировки. Например 1 — ни у какого размера не будет «Дослать» больше одной штуки (в таблице и PDF). Пусто или 0 — без лимита.">Лимит на размер:
+              <input type="number" class="tool-input num" id="replenishMaxPerSize" min="0" max="20" step="1" placeholder="—">
+            </label>
+            <label class="chk" title="Сколько штук вернуть в убыточные карточки: по одной штуке в самые «далёкие» размеры (где нет продаж и остатков). Так товар можно попробовать на минимальной поставке. Не работает вместе с «Пожеланием» и в PDF из Excel.">Реабилитация убыточных:
+              <input type="number" class="tool-input num" id="replenishRehabUnits" min="0" max="500" step="1" placeholder="—"> шт.
+            </label>
+            <div class="wish-hint">Лимит и реабилитация меняют «Дослать» в таблице, Excel и PDF. «Реабилитация» добавляет по 1 шт в самые «далёкие» размеры убыточных товаров.</div>
           </div>
         </div>
         <div class="view-menu" id="replenishExtraMenu">
@@ -1412,7 +1419,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=215"></script>
+  <script src="/static/app.js?v=216"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
     <div class="xyz-modal-dialog" role="dialog" aria-modal="true">

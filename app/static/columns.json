@@ -3442,7 +3442,12 @@
       },
       {
        "k": "margin",
-       "label": "Маржа, руб",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_gross",
+       "label": "Маржа, до себестоимости",
        "def": true
       },
       {
@@ -3572,6 +3577,16 @@
       {
        "k": "margin_pct",
        "label": "Рент-сть, %",
+       "def": true
+      },
+      {
+       "k": "margin",
+       "label": "Прибыль",
+       "def": true
+      },
+      {
+       "k": "margin_gross",
+       "label": "Маржа, до себестоимости",
        "def": true
       },
       {
@@ -6663,7 +6678,11 @@
    },
    {
     "k": "margin",
-    "label": "Маржа, руб"
+    "label": "Прибыль"
+   },
+   {
+    "k": "margin_gross",
+    "label": "Маржа, до себестоимости"
    },
    {
     "k": "margin_per_one",
@@ -6767,10 +6786,14 @@
     "k": "margin_pct",
     "label": "Рент-сть, %"
    },
-   {
-    "k": "margin",
-    "label": "Маржа, руб"
-   }
+    {
+     "k": "margin",
+     "label": "Прибыль"
+    },
+    {
+     "k": "margin_gross",
+     "label": "Маржа, до себестоимости"
+    }
   ],
   "oz_pricing_export": [
     {

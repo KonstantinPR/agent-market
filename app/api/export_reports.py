@@ -11,6 +11,7 @@ from app.api._common import (
     _resolve_compare_window,
     _xlsx_response,
 )
+from app.services import excel_io
 
 router = APIRouter()
 
@@ -194,6 +195,8 @@ def export_replenish(
     cols: Optional[str] = None,
     wish: int = 0,
     wish_step: str = "",
+    max_per_size: int = 0,
+    rehab_units: int = 0,
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
@@ -221,6 +224,7 @@ def export_replenish(
         articles=arts,
         show_inactive=bool(show_inactive), hide_zero_sizes=bool(hide_zero_sizes),
         view=view, wish=wish, wish_step=wish_step,
+        max_per_size=max_per_size, rehab_units=rehab_units,
     )
     df = pd.DataFrame(result["rows"])
     if df.empty:
@@ -236,6 +240,29 @@ def export_replenish(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/export/replenish/template")
+def export_replenish_template():
+    """Пустой Excel-шаблон «Потребности» для правок и дропзоны PDF ▾.
+
+    Два листа — «Потребность» и «Потребность по размерам» — с теми же
+    подписями колонок, что у кнопки «Экспорт в Excel». Заполнять не нужно:
+    файл нужен, чтобы владелец мог заранее подготовить правки и загрузить
+    их обратно через меню «PDF ▾».
+    """
+    sheets = {
+        "Потребность": pd.DataFrame(columns=list(_REPLENISH_EXPORT.values())),
+        "Потребность по размерам": pd.DataFrame(
+            columns=list(_REPLENISH_EXPORT_SIZES.values())
+        ),
+    }
+    buf = excel_io.dfs_to_excel_stream(sheets)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="replenish_template.xlsx"'},
     )
 
 
@@ -260,6 +287,8 @@ def export_replenish_pdf(
     limit: int = PDF_DEFAULT_LIMIT,
     wish: int = 0,
     wish_step: str = "",
+    max_per_size: int = 0,
+    rehab_units: int = 0,
     cabinet: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
@@ -283,6 +312,11 @@ def export_replenish_pdf(
 
     ``wish``/``wish_step`` — «Пожелание»: ручной объём N шт на WB и шаг размера;
     при заданном пожелании PDF-план строится из него (кроме режима файла).
+
+    ``max_per_size`` — потолок штук на один размер (0 — без потолка).
+    ``rehab_units`` — сколько штук точечно вернуть в убыточные карточки:
+    по одной штуке в самые «далёкие» размеры (0 — выключено). Оба параметра
+    действуют только в базовом режиме; PDF из Excel задаёт бюджет сам.
 
     ``articles=ART1,ART2,…`` — тот же список «Артикулы ▾», что фильтрует
     таблицу (``/api/replenish``): артикулы, баркоды, nmID WB и артикулы Ozon
@@ -321,6 +355,7 @@ def export_replenish_pdf(
         target_days=target_days, vel_days=vel_days, profit=profit,
         cols=cols, with_photos=with_photos, photo_count=photo_count,
         article_like=article_like, wish=wish, wish_step=wish_step,
+        max_per_size=max_per_size, rehab_units=rehab_units,
         supplier=bool(supplier), mobile=bool(mobile),
     )
 
@@ -423,6 +458,8 @@ def _replenish_pdf_build(
     subtitle_extra: str = "",
     wish: int = 0,
     wish_step: str = "",
+    max_per_size: int = 0,
+    rehab_units: int = 0,
     supplier: bool = False,
     mobile: bool = False,
 ) -> Response:
@@ -435,6 +472,8 @@ def _replenish_pdf_build(
     (см. ``replenish.apply_sort_budget``). В этом режиме пожелание игнорируется.
     ``wish``/``wish_step`` — ручной объём N шт на WB: поверх плана применяется
     ``replenish.apply_wish`` (маржа из ``rows[].margin_per_one``).
+    ``max_per_size``/``rehab_units`` — лимит штук на размер и точечная
+    реабилитация убыточных карточек; не применяются в режиме файла.
     ``supplier`` — упрощённый режим «для поставщика»: карточка без аналитики
     и остатков, пустые (ничего не отгружать) товары из выгрузки убираются.
     ``mobile`` — раскладка под смартфон: по два крупных фото в ряд, крупнее
@@ -467,6 +506,7 @@ def _replenish_pdf_build(
     )
 
     wish_note = ""
+    plan_note = ""
     if budgets is not None:
         # Режим Excel: «Итого дослать» и распределение по размерам идут по
         # колонке «WB дефицит» из файла (пустые ячейки не задают бюджет).
@@ -483,6 +523,23 @@ def _replenish_pdf_build(
                 plan, wish, wish_step, margin_by_art)
             if summary.get("reason") != "no_eligible":
                 wish_note = f" · пожелание: {int(wish)} шт, шаг {summary['step']}"
+        plan_summary = replenish_service.apply_sort_plan_options(
+            plan,
+            max_per_size=max_per_size,
+            rehab_units=rehab_units,
+            allow_rehab=int(wish or 0) == 0,
+        )
+        if plan_summary["max_per_size"] > 0:
+            plan_note += (
+                f" · лимит {plan_summary['max_per_size']} шт/размер"
+                if plan_summary["capped_sizes"]
+                else f" · лимит {plan_summary['max_per_size']} шт/размер (без правок)"
+            )
+        rehab = plan_summary["rehab"]
+        if rehab["requested"] > 0:
+            plan_note += (
+                f" · реабилитация: {rehab['placed']} из {rehab['requested']} шт"
+            )
         if use_profit or supplier:
             # убыточные и уже полные товары в шопинг-листе не нужны: иначе PDF
             # наполовину состоит из нулей. В режиме «для поставщика» из выгрузки
@@ -570,10 +627,11 @@ def _replenish_pdf_build(
             f" · скорость по {vel_label}"
             + (f" · прибыльность 0…{replenish_service.PROFIT_FACTOR_MAX:g}×"
                if use_profit else "")
-            + (f" · пустой размер ≥ {replenish_service.WB_SORT_MIN_SIZE_STOCK} шт"
-               if use_profit else "")
+             + (f" · пустой размер ≥ {replenish_service.WB_SORT_MIN_SIZE_STOCK} шт"
+                if use_profit else "")
             + " · WB"
             + wish_note
+            + plan_note
             + subtitle_extra
         ),
     )

@@ -63,6 +63,7 @@ GET /api/export/ozon/placement-summary
 GET /api/export/products
 GET /api/export/replenish
 GET /api/export/replenish/pdf
+GET /api/export/replenish/template
 GET /api/export/sales
 GET /api/export/wb/cards
 GET /api/export/wb/detail-rows

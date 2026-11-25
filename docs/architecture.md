@@ -34,17 +34,17 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 14731 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 7134 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
-| `app/static/columns.json` | 6906 | единый источник колонок: панель, подписи, Excel-словари |
+| `app/static/app.js` | 14785 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 7196 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/columns.json` | 6929 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 3940 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
 | `app/static/style.css` | 2029 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `tests/js/test_js_helpers.py` | 1671 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1676 | проверка app.js через Node `vm` |
+| `app/services/replenish.py` | 1543 | подсортировка WB, план дефицита, скорость продаж |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `app/static/index.html` | 1461 | разметка: навигация `data-tab` + секции `tab-*` |
-| `app/services/replenish.py` | 1388 | подсортировка WB, план дефицита, скорость продаж |
+| `app/static/index.html` | 1468 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/margin.py` | 1282 | маржинальность по детализациям, группировка артикулоразмеров |
 | `tests/unit/test_margin.py` | 1276 | юнит-тесты маржинальности |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |

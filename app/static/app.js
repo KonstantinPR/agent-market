@@ -72,7 +72,7 @@ function _cabLinksFiltered(mp, force) {
 function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
 function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "215";
+const UI_VERSION = "216";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -5115,7 +5115,8 @@ const replenishHeaders = [
   { k: "need_buy", label: "Купить у поставщика", num: true, render: (v) => (v || 0) > 0 ? `<b>${fmt(v)}</b>` : "—", tip: "Сколько докупить у поставщика, чтобы общий запас (наш склад + WB + Ozon) покрывал целевой запас в днях продаж." },
   { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа (после себестоимости и расходов маркетплейса) в расчёте на одну проданную штуку." },
   { k: "margin_pct", label: "Рент-сть, %", num: true, render: cellFmts.pct, tip: "Рентабельность: маржа ÷ сумма к перечислению, %." },
-  { k: "margin", label: "Маржа, руб", num: true, render: cellFmts.money, tip: "Маржа за окно по артикулу: к перечислению − расходы маркетплейса − себестоимость проданного." },
+  { k: "margin", label: "Прибыль", num: true, render: cellFmts.money, tip: "Прибыль за окно по артикулу: к перечислению − расходы маркетплейса − себестоимость проданного." },
+  { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.money, tip: "Маржа до вычета себестоимости: к перечислению − расходы маркетплейса. Показывает запас до себестоимости проданного." },
   { k: "sells", label: "Продано, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Продано за окно суммарно по WB и Ozon, шт (с учётом возвратов)." },
   { k: "returns_qty", label: "Возвраты, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Возвраты покупателей за окно по WB и Ozon, шт." },
   { k: "income", label: "К перечислению, руб", num: true, render: cellFmts.money, tip: "Сумма к перечислению маркетплейсами за окно: WB + Ozon после всех удержаний." },
@@ -5145,6 +5146,8 @@ const replenishSizeHeaders = [
   { k: "our_stock", label: "У нас, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Остаток на нашем складе — по всему артикулу (по размерам склад не ведётся)." },
   { k: "margin_per_one", label: "Маржа/шт", num: true, render: cellFmts.money, tip: "Маржа/шт по артикулу целиком (по размерам не раскладывается)." },
   { k: "margin_pct", label: "Рент-сть, %", num: true, render: cellFmts.pct, tip: "Рентабельность по артикулу целиком, %." },
+  { k: "margin", label: "Прибыль", num: true, render: cellFmts.money, tip: "Прибыль по артикулу целиком: к перечислению − расходы маркетплейса − себестоимость проданного. По размерам себестоимость не раскладывается." },
+  { k: "margin_gross", label: "Маржа, до себестоимости", num: true, render: cellFmts.money, tip: "Маржа по артикулу до вычета себестоимости. По размерам не раскладывается — показывает запас до себестоимости целиком по товару." },
   { k: "wb_net", label: "Продажи WB нетто, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Продажи этого размера на WB за окно нетто (продажи − возвраты, без минусовых возвратов)." },
   { k: "wb_ret", label: "Возвраты WB, шт", num: true, render: (v) => v == null ? "—" : fmt(v), tip: "Возвраты этого размера на WB за окно, шт." },
   { k: "wb_qty", label: "WB склад, шт", num: true, render: cellFmts.int, tip: "Остаток этого размера на складах WB (quantity) по последнему срезу." },
@@ -5191,6 +5194,10 @@ function syncReplenishView() {
   if (wshStep) wshStep.disabled = !!ozView;
   const wshBtn = $("#btnReplenishWish");
   if (wshBtn) wshBtn.disabled = !!ozView;
+  const lim = $("#replenishMaxPerSize");
+  if (lim) lim.disabled = !!ozView;
+  const rehab = $("#replenishRehabUnits");
+  if (rehab) rehab.disabled = !!ozView;
   syncReplenishWishBtn();
   sel.title = ozView
     ? "Связка Ozon: доступен только разрез по артикулам — размеров в продажах Ozon нет"
@@ -5246,6 +5253,7 @@ function replenishFooters(rows) {
     oz_def: _footSum(rows, "oz_def"),
     ship_wb: _footSum(rows, "ship_wb"), ship_oz: _footSum(rows, "ship_oz"),
     need_buy: _footSum(rows, "need_buy"), margin: _footSum(rows, "margin"),
+    margin_gross: _footSum(rows, "margin_gross"),
     sells: _footSum(rows, "sells"), returns_qty: _footSum(rows, "returns_qty"),
     income: _footSum(rows, "income"),
     oz_qty: _footSum(rows, "oz_qty"), wb_qty: _footSum(rows, "wb_qty"),
@@ -5277,6 +5285,8 @@ function replenishSizeFooters(rows) {
     wb_vel: _footAvg(rows, "wb_vel", 2), wb_doc: _footAvg(rows, "wb_doc", 1),
     margin_per_one: _footAvgByArticle(rows, "margin_per_one", 2),
     margin_pct: _footAvgByArticle(rows, "margin_pct", "pct"),
+    margin: _footSumByArticle(rows, "margin"),
+    margin_gross: _footSumByArticle(rows, "margin_gross"),
   };
   Object.keys(t).forEach((k) => { if (t[k] == null) delete t[k]; });
   return t;
@@ -5317,6 +5327,10 @@ function replenishQs(f) {
     q.wish = wish;
     q.wish_step = step;
   }
+  const lim = replenishPlanLimit();
+  if (lim > 0) q.max_per_size = lim;
+  const rehab = replenishRehabUnits();
+  if (rehab > 0) q.rehab_units = rehab;
   return qs(q);
 }
 
@@ -5325,6 +5339,18 @@ function replenishWishValue() {
   const el = $("#replenishWish");
   const n = parseInt((el || {}).value, 10);
   return isFinite(n) && n > 0 ? n : 0;
+}
+
+function replenishPlanLimit() {
+  const el = $("#replenishMaxPerSize");
+  const n = parseInt((el || {}).value, 10);
+  return isFinite(n) && n > 0 ? Math.min(20, n) : 0;
+}
+
+function replenishRehabUnits() {
+  const el = $("#replenishRehabUnits");
+  const n = parseInt((el || {}).value, 10);
+  return isFinite(n) && n > 0 ? Math.min(500, n) : 0;
 }
 
 // Разбор шага размера «Пожелания»: "2" → [2, 2], "2-4" → [2, 4]. Пусто —
@@ -5401,6 +5427,14 @@ async function renderReplenish() {
       parts.push(wsh.reason === ""
         ? "Пожелание: " + fmt(wsh.placed) + " из " + fmt(wsh.total) + " шт"
         : "Пожелание не применено: " + fmt(wsh.total) + " шт");
+    }
+    const sp = m.sort_plan || {};
+    if (sp.max_per_size > 0) {
+      parts.push("Лимит/размер: " + fmt(sp.max_per_size) + " шт");
+    }
+    if (sp.rehab && sp.rehab.requested > 0) {
+      parts.push("Реабилитация: " + fmt(sp.rehab.placed) + " из "
+        + fmt(sp.rehab.requested) + " шт");
     }
     const full = parts.join(" · ");
     if (full.length > 150) {
@@ -5705,6 +5739,16 @@ function buildReplenishPdfMenu() {
   hint.style.fontSize = "12px";
   hint.style.color = "#666";
   panel.appendChild(hint);
+
+  const tpl = document.createElement("a");
+  tpl.className = "btn";
+  tpl.href = "/api/export/replenish/template";
+  tpl.textContent = "Шаблон Excel";
+  tpl.title = "Пустой файл с теми же колонками, что у «Экспорт в Excel»: "
+    + "два листа — «Потребность» и «Потребность по размерам». Заполните "
+    + "правки и перетащите файл сюда, чтобы собрать PDF из него";
+  tpl.style.marginTop = "6px";
+  panel.appendChild(tpl);
 
   // Дропзона Excel / карточка уже загруженного файла.
   const xrow = document.createElement("div");
@@ -12285,8 +12329,14 @@ function syncReplenishWishBtn() {
   if (!btn) return;
   const n = replenishWishValue();
   const step = ($("#replenishWishStep") || {}).value || "2";
-  btn.textContent = (n > 0 ? "Пожелание: " + fmt(n) + " шт · шаг " + step : "Пожелание") + " \u25BE";
-  btn.classList.toggle("active", n > 0);
+  const lim = replenishPlanLimit();
+  const rehab = replenishRehabUnits();
+  const notes = [];
+  if (n > 0) notes.push("Пожелание: " + fmt(n) + " шт · шаг " + step);
+  if (lim > 0) notes.push("Лимит/размер: " + fmt(lim));
+  if (rehab > 0) notes.push("Реабилитация: " + fmt(rehab));
+  btn.textContent = (notes.length ? notes.join(" · ") : "Пожелание") + " \u25BE";
+  btn.classList.toggle("active", n > 0 || lim > 0 || rehab > 0);
 }
 
 function initReplenishWishMenu() {
@@ -12301,6 +12351,10 @@ function initReplenishWishMenu() {
   const wsh = $("#replenishWish");
   if (wsh) wsh.addEventListener("change", onWishChange);
   if (stepSel) stepSel.addEventListener("change", onWishChange);
+  const lim = $("#replenishMaxPerSize");
+  if (lim) lim.addEventListener("change", onWishChange);
+  const rehab = $("#replenishRehabUnits");
+  if (rehab) rehab.addEventListener("change", onWishChange);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const wasHidden = panel.classList.contains("hidden");

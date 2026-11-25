@@ -2,7 +2,7 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **187**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **188**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
@@ -15,7 +15,7 @@
 - [cards](#cards) — 1 шт.
 - [custom-stock](#custom-stock) — 1 шт.
 - [dashboard](#dashboard) — 2 шт.
-- [export](#export) — 23 шт.
+- [export](#export) — 24 шт.
 - [funnel](#funnel) — 1 шт.
 - [import](#import) — 4 шт.
 - [margin](#margin) — 4 шт.
@@ -140,6 +140,7 @@
 | GET | `/api/export/replenish` | `export_replenish` | Excel-выгрузка «Потребности»: те же фильтры, что у таблицы. |
 | GET | `/api/export/replenish/pdf` | `export_replenish_pdf` | Карточки потребности в PDF из строк таблицы (базовый режим). |
 | POST | `/api/export/replenish/pdf` | `export_replenish_pdf_from_excel` | PDF из строк Excel-файла (дропзона в меню PDF). |
+| GET | `/api/export/replenish/template` | `export_replenish_template` | Пустой Excel-шаблон «Потребности» для правок и дропзоны PDF ▾. |
 | GET | `/api/export/sales` | `export_sales` |  |
 | GET | `/api/export/wb/cards` | `export_wb_cards` | Экспорт карточек WB из БД (marketplace_cards) в Excel. |
 | GET | `/api/export/wb/detail-rows` | `export_wb_detail_rows` | Экспорт сырых строк «Детализации продаж» WB (wb_detail_rows) в Excel. |
