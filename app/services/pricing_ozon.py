@@ -43,6 +43,8 @@ from app.services.pricing import (
     _nothing_applied_note,
     _num,
     _reason_add,
+    clear_cooldown,
+    cooldown_applied,
     mark_cooldown,
     project_velocity,
 )
@@ -806,8 +808,7 @@ def recommendations_ozon(
 
     rows.sort(key=lambda r: (-_num(r.get("stock_value")), r["article"]))
     # T-64: кулдаун — сразу в таблице (см. pricing.recommendations).
-    mark_cooldown(rows, _recent_applied(db, int(s["cooldown_days"]), today),
-                  s["cooldown_days"])
+    mark_cooldown(rows, cooldown_applied(db, s, today), s["cooldown_days"])
     return {
         "rows": rows, "count": len(rows),
         "date_from": str(date_from), "date_to": str(date_to),
@@ -837,25 +838,14 @@ def _expand_offers(r: dict) -> list:
     return pushed
 
 
-def _recent_applied(db: Session, cooldown_days: int,
-                    today: Optional[date] = None) -> set:
-    today = today or date.today()
-    cooldown_from = today - timedelta(days=int(cooldown_days))
-    return set(db.scalars(
-        select(models.PriceChange.article).where(
-            models.PriceChange.status == "applied",
-            models.PriceChange.action.in_(("RAISE", "LOWER", "HALVE")),
-            models.PriceChange.applied_at >= cooldown_from,
-        )
-    ).all())
-
-
 def _pushed_items_ozon(rows: list, s: dict, applied_past: set) -> list:
     """Строки → плоский список офферов для import/prices (со сдвигом по базе).
 
     Для каждой строки считаем коэффициент delta = target/price − 1 и применяем
     его к каждому офферу (сохраняем относительные различия размеров).
     """
+    if s.get("ignore_cooldown"):
+        clear_cooldown(rows)
     items: list = []
     for r in rows:
         if r["action"] not in ("RAISE", "LOWER"):
@@ -916,7 +906,7 @@ def apply_recommendations_ozon(
                                prices_df=prices_df, today=today, main_map=main_map)
     rows = rec["rows"]
     now = datetime.now()
-    applied_past = _recent_applied(db, int(s["cooldown_days"]))
+    applied_past = cooldown_applied(db, s, today)
     items = _pushed_items_ozon(rows, s, applied_past)
     prov = provider or _oz_provider(db)
 
@@ -949,7 +939,7 @@ def apply_rows_ozon(
     s = merge_settings(settings or {})
     rows = [dict(r) for r in rows]
     now = datetime.now()
-    applied_past = _recent_applied(db, int(s["cooldown_days"]), today)
+    applied_past = cooldown_applied(db, s, today)
     items = _pushed_items_ozon(rows, s, applied_past)
     prov = provider or _oz_provider(db)
     if not items:

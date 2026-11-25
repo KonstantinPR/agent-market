@@ -55,6 +55,7 @@ PRICING_DEFAULTS = {
     "lower_soften": 4.0,
     "min_delta_pp": 1.0,
     "cooldown_days": 3,
+    "ignore_cooldown": False,
     "season_adj": True,
     "season_damp": 0.5,
     "min_days_with_sales": 5,
@@ -1643,8 +1644,7 @@ def recommendations(
     # T-64: кулдаун показываем сразу в таблице, а не только при применении —
     # иначе «решений: 89», а «Применить» отправляет 0 строк.
     cooldown_n = mark_cooldown(
-        out_rows, _recent_applied(db, int(_num(s["cooldown_days"])), today),
-        s["cooldown_days"])
+        out_rows, cooldown_applied(db, s, today), s["cooldown_days"])
 
     return {
         "rows": out_rows,
@@ -3774,6 +3774,29 @@ def _recent_applied(db: Session, cooldown_days: int,
     ).all())
 
 
+def cooldown_applied(db: Session, settings: dict,
+                     today: Optional[date] = None) -> set:
+    """Статьи в кулдауне; пусто, когда T-100 разрешил повтор без ожидания."""
+    if settings.get("ignore_cooldown"):
+        return set()
+    days = int(_num(settings.get("cooldown_days"), PRICING_DEFAULTS["cooldown_days"]))
+    return _recent_applied(db, days, today)
+
+
+def clear_cooldown(rows: list) -> int:
+    """Снимает старую пометку skipped_cooldown перед повторным применением."""
+    n = 0
+    for r in rows:
+        if r.get("status") != "skipped_cooldown":
+            continue
+        r["status"] = "suggested"
+        r["reason"] = re.sub(
+            r"(?: — |\. )?кулдаун \d+ дн\. после предыдущего изменения$",
+            "", (r.get("reason") or "").strip())
+        n += 1
+    return n
+
+
 def mark_cooldown(rows: list, applied_past: set, cooldown_days: int) -> int:
     """Помечает строки, которые «Применить» всё равно пропустит по кулдауну.
 
@@ -3811,6 +3834,8 @@ def _nothing_applied_note(rows: list, s: dict) -> str:
 
 
 def _pushed_items(rows: list, s: dict, applied_past: set) -> list:
+    if s.get("ignore_cooldown"):
+        clear_cooldown(rows)
     items = []
     for r in rows:
         if r["action"] not in ("RAISE", "LOWER", "HALVE"):
@@ -3893,7 +3918,7 @@ def apply_recommendations(
 
     # Кулдаун — только по изменениям скидки (RAISE/LOWER/HALVE). MIN (минимальные
     # цены, T-33) не должен блокировать последующие шаги автопилота.
-    applied_past = _recent_applied(db, int(s["cooldown_days"]), today)
+    applied_past = cooldown_applied(db, s, today)
 
     items = _pushed_items(rows, s, applied_past)
     now = datetime.now()
@@ -3946,7 +3971,7 @@ def apply_rows(
     rows = [dict(r) for r in rows]
     now = datetime.now()
 
-    applied_past = _recent_applied(db, int(s["cooldown_days"]), today)
+    applied_past = cooldown_applied(db, s, today)
     items = _pushed_items(rows, s, applied_past)
     prov = provider or _cab_provider(db)
 

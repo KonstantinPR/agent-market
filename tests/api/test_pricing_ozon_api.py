@@ -44,6 +44,7 @@ def test_ozon_defaults(api_client):
     d = r.json()["defaults"]
     assert d["window_days"] == OZON_PRICING_DEFAULTS["window_days"]
     assert d["oz_price_step"] == 1.0
+    assert d["ignore_cooldown"] is False
     assert d["use_orders"] is False
 
 

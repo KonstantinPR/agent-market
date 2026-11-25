@@ -223,6 +223,20 @@ def test_apply_cooldown_skips(db, stub_oz):
     assert "кулдаун" in res["note"]
 
 
+def test_ignore_cooldown_allows_ozon_reapply(db, stub_oz):
+    _seed(db, "OZ-1", stock=100, price=1000, sells=[])
+    db.add(models.PriceChange(article="OZ-1", calculated_at=date.today(),
+                              applied_at=date.today(), action="LOWER", status="applied"))
+    db.commit()
+    rec = oz.recommendations_ozon(db, settings={"ignore_cooldown": True})
+    assert _row(rec, "OZ-1")["status"] != "skipped_cooldown"
+    res = oz.apply_rows_ozon(db, rec["rows"], settings={"ignore_cooldown": True},
+                             provider=stub_oz)
+    assert res["pushed"] == 1
+    changes = db.execute(select(models.PriceChange)).scalars().all()
+    assert sum(1 for c in changes if c.status == "applied") == 2
+
+
 def test_apply_min_prices_raises_to_floor(db, stub_oz):
     _seed(db, "OZ-1", stock=100, price=300, net_cost=300, sells=[(1, 2, 0)])
     rec = oz.recommendations_ozon(db)

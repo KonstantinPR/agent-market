@@ -34,14 +34,14 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 14815 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/static/app.js` | 14819 | весь фронтенд (вкладки, таблицы, fetch к /api) |
 | `app/api/ (20 файлов)` | 7208 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/static/columns.json` | 6929 | единый источник колонок: панель, подписи, Excel-словари |
-| `app/services/pricing.py` | 4079 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
+| `app/services/pricing.py` | 4104 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
 | `app/static/style.css` | 2029 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `tests/js/test_js_helpers.py` | 1678 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1681 | проверка app.js через Node `vm` |
 | `app/services/replenish.py` | 1543 | подсортировка WB, план дефицита, скорость продаж |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `app/static/index.html` | 1469 | разметка: навигация `data-tab` + секции `tab-*` |

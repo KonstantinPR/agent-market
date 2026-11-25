@@ -1675,4 +1675,7 @@ def test_responsive_css_manifest():
     assert ">Ок</button>" in html
     js = APP_JS.read_text(encoding="utf-8")
     assert "ticket-col-selected" in js
+    assert 'ignore_cooldown: "Повторное применение без кулдауна"' in js
+    assert '"cooldown_days", "ignore_cooldown"' in js
+    assert 'apiPut("/cabinet/pricing-settings"' in js
     assert "ticketSectionSelect" in js

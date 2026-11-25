@@ -872,6 +872,49 @@ def test_recommendations_marks_cooldown_after_apply(db):
     assert rec["actionable"] == 0
 
 
+def test_ignore_cooldown_recommendations_do_not_mark_rows(db):
+    _seed(db, "R8", "881234", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    pricing_service.apply_recommendations(
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        settings=T85_OFF,
+    )
+    rec = recommendations(
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        settings={"ignore_cooldown": True},
+    )
+    changing = [r for r in rec["rows"] if r["action"] in ("RAISE", "LOWER")]
+    assert changing
+    assert all(r["status"] == "suggested" for r in changing)
+    assert all("кулдаун" not in (r["reason"] or "") for r in changing)
+    assert rec["cooldown"] == 0
+    assert rec["actionable"] == len(changing)
+
+
+def test_ignore_cooldown_apply_rows_releases_marked_rows(db):
+    _seed(db, "R8", "881234", stock=1000,
+          sales=[(5, 1, 0), (14, 1, 0), *_fallback_sales()], funnel=(200, 3, 2, 0, 0))
+    pricing_service.apply_recommendations(
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+        settings=T85_OFF,
+    )
+    rec = recommendations(
+        db, prices_df=_prices(("881234", 2000, 10)), provider=_FakeProvider(), today=TODAY,
+    )
+    changing = [r for r in rec["rows"] if r["action"] in ("RAISE", "LOWER")]
+    assert changing and all(r["status"] == "skipped_cooldown" for r in changing)
+
+    res = pricing_service.apply_rows(
+        db, changing, provider=_FakeProvider(), today=TODAY,
+        settings={"ignore_cooldown": True},
+    )
+    assert res["pushed"] >= 1
+    assert all(r["status"] == "applied" for r in res["rows"])
+    logs = db.execute(select(models.PriceChange)).scalars().all()
+    assert any(c.action in ("RAISE", "LOWER") and c.status == "applied" for c in logs)
+    assert all("кулдаун" not in (c.reason or "") for c in logs)
+
+
 class _FakeProvider:
     def __init__(self, raise_on_update=False):
         self.raise_on_update = raise_on_update

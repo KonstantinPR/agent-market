@@ -72,7 +72,7 @@ function _cabLinksFiltered(mp, force) {
 function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
 function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "218";
+const UI_VERSION = "219";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -11563,6 +11563,7 @@ const PRICING_LABELS = {
   lower_soften: "Мягкость снижения цены, ×",
   min_delta_pp: "Мин. изменение скидки, п.п.",
   cooldown_days: "Кулдаун между изменениями цены, дн",
+  ignore_cooldown: "Повторное применение без кулдауна",
   season_adj: "Экстраполяция тренда продаж (сезонность)",
   season_damp: "Ослабление экстраполяции тренда, 0..1",
   min_days_with_sales: "Мин. дней с продажами для учёта тренда",
@@ -11659,6 +11660,7 @@ const PRICING_HINTS = {
   lower_soften: "Во сколько раз делить расчётное снижение цены: 1 — как считает движок, 4 — снижение в 4 раза мягче. Повышения цены и минимальный шаг (min_delta_pp) от этого не зависят.",
   min_delta_pp: "Минимальное изменение скидки, п.п. Если расчётная дельта меньше — товар не трогаем (защита от «флапа» цен).",
   cooldown_days: "Кулдаун: сколько дней после применения товар не меняется повторно, даже если правила снова что-то рекомендуют.",
+  ignore_cooldown: "Если включено, автопилот можно применять снова сразу, не дожидаясь окончания кулдауна после прошлого изменения цены (WB и Ozon).",
   season_adj: "Учитывать тренд продаж (рост/падение как сезонность). Выкл. → скорость продаж берётся как есть, без экстраполяции.",
   season_damp: "Насколько ослабляем экстраполяцию тренда: 0 = полностью игнорировать, 1 = переносить тренд без смягчения. 0.5 — компромисс. Обычно не требует изменения.",
   min_days_with_sales: "Минимум дней с ненулевыми продажами в окне, чтобы вообще применять поправку тренда. Меньше — зашумленную динамику прогнозировать нельзя.",
@@ -12252,7 +12254,7 @@ async function setCabSyncPricingOn(on) {
   if ((!server || !Object.keys(server).length) && local && Object.keys(local).length) {
     // Первое включение: сервер пуст — забираем текущие локальные настройки.
     _pricingSettingsByCab[id] = local;
-    try { await apiPost("/cabinet/pricing-settings", { settings: local }); } catch (e) { /* ignore */ }
+    try { await apiPut("/cabinet/pricing-settings", { settings: local }); } catch (e) { /* ignore */ }
   }
   if (currentTab === "pricing") loadTab("pricing");
 }
@@ -12266,7 +12268,7 @@ async function copyPricingSettingsAll() {
   try {
     // Сначала фиксируем текущие настройки источника (обгоняем debounce),
     // затем копируем их во все связки.
-    if (settings) await apiPost("/cabinet/pricing-settings", { settings });
+    if (settings) await apiPut("/cabinet/pricing-settings", { settings });
     const data = await apiPost("/cabinet/pricing-settings/copy", {});
     setStatus("Настройки автопилота скопированы в связки: " + ((data && data.copied) || 0));
   } catch (err) {
@@ -12294,7 +12296,7 @@ function savePricingSettings(s) {
   _pricingSettingsByCab[id] = s;
   if (_pricingSaveTimer) clearTimeout(_pricingSaveTimer);
   _pricingSaveTimer = setTimeout(() => {
-    apiPost("/cabinet/pricing-settings", { settings: s }).catch(() => {});
+    apiPut("/cabinet/pricing-settings", { settings: s }).catch(() => {});
   }, 500);
 }
 
@@ -13178,7 +13180,7 @@ const PRICING_GROUPS = [
       "strong_margin_pct", "raise_boost_pct",
   ] },
   { title: "Применение и противовес", col: 1, keys: [
-      "cooldown_days", "prefer_raise", "prefer_raise_bias",
+      "cooldown_days", "ignore_cooldown", "prefer_raise", "prefer_raise_bias",
       "follow_main", "main_influence_pct",
   ] },
   { title: "Ozon (price-based)", col: 1, keys: [
@@ -13453,7 +13455,9 @@ let pricingModeCurrent = null;
 // пропустит её по кулдауну. T-64: раньше кулдаун проверялся только на
 // применении — таблица показывала десятки «решений», а отправлялось 0 строк.
 function pricingApplyable(r) {
-  if ((r.status || "suggested") !== "suggested") return false;
+  const status = r.status || "suggested";
+  const ignoreCooldown = !!loadPricingSettings().ignore_cooldown;
+  if (status !== "suggested" && !(ignoreCooldown && status === "skipped_cooldown")) return false;
   if (pricingMpCurrent() === "oz") return r.action === "RAISE" || r.action === "LOWER";
   return r.action === "RAISE" || r.action === "LOWER" || r.action === "HALVE";
 }
