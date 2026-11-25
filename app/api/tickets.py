@@ -33,11 +33,21 @@ def api_tickets_create(body: dict = Body(...)):
 
 @router.post("/tickets/draft")
 def api_tickets_draft(body: dict = Body(...)):
-    """Сохраняет свободный текст из окна «Мысль» как черновик и выдаёт метку."""
+    """Сохраняет свободный текст из окна «Заметка» как черновик и выдаёт метку."""
     text = str(body.get("text", "")).strip()
     if not text:
         raise HTTPException(status_code=400, detail="Текст черновика обязателен")
     res = _ticket_or_error(tickets_service.draft, text=text)
+    return {**res, "copy": res["id"] + "\n" + res["body"]}
+
+
+@router.post("/tickets/{tid}/draft")
+def api_ticket_draft_update(tid: str, body: dict = Body(...)):
+    """Обновляет текст черновика (кнопка «Редактировать» в «Мысли»)."""
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Текст черновика обязателен")
+    res = _ticket_or_error(tickets_service.update_draft, tid, text=text)
     return {**res, "copy": res["id"] + "\n" + res["body"]}
 
 

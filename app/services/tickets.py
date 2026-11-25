@@ -528,12 +528,44 @@ def _build_reopen(b: dict) -> dict:
             "title": b["title"], "body": [], "commit": None, "raw": raw}
 
 
+def update_draft(tid: str, text: str, path=None) -> dict:
+    """Обновляет текст черновика; номер и раздел не меняются."""
+    p = _path(path)
+    text = str(text or "").strip()
+    if not text:
+        raise TicketError("Текст черновика обязателен")
+    nonempty = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    title = nonempty[0] if nonempty else "Черновик"
+    if len(title) > 80:
+        title = title[:79].rstrip() + "…"
+    if not p.exists():
+        raise TicketError(f"Тикет {tid} не найден", 404)
+    with _LOCK:
+        info = _load(p)
+        key, block, blocks = _find(info, tid)
+        if block is None:
+            raise TicketError(f"Тикет {tid} не найден", 404)
+        if key != "draft":
+            raise TicketError(
+                f"Тикет {tid} нельзя редактировать: он в «{_LABEL[key]}»", 409)
+        idx = blocks.index(block)
+        raw = [f"- [{tid}] (draft) {title}"] + _quoted_body(text)
+        block = {"id": tid, "marker": "draft", "priority": None,
+                 "title": title, "body": [ln.rstrip() for ln in text.split("\n")],
+                 "commit": None, "raw": raw}
+        blocks[idx] = block
+        _set_section_blocks(info, "draft", blocks)
+        _write(p, info["lines"], info["segs"])
+    return {"id": tid, "state": "draft", "priority": None,
+            "title": title, "body": text, "commit": None}
+
+
 def promote(tid: str, title: Optional[str] = None, body: Optional[str] = None,
             priority: str = "medium", path=None) -> dict:
-    """Превращает черновик в обычный тикет в «Открытые».
+    """Преобразует черновик в обычный тикет с понятными title/body/priority;
 
-    Вызванный агентом вариант передаёт уточнённые `title`/`body`/`priority`;
-    без них берётся то, что пользователь написал в окне черновиков.
+    вызывающий может передать финальные title/body/priority;
+    без них берём то, что сохранил пользователь в окне черновика.
     """
     priority = str(priority or "medium").strip().lower()
     if priority not in PRIORITIES:

@@ -34,14 +34,14 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 14785 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 7196 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/app.js` | 14812 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (20 файлов)` | 7206 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/static/columns.json` | 6929 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 3940 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
 | `app/static/style.css` | 2029 | стили (панели «Вид таблицы», тулбары, таблицы) |
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
-| `tests/js/test_js_helpers.py` | 1676 | проверка app.js через Node `vm` |
+| `tests/js/test_js_helpers.py` | 1678 | проверка app.js через Node `vm` |
 | `app/services/replenish.py` | 1543 | подсортировка WB, план дефицита, скорость продаж |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
 | `app/static/index.html` | 1468 | разметка: навигация `data-tab` + секции `tab-*` |
@@ -52,7 +52,7 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `app/models.py` | 887 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
 | `app/services/warehouse.py` | 729 | складские документы (приход/отгрузка, обороты) |
-| `app/services/tickets.py` | 646 | реестр тикетов `TICKETS.md` (create/validate/report) |
+| `app/services/tickets.py` | 678 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/dashboard.py` | 642 | сводные панели дашборда |
 | `app/services/storage_settings.py` | 493 | пути хранилищ и ссылки проекта (`app_settings`) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
@@ -168,7 +168,7 @@ analytics_root()/reports_folder()`, а не `settings.*` напрямую.
 считается как max+1. Так нельзя разойтись со счётчиком, потому что
 счётчика нет.
 
-Раздел «Черновики» добавляет к четырём обычным секциям пятую: окно «Мысль»
+Раздел «Черновики» добавляет к четырём обычным секциям пятую: окно «Заметка»
 в UI (`POST /api/tickets/draft`) сохраняет
 произвольный текст и сразу занимает метку `T-<N>`, копируя в буфер номер
 вместе с текстом. Черновик не является тикетом: агент по этому номеру

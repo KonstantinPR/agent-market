@@ -72,7 +72,7 @@ function _cabLinksFiltered(mp, force) {
 function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
 function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "216";
+const UI_VERSION = "217";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -8281,6 +8281,7 @@ function ticketCard(key, t) {
   const id = escapeHtml(t.id);
   const actions = [];
   if (key === "draft") {
+    actions.push('<button class="btn" data-act="edit-draft" data-id="' + id + '">Редактировать</button>');
     actions.push('<button class="btn btn-primary" data-act="promote" data-id="' + id + '">В тикет</button>');
     actions.push('<button class="btn" data-act="discard" data-id="' + id + '">Отклонить</button>');
   } else if (key === "open") {
@@ -8311,6 +8312,8 @@ function ticketCard(key, t) {
     + "</div>";
 }
 
+let ticketsData = null;
+
 async function renderTickets() {
   const board = document.getElementById("ticketsBoard");
   const msg = statusEl();
@@ -8324,6 +8327,7 @@ async function renderTickets() {
     if (msg) msg.textContent = "";
     return;
   }
+  ticketsData = d;
   if (msg) msg.textContent = d.counter ? "Счётчик следующих номеров: T-" + d.counter : "Файл TICKETS.md ещё не создан";
   let html = '<div class="tickets-board">';
   for (const [key, label] of TICKET_COLS) {
@@ -8343,9 +8347,16 @@ async function renderTickets() {
   applyTicketSection();
 }
 
-async function ticketAction(act, id, card) {
+async function ticketAction(act, id, card, openDraft) {
   const msg = statusEl();
   try {
+    if (act === "edit-draft") {
+      if (!openDraft) return;
+      const draft = ((ticketsData || {}).sections || {}).draft || [];
+      const found = draft.find((t) => t.id === id);
+      openDraft(id, found ? found.body : (card.querySelector(".ticket-body") || {}).innerText || "");
+      return;
+    }
     if (act === "close") {
       const form = card.querySelector(".ticket-close-form");
       if (!form) return;
@@ -8419,7 +8430,7 @@ function initTicketsTab() {
     const id = btn.dataset.id;
     const act = btn.dataset.act;
     const card = btn.closest(".ticket-card");
-    if (id && card && act) await ticketAction(act, id, card);
+    if (id && card && act) await ticketAction(act, id, card, openDraft);
   });
   board.addEventListener("keydown", async (ev) => {
     if (ev.key === "Enter" && ev.target.matches(".ticket-close-form input")) {
@@ -8443,35 +8454,53 @@ function initTicketsTab() {
   });
   const draftModal = document.getElementById("draftModal");
   const draftText = document.getElementById("draftText");
-  const openDraft = () => {
+  const draftModalTitle = document.getElementById("draftModalTitle");
+  const draftModalHint = document.getElementById("draftModalHint");
+  let draftEditId = null;
+  const openDraft = (id, text) => {
+    draftEditId = id || null;
+    draftText.value = text || "";
+    if (draftModalTitle) {
+      draftModalTitle.textContent = draftEditId
+        ? "Редактировать черновик " + draftEditId
+        : "Новая заметка";
+    }
+    if (draftModalHint) {
+      draftModalHint.textContent = draftEditId
+        ? "Измените текст и нажмите «ОК» — черновик сохранится под тем же номером."
+        : "Пиши как есть. После «ОК» текст сохранится в разделе «Черновики», а номер и текст попадут в буфер — вставь их агенту, он оформит тикет.";
+    }
     draftModal.classList.remove("hidden");
     draftText.focus();
   };
   const closeDraft = () => {
     draftModal.classList.add("hidden");
     draftText.value = "";
+    draftEditId = null;
   };
-  document.getElementById("ticketDraft").addEventListener("click", openDraft);
+  document.getElementById("ticketDraft").addEventListener("click", () => openDraft(null, ""));
   document.getElementById("draftModalClose").addEventListener("click", closeDraft);
   document.getElementById("draftModalCancel").addEventListener("click", closeDraft);
-  draftModal.addEventListener("click", (e) => {
-    if (e.target.id === "draftModal") closeDraft();
-  });
+  // Клик мимо окна не закрывает черновик — иначе легко потерять текст.
   document.getElementById("draftSave").addEventListener("click", async () => {
     const text = draftText.value.trim();
     if (!text) {
-      setStatus("Напишите текст мысли", { error: true });
+      setStatus("Напишите текст заметки", { error: true });
       draftText.focus();
       return;
     }
     try {
-      const res = await apiPost("/tickets/draft", { text });
+      const editId = draftEditId;
+      const res = editId
+        ? await apiPost("/tickets/" + encodeURIComponent(editId) + "/draft", { text })
+        : await apiPost("/tickets/draft", { text });
       const copied = await copyTicketDraft(res.copy || (res.id + "\n" + res.body));
       closeDraft();
       await renderTickets();
+      const verb = editId ? "обновлён" : "создан";
       setStatus("Черновик " + res.id + (copied
-        ? " создан и скопирован в буфер"
-        : " создан; скопируйте вручную: " + res.id + "\n" + text), { error: !copied });
+        ? " " + verb + " и скопирован в буфер"
+        : " " + verb + "; скопируйте вручную: " + res.id + "\n" + text), { error: !copied });
     } catch (err) {
       setStatus(err.message, { error: true });
     }

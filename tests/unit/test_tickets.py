@@ -178,6 +178,24 @@ def test_promote_rejects_non_draft_and_bad_priority(tfile):
     assert _ids(t.load(tfile), "draft") == ["T-2"]
 
 
+def test_update_draft_changes_text_and_keeps_number(tfile):
+    t.draft("старое\nтело", path=tfile)
+    r = t.update_draft("T-1", "новое\nдругое тело", path=tfile)
+    assert r["state"] == "draft"
+    assert r["title"] == "новое"
+    data = t.load(tfile)
+    assert _ids(data, "draft") == ["T-1"]
+    assert data["sections"]["draft"][0]["body"] == "новое\nдругое тело"
+    assert data["counter"] == 2
+
+
+def test_update_draft_rejects_non_draft(tfile):
+    t.create("A", path=tfile)
+    with pytest.raises(t.TicketError) as e:
+        t.update_draft("T-1", "x", path=tfile)
+    assert e.value.status == 409
+
+
 def test_discard_draft_retires_number(tfile):
     t.draft("мысль", path=tfile)
     r = t.discard("T-1", path=tfile)

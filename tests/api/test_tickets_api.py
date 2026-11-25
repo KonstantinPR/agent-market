@@ -53,8 +53,13 @@ def test_draft_copies_number_and_text(ticket_api):
     assert ticket_api.post("/api/tickets/draft", json={"text": " "}).status_code == 400
 
 
-def test_promote_and_discard_draft(ticket_api):
+def test_edit_promote_and_discard_draft(ticket_api):
     ticket_api.post("/api/tickets/draft", json={"text": "Черновик\nдетали"})
+    r = ticket_api.post("/api/tickets/T-1/draft", json={"text": "Новый\nтекст"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Новый"
+    assert r.json()["copy"] == "T-1\nНовый\nтекст"
+
     r = ticket_api.post("/api/tickets/T-1/promote", json={
         "title": "Оформленный тикет", "priority": "high"})
     assert r.status_code == 200
@@ -67,6 +72,7 @@ def test_promote_and_discard_draft(ticket_api):
     assert ticket_api.post("/api/tickets/draft", json={"text": "Ещё мысль"}).json()["id"] == "T-2"
     assert ticket_api.post("/api/tickets/T-2/discard").json()["state"] == "declined"
     assert ticket_api.post("/api/tickets/T-2/promote").status_code == 409
+    assert ticket_api.post("/api/tickets/T-2/draft", json={"text": "x"}).status_code == 409
 
 
 def test_start_close_flow(ticket_api):

@@ -173,6 +173,7 @@ POST /api/tickets/{tid}/block
 POST /api/tickets/{tid}/close
 POST /api/tickets/{tid}/decline
 POST /api/tickets/{tid}/discard
+POST /api/tickets/{tid}/draft
 POST /api/tickets/{tid}/promote
 POST /api/tickets/{tid}/reopen
 POST /api/tickets/{tid}/start

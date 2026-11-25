@@ -1083,7 +1083,7 @@
       <button id="ticketMenuBtn" class="btn ticket-menu-btn" aria-label="Действия тикетов">&#9776;</button>
       <select id="ticketSectionSelect" class="ticket-section-select" aria-label="Раздел тикетов"></select>
       <div class="ticket-actions-menu" id="ticketActions">
-        <button id="ticketDraft" class="btn btn-primary" title="Записать мысль: текст сохранится как черновик, а номер и текст скопируются в буфер">Мысль…</button>
+        <button id="ticketDraft" class="btn btn-primary" title="Быстрая заметка: текст сохранится как черновик, а номер и текст скопируются в буфер">Заметка…</button>
         <button id="ticketAdd" class="btn">Добавить тикет</button>
         <button id="ticketsRefresh" class="btn">Обновить</button>
       </div>
@@ -1401,11 +1401,11 @@
 <div id="draftModal" class="modal hidden">
   <div class="modal-box">
     <div class="modal-head">
-      <h3>Мысль — черновик тикета</h3>
+      <h3 id="draftModalTitle">Новая заметка</h3>
       <button id="draftModalClose" class="modal-close" aria-label="Закрыть">&times;</button>
     </div>
     <div class="modal-body">
-      <p class="hint">Пиши как есть. После «ОК» текст сохранится в разделе «Черновики», а номер и текст попадут в буфер — вставь их агенту, он оформит тикет.</p>
+      <p class="hint" id="draftModalHint">Пиши как есть. После «ОК» заметка сохранится в «Черновики», а номер и текст попадут в буфер — вставь их агенту, он оформит тикет.</p>
       <div class="ticket-form">
         <label>Текст задачи
           <textarea id="draftText" rows="9" placeholder="Что сделать? Свободные мысли, контекст, ссылки…"></textarea>
@@ -1419,7 +1419,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=216"></script>
+  <script src="/static/app.js?v=217"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
     <div class="xyz-modal-dialog" role="dialog" aria-modal="true">
