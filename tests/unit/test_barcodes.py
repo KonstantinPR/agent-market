@@ -167,3 +167,28 @@ def test_datamatrix_long_code_renders():
     pytest.importorskip("pylibdmtx.pylibdmtx")
     rows = bc.generate_batch([GS1_LINE1], "datamatrix")
     assert rows[0]["ok"] and rows[0]["png"] is not None
+
+
+def test_datamatrix_label_size_matches_template():
+    from io import BytesIO
+
+    from PIL import Image
+
+    pytest.importorskip("pylibdmtx.pylibdmtx")
+    png = bc.generate_png(GS1_LINE1, "datamatrix")
+    assert Image.open(BytesIO(png)).size == (210, 300)
+
+
+def test_datamatrix_service_note_in_bottom_right():
+    from io import BytesIO
+
+    from PIL import Image, ImageChops
+
+    pytest.importorskip("pylibdmtx.pylibdmtx")
+    code = GS1_LINE1
+    base = Image.open(BytesIO(bc.generate_png(code, "datamatrix"))).convert("RGB")
+    noted = Image.open(BytesIO(bc.generate_png(code, "datamatrix", "ИП"))).convert("RGB")
+    bbox = ImageChops.difference(base, noted).getbbox()
+    assert bbox is not None
+    assert bbox[0] >= 160 and bbox[1] >= 270
+    assert bbox[2] <= 205 and bbox[3] <= 295

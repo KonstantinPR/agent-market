@@ -1255,6 +1255,7 @@
           <option value="ean13">EAN-13</option>
           <option value="datamatrix">Data Matrix (Честный знак)</option>
         </select>
+        <input id="autoBarNote" type="text" maxlength="120" placeholder="Служебная информация (например, ИП) — по умолчанию пусто" title="Необязательный текст в правом нижнем углу бирки Data Matrix; по умолчанию не печатается">
         <button id="autoBarPreview" class="btn">Предпросмотр</button>
         <button id="autoBarBuild" class="btn btn-primary">Скачать ZIP</button>
       </div>
@@ -1419,7 +1420,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=217"></script>
+  <script src="/static/app.js?v=218"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
     <div class="xyz-modal-dialog" role="dialog" aria-modal="true">

@@ -246,6 +246,14 @@ def test_barcodes_preview_ok(client):
         assert it["ok"] and it["data_url"].startswith("data:image/png;base64,")
 
 
+def test_barcodes_preview_service_note_changes_datamatrix(client):
+    data = {"codes": "0104670630636090215LcFWqhXYe", "kind": "datamatrix"}
+    plain = client.post("/api/automation/barcodes/preview", data=data)
+    noted = client.post("/api/automation/barcodes/preview", data={**data, "note": "ИП"})
+    assert plain.status_code == noted.status_code == 200
+    assert plain.json()["items"][0]["data_url"] != noted.json()["items"][0]["data_url"]
+
+
 def test_barcodes_preview_bad_kind(client):
     r = client.post("/api/automation/barcodes/preview", data={"codes": "A", "kind": "qr"})
     assert r.status_code == 400

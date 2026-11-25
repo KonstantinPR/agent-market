@@ -4,11 +4,12 @@
 По мотивам ``finance/app/modules/barcode_module.py``: Code128 и EAN-13 — через
 ``python-barcode`` (PNG), Data Matrix — через ``pylibdmtx`` + Pillow с белой
 подложкой, заголовком «ЧЕСТНЫЙ ЗНАК» над матрицей (шрифт ужимается, чтобы не
-выходить за ширину квадрата) и подписью кода под матрицей — 3 строки со
-слайсом как в finance (``[0:18]``, ``[18:31]``, ``[32:38]``). Шрифт —
-системный Arial, без загрузки из сети. Строки длиннее ``DM_LIMIT`` символов
-автоматически рисуются как Data Matrix — 1D-коды физически не вместят
-31-символьный код маркировки Честного знака.
+выходить за ширину квадрата), подписью кода под матрицей — 3 строки со
+слайсом как в finance (``[0:18]``, ``[18:31]``, ``[32:38]``) — и необязательной
+служебной строкой в правом нижнем углу бирки. Шрифт — системный Arial, без
+загрузки из сети. Строки длиннее ``DM_LIMIT`` символов автоматически рисуются
+как Data Matrix — 1D-коды физически не вместят 31-символьный код маркировки
+Честного знака.
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ DM_LIMIT = 100
 #: Максимум картинок с data-url в ответе предпросмотра (остальные — статус).
 MAX_PREVIEW = 300
 
-#: Апскейл модуля Data Matrix: pylibdmtx рисует модуль 5px — мелко для
-#: сканирования с экрана и печати. ×2 (NEAREST, чёткие границы) → 10px.
-DM_SCALE = 2
+#: Апскейл модуля Data Matrix: pylibdmtx уже рисует модуль ~5px, поэтому
+#: бирка печатается без апскейла — 200px матрица в куске 210×300.
+DM_SCALE = 1
 
 #: Подпись кода под матрицей — раскладка как в finance: 3 строки
 #: ``[0:18]``, ``[18:31]``, ``[32:38]`` (типовой код ЧЗ = 31 символ).
@@ -42,8 +43,15 @@ DM_HEADER_FONT = 22
 DM_CAPTION_FONT = 16
 DM_LINE_STEP = 16
 
-#: Тихая зона вокруг матрицы (≥1 модуля по ISO/ГОСТ).
-DM_QUIET = 10
+#: Тихая зона вокруг матрицы (≥1 модуля по ISO/ГОСТ) и отступы бирки.
+DM_QUIET = 5
+DM_HEADER_Y = 6
+DM_CAPTION_PAD = 2
+DM_CAPTION_YS = (242, 256, 272)
+DM_BOTTOM_MARGIN = 10
+DM_SERVICE_FONT = 14
+DM_SERVICE_MARGIN = 16
+DM_SERVICE_MAX_WIDTH = 190
 
 #: Системный шрифт для подписей Data Matrix (Linux-сервер без Arial — default).
 _FONT_PATH = Path(r"C:\Windows\Fonts\arial.ttf")
@@ -127,7 +135,7 @@ def _ean13_png(code: str) -> bytes:
     return rv.getvalue()
 
 
-def _datamatrix_png(code: str) -> bytes:
+def _datamatrix_png(code: str, note: str = "") -> bytes:
     from PIL import Image, ImageDraw
     from pylibdmtx.pylibdmtx import encode
 
@@ -139,7 +147,7 @@ def _datamatrix_png(code: str) -> bytes:
 
     caption = [code[a:b] for a, b in DM_CAPTION_SLICES]
     pad_x, pad_top = DM_QUIET, 40
-    pad_bottom = DM_QUIET + DM_LINE_STEP * len(caption)
+    pad_bottom = DM_CAPTION_PAD + DM_LINE_STEP * len(caption) + DM_BOTTOM_MARGIN
     canvas = Image.new("RGB", (width + 2 * pad_x, pad_top + height + pad_bottom), (255, 255, 255))
     canvas.paste(dm, (pad_x, pad_top))
 
@@ -147,20 +155,28 @@ def _datamatrix_png(code: str) -> bytes:
     # Шапка и строки кода центрируются по квадрату матрицы и ужимаются,
     # если не влезают по его ширине (как в finance, но без обрезки краёв).
     font_h, w_h = _fit_font(draw, DM_HEADER, width, DM_HEADER_FONT)
-    draw.text((pad_x + (width - w_h) // 2, 8), DM_HEADER, font=font_h, fill=(0, 0, 0))
-    y = pad_top + height + DM_QUIET  # тихая зона ≥1 модуля и под матрицей
-    for line in caption:
+    draw.text((pad_x + (width - w_h) // 2, DM_HEADER_Y), DM_HEADER, font=font_h, fill=(0, 0, 0))
+    for line, y in zip(caption, DM_CAPTION_YS):
         if line:
             font_c, w_c = _fit_font(draw, line, width, DM_CAPTION_FONT)
             draw.text((pad_x + (width - w_c) // 2, y), line, font=font_c, fill=(0, 0, 0))
-        y += DM_LINE_STEP
+
+    service = " ".join((note or "").split())
+    if service:
+        font_s, w_s = _fit_font(draw, service, min(DM_SERVICE_MAX_WIDTH, width), DM_SERVICE_FONT)
+        draw.text(
+            (width + pad_x - DM_SERVICE_MARGIN - w_s, canvas.height - 26),
+            service,
+            font=font_s,
+            fill=(0, 0, 0),
+        )
 
     rv = BytesIO()
     canvas.save(rv, format="PNG")
     return rv.getvalue()
 
 
-def generate_png(code: str, kind: str = "code128") -> bytes:
+def generate_png(code: str, kind: str = "code128", note: str = "") -> bytes:
     """Один PNG-штрихкод. Кидает ValueError/BarcodeError при неверном коде."""
     code = (code or "").strip()
     err = _check(code, kind)
@@ -172,11 +188,11 @@ def generate_png(code: str, kind: str = "code128") -> bytes:
     if kind == "ean13":
         return _ean13_png(code)
     if kind == "datamatrix":
-        return _datamatrix_png(code)
+        return _datamatrix_png(code, note)
     raise ValueError(f"Неизвестный тип: {kind}")
 
 
-def generate_batch(codes: list[str], kind: str = "code128") -> list[dict]:
+def generate_batch(codes: list[str], kind: str = "code128", note: str = "") -> list[dict]:
     """Пакетная генерация: ``[{code, ok, error, png, kind}]`` в порядке кодов.
 
     Первые ``MAX_PREVIEW`` кодов рендерятся полностью (png); остальным
@@ -195,7 +211,7 @@ def generate_batch(codes: list[str], kind: str = "code128") -> list[dict]:
         row["kind"] = _resolve_kind(code, kind)
         if len(out) < MAX_PREVIEW:
             try:
-                row["png"] = generate_png(code, kind)
+                row["png"] = generate_png(code, kind, note)
                 row["ok"] = True
             except Exception as exc:  # noqa: BLE001 — ошибка одного кода не роняет батч
                 row["error"] = str(exc)
@@ -210,12 +226,12 @@ def to_data_url(png: bytes) -> str:
     return "data:image/png;base64," + b64encode(png).decode("ascii")
 
 
-def build_zip(codes: list[str], kind: str = "code128") -> BytesIO:
+def build_zip(codes: list[str], kind: str = "code128", note: str = "") -> BytesIO:
     """ZIP с PNG: ``bar_0001.png``, ``bar_0002.png``… (как в finance).
 
     Невалидные строки пропускаются; если ни один код не сошёлся — ValueError.
     """
-    rows = generate_batch(codes, kind)
+    rows = generate_batch(codes, kind, note)
     ok_rows = [r for r in rows if r["ok"]]
     if not ok_rows:
         errors = "; ".join(f"{r['code'] or '∅'}: {r['error']}" for r in rows[:5])
@@ -224,7 +240,7 @@ def build_zip(codes: list[str], kind: str = "code128") -> BytesIO:
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, False) as zf:
         for i, row in enumerate(ok_rows, 1):
-            png = row["png"] or generate_png(row["code"], row["kind"])
+            png = row["png"] or generate_png(row["code"], row["kind"], note)
             zf.writestr(f"bar_{i:04d}.png", png)
     buf.seek(0)
     return buf

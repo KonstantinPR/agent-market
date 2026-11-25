@@ -72,7 +72,7 @@ function _cabLinksFiltered(mp, force) {
 function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
 function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "217";
+const UI_VERSION = "218";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -7076,6 +7076,7 @@ function _autoBarFormData() {
   const fd = new FormData();
   fd.append("codes", (document.getElementById("autoBarCodes") || {}).value || "");
   fd.append("kind", (document.getElementById("autoBarType") || {}).value || "code128");
+  fd.append("note", (document.getElementById("autoBarNote") || {}).value || "");
   const fileEl = document.getElementById("autoBarFile");
   if (fileEl && fileEl.files[0]) fd.append("file", fileEl.files[0]);
   return fd;
