@@ -506,6 +506,7 @@ def automation_body_open(job_id: int):
 async def automation_barcodes_preview(
     codes: str = Form(""),
     kind: str = Form("code128"),
+    note: str = Form(""),
     file: UploadFile = File(None),
 ):
     """Предпросмотр: первые MAX_PREVIEW кодов рендерятся в data-url PNG."""
@@ -515,7 +516,7 @@ async def automation_barcodes_preview(
     if not codes_list:
         raise HTTPException(status_code=400, detail="Не переданы коды")
 
-    rows = barcode_service.generate_batch(codes_list, kind)
+    rows = barcode_service.generate_batch(codes_list, kind, note.strip()[:120])
     items = [
         {
             "index": i,
@@ -539,6 +540,7 @@ async def automation_barcodes_preview(
 async def automation_barcodes_build(
     codes: str = Form(""),
     kind: str = Form("code128"),
+    note: str = Form(""),
     file: UploadFile = File(None),
 ):
     """ZIP с PNG-штрихкодами: bar_0001.png, bar_0002.png…"""
@@ -548,7 +550,7 @@ async def automation_barcodes_build(
     if not codes_list:
         raise HTTPException(status_code=400, detail="Не переданы коды")
     try:
-        buf = barcode_service.build_zip(codes_list, kind)
+        buf = barcode_service.build_zip(codes_list, kind, note.strip()[:120])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _zip_response(buf, f"barcodes_{kind}.zip")

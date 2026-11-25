@@ -2933,6 +2933,72 @@ def test_floor_source_cabinet_for_r14(db):
     assert "средние по связке" in row["reason"]
 
 
+def test_floor_uses_detail_trips_for_own_item(db):
+    """T-99: логистика пола идёт из доставок/возвратов детализации строки."""
+    _seed(db, "TR1", "PTR1", stock=100, net_cost=300, sales=[(40, 1, 0)])
+    db.add_all([
+        models.WbDetailRow(op_key="sr:tr1-sale", source="excel", article="TR1",
+                           doc_type_name="Продажа", sale_dt=TODAY - timedelta(days=2),
+                           quantity=5, retail_amount=5000.0, for_pay=4000.0,
+                           delivery_service=500.0, delivery_count=5),
+        models.WbDetailRow(op_key="sr:tr1-ret", source="excel", article="TR1",
+                           doc_type_name="Возврат", sale_dt=TODAY - timedelta(days=2),
+                           quantity=2, retail_amount=2000.0, for_pay=1600.0,
+                           delivery_service=200.0, return_delivery_count=2),
+    ])
+    db.commit()
+    rec = recommendations(db, prices_df=_prices(("PTR1", 1000, 10)), today=TODAY)
+    row = _row(rec, "TR1")
+    assert row["floor_source"] == "unit_trips"
+    assert row["floor_basis"]["logistics_unit"] == pytest.approx(700.0 / 3)
+    assert row["floor_basis"]["cost_per_trip"] == pytest.approx(100.0)
+    assert row["floor_basis"]["trips_per_unit"] == pytest.approx(7.0 / 3)
+    assert row["floor_basis"]["trip_count"] == 7
+    assert "доставка 100 ₽ × 2.33/шт" in row["reason"]
+
+
+def test_floor_uses_group_trips_when_own_detail_missing(db):
+    """T-99: без своих покатушек логистику пола берём по связке артикула."""
+    _seed(db, "TRP-1", "PTRP1", stock=100, net_cost=300, sales=[])
+    for art, nm, qty in (("TRP-2", "PTRP2", 5), ("TRP-3", "PTRP3", 4)):
+        _seed(db, art, nm, stock=0, net_cost=300, sales=[(40, 1, 0)])
+        db.add(models.WbDetailRow(
+            op_key=f"sr:{art}-sale", source="excel", article=art,
+            doc_type_name="Продажа", sale_dt=TODAY - timedelta(days=2),
+            quantity=qty, retail_amount=qty * 1000.0, for_pay=qty * 800.0,
+            delivery_service=qty * 100.0, delivery_count=qty,
+        ))
+    db.commit()
+    rec = recommendations(db, prices_df=_prices(
+        ("PTRP1", 1000, 0), ("PTRP2", 1000, 0), ("PTRP3", 1000, 0)), today=TODAY)
+    row = _row(rec, "TRP-1")
+    assert row["floor_source"] == "group_trips"
+    assert row["floor_basis"]["logistics_unit"] == pytest.approx(100.0)
+    assert row["floor_basis"]["cost_per_trip"] == pytest.approx(100.0)
+    assert row["floor_basis"]["trips_per_unit"] == pytest.approx(1.0)
+    assert row["floor_basis"]["trip_group"] == "TRP"
+    assert row["floor_basis"]["trip_articles"] == 2
+    assert row["floor_basis"]["trip_sells"] == 9
+    assert "логистика по связке «TRP»" in row["reason"]
+
+
+def test_detail_trip_stats_falls_back_to_sales_when_counts_zero(db):
+    """T-99: при нулевых счётчиках WB покатушка считается на каждую продажу."""
+    _seed(db, "TRZ", "PTRZ", stock=0, net_cost=300, sales=[(40, 1, 0)])
+    db.add(models.WbDetailRow(
+        op_key="sr:trz-sale", source="excel", article="TRZ",
+        doc_type_name="Продажа", sale_dt=TODAY - timedelta(days=2),
+        quantity=4, retail_amount=4000.0, for_pay=3200.0,
+        delivery_service=400.0, delivery_count=0, return_delivery_count=0,
+    ))
+    db.commit()
+    stats = pricing_service._detail_trip_stats(db, TODAY)
+    own = stats["by_article"]["TRZ"]
+    assert own["sells"] == 4
+    assert own["trips"] == 4
+    assert own["cost_per_trip"] == pytest.approx(100.0)
+
+
 def test_estimated_floor_sent_to_minpromo_and_min_prices(db):
     """T-82: пол по средним связки уходит в мин. цены WB (ни файл, ни apply-min).
 

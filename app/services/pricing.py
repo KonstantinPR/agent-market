@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -920,6 +920,96 @@ def _canon_article(value) -> str:
     return str(value or "").strip().upper()
 
 
+TRIP_LOOKBACK_DAYS = 180
+TRIP_MIN_UNITS = 3
+TRIP_MIN_GROUP_ARTICLES = 2
+
+
+def _detail_trip_stats(db: Session, today: date) -> dict:
+    """T-99: логистика детализации в разрезе «покатушек» (доставка + возврат).
+
+    Логистика в WB ложится на товар при каждой доставке и при каждом возврате,
+    поэтому опора на число поездок, а не только на проданные штуки. Собираем
+    нетто-продажи и стоимость одной поездки по детализации за 180 дней, затем
+    медиану по артикулу и по связке (article_token). При нулевых счётчиках в
+    выгрузке считаем одной поездкой каждую проданную штуку — так дешёвый пол
+    не появляется там, где WB вообще не прислал числа доставок.
+    """
+    d0 = today - timedelta(days=TRIP_LOOKBACK_DAYS - 1)
+    doc_type = func.lower(func.coalesce(models.WbDetailRow.doc_type_name, ""))
+    ret_doc = or_(doc_type.like("%возврат%"), doc_type.like("%return%"))
+    goods_row = or_(
+        ret_doc,
+        doc_type.like("%продаж%"),
+        doc_type.like("%sale%"),
+        func.abs(func.coalesce(models.WbDetailRow.retail_amount, 0.0)) >= 0.005,
+        func.abs(func.coalesce(models.WbDetailRow.for_pay, 0.0)) >= 0.005,
+    )
+    qty = func.coalesce(models.WbDetailRow.quantity, 0)
+    signed_qty = case((ret_doc, -qty), else_=qty)
+    q = select(
+        func.upper(func.trim(models.WbDetailRow.article)).label("article"),
+        func.sum(func.abs(func.coalesce(models.WbDetailRow.delivery_service, 0.0)))
+        .label("logistics"),
+        func.sum(
+            func.coalesce(models.WbDetailRow.delivery_count, 0)
+            + func.coalesce(models.WbDetailRow.return_delivery_count, 0)
+        ).label("trips"),
+        func.sum(case((goods_row, signed_qty), else_=0)).label("sells"),
+    ).where(
+        models.WbDetailRow.sale_dt >= d0,
+        func.trim(models.WbDetailRow.article) != "",
+    ).group_by("article")
+
+    by_article: dict = {}
+    groups: dict = {}
+    cabinet: list = []
+    for r in db.execute(q):
+        art = str(r.article or "").strip().upper()
+        sells = int(_num(r.sells))
+        logistics = abs(_num(r.logistics))
+        if not art or sells <= 0 or logistics <= 0:
+            continue
+        trips = int(_num(r.trips))
+        if trips <= 0:
+            trips = sells
+        stats = {
+            "logistics": logistics,
+            "sells": sells,
+            "trips": trips,
+            "logistics_unit": logistics / sells,
+            "cost_per_trip": logistics / trips,
+            "trips_per_unit": trips / sells,
+        }
+        by_article[art] = stats
+        groups.setdefault(article_token(art) or art, []).append(stats)
+        cabinet.append(stats)
+
+    def _summary(items: list) -> Optional[dict]:
+        if not items:
+            return None
+        units = sum(int(i["sells"]) for i in items)
+        if units < TRIP_MIN_UNITS:
+            return None
+        return {
+            "logistics_unit": max(0.0, _median([i["logistics_unit"] for i in items])),
+            "cost_per_trip": max(0.0, _median([i["cost_per_trip"] for i in items])),
+            "trips_per_unit": max(0.0, _median([i["trips_per_unit"] for i in items])),
+            "articles": len(items),
+            "units": units,
+            "trips": sum(int(i["trips"]) for i in items),
+            "lookback": TRIP_LOOKBACK_DAYS,
+        }
+
+    by_group = {}
+    for group, items in groups.items():
+        if len(items) >= TRIP_MIN_GROUP_ARTICLES:
+            summary = _summary(items)
+            if summary is not None:
+                by_group[group] = summary
+    return {"by_article": by_article, "by_group": by_group, "cabinet": _summary(cabinet)}
+
+
 def _reason_add(r: dict, note: str) -> None:
     """Дописывает пометку к причине, не теряя прежний текст."""
     old = (r.get("reason") or "").rstrip(". ")
@@ -1211,6 +1301,8 @@ def recommendations(
     # T-82: средние комиссия/логистика/хранение/услуги по связке — для строк без
     # собственной unit-экономики. Считаются один раз на прогон.
     econ_fb = _econ_fallback(db, s, today) if bool(s.get("no_econ_floor", True)) else None
+    # T-99: логистика детализации (доставки/возвраты) за 180 дн. — для пола.
+    trip_stats = _detail_trip_stats(db, today)
 
     now_df = rows_df[(rows_df["date"] >= now_from)] if not rows_df.empty else rows_df
     prev_df = rows_df[(rows_df["date"] >= prev_from) & (rows_df["date"] <= prev_to)] if not rows_df.empty else rows_df
@@ -1393,14 +1485,41 @@ def recommendations(
         econ = None
         econ_src = None
         if ue is not None:
-            econ, econ_src = ue, "unit_econ"
+            econ, econ_src = dict(ue), "unit_econ"
         elif econ_fb is not None:
             # T-82: своей unit-экономики нет — берём средние связки (или
             # константы настроек, если продаж в связке нет вовсе). Пол считается
             # той же формулой, что и по собственным данным: иначе он заведомо
             # ниже безубытка (комиссия/логистика/услуги не учтены).
-            econ, econ_src = econ_fb, econ_fb["source"]
+            econ, econ_src = dict(econ_fb), econ_fb["source"]
         if econ is not None:
+            econ["base_source"] = econ_src
+            own_trip = trip_stats["by_article"].get(art)
+            if own_trip is not None and int(own_trip["sells"]) >= TRIP_MIN_UNITS:
+                econ.update({
+                    "logistics_unit": own_trip["logistics_unit"],
+                    "cost_per_trip": own_trip["cost_per_trip"],
+                    "trips_per_unit": own_trip["trips_per_unit"],
+                    "trip_sells": own_trip["sells"],
+                    "trip_count": own_trip["trips"],
+                    "trip_lookback": TRIP_LOOKBACK_DAYS,
+                })
+                econ_src = "unit_trips"
+            else:
+                group = article_token(art) or art
+                grp_trip = trip_stats["by_group"].get(group)
+                if grp_trip is not None:
+                    econ.update({
+                        "logistics_unit": grp_trip["logistics_unit"],
+                        "cost_per_trip": grp_trip["cost_per_trip"],
+                        "trips_per_unit": grp_trip["trips_per_unit"],
+                        "trip_sells": grp_trip["units"],
+                        "trip_count": grp_trip["trips"],
+                        "trip_articles": grp_trip["articles"],
+                        "trip_group": group,
+                        "trip_lookback": TRIP_LOOKBACK_DAYS,
+                    })
+                    econ_src = "group_trips"
             f["comm_rate"] = econ["comm_rate"]
             f["logistics_unit"] = econ["logistics_unit"]
             f["storage_unit"] = econ["storage_unit"]
@@ -1421,6 +1540,14 @@ def recommendations(
                     "articles": int(econ.get("articles") or 0),
                     "units": int(econ.get("units") or 0),
                     "lookback": int(econ.get("lookback") or 0),
+                    "base_source": econ.get("base_source"),
+                    "cost_per_trip": float(econ.get("cost_per_trip") or 0.0),
+                    "trips_per_unit": float(econ.get("trips_per_unit") or 0.0),
+                    "trip_sells": int(econ.get("trip_sells") or 0),
+                    "trip_count": int(econ.get("trip_count") or 0),
+                    "trip_articles": int(econ.get("trip_articles") or 0),
+                    "trip_group": econ.get("trip_group"),
+                    "trip_lookback": int(econ.get("trip_lookback") or 0),
                 }
 
         if mode == "old":
@@ -1631,6 +1758,18 @@ def _floor_source_text(r: dict, s: dict) -> str:
 
     if src == "unit_econ":
         return "unit-экономика строки: " + _parts(basis) + _cost_note()
+    if src in ("unit_trips", "group_trips"):
+        trips = (f"; доставка {_num(basis.get('cost_per_trip')):.0f} ₽ × "
+                 f"{_num(basis.get('trips_per_unit')):.2f}/шт "
+                 f"({int(_num(basis.get('trip_count')))} покатушек, "
+                 f"{int(_num(basis.get('trip_sells')))} шт за "
+                 f"{int(_num(basis.get('trip_lookback')))} дн.)")
+        if src == "unit_trips":
+            return "покатушки строки: " + _parts(basis) + trips + _cost_note()
+        return (_parts(basis) + trips
+                + f"; логистика по связке «{basis.get('trip_group') or '—'}» "
+                  f"({int(_num(basis.get('trip_articles')))} тов.)"
+                + _cost_note())
     if src == "cabinet":
         days = int(_num(basis.get("lookback")))
         arts = int(_num(basis.get("articles")))
