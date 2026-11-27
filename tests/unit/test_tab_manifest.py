@@ -20,7 +20,7 @@ INDEX_HTML = ROOT / "app" / "static" / "index.html"
 ORPHAN_TABS = {"sales", "stocks"}
 # Вкладки без «Вида таблицы»: списки/формы, а не табличные разделы.
 NO_COLVIEW_TABS = {
-    "dashboard", "wh-cp",
+    "dashboard", "wh-cp", "wh-packing",
     "yandex", "tickets",
     "automation-foldering", "automation-names", "automation-crop",
     "automation-faces", "automation-body", "automation-barcodes",
@@ -127,6 +127,6 @@ def test_api_tabs_have_pull_route():
 
 def test_manifest_counts_are_stable():
     """Страховка от регрессии парсинга: числа зафиксированы осознанно."""
-    assert len(nav_tabs()) == 33, "изменилось число пунктов меню — обновите тест осознанно"
-    assert len(section_tabs()) == 35, "изменилось число секций — обновите тест осознанно"
+    assert len(nav_tabs()) == 34, "изменилось число пунктов меню — обновите тест осознанно"
+    assert len(section_tabs()) == 36, "изменилось число секций — обновите тест осознанно"
     assert len(pull_tabs()) == 16, "изменилось число записей apiPullByTab — обновите тест"

@@ -9,7 +9,7 @@ def test_storage_settings_get(client):
     assert r.status_code == 200
     body = r.json()
     assert set(body["roots"]) == {
-        "photos_root", "analytics_root", "products_file", "reports_folder"}
+        "photos_root", "analytics_root", "products_file", "reports_folder", "stock_root"}
     assert body["roots"]["photos_root"]["title"] == "Фото товаров"
     # T-82: файл каталога себестоимости — отдельный корень (kind=file).
     file_row = body["roots"]["products_file"]

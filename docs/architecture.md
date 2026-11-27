@@ -34,8 +34,8 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 <!-- BEGIN:file-stats -->
 | Файл | Строк | Роль |
 |---|---|---|
-| `app/static/app.js` | 14815 | весь фронтенд (вкладки, таблицы, fetch к /api) |
-| `app/api/ (20 файлов)` | 7208 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
+| `app/static/app.js` | 15000 | весь фронтенд (вкладки, таблицы, fetch к /api) |
+| `app/api/ (21 файлов)` | 7285 | пакет HTTP-эндпоинтов: роутеры по группам + общий багаж `_common.py` |
 | `app/static/columns.json` | 6929 | единый источник колонок: панель, подписи, Excel-словари |
 | `app/services/pricing.py` | 4079 | автопилот цен: R1–R11, R16/R18/R19, расчёт скидок |
 | `app/services/sync.py` | 2753 | запись выгрузок WB/Ozon в БД |
@@ -43,18 +43,18 @@ FastAPI router — app/api/  (пакет: роутеры по группам, о
 | `tests/api/test_endpoints.py` | 1884 | HTTP-эндпоинты через TestClient |
 | `tests/js/test_js_helpers.py` | 1678 | проверка app.js через Node `vm` |
 | `app/services/replenish.py` | 1543 | подсортировка WB, план дефицита, скорость продаж |
+| `app/static/index.html` | 1487 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/refresh.py` | 1486 | `pull_*`-функции, фоновые задания, «Обновить WB/Ozon» |
-| `app/static/index.html` | 1469 | разметка: навигация `data-tab` + секции `tab-*` |
 | `app/services/margin.py` | 1282 | маржинальность по детализациям, группировка артикулоразмеров |
 | `tests/unit/test_margin.py` | 1276 | юнит-тесты маржинальности |
 | `app/providers/wb.py` | 1172 | HTTP к Wildberries |
 | `app/providers/ozon.py` | 1039 | HTTP к Ozon |
-| `app/models.py` | 887 | SQLAlchemy-модели (схема БД) |
+| `app/models.py` | 933 | SQLAlchemy-модели (схема БД) |
 | `app/services/pdf_demand.py` | 746 | PDF «Потребность в товаре» |
 | `app/services/warehouse.py` | 729 | складские документы (приход/отгрузка, обороты) |
 | `app/services/tickets.py` | 678 | реестр тикетов `TICKETS.md` (create/validate/report) |
 | `app/services/dashboard.py` | 642 | сводные панели дашборда |
-| `app/services/storage_settings.py` | 493 | пути хранилищ и ссылки проекта (`app_settings`) |
+| `app/services/storage_settings.py` | 520 | пути хранилищ и ссылки проекта (`app_settings`) |
 | `app/services/ozon_article.py` | 368 | резолвер артикула/размера Ozon (`base_article`) |
 | `app/services/photos.py` | 251 | индекс фото на диске, выбор папки, fallback по префиксу |
 | `app/database.py` | 240 | engine/session PostgreSQL |

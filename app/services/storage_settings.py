@@ -29,7 +29,13 @@ from app import models
 from app.config import settings
 
 SETTING_KEY = "project"
-ROOT_KEYS = ("photos_root", "analytics_root", "products_file", "reports_folder")
+ROOT_KEYS = (
+    "photos_root",
+    "analytics_root",
+    "products_file",
+    "reports_folder",
+    "stock_root",
+)
 LINKS_KEY = "links"
 
 #: Заголовки строк хранилищ (для UI и документации).
@@ -38,6 +44,7 @@ ROOT_TITLES = {
     "analytics_root": "Аналитика (Google Drive)",
     "products_file": "Каталог себестоимости (products.xlsx)",
     "reports_folder": "Отчёты на Яндекс.Диске",
+    "stock_root": "Остатки для упаковки (ОСТАТКИ.xlsx)",
 }
 
 #: Адрес облачной папки на Диске для открытия в браузере.
@@ -59,6 +66,9 @@ def products_file_default(analytics: Optional[str] = None) -> str:
     return str(Path(base) / PRODUCTS_SUBDIR / PRODUCTS_NAME)
 
 
+STOCK_ROOT_DEFAULT = r"E:\Мой диск\ИП ПРУДНИКОВ\ОСТАТКИ"
+
+
 def default_roots() -> dict[str, str]:
     """Дефолтные корни из config/.env (фото — с учётом PHOTOS_ROOT)."""
     analytics = settings.analytics_root
@@ -67,6 +77,7 @@ def default_roots() -> dict[str, str]:
         "analytics_root": analytics,
         "products_file": products_file_default(analytics),
         "reports_folder": settings.yandex_reports_dir,
+        "stock_root": STOCK_ROOT_DEFAULT,
     }
 
 
@@ -271,6 +282,11 @@ def products_file(db: Optional[Session] = None) -> str:
     return roots(db)["products_file"]
 
 
+def stock_root(db: Optional[Session] = None) -> str:
+    """Папка остатков для упаковочного листа (T-100)."""
+    return roots(db)["stock_root"]
+
+
 def yandex_folder_url(folder: str) -> str:
     folder = normalize_folder(folder)
     if folder == "/":
@@ -298,16 +314,27 @@ def _root_row(key: str, value: str, default: str, custom: bool) -> dict:
             row["exists"] = path.is_file()
             if row["exists"]:
                 st = path.stat()
+                row["mtime"] = datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
                 row["size"] = int(st.st_size)
-                row["mtime"] = datetime.fromtimestamp(
-                    st.st_mtime).isoformat(timespec="seconds")
         except OSError:
             row["exists"] = False
-    else:
+    elif key == "stock_root":
+        row["kind"] = "stock_root"
+        folder = Path(value)
+        stock_file = folder / "ОСТАТКИ.xlsx"
+        row["stock_file"] = str(stock_file)
         try:
-            row["exists"] = Path(value).is_dir()
+            row["exists"] = folder.exists()
+            row["stock_file_exists"] = stock_file.is_file()
+            if row["stock_file_exists"]:
+                st = stock_file.stat()
+                row["mtime"] = datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+                row["size"] = int(st.st_size)
         except OSError:
             row["exists"] = False
+            row["stock_file_exists"] = False
+    else:
+        row["exists"] = Path(value).exists()
     return row
 
 
@@ -447,7 +474,7 @@ def allowed_paths(db: Session, companies: Iterable[models.Company]) -> list[Path
     """Корни, внутри которых разрешено открывать папки."""
     values = roots(db)
     out: list[Path] = []
-    for key in ("photos_root", "analytics_root"):
+    for key in ("photos_root", "analytics_root", "stock_root"):
         try:
             out.append(Path(values[key]).resolve())
         except OSError:

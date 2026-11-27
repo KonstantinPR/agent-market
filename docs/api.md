@@ -2,7 +2,7 @@
 
 <!-- Сгенерировано: python scripts/gen_api_map.py -- не редактировать руками. -->
 
-Всего эндпоинтов `/api/*`: **189**, групп: **32**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
+Всего эндпоинтов `/api/*`: **194**, групп: **33**. Источник — реестр роутов FastAPI (`app.main:app`), поэтому список всегда совпадает с кодом.
 
 Общий префикс и общие `Depends` заданы в `app/api/__init__.py`. Все ответы — JSON или файл (`StreamingResponse`/`FileResponse`); `response_model` сейчас почти не используется — схему смотреть в теле хендлера.
 
@@ -20,6 +20,7 @@
 - [import](#import) — 4 шт.
 - [margin](#margin) — 4 шт.
 - [ozon](#ozon) — 16 шт.
+- [packing](#packing) — 5 шт.
 - [prices](#prices) — 1 шт.
 - [pricing](#pricing) — 9 шт.
 - [pricing-ozon](#pricing-ozon) — 5 шт.
@@ -194,6 +195,16 @@
 | POST | `/api/ozon/prices` | `ozon_prices` |  |
 | POST | `/api/ozon/realization` | `ozon_realization` | Реализация за месяцы, покрывающие окно из шапки (или точный месяц). |
 | POST | `/api/ozon/stock` | `ozon_stock` |  |
+
+## packing
+
+| Метод | Путь | Функция | Описание |
+|---|---|---|---|
+| POST | `/api/packing/commit` | `api_packing_commit` |  |
+| GET | `/api/packing/draft` | `api_packing_draft` |  |
+| GET | `/api/packing/history` | `api_packing_history` |  |
+| GET | `/api/packing/{packing_id}` | `api_packing_get` |  |
+| POST | `/api/packing/{packing_id}/revert` | `api_packing_revert` |  |
 
 ## prices
 

@@ -20,6 +20,7 @@
         <a class="nav-link" data-tab="wh-cp" href="#">Контрагенты</a>
         <a class="nav-link" data-tab="wh-receipt" href="#">Приходы</a>
         <a class="nav-link" data-tab="wh-shipment" href="#">Отправки</a>
+        <a class="nav-link" data-tab="wh-packing" href="#">Упаковочный лист</a>
       </div>
     </div>
     <div class="dropdown" id="profitDropdown">
@@ -612,6 +613,23 @@
     </div>
     <div class="table-wrap" id="whSTable"></div>
     <div class="table-wrap" id="whSDetail"></div>
+  </section>
+
+    <section id="tab-wh-packing" class="pane">
+    <div class="toolbar">
+      <input type="date" id="packingFrom" title="Начало периода продаж для расчёта потребности WB to_sort">
+      <input type="date" id="packingTo" title="Конец периода продаж для расчёта потребности WB to_sort">
+      <label title="Горизонт запаса: сколько дней покрывать спросом при расчёте потребности">Запас, дн <input type="number" id="packingTargetDays" value="30" min="1" max="365" style="width:110px"></label>
+      <label title="Добавить Ozon в черновик упаковки. Сейчас MVP считает в первую очередь WB to_sort."><input type="checkbox" id="packingIncludeOzon"> Ozon</label>
+      <button class="btn primary" id="btnPackingDraft" title="Рассчитать черновик: WB to_sort из «Потребности в товаре» по размерам, сопоставление с ОСТАТКИ.xlsx">Сформировать черновик</button>
+      <button class="btn" id="btnPackingCommit" title="Создать Excel 00N_YYYY-MM-DD.xlsx, сохранить backup остатков в ОРИГИНАЛ и списать количество из ОСТАТКИ.xlsx">Создать файл и списать остатки</button>
+      <button class="btn" id="btnPackingRefreshHistory" title="Обновить историю упаковочных листов из базы">История</button>
+      <span class="tip" tabindex="0" role="tooltip">?<span class="tip-text">Черновик берёт WB `to_sort` из «Потребности в товаре» (вид «По размерам») и сопоставляет позиции с файлом ОСТАТКИ.xlsx из «Ссылки и хранилища → Остатки для упаковки». Матчинг: артикул+размер, затем штрихкод. Коммит: backup в `ОРИГИНАЛ`, упаковочный Excel `00N_YYYY-MM-DD.xlsx`, атомарное списание остатков. Откат возможен только если файл остатков не менялся после коммита.</span></span>
+    </div>
+    <div id="packingMsg" class="cab-storage-msg"></div>
+    <div class="table-wrap" id="packingTable"></div>
+    <h3 style="margin-top:16px">История упаковочных листов</h3>
+    <div class="table-wrap" id="packingHistoryTable"></div>
   </section>
 
   <section id="tab-replenish" class="pane">
@@ -1420,7 +1438,7 @@
   </div>
 </div>
   <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=218"></script>
+  <script src="/static/app.js?v=222"></script>
   <div id="xyzDrillModal" class="xyz-modal hidden">
     <div class="xyz-modal-backdrop" id="xyzDrillBackdrop"></div>
     <div class="xyz-modal-dialog" role="dialog" aria-modal="true">

@@ -870,6 +870,52 @@ class OzonBuyout(Base):
     )
 
 
+class PackingList(Base):
+    """T-101: Упаковочный лист — манифест коммита списания остатков."""
+
+    __tablename__ = "packing_lists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
+    reverted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft|committed|reverted
+    stock_file: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    backup_file: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    packing_file: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    stock_hash_before: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    stock_hash_after: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    params_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    meta_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
+    items: Mapped[list["PackingListItem"]] = relationship(
+        back_populates="packing_list", cascade="all, delete-orphan"
+    )
+
+
+class PackingListItem(Base):
+    __tablename__ = "packing_list_items"
+    __table_args__ = (
+        Index("ix_packing_list_items_list", "packing_list_id"),
+        Index("ix_packing_list_items_article", "article"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    packing_list_id: Mapped[int] = mapped_column(
+        ForeignKey("packing_lists.id", ondelete="CASCADE"), nullable=False
+    )
+    article: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    name: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    size: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    barcode: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    need_qty: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    available_qty: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pack_qty: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    allocation_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="", nullable=False)
+
+    packing_list: Mapped[PackingList] = relationship(back_populates="items")
+
+
 class AppSetting(Base):
     """Глобальные настройки проекта (T-80): ключ → JSON-строка.
 

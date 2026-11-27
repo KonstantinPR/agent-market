@@ -104,6 +104,9 @@ GET /api/stocks
 GET /api/storage-cost
 GET /api/system/size
 GET /api/tickets
+GET /api/packing/draft
+GET /api/packing/history
+GET /api/packing/{packing_id}
 GET /api/warehouse/counterparties
 GET /api/warehouse/docs
 GET /api/warehouse/docs/{doc_id}/items
@@ -178,6 +181,8 @@ POST /api/tickets/{tid}/promote
 POST /api/tickets/{tid}/reopen
 POST /api/tickets/{tid}/start
 POST /api/tickets/{tid}/unblock
+POST /api/packing/commit
+POST /api/packing/{packing_id}/revert
 POST /api/warehouse/counterparties
 POST /api/warehouse/docs
 POST /api/warehouse/fromdisk

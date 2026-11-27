@@ -72,7 +72,7 @@ function _cabLinksFiltered(mp, force) {
 function cabLinksAll(force) { return _cabLinksFiltered(null, force); }
 function cabLinksFor(mp, force) { return _cabLinksFiltered(mp, force); }
 
-const UI_VERSION = "218";
+const UI_VERSION = "222";
 if (document.title) document.title = "Agent Market \u00B7 UI v" + UI_VERSION;
 
 function fmt(n) {
@@ -1533,6 +1533,7 @@ async function loadTabInner(name, f) {
     else if (name === "wh-cp") await renderWhCp();
     else if (name === "wh-receipt") await renderWhDocs("receipt", "whRTable", "headerMsg", "whRDetail");
     else if (name === "wh-shipment") await renderWhShipments();
+    else if (name === "wh-packing") await renderPackingTab();
     else if (name === "replenish") await renderReplenish();
     else if (name === "pricing") await renderPricing(false);
     else if (name === "wb-cards" || name === "oz-cards") await renderCards(name);
@@ -10278,7 +10279,7 @@ let cabStorageData = null;
 let cabStorageEdit = null; // {kind: "root"|"company"|"link", id}
 let cabStorageBusy = false;
 
-const CAB_STORAGE_ROOT_ORDER = ["photos_root", "analytics_root", "products_file", "reports_folder"];
+const CAB_STORAGE_ROOT_ORDER = ["photos_root", "analytics_root", "products_file", "reports_folder", "stock_root"];
 
 function cabStorageMsg(text, isError) {
   const el = $("#cabStorageMsg");
@@ -10381,6 +10382,7 @@ function renderStorageSettings() {
     }
     const isDisk = row.kind === "yandex";
     const isFile = row.kind === "file";
+    const isStockRoot = row.kind === "stock_root";
     let open = "";
     if (isDisk) {
       open = '<a class="cab-storage-act" href="' + escapeHtml(row.url || "") +
@@ -10412,11 +10414,21 @@ function renderStorageSettings() {
       }
       syncBtn = '<button type="button" class="cab-storage-act primary" data-products-sync="1"' +
         (st.running ? " disabled" : "") + ">Обновить каталог из файла</button>";
+    } else if (isStockRoot) {
+      const bits = [];
+      bits.push(row.stock_file_exists ? "файл ОСТАТКИ.xlsx найден" : "файл ОСТАТКИ.xlsx не найден");
+      if (row.mtime) bits.push("изменён " + cabStorageWhen(row.mtime));
+      if (row.size) bits.push(cabStorageSize(row.size));
+      meta = '<div class="cab-storage-val cab-storage-meta">' + escapeHtml(bits.join(" · ")) + "</div>";
+      if (row.stock_file) {
+        meta += '<div class="cab-storage-val cab-storage-meta" title="' + escapeHtml(row.stock_file) + '">' +
+          escapeHtml(row.stock_file) + "</div>";
+      }
     }
     h += '<div class="cab-storage-row">' +
       '<div class="cab-storage-main">' +
         '<div class="cab-storage-title">' + escapeHtml(row.title) + " " +
-          (isDisk ? "" : cabStorageStatus(row.exists, isFile)) + "</div>" +
+          (isDisk ? "" : cabStorageStatus(isStockRoot ? !!row.stock_file_exists : row.exists, isFile)) + "</div>" +
         '<div class="cab-storage-val" title="' + escapeHtml(row.value) + '">' +
           escapeHtml(row.value) + "</div>" +
         meta +
@@ -14813,3 +14825,165 @@ function openXyzDrill(abc, xyz) {
   }
   modal.classList.remove("hidden");
 }
+// ── T-101: Упаковочный лист ──────────────────────────────────────────────
+let packingDraft = null;
+
+function packingMsg(text, isErr=false) {
+  const el = $("#packingMsg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = isErr ? "#b91c1c" : "#166534";
+}
+
+function packingDefaultDates() {
+  const iso = d => d.toISOString().slice(0, 10);
+  const globalFrom = $("#fFrom")?.value || "";
+  const globalTo = $("#fTo")?.value || iso(new Date());
+  const to = globalTo;
+  const from = globalFrom || iso(new Date(new Date(to).getTime() - 30 * 24 * 3600 * 1000));
+  if ($("#packingFrom") && !$("#packingFrom").value) $("#packingFrom").value = from;
+  if ($("#packingTo") && !$("#packingTo").value) $("#packingTo").value = to;
+}
+
+async function renderPackingTab() {
+  packingDefaultDates();
+  await renderPackingHistory();
+  if (packingDraft) renderPackingDraftTable();
+}
+
+function packingDraftParams() {
+  return {
+    date_from: $("#packingFrom")?.value || "",
+    date_to: $("#packingTo")?.value || "",
+    target_days: Number($("#packingTargetDays")?.value || 30),
+    include_ozon: $("#packingIncludeOzon")?.checked ? 1 : 0,
+  };
+}
+
+async function loadPackingDraft() {
+  packingDefaultDates();
+  const p = packingDraftParams();
+  if (!p.date_from || !p.date_to) {
+    packingMsg("Укажите период: «с» и «по».", true);
+    return;
+  }
+  packingMsg("Формирую черновик…");
+  const data = await api("/packing/draft" + qs(p));
+  packingDraft = data;
+  renderPackingDraftTable();
+  packingMsg(`Черновик: ${data.count} строк, нужно ${data.need_total}, в упаковку ${data.pack_total}. Файл остатков: ${data.stock_file}`);
+}
+
+function renderPackingDraftTable() {
+  const wrap = $("#packingTable");
+  if (!wrap) return;
+  if (!packingDraft || !packingDraft.items || !packingDraft.items.length) {
+    wrap.innerHTML = "<p class='muted'>Нет позиций для упаковки. Нажмите «Сформировать черновик».</p>";
+    return;
+  }
+  const cabs = packingDraft.cabinets || [];
+  let h = "<table class='data-table'><thead><tr>" +
+    "<th>Артикул</th><th>Размер</th><th>Штрихкод</th><th>Нужно</th><th>В наличии</th><th>В упаковку</th>";
+  for (const c of cabs) h += `<th>${escapeHtml(c.name || c.code)}</th>`;
+  h += "<th>Статус</th><th></th></tr></thead><tbody>";
+  packingDraft.items.forEach((it, idx) => {
+    h += `<tr data-idx="${idx}">` +
+      `<td>${escapeHtml(it.article)}</td>` +
+      `<td>${escapeHtml(it.size || "—")}</td>` +
+      `<td>${escapeHtml(it.barcode || "")}</td>` +
+      `<td class="num">${it.need_qty}</td>` +
+      `<td class="num">${it.available_qty}</td>` +
+      `<td class="num"><input type="number" min="0" max="${it.available_qty}" value="${it.pack_qty}" data-pack-idx="${idx}" style="width:72px"></td>`;
+    for (const c of cabs) {
+      const v = (it.allocation && it.allocation[c.code]) || 0;
+      h += `<td class="num"><input type="number" min="0" value="${v}" data-alloc-idx="${idx}" data-cab="${escapeHtml(c.code)}" style="width:72px"></td>`;
+    }
+    h += `<td>${escapeHtml(it.status || "")}</td>` +
+      `<td><button class="btn btn-sm" data-pack-fill="${idx}">max</button></td></tr>`;
+  });
+  h += "</tbody></table>";
+  wrap.innerHTML = h;
+  wrap.querySelectorAll("[data-pack-idx]").forEach(inp => {
+    inp.addEventListener("change", e => {
+      const i = Number(e.target.dataset.packIdx);
+      const it = packingDraft.items[i];
+      const v = Math.max(0, Math.min(Number(e.target.value||0), it.available_qty, it.need_qty));
+      it.pack_qty = v; e.target.value = String(v);
+      it.allocation = packingAllocate(it.pack_qty, cabs.map(c=>c.code));
+      renderPackingDraftTable();
+    });
+  });
+  wrap.querySelectorAll("[data-alloc-idx]").forEach(inp => {
+    inp.addEventListener("change", e => {
+      const i = Number(e.target.dataset.allocIdx); const cab = e.target.dataset.cab;
+      const it = packingDraft.items[i]; it.allocation = it.allocation || {};
+      it.allocation[cab] = Math.max(0, Number(e.target.value||0));
+      let sum = 0; for (const c of cabs) sum += Number(it.allocation[c.code]||0);
+      if (sum > it.pack_qty) it.allocation[cab] = Math.max(0, it.pack_qty - (sum - Number(it.allocation[cab]||0)));
+      renderPackingDraftTable();
+    });
+  });
+  wrap.querySelectorAll("[data-pack-fill]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.packFill); const it = packingDraft.items[i];
+      it.pack_qty = Math.min(it.need_qty, it.available_qty);
+      it.allocation = packingAllocate(it.pack_qty, cabs.map(c=>c.code));
+      renderPackingDraftTable();
+    });
+  });
+}
+
+function packingAllocate(packQty, codes) {
+  const w = {"ip_prudnikov_wb":1,"oo_joinco":2,"ip_prudnikov":3};
+  const alloc = {}; codes.forEach(c=>alloc[c]=0);
+  if (packQty<=0 || !codes.length) return alloc;
+  const totalW = codes.reduce((s,c)=>s+Math.max(0,Number(w[c]||1)),0) || codes.length;
+  let remain = packQty; const fracs=[];
+  for (const c of codes) {
+    const exact = packQty * Math.max(0,Number(w[c]||1)) / totalW;
+    const base = Math.floor(exact); alloc[c]=base; remain-=base; fracs.push([exact-base,c]);
+  }
+  fracs.sort((a,b)=>b[0]-a[0] || codes.indexOf(a[1])-codes.indexOf(b[1]));
+  for (const [,c] of fracs) { if (remain<=0) break; alloc[c]++; remain--; }
+  return alloc;
+}
+
+async function commitPackingDraft() {
+  if (!packingDraft) { packingMsg("Сначала сформируйте черновик", true); return; }
+  if (!confirm("Создать упаковочный лист и списать остатки из ОСТАТКИ.xlsx? Будет создан backup в ОРИГИНАЛ.")) return;
+  packingMsg("Создаю файл и списываю остатки…");
+  const res = await apiPost("/packing/commit", { draft: packingDraft });
+  packingMsg(`Готово: ${res.packing_file}. Списано ${res.pack_total} шт. Backup: ${res.backup_file}`);
+  packingDraft = null; await renderPackingHistory();
+  const wrap = $("#packingTable"); if (wrap) wrap.innerHTML = "";
+}
+
+async function renderPackingHistory() {
+  const wrap = $("#packingHistoryTable");
+  if (!wrap) return;
+  const data = await api("/packing/history?limit=30");
+  const items = data.items || [];
+  if (!items.length) { wrap.innerHTML = "<p class='muted'>Истории пока нет.</p>"; return; }
+  let h = "<table class='data-table'><thead><tr><th>ID</th><th>Дата</th><th>Статус</th><th>Позиций</th><th>В упаковку</th><th>Файл</th><th></th></tr></thead><tbody>";
+  for (const it of items) {
+    h += `<tr><td>${it.id}</td><td>${escapeHtml(it.created_at||"")}</td><td>${escapeHtml(it.status||"")}</td><td class="num">${it.count||0}</td><td class="num">${it.pack_total||0}</td><td title="${escapeHtml(it.packing_file||"")}">${escapeHtml((it.packing_file||"").split(/[/\\\\]/).pop())}</td>` +
+      `<td>${it.status==="committed"?`<button class="btn btn-sm" data-packing-revert="${it.id}">Откатить</button>`:""}</td></tr>`;
+  }
+  h += "</tbody></table>";
+  wrap.innerHTML = h;
+  wrap.querySelectorAll("[data-packing-revert]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.packingRevert);
+      if (!confirm(`Откатить упаковочный лист #${id}? Будет восстановлен backup остатков, если файл не менялся.`)) return;
+      try { await apiPost(`/packing/${id}/revert`, {}); packingMsg(`Упаковочный лист #${id} откачен.`); await renderPackingHistory(); }
+      catch (e) { packingMsg(String(e.message||e), true); }
+    });
+  });
+}
+
+document.addEventListener("click", async (e) => {
+  const t = e.target; if (!(t instanceof Element)) return;
+  if (t.id === "btnPackingDraft" || t.closest("#btnPackingDraft")) { try { await loadPackingDraft(); } catch(e2){ packingMsg(String(e2.message||e2), true); } }
+  if (t.id === "btnPackingCommit" || t.closest("#btnPackingCommit")) { try { await commitPackingDraft(); } catch(e2){ packingMsg(String(e2.message||e2), true); } }
+  if (t.id === "btnPackingRefreshHistory" || t.closest("#btnPackingRefreshHistory")) { try { await renderPackingHistory(); } catch(e2){ packingMsg(String(e2.message||e2), true); } }
+});

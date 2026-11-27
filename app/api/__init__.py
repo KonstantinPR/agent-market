@@ -22,6 +22,7 @@ from . import (
     maintenance,
     automation,
     batch,
+    packing,
 )
 
 router = APIRouter(prefix="/api")
@@ -45,6 +46,7 @@ for _mod in (
     maintenance,
     automation,
     batch,
+    packing,
 ):
     router.include_router(_mod.router)
 
